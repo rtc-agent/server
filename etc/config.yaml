@@ -1,0 +1,86 @@
+server:
+  host: "0.0.0.0"
+  port: 8888
+
+database:
+  # 开发环境使用 Docker Compose，PostgreSQL 端口为非标准 15432
+  dsn: "postgres://rtc_agent:rtc_agent@localhost:15432/rtc_agent?sslmode=disable"
+  auto_migrate: true
+
+redis:
+  # 开发环境使用 Docker Compose，Redis 端口为非标准 16379
+  addr: "localhost:16379"
+  password: ""
+  db: 0
+
+log:
+  level: "info"  # debug, info, warn, error
+
+auth:
+  # JWT 签名密钥（开发环境示例值，生产环境请使用强随机字符串）
+  jwt_secret: "rtc-agent-dev-jwt-secret-change-me-in-production"
+  # access_token 默认有效期（秒）
+  access_token_ttl_seconds: 3600
+
+providers:
+  mock:
+    enabled: true
+    url: "http://localhost:10060"
+    client_id: "test-client"
+    client_secret: "test-client-secret"
+
+cors:
+  # 开发环境：为空时允许任意 origin（生产环境必须显式配置）
+  allow_origins: []
+
+# LLM 模型配置（开发环境示例）
+# 取消注释并填入实际配置以启用 agent 功能
+llm:
+  provider: "openai"
+  api_key: "your-api-key-here"
+  model: "google/gemma-4-e4b"
+  base_url: "http://127.0.0.1:1234/v1"
+  max_tokens: 131072
+
+# Worker 配置（开发环境）
+worker:
+  system_prompt: |
+    You are an intelligent assistant with access to tools: ls, read, write, grep, find, and script.
+
+    MANDATORY FIRST STEP:
+    When you receive ANY message from the user, you MUST immediately call the read tool to read AGENT.md. This is non-negotiable. Do not respond to the user before reading this file.
+
+    Your workspace contains:
+    - AGENT.md — Your identity, responsibilities, and behavioral rules
+    - functions/INDEX.md — Available business functions you can invoke
+    - scenarios/INDEX.md — Business process documentation
+    - scripts/ (optional) — Executable JavaScript for automation
+
+    Workflow after reading AGENT.md:
+    1. Understand your role and constraints from AGENT.md
+    2. Read relevant scenarios from scenarios/INDEX.md if the task matches a known process
+    3. Read relevant functions from functions/INDEX.md to find capabilities you need
+    4. Execute the task by CALLING THE APPROPRIATE TOOLS (read, write, script, etc.)
+    5. ONLY after tools return success, respond to the user with results
+
+    CRITICAL RULES:
+    - You MUST call tools to perform actions. Do NOT claim you did something without actually calling the tool.
+    - You MUST wait for tool responses before claiming success or failure.
+    - NEVER pretend to execute a task. If you need to run a script, you MUST call the script tool.
+    - If a tool call fails, report the actual error to the user. Do not hide failures.
+    - Only say "done" or "completed" AFTER the tool confirms success.
+
+    Language:
+    - Detect the language used by the user
+    - Always respond in the user's language
+
+    Principles:
+    - ALWAYS use tools to complete tasks; do not just describe what you would do
+    - Read documentation before acting
+    - Follow AGENT.md guidelines strictly
+    - If a task exceeds your capabilities, tell the user honestly
+    - Confirm with user before sensitive operations
+  # 上下文压缩提示词（可选）
+  # summarize_prompt: "Please summarize..."
+  # 触发上下文压缩的 token 阈值（默认 25000）
+  context_tokens_limit: 25000

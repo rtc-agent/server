@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook for rtc-agent/server
+# - API key leak detection (OpenAI / Claude)
+# - Large file detection (> 5MB)
+# - Executable file detection (no extension / .exe)
+# - golangci-lint
+
+set -euo pipefail
+
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+ERRORS=0
+
+# Get staged files (excluding deleted files)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=d)
+
+if [ -z "$STAGED_FILES" ]; then
+    exit 0
+fi
+
+# ============================================================
+# 1. API Key Leak Detection
+# ============================================================
+echo "🔍 Checking for API key leaks..."
+
+# Patterns for OpenAI and Claude API keys
+declare -a PATTERNS=(
+    'sk-proj-[A-Za-z0-9_-]{20,}'          # OpenAI project key
+    'sk-[A-Za-z0-9]{32,}'                 # OpenAI / Anthropic legacy key
+    'sk-ant-[A-Za-z0-9_-]{20,}'           # Anthropic key
+    'ANTHROPIC_API_KEY\s*=\s*["\x27][^"\x27]+'
+    'OPENAI_API_KEY\s*=\s*["\x27][^"\x27]+'
+    'xoxb-[0-9A-Za-z-]+'                  # Slack token (bonus)
+)
+
+API_KEY_FOUND=0
+while IFS= read -r file; do
+    # Skip binary files, this script, and go.sum
+    if ! git diff --cached --name-only --diff-filter=d -- "$file" | grep -qE '\.(go|md|yaml|yml|json|toml|env|conf|cfg)$'; then
+        continue
+    fi
+    for pattern in "${PATTERNS[@]}"; do
+        if git show ":$file" | grep -qEi "$pattern" 2>/dev/null; then
+            echo -e "${RED}  ✗ Potential API key found in: $file${NC}"
+            API_KEY_FOUND=1
+        fi
+    done
+done <<< "$STAGED_FILES"
+
+if [ "$API_KEY_FOUND" -eq 1 ]; then
+    echo -e "${RED}✗ API key leak detected! Remove keys before committing.${NC}"
+    ERRORS=1
+else
+    echo -e "${GREEN}  ✓ No API key leaks found${NC}"
+fi
+
+# ============================================================
+# 2. Large File Detection (> 5MB)
+# ============================================================
+echo "🔍 Checking for large files (> 5MB)..."
+
+MAX_SIZE=$((5 * 1024 * 1024))  # 5MB in bytes
+LARGE_FILE_FOUND=0
+
+while IFS= read -r file; do
+    if [ ! -f "$file" ]; then
+        continue
+    fi
+    file_size=$(wc -c < "$file" | tr -d ' ')
+    if [ "$file_size" -gt "$MAX_SIZE" ]; then
+        size_mb=$(awk "BEGIN {printf \"%.2f\", $file_size/1024/1024}")
+        echo -e "${RED}  ✗ Large file: $file (${size_mb} MB)${NC}"
+        LARGE_FILE_FOUND=1
+    fi
+done <<< "$STAGED_FILES"
+
+if [ "$LARGE_FILE_FOUND" -eq 1 ]; then
+    echo -e "${RED}✗ Files exceeding 5MB detected!${NC}"
+    ERRORS=1
+else
+    echo -e "${GREEN}  ✓ No large files found${NC}"
+fi
+
+# ============================================================
+# 3. Executable File Detection (actual binaries)
+# ============================================================
+echo "🔍 Checking for executable files..."
+
+EXEC_FOUND=0
+
+while IFS= read -r file; do
+    basename=$(basename "$file")
+    # Check: no extension, or .exe extension
+    if [[ "$basename" != *.* ]] || [[ "$basename" == *.exe ]]; then
+        # Use file command to check if it's actually a binary
+        file_type=$(file --brief --mime-type "$file" 2>/dev/null || echo "unknown")
+        # Allow text files (even without extension)
+        if [[ "$file_type" == text/* ]] || [[ "$file_type" == application/json ]] || [[ "$file_type" == application/xml ]] || [[ "$file_type" == application/x-sh ]]; then
+            continue
+        fi
+        # Flag actual binaries
+        echo -e "${RED}  ✗ Executable detected: $file${NC}"
+        EXEC_FOUND=1
+    fi
+done <<< "$STAGED_FILES"
+
+if [ "$EXEC_FOUND" -eq 1 ]; then
+    echo -e "${RED}✗ Executable files should not be committed!${NC}"
+    ERRORS=1
+else
+    echo -e "${GREEN}  ✓ No executable files found${NC}"
+fi
+
+# ============================================================
+# 4. golangci-lint
+# ============================================================
+echo "🔍 Running golangci-lint..."
+
+if ! command -v golangci-lint &> /dev/null; then
+    echo -e "${YELLOW}  ⚠ golangci-lint not installed, skipping lint check${NC}"
+    echo -e "${YELLOW}    Install: https://golangci-lint.run/usage/install/${NC}"
+else
+    # Get staged .go files
+    GO_FILES=$(echo "$STAGED_FILES" | grep -E '\.go$' || true)
+
+    if [ -n "$GO_FILES" ]; then
+        if golangci-lint run --new-from-rev=HEAD ./...; then
+            echo -e "${GREEN}  ✓ golangci-lint passed${NC}"
+        else
+            echo -e "${RED}✗ golangci-lint failed!${NC}"
+            ERRORS=1
+        fi
+    else
+        echo -e "${GREEN}  ✓ No .go files changed, skipping lint${NC}"
+    fi
+fi
+
+# ============================================================
+# Final result
+# ============================================================
+echo ""
+if [ "$ERRORS" -eq 1 ]; then
+    echo -e "${RED}❌ Pre-commit checks failed. Commit aborted.${NC}"
+    exit 1
+else
+    echo -e "${GREEN}✅ All pre-commit checks passed.${NC}"
+    exit 0
+fi

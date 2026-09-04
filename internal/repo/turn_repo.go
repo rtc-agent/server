@@ -1,0 +1,157 @@
+package repo
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"runtime/debug"
+
+	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/pkg/logger"
+	"github.com/rtc-agent/server/pkg/protocol"
+
+	"gorm.io/gorm"
+)
+
+// TurnRepo Turn 仓储接口
+type TurnRepo interface {
+	Create(ctx context.Context, turn *dbmodel.Turn) error
+	GetByID(ctx context.Context, id uuid.UUID) (*dbmodel.Turn, error)
+	FindByClientID(ctx context.Context, clientID string) (*dbmodel.Turn, error)
+	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*dbmodel.Turn, error)
+	FindActiveBySession(ctx context.Context, sessionID uuid.UUID) ([]*dbmodel.Turn, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, errMsg string) error
+	// UpdateStatusBySession batch-updates all turns for a session that are in
+	// any of the given statuses to the target status. Returns the number of
+	// rows affected. Used by stopActiveTurns to cancel pending/running turns
+	// as a belt-and-suspenders measure after rtc-queue CancelSession.
+	UpdateStatusBySession(ctx context.Context, sessionID uuid.UUID, fromStatuses []string, toStatus protocol.TurnStatus) (int64, error)
+}
+
+type turnRepo struct {
+	db *gorm.DB
+}
+
+// NewTurnRepo 创建 TurnRepo
+func NewTurnRepo(db *gorm.DB) TurnRepo {
+	return &turnRepo{db: db}
+}
+
+func (r *turnRepo) Create(ctx context.Context, turn *dbmodel.Turn) error {
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(turn).Error; err != nil {
+		return fmt.Errorf("create turn: %w", err)
+	}
+	return nil
+}
+
+func (r *turnRepo) GetByID(ctx context.Context, id uuid.UUID) (*dbmodel.Turn, error) {
+	// Debug: print stack trace when querying with zero UUID
+	if id == uuid.Nil {
+		logger.Warn("[TurnRepo.GetByID] querying with zero UUID, stack trace:\n%s", string(debug.Stack()))
+	}
+	var turn dbmodel.Turn
+	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&turn, "id = ?", id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("get turn %s: %w", id, ErrTurnNotFound)
+		}
+		return nil, fmt.Errorf("get turn %s: %w", id, err)
+	}
+	return &turn, nil
+}
+
+func (r *turnRepo) FindByClientID(ctx context.Context, clientID string) (*dbmodel.Turn, error) {
+	if clientID == "" {
+		return nil, nil
+	}
+	var turn dbmodel.Turn
+	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&turn, "client_id = ?", clientID).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil // Not found is not an error
+		}
+		return nil, fmt.Errorf("find turn by client_id %s: %w", clientID, err)
+	}
+	return &turn, nil
+}
+
+func (r *turnRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*dbmodel.Turn, error) {
+	var turns []*dbmodel.Turn
+	q := DBFromContext(ctx, r.db).WithContext(ctx).Where("session_id = ?", sessionID).Order("created_at ASC")
+	if cursor != nil {
+		q = q.Where("id > ?", *cursor)
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if err := q.Limit(limit).Find(&turns).Error; err != nil {
+		return nil, fmt.Errorf("list turns by session %s: %w", sessionID, err)
+	}
+	return turns, nil
+}
+
+// FindActiveBySession returns all pending, running, or interrupted turns for a session.
+// Used by CloseSession/StopTurn to stop active turns before closing.
+// 🔧 Fix: Include "interrupted" status — turns waiting for RTC/webchat answers
+// were invisible to the stop flow, leaving them stuck in DB after stop.
+func (r *turnRepo) FindActiveBySession(ctx context.Context, sessionID uuid.UUID) ([]*dbmodel.Turn, error) {
+	var turns []*dbmodel.Turn
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("session_id = ? AND status IN ?", sessionID, []string{
+			string(dbmodel.TurnStatusPending),
+			string(dbmodel.TurnStatusRunning),
+			string(dbmodel.TurnStatusInterrupted),
+		}).
+		Order("created_at ASC").
+		Find(&turns).Error
+	if err != nil {
+		return nil, fmt.Errorf("find active turns for session %s: %w", sessionID, err)
+	}
+	return turns, nil
+}
+
+func (r *turnRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, errMsg string) error {
+	updates := map[string]any{
+		"status":        string(status),
+		"error_message": errMsg,
+	}
+	if status == dbmodel.TurnStatusRunning {
+		updates["started_at"] = gorm.Expr("NOW()")
+	}
+	if status == dbmodel.TurnStatusCompleted || status == dbmodel.TurnStatusFailed || status == dbmodel.TurnStatusCancelled || status == dbmodel.TurnStatusMerged {
+		updates["completed_at"] = gorm.Expr("NOW()")
+	}
+	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&dbmodel.Turn{}).Where("id = ?", id).Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("update turn %s status: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("update turn %s status: %w", id, ErrTurnNotFound)
+	}
+	return nil
+}
+
+// UpdateStatusBySession batch-updates all turns for a session whose status is
+// in fromStatuses to the target status. Returns the number of rows affected.
+// Used by stopActiveTurns as a belt-and-suspenders measure after rtc-queue
+// CancelSession.
+func (r *turnRepo) UpdateStatusBySession(ctx context.Context, sessionID uuid.UUID, fromStatuses []string, toStatus protocol.TurnStatus) (int64, error) {
+	if len(fromStatuses) == 0 {
+		return 0, nil
+	}
+	updates := map[string]any{
+		"status": string(toStatus),
+	}
+	if toStatus == dbmodel.TurnStatusCompleted || toStatus == dbmodel.TurnStatusFailed || toStatus == dbmodel.TurnStatusCancelled || toStatus == dbmodel.TurnStatusMerged {
+		updates["completed_at"] = gorm.Expr("NOW()")
+	}
+	result := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&dbmodel.Turn{}).
+		Where("session_id = ? AND status IN ?", sessionID, fromStatuses).
+		Updates(updates)
+	if result.Error != nil {
+		return 0, fmt.Errorf("update turns for session %s to %s: %w", sessionID, toStatus, result.Error)
+	}
+	return result.RowsAffected, nil
+}

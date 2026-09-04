@@ -1,0 +1,5 @@
+server:
+  port: "10060"
+
+client_id: "test-client"
+client_secret: "test-client-secret"

@@ -1,0 +1,26 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: rtc-agent-redis
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: rtc-agent-postgres
+    environment:
+      POSTGRES_USER: rtc_agent
+      POSTGRES_PASSWORD: rtc_agent
+      POSTGRES_DB: rtc_agent
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  postgres-data:

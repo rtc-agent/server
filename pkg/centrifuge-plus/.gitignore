@@ -1,0 +1,44 @@
+# 依赖和构建产物
+/vendor/
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+
+# 测试和编译产物
+/example/example
+/example/example.exe
+
+# IDE 和编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude Code skills（非项目核心代码）
+skills/
+
+# Go 工作区
+go.work
+go.work.sum
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# 日志
+*.log
+logs/
+
+# 临时文件
+tmp/
+temp/
+*.tmp
