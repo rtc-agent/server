@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/rtc-agent/server/internal/config"
+	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/pkg/logger"
 
 	"github.com/redis/go-redis/v9"

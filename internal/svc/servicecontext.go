@@ -1,8 +1,8 @@
 package svc
 
 import (
-	"github.com/rtc-agent/server/internal/auth"
-	"github.com/rtc-agent/server/internal/config"
+	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
 	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"

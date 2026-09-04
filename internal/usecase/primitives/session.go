@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -24,7 +24,7 @@ func PrepareSession(
 	clientSessionID string,
 	creator usecase.Creator,
 	initialTitle string,
-) (*dbmodel.Session, bool, error) {
+) (*model.Session, bool, error) {
 	if sessionID != nil {
 		existing, err := deps.SessionRepo.GetByID(ctx, *sessionID)
 		if err != nil {
@@ -40,7 +40,7 @@ func PrepareSession(
 	}
 
 	// 新建
-	session := &dbmodel.Session{
+	session := &model.Session{
 		ID:         uuid.Must(uuid.NewV7()),
 		ClientID:   clientSessionID,
 		OwnerKind:  string(creator.Kind()),
@@ -58,7 +58,7 @@ func PrepareSession(
 }
 
 // assertCreatorOwns 检查 session 的 owner 与 creator 是否匹配。
-func assertCreatorOwns(session *dbmodel.Session, creator usecase.Creator) error {
+func assertCreatorOwns(session *model.Session, creator usecase.Creator) error {
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
 		return fmt.Errorf("session %s does not belong to %s/%s",
 			session.ID, creator.Kind(), creator.ReferenceID())
@@ -67,7 +67,7 @@ func assertCreatorOwns(session *dbmodel.Session, creator usecase.Creator) error 
 }
 
 // CreateSession 在事务内创建 session（thin wrapper）。
-func CreateSession(txCtx context.Context, deps *usecase.Dependencies, session *dbmodel.Session) error {
+func CreateSession(txCtx context.Context, deps *usecase.Dependencies, session *model.Session) error {
 	return deps.SessionRepo.Create(txCtx, session)
 }
 

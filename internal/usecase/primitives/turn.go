@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/protocol"
 
@@ -13,7 +13,7 @@ import (
 )
 
 // CreateTurn 在事务内创建 turn（thin wrapper）。
-func CreateTurn(txCtx context.Context, deps *usecase.Dependencies, turn *dbmodel.Turn) error {
+func CreateTurn(txCtx context.Context, deps *usecase.Dependencies, turn *model.Turn) error {
 	return deps.TurnRepo.Create(txCtx, turn)
 }
 

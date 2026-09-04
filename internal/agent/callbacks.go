@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -52,10 +52,10 @@ func (h *helpers) createTurn(ctx context.Context, sessionID string, workID strin
 	}
 
 	// Create a new turn.
-	turn := &dbmodel.Turn{
+	turn := &model.Turn{
 		SessionID: sid,
 		ClientID:  workID, // workID as idempotency key
-		Status:    string(dbmodel.TurnStatusPending),
+		Status:    string(model.TurnStatusPending),
 	}
 	if err := h.deps.TurnRepo.Create(ctx, turn); err != nil {
 		return "", fmt.Errorf("createTurn: create turn: %w", err)

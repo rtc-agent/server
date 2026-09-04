@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -44,7 +44,7 @@ func CreateMessage(
 	status protocol.MessageStreamingStatus,
 	clientID string,
 	parentMessageID *uuid.UUID,
-) (*dbmodel.Message, error) {
+) (*model.Message, error) {
 	globalOffset, turnOffset, err := AllocateOffsets(txCtx, deps, sessionID, turnID, 1)
 	if err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func CreateMessage(
 		clientID = uuid.Must(uuid.NewV7()).String()
 	}
 
-	message := &dbmodel.Message{
+	message := &model.Message{
 		ID:              uuid.Must(uuid.NewV7()),
 		ClientID:        clientID,
 		SessionID:       sessionID,
@@ -99,7 +99,7 @@ func BatchCreateMessages(
 	sessionID uuid.UUID,
 	turnID *uuid.UUID,
 	messages []MessageToCreate,
-) ([]*dbmodel.Message, error) {
+) ([]*model.Message, error) {
 	count := len(messages)
 	if count == 0 {
 		return nil, nil
@@ -112,7 +112,7 @@ func BatchCreateMessages(
 	}
 
 	// 构造消息列表
-	dbMessages := make([]*dbmodel.Message, count)
+	dbMessages := make([]*model.Message, count)
 	now := time.Now()
 	for i, m := range messages {
 		globalOffset := startGlobalOffset + uint32(i)
@@ -136,7 +136,7 @@ func BatchCreateMessages(
 			updatedAt = now
 		}
 
-		msg := &dbmodel.Message{
+		msg := &model.Message{
 			ID:              uuid.Must(uuid.NewV7()),
 			ClientID:        clientID,
 			SessionID:       sessionID,

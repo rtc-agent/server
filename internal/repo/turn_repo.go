@@ -7,7 +7,7 @@ import (
 	"runtime/debug"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 
@@ -16,11 +16,11 @@ import (
 
 // TurnRepo Turn 仓储接口
 type TurnRepo interface {
-	Create(ctx context.Context, turn *dbmodel.Turn) error
-	GetByID(ctx context.Context, id uuid.UUID) (*dbmodel.Turn, error)
-	FindByClientID(ctx context.Context, clientID string) (*dbmodel.Turn, error)
-	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*dbmodel.Turn, error)
-	FindActiveBySession(ctx context.Context, sessionID uuid.UUID) ([]*dbmodel.Turn, error)
+	Create(ctx context.Context, turn *model.Turn) error
+	GetByID(ctx context.Context, id uuid.UUID) (*model.Turn, error)
+	FindByClientID(ctx context.Context, clientID string) (*model.Turn, error)
+	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Turn, error)
+	FindActiveBySession(ctx context.Context, sessionID uuid.UUID) ([]*model.Turn, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, errMsg string) error
 	// UpdateStatusBySession batch-updates all turns for a session that are in
 	// any of the given statuses to the target status. Returns the number of
@@ -38,19 +38,19 @@ func NewTurnRepo(db *gorm.DB) TurnRepo {
 	return &turnRepo{db: db}
 }
 
-func (r *turnRepo) Create(ctx context.Context, turn *dbmodel.Turn) error {
+func (r *turnRepo) Create(ctx context.Context, turn *model.Turn) error {
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(turn).Error; err != nil {
 		return fmt.Errorf("create turn: %w", err)
 	}
 	return nil
 }
 
-func (r *turnRepo) GetByID(ctx context.Context, id uuid.UUID) (*dbmodel.Turn, error) {
+func (r *turnRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Turn, error) {
 	// Debug: print stack trace when querying with zero UUID
 	if id == uuid.Nil {
 		logger.Warn("[TurnRepo.GetByID] querying with zero UUID, stack trace:\n%s", string(debug.Stack()))
 	}
-	var turn dbmodel.Turn
+	var turn model.Turn
 	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&turn, "id = ?", id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -61,11 +61,11 @@ func (r *turnRepo) GetByID(ctx context.Context, id uuid.UUID) (*dbmodel.Turn, er
 	return &turn, nil
 }
 
-func (r *turnRepo) FindByClientID(ctx context.Context, clientID string) (*dbmodel.Turn, error) {
+func (r *turnRepo) FindByClientID(ctx context.Context, clientID string) (*model.Turn, error) {
 	if clientID == "" {
 		return nil, nil
 	}
-	var turn dbmodel.Turn
+	var turn model.Turn
 	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&turn, "client_id = ?", clientID).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -76,8 +76,8 @@ func (r *turnRepo) FindByClientID(ctx context.Context, clientID string) (*dbmode
 	return &turn, nil
 }
 
-func (r *turnRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*dbmodel.Turn, error) {
-	var turns []*dbmodel.Turn
+func (r *turnRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Turn, error) {
+	var turns []*model.Turn
 	q := DBFromContext(ctx, r.db).WithContext(ctx).Where("session_id = ?", sessionID).Order("created_at ASC")
 	if cursor != nil {
 		q = q.Where("id > ?", *cursor)
@@ -95,13 +95,13 @@ func (r *turnRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, curso
 // Used by CloseSession/StopTurn to stop active turns before closing.
 // 🔧 Fix: Include "interrupted" status — turns waiting for RTC/webchat answers
 // were invisible to the stop flow, leaving them stuck in DB after stop.
-func (r *turnRepo) FindActiveBySession(ctx context.Context, sessionID uuid.UUID) ([]*dbmodel.Turn, error) {
-	var turns []*dbmodel.Turn
+func (r *turnRepo) FindActiveBySession(ctx context.Context, sessionID uuid.UUID) ([]*model.Turn, error) {
+	var turns []*model.Turn
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("session_id = ? AND status IN ?", sessionID, []string{
-			string(dbmodel.TurnStatusPending),
-			string(dbmodel.TurnStatusRunning),
-			string(dbmodel.TurnStatusInterrupted),
+			string(model.TurnStatusPending),
+			string(model.TurnStatusRunning),
+			string(model.TurnStatusInterrupted),
 		}).
 		Order("created_at ASC").
 		Find(&turns).Error
@@ -116,13 +116,13 @@ func (r *turnRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status protoc
 		"status":        string(status),
 		"error_message": errMsg,
 	}
-	if status == dbmodel.TurnStatusRunning {
+	if status == model.TurnStatusRunning {
 		updates["started_at"] = gorm.Expr("NOW()")
 	}
-	if status == dbmodel.TurnStatusCompleted || status == dbmodel.TurnStatusFailed || status == dbmodel.TurnStatusCancelled || status == dbmodel.TurnStatusMerged {
+	if status == model.TurnStatusCompleted || status == model.TurnStatusFailed || status == model.TurnStatusCancelled || status == model.TurnStatusMerged {
 		updates["completed_at"] = gorm.Expr("NOW()")
 	}
-	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&dbmodel.Turn{}).Where("id = ?", id).Updates(updates)
+	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Turn{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
 		return fmt.Errorf("update turn %s status: %w", id, result.Error)
 	}
@@ -143,11 +143,11 @@ func (r *turnRepo) UpdateStatusBySession(ctx context.Context, sessionID uuid.UUI
 	updates := map[string]any{
 		"status": string(toStatus),
 	}
-	if toStatus == dbmodel.TurnStatusCompleted || toStatus == dbmodel.TurnStatusFailed || toStatus == dbmodel.TurnStatusCancelled || toStatus == dbmodel.TurnStatusMerged {
+	if toStatus == model.TurnStatusCompleted || toStatus == model.TurnStatusFailed || toStatus == model.TurnStatusCancelled || toStatus == model.TurnStatusMerged {
 		updates["completed_at"] = gorm.Expr("NOW()")
 	}
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&dbmodel.Turn{}).
+		Model(&model.Turn{}).
 		Where("session_id = ? AND status IN ?", sessionID, fromStatuses).
 		Updates(updates)
 	if result.Error != nil {

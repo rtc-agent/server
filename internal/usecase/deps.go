@@ -7,7 +7,7 @@ package usecase
 import (
 	"context"
 
-	"github.com/rtc-agent/server/internal/config"
+	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/pkg/protocol"

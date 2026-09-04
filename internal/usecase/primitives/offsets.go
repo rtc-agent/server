@@ -5,8 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rtc-agent/server/internal/rediskey"
-	"github.com/rtc-agent/server/internal/redisscript"
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/usecase"
 
 	"github.com/google/uuid"
@@ -25,13 +24,13 @@ func AllocateOffsets(
 	if count < 1 {
 		count = 1
 	}
-	keys := []string{rediskey.SessionMsgOffset(sessionID.String())}
+	keys := []string{cache.SessionMsgOffset(sessionID.String())}
 	argv := []any{count}
 	if turnID != nil {
-		keys = append(keys, rediskey.TurnMsgOffset(turnID.String()))
+		keys = append(keys, cache.TurnMsgOffset(turnID.String()))
 		argv = append(argv, count)
 	}
-	result, err := redisscript.BatchIncrOffset.Run(ctx, deps.Redis, keys, argv...).Result()
+	result, err := cache.BatchIncrOffset.Run(ctx, deps.Redis, keys, argv...).Result()
 	if err != nil {
 		return 0, nil, fmt.Errorf("incr offsets: %w", err)
 	}

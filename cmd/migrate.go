@@ -3,8 +3,8 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/rtc-agent/server/internal/config"
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 
 	"github.com/spf13/cobra"
@@ -39,19 +39,19 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("connect database: %w", err)
 	}
 
-	if err := dbmodel.AutoMigrate(db); err != nil {
+	if err := model.AutoMigrate(db); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
 	}
 
-	if err := dbmodel.MigrateOwnerStages1And2(db); err != nil {
+	if err := model.MigrateOwnerStages1And2(db); err != nil {
 		return fmt.Errorf("migrate owner stages 1+2: %w", err)
 	}
 
-	if err := dbmodel.MigrateOwnerStage3(db); err != nil {
+	if err := model.MigrateOwnerStage3(db); err != nil {
 		return fmt.Errorf("migrate owner stage 3: %w", err)
 	}
 
-	if err := dbmodel.MigrateOwnerStage4(db); err != nil {
+	if err := model.MigrateOwnerStage4(db); err != nil {
 		return fmt.Errorf("migrate owner stage 4: %w", err)
 	}
 

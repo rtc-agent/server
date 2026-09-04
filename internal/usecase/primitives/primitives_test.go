@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -52,7 +52,7 @@ func TestCheckSessionOwnership_SystemAlwaysPass(t *testing.T) {
 }
 
 func TestBuildSendMessageUpdates_SkipsForSystemSession(t *testing.T) {
-	s := &dbmodel.Session{ID: uuid.New(), OwnerKind: string(usecase.CreatorKindSystem), OwnerRefID: "system"}
+	s := &model.Session{ID: uuid.New(), OwnerKind: string(usecase.CreatorKindSystem), OwnerRefID: "system"}
 	turnID := uuid.New()
 	if items := primitives.BuildSendMessageUpdates(s, true, &turnID, uuid.New()); len(items) != 0 {
 		t.Fatalf("system session should produce no updates, got %d", len(items))
@@ -61,7 +61,7 @@ func TestBuildSendMessageUpdates_SkipsForSystemSession(t *testing.T) {
 
 func TestBuildSendMessageUpdates_UserSessionProducesPush(t *testing.T) {
 	uid := uuid.New()
-	s := &dbmodel.Session{ID: uuid.New(), OwnerKind: string(usecase.CreatorKindUser), OwnerRefID: uid.String()}
+	s := &model.Session{ID: uuid.New(), OwnerKind: string(usecase.CreatorKindUser), OwnerRefID: uid.String()}
 	turnID := uuid.New()
 	items := primitives.BuildSendMessageUpdates(s, true, &turnID, uuid.New())
 	if len(items) != 1 || len(items[0].Items) != 3 {

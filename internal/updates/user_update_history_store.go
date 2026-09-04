@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/rtc-agent/server/internal/channel"
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 
 	"github.com/google/uuid"
@@ -26,7 +26,7 @@ func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint
 		return nil, fmt.Errorf("invalid user ID in channel: %s", ch)
 	}
 
-	var updates []dbmodel.UserUpdate
+	var updates []model.UserUpdate
 	err = repo.DBFromContext(ctx, u.db).WithContext(ctx).
 		Where("user_id = ? AND \"offset\" > ?", userID, sinceOffset).
 		Order("\"offset\" ASC").
@@ -52,12 +52,12 @@ func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint
 }
 
 // buildPublications 将 UserUpdate 转换为 centrifuge.Publication。
-func (u *UpdatePublisher) buildPublications(ctx context.Context, uu dbmodel.UserUpdate) ([]*centrifuge.Publication, error) {
+func (u *UpdatePublisher) buildPublications(ctx context.Context, uu model.UserUpdate) ([]*centrifuge.Publication, error) {
 	if len(uu.Items) == 0 {
 		return nil, nil
 	}
 
-	updates, err := u.convertUpdates(ctx, []*dbmodel.UserUpdate{&uu})
+	updates, err := u.convertUpdates(ctx, []*model.UserUpdate{&uu})
 	if err != nil {
 		return nil, fmt.Errorf("convert updates: %w", err)
 	}

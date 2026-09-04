@@ -13,15 +13,14 @@ import (
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/internal/agent"
-	"github.com/rtc-agent/server/internal/auth"
+	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/channel"
-	"github.com/rtc-agent/server/internal/config"
-	"github.com/rtc-agent/server/internal/httphandler"
-	"github.com/rtc-agent/server/internal/oauth2provider"
+	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/handler/http"
 	"github.com/rtc-agent/server/internal/repo"
-	"github.com/rtc-agent/server/internal/rpchandler"
+	"github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/server"
-	"github.com/rtc-agent/server/internal/statestore"
+	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/svc"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -295,13 +294,13 @@ func provideQueueWorker(
 	})
 }
 
-func provideStateStore(redisClient redis.UniversalClient) *statestore.RedisStore {
-	return statestore.NewRedisStore(redisClient)
+func provideStateStore(redisClient redis.UniversalClient) *oauth.RedisStore {
+	return oauth.NewRedisStore(redisClient)
 }
 
-func provideOAuth2ProviderClient(cfg *config.Config) *oauth2provider.Client {
+func provideOAuth2ProviderClient(cfg *config.Config) *oauth.Client {
 	providers := server.BuildProviderClients(cfg)
-	return oauth2provider.NewClient(providers, cfg.Providers.HTTPTimeout)
+	return oauth.NewClient(providers, cfg.Providers.HTTPTimeout)
 }
 
 func provideRPCHandler(
@@ -327,8 +326,8 @@ func provideHTTPHandler(svcCtx *svc.ServiceContext) *httphandler.Handler {
 func provideOAuth2Handler(
 	svcCtx *svc.ServiceContext,
 	jwtSigner *auth.JWTSigner,
-	stateStore *statestore.RedisStore,
-	providerClient *oauth2provider.Client,
+	stateStore *oauth.RedisStore,
+	providerClient *oauth.Client,
 	cfg *config.Config,
 ) *httphandler.OAuth2Handler {
 	return httphandler.NewOAuth2Handler(svcCtx, jwtSigner, stateStore, providerClient, cfg.Auth)

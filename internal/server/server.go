@@ -6,12 +6,11 @@ import (
 	"net/http"
 
 	"github.com/rtc-agent/server/internal/agent"
-	"github.com/rtc-agent/server/internal/config"
-	"github.com/rtc-agent/server/internal/httphandler"
-	"github.com/rtc-agent/server/internal/middleware"
-	"github.com/rtc-agent/server/internal/oauth2provider"
-	"github.com/rtc-agent/server/internal/rpchandler"
-	"github.com/rtc-agent/server/internal/statestore"
+	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/handler/http"
+	"github.com/rtc-agent/server/internal/infra/middleware"
+	"github.com/rtc-agent/server/internal/handler/rpc"
+	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/svc"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -38,11 +37,11 @@ type Server struct {
 // New 创建服务器
 func New(cfg *config.Config, svcCtx *svc.ServiceContext) *Server {
 	// 构造 Redis state 存储（分布式环境使用 Redis）
-	stateStore := statestore.NewRedisStore(svcCtx.Redis)
+	stateStore := oauth.NewRedisStore(svcCtx.Redis)
 
 	// 构造 ProviderClient（注册启用的 provider）
 	providers := BuildProviderClients(cfg)
-	providerClient := oauth2provider.NewClient(providers, cfg.Providers.HTTPTimeout)
+	providerClient := oauth.NewClient(providers, cfg.Providers.HTTPTimeout)
 
 	// 创建 ChatModel（LLM 客户端）
 	//
@@ -147,10 +146,10 @@ func New(cfg *config.Config, svcCtx *svc.ServiceContext) *Server {
 }
 
 // BuildProviderClients 根据配置构造 Provider 列表
-func BuildProviderClients(cfg *config.Config) []*oauth2provider.ProviderConfig {
-	var list []*oauth2provider.ProviderConfig
+func BuildProviderClients(cfg *config.Config) []*oauth.ProviderConfig {
+	var list []*oauth.ProviderConfig
 	if cfg.Providers.Mock.Enabled {
-		list = append(list, &oauth2provider.ProviderConfig{
+		list = append(list, &oauth.ProviderConfig{
 			Name:         "mock",
 			AuthURL:      cfg.Providers.Mock.URL + "/oauth2/authorize",
 			TokenURL:     cfg.Providers.Mock.URL + "/oauth2/token/exchange",

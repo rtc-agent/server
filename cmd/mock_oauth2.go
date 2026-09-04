@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/rtc-agent/server/internal/mockoauth2"
+	"github.com/rtc-agent/server/internal/oauth"
 )
 
 // mockOAuth2Cmd Mock OAuth2 服务器命令
@@ -61,7 +61,7 @@ func runMockOAuth2(configPath string) {
 	}
 
 	// 创建 Mock OAuth2 Provider
-	provider := mockoauth2.NewProvider(mockoauth2.Config{
+	provider := oauth.NewProvider(oauth.Config{
 		ClientID:     v.GetString("client_id"),
 		ClientSecret: v.GetString("client_secret"),
 	})

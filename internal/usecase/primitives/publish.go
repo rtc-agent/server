@@ -3,7 +3,7 @@ package primitives
 
 import (
 	"github.com/rtc-agent/server/internal/channel"
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -15,7 +15,7 @@ import (
 //
 // nil session is treated as non-system. Callers should check for nil session
 // separately and skip publishing if the routing metadata is unavailable.
-func isSystemSession(session *dbmodel.Session) bool {
+func isSystemSession(session *model.Session) bool {
 	if session == nil {
 		return false
 	}
@@ -35,7 +35,7 @@ func isSystemSession(session *dbmodel.Session) bool {
 // nil in that case — the caller should have already logged the pre-load
 // failure.
 func BuildSendMessageUpdates(
-	session *dbmodel.Session,
+	session *model.Session,
 	sessionCreated bool,
 	turnID *uuid.UUID,
 	messageID uuid.UUID,
@@ -69,7 +69,7 @@ func BuildSendMessageUpdates(
 
 // BuildMessageUpdate 构造"仅 message 创建"的 UpdatePublishItem（worker 使用）。
 // nil session returns nil (cannot route).
-func BuildMessageUpdate(session *dbmodel.Session, messageID uuid.UUID) []updates.UpdatePublishItem {
+func BuildMessageUpdate(session *model.Session, messageID uuid.UUID) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
 		return nil
 	}
@@ -83,7 +83,7 @@ func BuildMessageUpdate(session *dbmodel.Session, messageID uuid.UUID) []updates
 
 // BuildSessionUpdateUpdates 构造"仅 session 属性更新"的 UpdatePublishItem。
 // nil session returns nil (cannot route).
-func BuildSessionUpdateUpdates(session *dbmodel.Session) []updates.UpdatePublishItem {
+func BuildSessionUpdateUpdates(session *model.Session) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
 		return nil
 	}
@@ -96,13 +96,13 @@ func BuildSessionUpdateUpdates(session *dbmodel.Session) []updates.UpdatePublish
 }
 
 // BuildSessionCloseUpdates 构造"session 关闭"的 UpdatePublishItem。
-func BuildSessionCloseUpdates(session *dbmodel.Session) []updates.UpdatePublishItem {
+func BuildSessionCloseUpdates(session *model.Session) []updates.UpdatePublishItem {
 	return BuildSessionUpdateUpdates(session)
 }
 
 // BuildTurnStopUpdates 构造"turn 停止"的 UpdatePublishItem。
 // nil session returns nil (cannot route).
-func BuildTurnStopUpdates(session *dbmodel.Session, turnID uuid.UUID) []updates.UpdatePublishItem {
+func BuildTurnStopUpdates(session *model.Session, turnID uuid.UUID) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
 		return nil
 	}
@@ -116,7 +116,7 @@ func BuildTurnStopUpdates(session *dbmodel.Session, turnID uuid.UUID) []updates.
 
 // BuildRtcStatusUpdates 构造"RTC 状态更新"的 UpdatePublishItem。
 // nil session returns nil (cannot route).
-func BuildRtcStatusUpdates(session *dbmodel.Session, rtcID uuid.UUID) []updates.UpdatePublishItem {
+func BuildRtcStatusUpdates(session *model.Session, rtcID uuid.UUID) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
 		return nil
 	}
@@ -129,14 +129,14 @@ func BuildRtcStatusUpdates(session *dbmodel.Session, rtcID uuid.UUID) []updates.
 }
 
 // BuildRtcResultUpdates 构造"RTC 结果提交"的 UpdatePublishItem。
-func BuildRtcResultUpdates(session *dbmodel.Session, rtcID uuid.UUID) []updates.UpdatePublishItem {
+func BuildRtcResultUpdates(session *model.Session, rtcID uuid.UUID) []updates.UpdatePublishItem {
 	return BuildRtcStatusUpdates(session, rtcID)
 }
 
 // BuildOrphanTurnUpdates 构造"孤儿 RTC 触发新 turn"的 UpdatePublishItem。
 // 新 Turn + 触发消息的创建通知。
 // nil session returns nil (cannot route).
-func BuildOrphanTurnUpdates(session *dbmodel.Session, turnID, messageID uuid.UUID) []updates.UpdatePublishItem {
+func BuildOrphanTurnUpdates(session *model.Session, turnID, messageID uuid.UUID) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
 		return nil
 	}
@@ -153,7 +153,7 @@ func BuildOrphanTurnUpdates(session *dbmodel.Session, turnID, messageID uuid.UUI
 // 当 createTurn 回调创建新 turn 时发布，通知前端有新的 turn 开始处理。
 // 这是唯一发布 turn.created 的位置 —— 其他 turn 生命周期转换都发布 turn.updated。
 // nil session returns nil (cannot route).
-func BuildTurnCreatedUpdates(session *dbmodel.Session, turnID uuid.UUID) []updates.UpdatePublishItem {
+func BuildTurnCreatedUpdates(session *model.Session, turnID uuid.UUID) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
 		return nil
 	}
@@ -168,14 +168,14 @@ func BuildTurnCreatedUpdates(session *dbmodel.Session, turnID uuid.UUID) []updat
 // BuildSessionUpdatedUpdates 构造"session 属性更新"的 UpdatePublishItem。
 // 当 session 状态变化时发布（如 beginTurn → active, completeTurn → idle）。
 // nil session returns nil (cannot route).
-func BuildSessionUpdatedUpdates(session *dbmodel.Session) []updates.UpdatePublishItem {
+func BuildSessionUpdatedUpdates(session *model.Session) []updates.UpdatePublishItem {
 	return BuildSessionUpdateUpdates(session)
 }
 
 // BuildTurnUpdatedUpdates 构造"turn 更新"的 UpdatePublishItem。
 // 当 turn 状态变化时发布（如 begin → running, cancel → cancelled）。
 // nil session returns nil (cannot route).
-func BuildTurnUpdatedUpdates(session *dbmodel.Session, turnID uuid.UUID) []updates.UpdatePublishItem {
+func BuildTurnUpdatedUpdates(session *model.Session, turnID uuid.UUID) []updates.UpdatePublishItem {
 	return BuildTurnStopUpdates(session, turnID)
 }
 
@@ -183,8 +183,8 @@ func BuildTurnUpdatedUpdates(session *dbmodel.Session, turnID uuid.UUID) []updat
 // 新 session 创建 + 批量消息创建。
 // nil newSession returns nil (cannot route).
 func BuildForkSessionUpdates(
-	newSession *dbmodel.Session,
-	messages []*dbmodel.Message,
+	newSession *model.Session,
+	messages []*model.Message,
 ) []updates.UpdatePublishItem {
 	if newSession == nil || isSystemSession(newSession) {
 		return nil

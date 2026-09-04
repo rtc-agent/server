@@ -6,9 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/rtc-agent/server/internal/channel"
-	"github.com/rtc-agent/server/internal/dbmodel"
-	"github.com/rtc-agent/server/internal/rediskey"
-	"github.com/rtc-agent/server/internal/redisscript"
+	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
@@ -59,7 +58,7 @@ func init() {
 // Mapping from old code: this replaces loadMessageHistory in
 // internal/worker/context.go. The key difference is the return type:
 // []*turnagent.Message instead of []*schema.Message. The conversion from
-// dbmodel.Message to turnagent.Message mirrors the old conversion to
+// model.Message to turnagent.Message mirrors the old conversion to
 // schema.Message, but uses the pkg-level types.
 func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnagent.Message, error) {
 	sid, err := uuid.Parse(sessionID)
@@ -79,7 +78,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	//
 	// ListRecentBySession returns messages in ASC order (oldest first within
 	// the returned set), so we iterate backwards to find the first summary.
-	tmpMsgs := make([]*dbmodel.Message, 0, len(dbMsgs))
+	tmpMsgs := make([]*model.Message, 0, len(dbMsgs))
 	for i := len(dbMsgs) - 1; i >= 0; i-- {
 		msg := dbMsgs[i]
 		tmpMsgs = append(tmpMsgs, msg)
@@ -106,13 +105,13 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	return messages, nil
 }
 
-// convertDBMessage converts a single dbmodel.Message to zero or more
+// convertDBMessage converts a single model.Message to zero or more
 // turnagent.Messages.
 //
 // A single DB message may produce multiple turnagent messages (e.g., a
 // toolcall_input produces an assistant message with tool calls; a summary
 // may expand into multiple messages).
-func convertDBMessage(msg *dbmodel.Message) []*turnagent.Message {
+func convertDBMessage(msg *model.Message) []*turnagent.Message {
 	contentData, err := primitives.ParseContentData(msg.Content)
 	if err != nil {
 		return nil
@@ -731,8 +730,8 @@ func (h *helpers) createAndPublishMessage(
 	content protocol.ContentData,
 	streamingStatus protocol.MessageStreamingStatus,
 	topicCh string,
-) (*dbmodel.Message, error) {
-	var newMsg *dbmodel.Message
+) (*model.Message, error) {
+	var newMsg *model.Message
 	_, err := h.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		var createErr error
 		newMsg, createErr = primitives.CreateMessage(
@@ -811,7 +810,7 @@ func (m *streamStateMap) remove(turnID string) {
 // NewStreamStore creates a stream store accessor backed by Redis.
 // The returned value satisfies updates.StreamStoreAccessor and can be injected
 // into UpdatePublisher via SetStreamStore. It uses the same Redis key format
-// (rediskey.MessageStream) as the stream buffering logic in this package.
+// (cache.MessageStream) as the stream buffering logic in this package.
 func NewStreamStore(rdb redis.UniversalClient, chunkTTL time.Duration) *StreamStore {
 	return &StreamStore{rdb: rdb, chunkTTL: chunkTTL}
 }
@@ -833,12 +832,12 @@ type StreamStore struct {
 }
 
 // AppendChunk atomically appends a chunk to the Redis list and refreshes
-// the TTL using the AppendChunk Lua script from redisscript.
+// the TTL using the AppendChunk Lua script from cache.
 // This replaces the previous non-atomic RPush + Expire two-command sequence.
 func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error) {
-	key := rediskey.MessageStream(messageID)
+	key := cache.MessageStream(messageID)
 	ttlSeconds := int(s.chunkTTL / time.Second)
-	result, err := redisscript.AppendChunk.Run(
+	result, err := cache.AppendChunk.Run(
 		context.Background(), s.rdb,
 		[]string{key},
 		ttlSeconds, chunk,
@@ -850,7 +849,7 @@ func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error)
 }
 
 func (s *StreamStore) GetAllChunks(messageID string) ([]string, error) {
-	key := rediskey.MessageStream(messageID)
+	key := cache.MessageStream(messageID)
 	chunks, err := s.rdb.LRange(context.Background(), key, 0, -1).Result()
 	if err != nil {
 		return nil, fmt.Errorf("get all chunks: %w", err)
@@ -859,7 +858,7 @@ func (s *StreamStore) GetAllChunks(messageID string) ([]string, error) {
 }
 
 func (s *StreamStore) DeleteChunks(messageID string) error {
-	key := rediskey.MessageStream(messageID)
+	key := cache.MessageStream(messageID)
 	if err := s.rdb.Del(context.Background(), key).Err(); err != nil {
 		return fmt.Errorf("delete chunks: %w", err)
 	}
@@ -886,7 +885,7 @@ func (s *StreamStore) DeleteChunks(messageID string) error {
 // rtcToolBase is the base for all RTC tools in the new agent package.
 // It holds the session, helpers (for DB access), and the current turn ID.
 type rtcToolBase struct {
-	session *dbmodel.Session
+	session *model.Session
 	helpers *helpers
 	turnID  uuid.UUID
 }
@@ -1178,7 +1177,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		msgID = msg.ID
 
 		// Create RTC record (MessageID points to the toolcall_input message).
-		rtc := &dbmodel.Rtc{
+		rtc := &model.Rtc{
 			ID:         rtcID,
 			ClientID:   clientID,
 			SessionID:  r.session.ID,
@@ -1186,8 +1185,8 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 			MessageID:  msgID,
 			Offset:     rtcOffset,
 			ToolName:   toolName,
-			Parameters: dbmodel.JSONBString(argumentsInJSON),
-			Status:     string(dbmodel.RtcStatusPending),
+			Parameters: model.JSONBString(argumentsInJSON),
+			Status:     string(model.RtcStatusPending),
 		}
 		if err := r.helpers.deps.RtcRepo.Create(txCtx, rtc); err != nil {
 			return nil, fmt.Errorf("create rtc: %w", err)

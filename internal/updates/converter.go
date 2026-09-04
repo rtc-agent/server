@@ -1,7 +1,7 @@
 package updates
 
 import (
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
@@ -10,23 +10,23 @@ import (
 // 供 UpdatePublisher 内部使用：将 repo 返回的 dbmodel 实体转换为 protocol DTO，
 // 用于组装推送到 Centrifuge 的富内容 Update。
 //
-// Session 转换已迁移到 dbmodel.ToProtocolSession，供多处复用。
+// Session 转换已迁移到 model.ToProtocolSession，供多处复用。
 
-// toProtocolSession 调用 dbmodel.ToProtocolSession，保留本包内的短名称便于内部使用。
-func toProtocolSession(m *dbmodel.Session) protocol.Session {
-	return dbmodel.ToProtocolSession(m)
+// toProtocolSession 调用 model.ToProtocolSession，保留本包内的短名称便于内部使用。
+func toProtocolSession(m *model.Session) protocol.Session {
+	return model.ToProtocolSession(m)
 }
 
-func toProtocolTurn(m *dbmodel.Turn) protocol.Turn {
-	return dbmodel.ToProtocolTurn(m)
+func toProtocolTurn(m *model.Turn) protocol.Turn {
+	return model.ToProtocolTurn(m)
 }
 
-func toProtocolMessage(m *dbmodel.Message) protocol.Message {
-	return dbmodel.ToProtocolMessage(m)
+func toProtocolMessage(m *model.Message) protocol.Message {
+	return model.ToProtocolMessage(m)
 }
 
-func toProtocolRtc(m *dbmodel.Rtc) protocol.Rtc {
-	return dbmodel.ToProtocolRtc(m)
+func toProtocolRtc(m *model.Rtc) protocol.Rtc {
+	return model.ToProtocolRtc(m)
 }
 
 // ========== 通用辅助 ==========

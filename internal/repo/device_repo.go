@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -14,8 +14,8 @@ import (
 
 // DeviceRepo 设备仓储接口
 type DeviceRepo interface {
-	Upsert(ctx context.Context, device *dbmodel.Device) error
-	FindByUserAndDeviceID(ctx context.Context, userID uuid.UUID, deviceID string) (*dbmodel.Device, error)
+	Upsert(ctx context.Context, device *model.Device) error
+	FindByUserAndDeviceID(ctx context.Context, userID uuid.UUID, deviceID string) (*model.Device, error)
 }
 
 type deviceRepo struct {
@@ -27,7 +27,7 @@ func NewDeviceRepo(db *gorm.DB) DeviceRepo {
 	return &deviceRepo{db: db}
 }
 
-func (r *deviceRepo) Upsert(ctx context.Context, device *dbmodel.Device) error {
+func (r *deviceRepo) Upsert(ctx context.Context, device *model.Device) error {
 	// 原子 upsert：ON CONFLICT (user_id, device_id) DO UPDATE
 	// 避免 find-then-create 的竞态条件
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
@@ -42,8 +42,8 @@ func (r *deviceRepo) Upsert(ctx context.Context, device *dbmodel.Device) error {
 	return nil
 }
 
-func (r *deviceRepo) FindByUserAndDeviceID(ctx context.Context, userID uuid.UUID, deviceID string) (*dbmodel.Device, error) {
-	var device dbmodel.Device
+func (r *deviceRepo) FindByUserAndDeviceID(ctx context.Context, userID uuid.UUID, deviceID string) (*model.Device, error) {
+	var device model.Device
 	err := DBFromContext(ctx, r.db).WithContext(ctx).Where("user_id = ? AND device_id = ?", userID, deviceID).First(&device).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

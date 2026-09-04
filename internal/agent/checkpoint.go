@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rtc-agent/server/internal/rediskey"
+	"github.com/rtc-agent/server/internal/infra/cache"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/redis/go-redis/v9"
@@ -19,7 +19,7 @@ import (
 //
 // This is a fresh implementation (not a copy) of the checkpoint store in
 // internal/worker/checkpoint_store.go. The key pattern is the same
-// (checkpoint:{id} via rediskey.Checkpoint), but the implementation is
+// (checkpoint:{id} via cache.Checkpoint), but the implementation is
 // tailored for the new agent package.
 //
 // Error handling: redis.Nil is converted to (nil, false, nil) per the
@@ -49,7 +49,7 @@ func newRedisCheckpointStore(rdb redis.UniversalClient, ttl time.Duration) *redi
 // A checkpoint save must survive even if the parent context is cancelled —
 // otherwise the turn's state is lost and cannot be resumed.
 func (s *redisCheckpointStore) Set(ctx context.Context, id string, data []byte) error {
-	key := rediskey.Checkpoint(id)
+	key := cache.Checkpoint(id)
 	if err := s.redis.Set(context.Background(), key, data, s.ttl).Err(); err != nil {
 		return fmt.Errorf("checkpoint set: id=%s key=%s: %w", id, key, err)
 	}
@@ -65,7 +65,7 @@ func (s *redisCheckpointStore) Set(ctx context.Context, id string, data []byte) 
 // Uses context.Background() for the same reason as Set: checkpoint reads
 // must not be affected by context cancellation.
 func (s *redisCheckpointStore) Get(ctx context.Context, id string) ([]byte, bool, error) {
-	key := rediskey.Checkpoint(id)
+	key := cache.Checkpoint(id)
 	data, err := s.redis.Get(context.Background(), key).Result()
 	if errors.Is(err, redis.Nil) {
 		// Key does not exist — return (nil, false, nil) per convention.
@@ -86,7 +86,7 @@ func (s *redisCheckpointStore) Get(ctx context.Context, id string) ([]byte, bool
 // Uses context.Background() for consistency with Set/Get — checkpoint deletion
 // must not be affected by context cancellation.
 func (s *redisCheckpointStore) Delete(ctx context.Context, id string) error {
-	key := rediskey.Checkpoint(id)
+	key := cache.Checkpoint(id)
 	if err := s.redis.Del(context.Background(), key).Err(); err != nil {
 		return fmt.Errorf("checkpoint delete: id=%s key=%s: %w", id, key, err)
 	}

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rtc-agent/server/internal/config"
+	"github.com/rtc-agent/server/internal/infra/config"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/cloudwego/eino-ext/components/model/claude"

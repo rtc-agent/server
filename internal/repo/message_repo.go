@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"gorm.io/gorm"
@@ -14,19 +14,19 @@ import (
 
 // MessageRepo 消息仓储接口
 type MessageRepo interface {
-	Create(ctx context.Context, msg *dbmodel.Message) error
-	BatchCreate(ctx context.Context, messages []*dbmodel.Message) error
-	GetByID(ctx context.Context, id uuid.UUID) (*dbmodel.Message, error)
-	FindByClientID(ctx context.Context, clientID string) (*dbmodel.Message, error)
-	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *uint32, limit int) ([]*dbmodel.Message, error)
+	Create(ctx context.Context, msg *model.Message) error
+	BatchCreate(ctx context.Context, messages []*model.Message) error
+	GetByID(ctx context.Context, id uuid.UUID) (*model.Message, error)
+	FindByClientID(ctx context.Context, clientID string) (*model.Message, error)
+	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *uint32, limit int) ([]*model.Message, error)
 	// ListRecentBySession returns the most recent `limit` messages for a session,
 	// ordered by global_offset ASC (oldest first within the returned set).
 	// Unlike ListBySession which returns the oldest messages (ASC + LIMIT from start),
 	// this returns the newest messages (DESC + LIMIT, then reversed to ASC).
-	ListRecentBySession(ctx context.Context, sessionID uuid.UUID, limit int) ([]*dbmodel.Message, error)
+	ListRecentBySession(ctx context.Context, sessionID uuid.UUID, limit int) ([]*model.Message, error)
 	// ListBySessionBeforeOffset returns the most recent `limit` messages with global_offset <= maxOffset,
 	// ordered by global_offset ASC (oldest first).
-	ListBySessionBeforeOffset(ctx context.Context, sessionID uuid.UUID, maxOffset uint32, limit int) ([]*dbmodel.Message, error)
+	ListBySessionBeforeOffset(ctx context.Context, sessionID uuid.UUID, maxOffset uint32, limit int) ([]*model.Message, error)
 	GetNextGlobalOffset(ctx context.Context, sessionID uuid.UUID) (uint32, error)
 	UpdateStreamingStatus(ctx context.Context, id uuid.UUID, status protocol.MessageStreamingStatus, content string) error
 	// DeleteByIDs soft-deletes messages by their IDs.
@@ -42,7 +42,7 @@ func NewMessageRepo(db *gorm.DB) MessageRepo {
 	return &messageRepo{db: db}
 }
 
-func (r *messageRepo) Create(ctx context.Context, msg *dbmodel.Message) error {
+func (r *messageRepo) Create(ctx context.Context, msg *model.Message) error {
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(msg).Error; err != nil {
 		return fmt.Errorf("create message: %w", err)
 	}
@@ -50,7 +50,7 @@ func (r *messageRepo) Create(ctx context.Context, msg *dbmodel.Message) error {
 }
 
 // BatchCreate 批量创建消息（一次 INSERT）。
-func (r *messageRepo) BatchCreate(ctx context.Context, messages []*dbmodel.Message) error {
+func (r *messageRepo) BatchCreate(ctx context.Context, messages []*model.Message) error {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -60,8 +60,8 @@ func (r *messageRepo) BatchCreate(ctx context.Context, messages []*dbmodel.Messa
 	return nil
 }
 
-func (r *messageRepo) GetByID(ctx context.Context, id uuid.UUID) (*dbmodel.Message, error) {
-	var msg dbmodel.Message
+func (r *messageRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Message, error) {
+	var msg model.Message
 	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&msg, "id = ?", id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -72,11 +72,11 @@ func (r *messageRepo) GetByID(ctx context.Context, id uuid.UUID) (*dbmodel.Messa
 	return &msg, nil
 }
 
-func (r *messageRepo) FindByClientID(ctx context.Context, clientID string) (*dbmodel.Message, error) {
+func (r *messageRepo) FindByClientID(ctx context.Context, clientID string) (*model.Message, error) {
 	if clientID == "" {
 		return nil, nil
 	}
-	var msg dbmodel.Message
+	var msg model.Message
 	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&msg, "client_id = ?", clientID).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -87,8 +87,8 @@ func (r *messageRepo) FindByClientID(ctx context.Context, clientID string) (*dbm
 	return &msg, nil
 }
 
-func (r *messageRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *uint32, limit int) ([]*dbmodel.Message, error) {
-	var messages []*dbmodel.Message
+func (r *messageRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *uint32, limit int) ([]*model.Message, error) {
+	var messages []*model.Message
 	q := DBFromContext(ctx, r.db).WithContext(ctx).Where("session_id = ?", sessionID).Order("global_offset ASC")
 	if cursor != nil {
 		q = q.Where("global_offset > ?", *cursor)
@@ -105,7 +105,7 @@ func (r *messageRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cu
 func (r *messageRepo) GetNextGlobalOffset(ctx context.Context, sessionID uuid.UUID) (uint32, error) {
 	var maxOffset uint32
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&dbmodel.Message{}).
+		Model(&model.Message{}).
 		Where("session_id = ?", sessionID).
 		Select("COALESCE(MAX(global_offset), 0)").
 		Scan(&maxOffset).Error
@@ -117,7 +117,7 @@ func (r *messageRepo) GetNextGlobalOffset(ctx context.Context, sessionID uuid.UU
 
 func (r *messageRepo) UpdateStreamingStatus(ctx context.Context, id uuid.UUID, status protocol.MessageStreamingStatus, content string) error {
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&dbmodel.Message{}).
+		Model(&model.Message{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
 			"streaming_status": string(status),
@@ -135,11 +135,11 @@ func (r *messageRepo) UpdateStreamingStatus(ctx context.Context, id uuid.UUID, s
 // ListRecentBySession returns the most recent `limit` messages for a session.
 // It queries with ORDER BY global_offset DESC LIMIT N, then reverses the result
 // so the returned slice is in chronological order (oldest first).
-func (r *messageRepo) ListRecentBySession(ctx context.Context, sessionID uuid.UUID, limit int) ([]*dbmodel.Message, error) {
+func (r *messageRepo) ListRecentBySession(ctx context.Context, sessionID uuid.UUID, limit int) ([]*model.Message, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	var messages []*dbmodel.Message
+	var messages []*model.Message
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("session_id = ?", sessionID).
 		Order("global_offset DESC").
@@ -161,7 +161,7 @@ func (r *messageRepo) DeleteByIDs(ctx context.Context, ids []uuid.UUID) error {
 	}
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("id IN ?", ids).
-		Delete(&dbmodel.Message{}).Error; err != nil {
+		Delete(&model.Message{}).Error; err != nil {
 		return fmt.Errorf("delete messages %v: %w", ids, err)
 	}
 	return nil
@@ -169,12 +169,12 @@ func (r *messageRepo) DeleteByIDs(ctx context.Context, ids []uuid.UUID) error {
 
 // ListBySessionBeforeOffset returns the most recent `limit` messages with global_offset <= maxOffset.
 // Results are ordered by global_offset ASC (oldest first).
-func (r *messageRepo) ListBySessionBeforeOffset(ctx context.Context, sessionID uuid.UUID, maxOffset uint32, limit int) ([]*dbmodel.Message, error) {
+func (r *messageRepo) ListBySessionBeforeOffset(ctx context.Context, sessionID uuid.UUID, maxOffset uint32, limit int) ([]*model.Message, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	// 先 DESC 查询最新的 limit 条
-	var messages []*dbmodel.Message
+	var messages []*model.Message
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("session_id = ? AND global_offset <= ?", sessionID, maxOffset).
 		Order("global_offset DESC").

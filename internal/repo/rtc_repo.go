@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/dbmodel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"gorm.io/gorm"
@@ -14,12 +14,12 @@ import (
 
 // RtcRepo RTC 仓储接口
 type RtcRepo interface {
-	Create(ctx context.Context, rtc *dbmodel.Rtc) error
-	GetByID(ctx context.Context, id uuid.UUID) (*dbmodel.Rtc, error)
-	FindByClientID(ctx context.Context, clientID string) (*dbmodel.Rtc, error)
-	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*dbmodel.Rtc, error)
-	ListByTurn(ctx context.Context, turnID uuid.UUID) ([]*dbmodel.Rtc, error)
-	ListByMessageIDs(ctx context.Context, messageIDs []uuid.UUID) ([]*dbmodel.Rtc, error)
+	Create(ctx context.Context, rtc *model.Rtc) error
+	GetByID(ctx context.Context, id uuid.UUID) (*model.Rtc, error)
+	FindByClientID(ctx context.Context, clientID string) (*model.Rtc, error)
+	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Rtc, error)
+	ListByTurn(ctx context.Context, turnID uuid.UUID) ([]*model.Rtc, error)
+	ListByMessageIDs(ctx context.Context, messageIDs []uuid.UUID) ([]*model.Rtc, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.RtcStatus) error
 	UpdateResult(ctx context.Context, id uuid.UUID, status protocol.RtcStatus, result *string, errMsg string) error
 	UpdateOutputMessageID(ctx context.Context, id uuid.UUID, outputMessageID uuid.UUID) error
@@ -34,15 +34,15 @@ func NewRtcRepo(db *gorm.DB) RtcRepo {
 	return &rtcRepo{db: db}
 }
 
-func (r *rtcRepo) Create(ctx context.Context, rtc *dbmodel.Rtc) error {
+func (r *rtcRepo) Create(ctx context.Context, rtc *model.Rtc) error {
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(rtc).Error; err != nil {
 		return fmt.Errorf("create rtc: %w", err)
 	}
 	return nil
 }
 
-func (r *rtcRepo) GetByID(ctx context.Context, id uuid.UUID) (*dbmodel.Rtc, error) {
-	var rtc dbmodel.Rtc
+func (r *rtcRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Rtc, error) {
+	var rtc model.Rtc
 	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&rtc, "id = ?", id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -53,11 +53,11 @@ func (r *rtcRepo) GetByID(ctx context.Context, id uuid.UUID) (*dbmodel.Rtc, erro
 	return &rtc, nil
 }
 
-func (r *rtcRepo) FindByClientID(ctx context.Context, clientID string) (*dbmodel.Rtc, error) {
+func (r *rtcRepo) FindByClientID(ctx context.Context, clientID string) (*model.Rtc, error) {
 	if clientID == "" {
 		return nil, nil
 	}
-	var rtc dbmodel.Rtc
+	var rtc model.Rtc
 	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&rtc, "client_id = ?", clientID).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -68,8 +68,8 @@ func (r *rtcRepo) FindByClientID(ctx context.Context, clientID string) (*dbmodel
 	return &rtc, nil
 }
 
-func (r *rtcRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*dbmodel.Rtc, error) {
-	var rtcs []*dbmodel.Rtc
+func (r *rtcRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Rtc, error) {
+	var rtcs []*model.Rtc
 	q := DBFromContext(ctx, r.db).WithContext(ctx).Where("session_id = ?", sessionID).Order("created_at ASC")
 	if cursor != nil {
 		q = q.Where("id > ?", *cursor)
@@ -83,8 +83,8 @@ func (r *rtcRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor
 	return rtcs, nil
 }
 
-func (r *rtcRepo) ListByTurn(ctx context.Context, turnID uuid.UUID) ([]*dbmodel.Rtc, error) {
-	var rtcs []*dbmodel.Rtc
+func (r *rtcRepo) ListByTurn(ctx context.Context, turnID uuid.UUID) ([]*model.Rtc, error) {
+	var rtcs []*model.Rtc
 	err := DBFromContext(ctx, r.db).WithContext(ctx).Where("turn_id = ?", turnID).Order("offset ASC").Find(&rtcs).Error
 	if err != nil {
 		return nil, fmt.Errorf("list rtcs by turn %s: %w", turnID, err)
@@ -92,11 +92,11 @@ func (r *rtcRepo) ListByTurn(ctx context.Context, turnID uuid.UUID) ([]*dbmodel.
 	return rtcs, nil
 }
 
-func (r *rtcRepo) ListByMessageIDs(ctx context.Context, messageIDs []uuid.UUID) ([]*dbmodel.Rtc, error) {
+func (r *rtcRepo) ListByMessageIDs(ctx context.Context, messageIDs []uuid.UUID) ([]*model.Rtc, error) {
 	if len(messageIDs) == 0 {
 		return nil, nil
 	}
-	var rtcs []*dbmodel.Rtc
+	var rtcs []*model.Rtc
 	err := DBFromContext(ctx, r.db).WithContext(ctx).Where("message_id IN ?", messageIDs).Find(&rtcs).Error
 	if err != nil {
 		return nil, fmt.Errorf("list rtcs by message_ids: %w", err)
@@ -105,7 +105,7 @@ func (r *rtcRepo) ListByMessageIDs(ctx context.Context, messageIDs []uuid.UUID) 
 }
 
 func (r *rtcRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.RtcStatus) error {
-	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&dbmodel.Rtc{}).Where("id = ?", id).Update("status", string(status))
+	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Rtc{}).Where("id = ?", id).Update("status", string(status))
 	if result.Error != nil {
 		return fmt.Errorf("update rtc %s status: %w", id, result.Error)
 	}
@@ -122,12 +122,12 @@ func (r *rtcRepo) UpdateResult(ctx context.Context, id uuid.UUID, status protoco
 		"completed_at":  gorm.Expr("NOW()"),
 	}
 	if result != nil {
-		updates["result"] = dbmodel.JSONBString(*result)
+		updates["result"] = model.JSONBString(*result)
 	} else {
 		updates["result"] = nil
 	}
 	dbResult := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&dbmodel.Rtc{}).
+		Model(&model.Rtc{}).
 		Where("id = ?", id).
 		Updates(updates)
 	if dbResult.Error != nil {
@@ -141,7 +141,7 @@ func (r *rtcRepo) UpdateResult(ctx context.Context, id uuid.UUID, status protoco
 
 func (r *rtcRepo) UpdateOutputMessageID(ctx context.Context, id uuid.UUID, outputMessageID uuid.UUID) error {
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&dbmodel.Rtc{}).
+		Model(&model.Rtc{}).
 		Where("id = ?", id).
 		Update("output_message_id", outputMessageID)
 	if result.Error != nil {

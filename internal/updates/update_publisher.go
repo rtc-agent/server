@@ -9,9 +9,8 @@ import (
 	"time"
 
 	"github.com/rtc-agent/server/internal/channel"
-	"github.com/rtc-agent/server/internal/dbmodel"
-	"github.com/rtc-agent/server/internal/rediskey"
-	"github.com/rtc-agent/server/internal/redisscript"
+	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -153,13 +152,13 @@ type UpdatePublishItem struct {
 
 // Save 在事务内保存 UserUpdate 记录（生成 offset + 写入 DB）。
 // 调用方负责管理事务：Begin → WithTx(ctx) → Save → Commit。
-func (u *UpdatePublisher) Save(ctx context.Context, items ...UpdatePublishItem) ([]*dbmodel.UserUpdate, error) {
+func (u *UpdatePublisher) Save(ctx context.Context, items ...UpdatePublishItem) ([]*model.UserUpdate, error) {
 	return u.save(ctx, items...)
 }
 
 // Push 将已保存的 UserUpdate 转换成富内容并推送到 Centrifuge。
 // 应在事务提交之后调用，确保订阅者查询时能看到已提交的数据。
-func (u *UpdatePublisher) Push(ctx context.Context, items []UpdatePublishItem, savedUpdates []*dbmodel.UserUpdate) ([]*protocol.Update, error) {
+func (u *UpdatePublisher) Push(ctx context.Context, items []UpdatePublishItem, savedUpdates []*model.UserUpdate) ([]*protocol.Update, error) {
 	pushUpdates, err := u.convertUpdates(ctx, savedUpdates)
 	if err != nil {
 		return nil, fmt.Errorf("convert updates: %w", err)
@@ -285,12 +284,12 @@ func (u *UpdatePublisher) publishLive(ctx context.Context, items []UpdatePublish
 	var allUpdates []*protocol.Update
 
 	for _, item := range items {
-		tempUpdate := &dbmodel.UserUpdate{
-			Items:  dbmodel.UpdateItemArray(item.Items),
+		tempUpdate := &model.UserUpdate{
+			Items:  model.UpdateItemArray(item.Items),
 			Offset: 0, // Live 频道不使用 offset
 		}
 
-		pushUpdates, err := u.convertUpdates(ctx, []*dbmodel.UserUpdate{tempUpdate})
+		pushUpdates, err := u.convertUpdates(ctx, []*model.UserUpdate{tempUpdate})
 		if err != nil {
 			return nil, fmt.Errorf("convert updates: %w", err)
 		}
@@ -312,7 +311,7 @@ func (u *UpdatePublisher) publishLive(ctx context.Context, items []UpdatePublish
 	return allUpdates, nil
 }
 
-func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) ([]*dbmodel.UserUpdate, error) {
+func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) ([]*model.UserUpdate, error) {
 	channelItemsMap := make(map[string][]UpdatePublishItem)
 	for _, item := range items {
 		channelItemsMap[item.Channel] = append(channelItemsMap[item.Channel], item)
@@ -327,7 +326,7 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 
 	offsetKeys := make([]string, len(channels))
 	for i, ch := range channels {
-		offsetKeys[i] = rediskey.ChannelOffset(ch)
+		offsetKeys[i] = cache.ChannelOffset(ch)
 	}
 
 	argv := make([]any, len(batchSizes))
@@ -335,7 +334,7 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 		argv[i] = size
 	}
 
-	maxOffsetsResult, err := redisscript.BatchIncrOffset.Run(ctx, u.redis, offsetKeys, argv...).Result()
+	maxOffsetsResult, err := cache.BatchIncrOffset.Run(ctx, u.redis, offsetKeys, argv...).Result()
 	if err != nil {
 		return nil, fmt.Errorf("batch incr offset: %w", err)
 	}
@@ -345,7 +344,7 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 		return nil, fmt.Errorf("invalid batch incr offset result")
 	}
 
-	var userUpdates []*dbmodel.UserUpdate
+	var userUpdates []*model.UserUpdate
 	for i, ch := range channels {
 		userIDStr, ok := channel.ParseUser(ch)
 		if !ok {
@@ -367,10 +366,10 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 
 		for j, item := range channelItemsMap[ch] {
 			offset := startOffset + uint32(j)
-			userUpdate := &dbmodel.UserUpdate{
+			userUpdate := &model.UserUpdate{
 				UserID: userID,
 				Offset: offset,
-				Items:  dbmodel.UpdateItemArray(item.Items),
+				Items:  model.UpdateItemArray(item.Items),
 			}
 			userUpdates = append(userUpdates, userUpdate)
 		}
@@ -389,9 +388,9 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 	return userUpdates, nil
 }
 
-// convertUpdates 将瘦引用（dbmodel.UserUpdate）转换成富内容（protocol.Update）。
+// convertUpdates 将瘦引用（model.UserUpdate）转换成富内容（protocol.Update）。
 // 使用 registry 模式分派实体查询，替代硬编码 switch。
-func (u *UpdatePublisher) convertUpdates(ctx context.Context, uus []*dbmodel.UserUpdate) ([]*protocol.Update, error) {
+func (u *UpdatePublisher) convertUpdates(ctx context.Context, uus []*model.UserUpdate) ([]*protocol.Update, error) {
 	var result []*protocol.Update
 
 	for _, uu := range uus {

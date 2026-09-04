@@ -35,7 +35,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rtc-agent/server/internal/rediskey"
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/usecase"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
@@ -158,7 +158,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		// but old checkpoints are stored at "checkpoint:session:{sessionID}".
 		// Using the old pattern avoids breaking in-flight turns on upgrade.
 		DeriveCheckpointID: func(sessionID string) string {
-			return rediskey.Checkpoint("session:" + sessionID)
+			return cache.Checkpoint("session:" + sessionID)
 		},
 
 		// Middleware — the summarization middleware is injected into the
