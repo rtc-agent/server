@@ -1,18 +1,19 @@
 package svc
 
 import (
-	"github.com/rtc-agent/server/internal/infra/auth"
-	"github.com/rtc-agent/server/internal/infra/config"
-	"github.com/rtc-agent/server/internal/repo"
-	"github.com/rtc-agent/server/internal/updates"
-	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
-	"github.com/rtc-agent/server/pkg/logger"
 	"time"
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+
+	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/internal/updates"
+	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // ServiceContext 服务上下文，用于依赖注入

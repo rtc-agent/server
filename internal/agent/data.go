@@ -5,19 +5,10 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
-	"github.com/rtc-agent/server/internal/channel"
-	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/infra/cache"
-	"github.com/rtc-agent/server/internal/updates"
-	"github.com/rtc-agent/server/internal/usecase"
-	"github.com/rtc-agent/server/internal/usecase/primitives"
-	"github.com/rtc-agent/server/pkg/protocol"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
@@ -25,6 +16,15 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/rtc-agent/server/internal/channel"
+	"github.com/rtc-agent/server/internal/infra/cache"
+	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/updates"
+	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/internal/usecase/primitives"
+	"github.com/rtc-agent/server/pkg/protocol"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 func init() {

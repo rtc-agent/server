@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/schema"
+	"github.com/google/uuid"
+
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
-
-	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/schema"
-	"github.com/google/uuid"
 )
 
 // buildSummarizationMiddleware constructs the summarization middleware for

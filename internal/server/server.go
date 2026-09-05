@@ -5,20 +5,20 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/centrifugal/centrifuge"
+	"github.com/cloudwego/eino/components/model"
+	"github.com/redis/go-redis/v9"
+
 	"github.com/rtc-agent/server/internal/agent"
-	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/handler/http"
-	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/handler/rpc"
+	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/svc"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
-
-	"github.com/centrifugal/centrifuge"
-	"github.com/cloudwego/eino/components/model"
-	"github.com/redis/go-redis/v9"
 )
 
 // Server HTTP + WebSocket 服务器

@@ -4,17 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/rtc-agent/server/internal/infra/auth"
-	"github.com/rtc-agent/server/internal/channel"
-	"github.com/rtc-agent/server/internal/infra/config"
-	"github.com/rtc-agent/server/internal/infra/context"
-	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
-	"github.com/rtc-agent/server/pkg/logger"
 	"sync"
 	"time"
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/google/uuid"
+
+	"github.com/rtc-agent/server/internal/channel"
+	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/infra/context"
+	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // rpcHandlerInstance 全局 RPC 处理器实例，由 RegisterRPCHandler 设置。
