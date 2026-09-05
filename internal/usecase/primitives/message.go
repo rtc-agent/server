@@ -26,6 +26,8 @@ type MessageToCreate struct {
 	// 零值则使用当前时间
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// TokenUsage 可选，仅 assistant 消息需要。
+	TokenUsage *model.TokenUsageUpdate
 }
 
 // CreateMessage 在事务内创建消息（调用方必须在 RunAndPublish 回调内）。
@@ -157,6 +159,17 @@ func BatchCreateMessages(
 			CreatorRefID:    m.Creator.ReferenceID(),
 			CreatedAt:       createdAt,
 			UpdatedAt:       updatedAt,
+		}
+		if m.TokenUsage != nil {
+			msg.InputTokens = &m.TokenUsage.InputTokens
+			msg.OutputTokens = &m.TokenUsage.OutputTokens
+			msg.TotalTokens = &m.TokenUsage.TotalTokens
+			if m.TokenUsage.CachedTokens > 0 {
+				msg.CachedTokens = &m.TokenUsage.CachedTokens
+			}
+			if m.TokenUsage.ReasoningTokens > 0 {
+				msg.ReasoningTokens = &m.TokenUsage.ReasoningTokens
+			}
 		}
 		if turnID != nil && startTurnOffset != nil {
 			turnOffset := *startTurnOffset + uint32(i)

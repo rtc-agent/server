@@ -1,5 +1,56 @@
 package turnagent
 
+import "context"
+
+// TokenUsage is the pkg-level token usage type, independent of eino's
+// schema.TokenUsage or model.TokenUsage. The upper application uses this
+// type for persistence and metrics without importing eino.
+type TokenUsage struct {
+	// InputTokens is the number of input (prompt) tokens.
+	InputTokens int
+	// OutputTokens is the number of output (completion) tokens.
+	OutputTokens int
+	// TotalTokens is the total number of tokens (InputTokens + OutputTokens).
+	TotalTokens int
+	// CachedTokens is the number of prompt cache hit tokens.
+	CachedTokens int
+	// ReasoningTokens is the number of tokens spent on reasoning/thinking,
+	// from CompletionTokensDetails.ReasoningTokens.
+	ReasoningTokens int
+}
+
+// context key types for session/turn identity. Defined as unexported struct
+// types to guarantee uniqueness (Go's context.WithValue uses pointer equality
+// on the key type, so distinct empty struct types cannot collide).
+type ctxSessionIDKey struct{}
+type ctxTurnIDKey struct{}
+
+// WithSessionID returns a child context carrying the given session ID.
+// turn-agent's GenInput injects this so eino callback handlers (metrics,
+// logging) can label per-call records with the session that produced them.
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, ctxSessionIDKey{}, sessionID)
+}
+
+// SessionIDFromContext reads the session ID from ctx, or returns "" if unset.
+func SessionIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(ctxSessionIDKey{}).(string)
+	return id
+}
+
+// WithTurnID returns a child context carrying the given turn ID.
+// turn-agent's GenInput injects this so eino callback handlers can label
+// per-call records with the turn that produced them.
+func WithTurnID(ctx context.Context, turnID string) context.Context {
+	return context.WithValue(ctx, ctxTurnIDKey{}, turnID)
+}
+
+// TurnIDFromContext reads the turn ID from ctx, or returns "" if unset.
+func TurnIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(ctxTurnIDKey{}).(string)
+	return id
+}
+
 // WorkKind identifies the kind of work item carried in an rtc-queue Work's Data
 // field. Two kinds exist; both flow through the same Agent.Process entry point.
 type WorkKind string

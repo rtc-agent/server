@@ -54,6 +54,16 @@ type Message struct {
 	// across conversions without interpreting it.
 	Extra map[string]any
 
+	// TokenUsage is the token usage for this message.
+	// For assistant messages: from the LLM response's ResponseMeta.Usage.
+	// For other roles: typically nil.
+	//
+	// Purpose:
+	//   - toEinoMessage writes TokenUsage to schema.Message.ResponseMeta.Usage,
+	//     so summarize_middleware's defaultTokenCounter gets an exact baseline.
+	//   - Event.TokenUsage is the streaming complement (for the final chunk).
+	TokenUsage *TokenUsage
+
 	// TurnID is the turn that created this message. Optional — user messages
 	// created by the API layer don't have a turnID yet (the turn is created
 	// later by turn-agent when the worker processes the work item). Assistant
@@ -129,6 +139,21 @@ func toEinoMessage(m *Message) *schema.Message {
 			},
 		})
 	}
+	if m.TokenUsage != nil {
+		em.ResponseMeta = &schema.ResponseMeta{
+			Usage: &schema.TokenUsage{
+				PromptTokens:     m.TokenUsage.InputTokens,
+				CompletionTokens: m.TokenUsage.OutputTokens,
+				TotalTokens:      m.TokenUsage.TotalTokens,
+			},
+		}
+		if m.TokenUsage.CachedTokens > 0 {
+			em.ResponseMeta.Usage.PromptTokenDetails.CachedTokens = m.TokenUsage.CachedTokens
+		}
+		if m.TokenUsage.ReasoningTokens > 0 {
+			em.ResponseMeta.Usage.CompletionTokensDetails.ReasoningTokens = m.TokenUsage.ReasoningTokens
+		}
+	}
 	return em
 }
 
@@ -162,6 +187,9 @@ func fromEinoMessage(m *schema.Message) *Message {
 	}
 	if m.ResponseMeta != nil {
 		msg.FinishReason = m.ResponseMeta.FinishReason
+		if m.ResponseMeta.Usage != nil {
+			msg.TokenUsage = extractTokenUsage(m.ResponseMeta.Usage)
+		}
 	}
 	for _, tc := range m.ToolCalls {
 		msg.ToolCalls = append(msg.ToolCalls, ToolCall{
@@ -171,4 +199,24 @@ func fromEinoMessage(m *schema.Message) *Message {
 		})
 	}
 	return msg
+}
+
+// extractTokenUsage converts eino's schema.TokenUsage to the pkg's TokenUsage.
+// Returns nil for nil input.
+func extractTokenUsage(u *schema.TokenUsage) *TokenUsage {
+	if u == nil {
+		return nil
+	}
+	t := &TokenUsage{
+		InputTokens:  u.PromptTokens,
+		OutputTokens: u.CompletionTokens,
+		TotalTokens:  u.TotalTokens,
+	}
+	if u.PromptTokenDetails.CachedTokens > 0 {
+		t.CachedTokens = u.PromptTokenDetails.CachedTokens
+	}
+	if u.CompletionTokensDetails.ReasoningTokens > 0 {
+		t.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+	}
+	return t
 }

@@ -13,11 +13,14 @@ import (
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // finalizeStreamMessage forces finalization of a streaming message that may
 // not have received a FinishReason chunk. This mirrors the old
 // finalizeStreamMessage in stream_message.go.
+//
+// tokenUsage is written to the message record when provided (may be nil).
 func (h *helpers) finalizeStreamMessage(
 	ctx context.Context,
 	sessionID uuid.UUID,
@@ -25,6 +28,7 @@ func (h *helpers) finalizeStreamMessage(
 	msgID *uuid.UUID,
 	buildContent func(string) (protocol.ContentData, error),
 	kind string,
+	tokenUsage *turnagent.TokenUsage,
 ) error {
 	if *msgID == uuid.Nil {
 		return nil
@@ -33,7 +37,7 @@ func (h *helpers) finalizeStreamMessage(
 	// Use a synthetic empty chunk with a FinishReason to trigger the
 	// finalization path in appendStreamChunk.
 	return h.appendStreamChunk(ctx, sessionID, turnID, "", "stream_finalize",
-		msgID, new(bool), buildContent, kind)
+		msgID, new(bool), buildContent, kind, tokenUsage)
 }
 
 // createAndPublishMessage creates a message record and publishes a
@@ -109,6 +113,9 @@ type turnStreamState struct {
 // On the final chunk (finishReason != ""): read all chunks from Redis,
 // concatenate, update the DB with the full content, delete Redis buffer,
 // and publish message.updated to the topic channel.
+//
+// tokenUsage is persisted to the message record on finalization (isLast).
+// Pass nil for intermediate chunks or when token data is unavailable.
 func (h *helpers) appendStreamChunk(
 	ctx context.Context,
 	sessionID uuid.UUID,
@@ -119,6 +126,7 @@ func (h *helpers) appendStreamChunk(
 	finalized *bool,
 	buildContent func(string) (protocol.ContentData, error),
 	kind string,
+	tokenUsage *turnagent.TokenUsage,
 ) error {
 	if h.deps.UpdatePublisher == nil {
 		return nil
@@ -205,6 +213,18 @@ func (h *helpers) appendStreamChunk(
 	if _, pubErr := h.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		if err := h.deps.MessageRepo.UpdateStreamingStatus(txCtx, *msgID, protocol.MessageStreamingCompleted, serializedContent); err != nil {
 			return nil, fmt.Errorf("update streaming status: %w", err)
+		}
+		// 写入 token 用量（仅 final chunk 有值）。
+		if tokenUsage != nil {
+			if err := h.deps.MessageRepo.UpdateTokenUsage(txCtx, *msgID, &model.TokenUsageUpdate{
+				InputTokens:     tokenUsage.InputTokens,
+				OutputTokens:    tokenUsage.OutputTokens,
+				TotalTokens:     tokenUsage.TotalTokens,
+				CachedTokens:    tokenUsage.CachedTokens,
+				ReasoningTokens: tokenUsage.ReasoningTokens,
+			}); err != nil {
+				return nil, fmt.Errorf("update token usage: %w", err)
+			}
 		}
 		return []updates.UpdatePublishItem{{
 			Channel: topicCh,

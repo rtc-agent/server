@@ -26,6 +26,13 @@ type Message struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	DeletedAt       *time.Time `gorm:"index" json:"-"`
+
+	// Token 用量（仅 assistant 消息有值，其余角色通常为 NULL）
+	InputTokens     *int `json:"input_tokens,omitempty"`
+	OutputTokens    *int `json:"output_tokens,omitempty"`
+	TotalTokens     *int `json:"total_tokens,omitempty"`
+	CachedTokens    *int `json:"cached_tokens,omitempty"`
+	ReasoningTokens *int `json:"reasoning_tokens,omitempty"`
 }
 
 func (m *Message) BeforeCreate(tx *gorm.DB) error {
@@ -53,6 +60,15 @@ const (
 	MessageStreamingCompleted = protocol.MessageStreamingCompleted
 	MessageStreamingFailed    = protocol.MessageStreamingFailed
 )
+
+// TokenUsageUpdate carries the token usage values for a message update.
+type TokenUsageUpdate struct {
+	InputTokens     int
+	OutputTokens    int
+	TotalTokens     int
+	CachedTokens    int
+	ReasoningTokens int
+}
 
 // ToProtocolMessage 将 dbmodel.Message 转换为 protocol.Message。
 // nil 输入返回零值 protocol.Message。
@@ -86,5 +102,10 @@ func ToProtocolMessage(m *Message) protocol.Message {
 		pid := protocol.UUID(m.ParentMessageID.String())
 		result.ParentMessageId = &pid
 	}
+	result.InputTokens = m.InputTokens
+	result.OutputTokens = m.OutputTokens
+	result.TotalTokens = m.TotalTokens
+	result.CachedTokens = m.CachedTokens
+	result.ReasoningTokens = m.ReasoningTokens
 	return result
 }

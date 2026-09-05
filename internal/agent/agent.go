@@ -40,6 +40,7 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/callbacks"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -164,6 +165,12 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		// Middleware — the summarization middleware is injected into the
 		// agent by CreateAgent via this field.
 		AgentMiddlewares: []adk.ChatModelAgentMiddleware{summarizeMW},
+
+		// eino Callbacks — the token usage handler records metrics and logs
+		// for every ChatModel call (including summarizeMessages).
+		Callbacks: []callbacks.Handler{
+			newTokenUsageCallbackHandler(cfg.Metrics, cfg.Logger),
+		},
 
 		// Observability
 		Logger:           cfg.Logger,

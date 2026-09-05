@@ -100,4 +100,18 @@ type Event struct {
 
 	// Err is the event-level error. Populated only for EventKindError.
 	Err error
+
+	// TokenUsage carries the token usage of the LLM call that produced this
+	// event. It is populated on:
+	//   - EventKindStreamChunk where FinishReason != "" (the final chunk)
+	//   - EventKindStreamEnd (aggregated usage from all chunks, fallback when
+	//     the final chunk didn't carry Usage — common in ReAct loops)
+	//   - EventKindMessage (a complete, non-streaming message)
+	// All other events carry nil.
+	//
+	// The upper application reads this field during message finalization to
+	// persist token usage to the DB. For StreamEnd, the usage is extracted
+	// by aggregating all chunks (taking max of each field), ensuring that
+	// intermediate ChatModel calls in ReAct loops also get their tokens recorded.
+	TokenUsage *TokenUsage
 }

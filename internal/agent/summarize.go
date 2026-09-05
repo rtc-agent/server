@@ -37,6 +37,7 @@ func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, 
 		Trigger: &turnagent.TriggerCondition{
 			ContextTokens: h.contextTokensLimit,
 		},
+		TokenCounter:    cumulativeTokenCounter,
 		CompressContext: h.compressContext,
 		OnCompress:      h.persistCompressedMessages,
 		Log:             h.logger,
@@ -139,7 +140,46 @@ func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message)
 		return "", fmt.Errorf("chat model returned empty response")
 	}
 
+	// Record token usage for the summarization LLM call.
+	// This call bypasses the eino callback chain (it uses the raw ChatModel
+	// from deps), so we must record metrics and log manually.
+	h.recordSummarizeTokenUsage(ctx, resp)
+
 	return resp.Content, nil
+}
+
+// recordSummarizeTokenUsage extracts token usage from a summarization response
+// and records it to metrics + structured log.
+func (h *helpers) recordSummarizeTokenUsage(ctx context.Context, resp *schema.Message) {
+	if resp.ResponseMeta == nil || resp.ResponseMeta.Usage == nil {
+		return
+	}
+
+	usage := resp.ResponseMeta.Usage
+
+	sessionID := turnagent.SessionIDFromContext(ctx)
+	turnID := turnagent.TurnIDFromContext(ctx)
+
+	if h.metrics != nil {
+		h.metrics.RecordLLMCall(ctx, turnagent.LLMCallMetricsAttrs{
+			SessionID:    sessionID,
+			TurnID:       turnID,
+			Model:        "summarize",
+			InputTokens:  usage.PromptTokens,
+			OutputTokens: usage.CompletionTokens,
+			TotalTokens:  usage.TotalTokens,
+		})
+	}
+
+	h.logIfEnabled(ctx, "summarize.llm_complete", map[string]any{
+		"session_id":    sessionID,
+		"turn_id":       turnID,
+		"input_tokens":  usage.PromptTokens,
+		"output_tokens": usage.CompletionTokens,
+		"total_tokens":  usage.TotalTokens,
+		"cached_tokens": usage.PromptTokenDetails.CachedTokens,
+		"finish_reason": resp.ResponseMeta.FinishReason,
+	})
 }
 
 // persistCompressedMessages persists the compressed message history to the
@@ -217,6 +257,47 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 	})
 
 	return nil
+}
+
+// cumulativeTokenCounter estimates the total token count across all messages.
+//
+// Strategy:
+//   - For messages with ResponseMeta.Usage (from LLM responses), use TotalTokens
+//     as the context size baseline at that point in the conversation.
+//   - For messages without Usage data, estimate via ~4 chars per token.
+//   - Walk backwards to find the last message with Usage, use its TotalTokens
+//     as the cumulative baseline, then add estimates for newer messages.
+//   - If no messages have Usage data at all, fall back to estimating every
+//     message from content length.
+func cumulativeTokenCounter(_ context.Context, messages []*schema.Message) (int, error) {
+	// 1. 从后向前查找最后一条带 Usage 的 assistant 消息作为基线。
+	var baseTokens int
+	incrementStart := 0
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.ResponseMeta != nil && msg.ResponseMeta.Usage != nil && msg.ResponseMeta.Usage.TotalTokens > 0 {
+			baseTokens = msg.ResponseMeta.Usage.TotalTokens
+			incrementStart = i + 1
+			break
+		}
+	}
+
+	// 2. 累加基线之后新增消息的估算 token。
+	var estimated int
+	for _, msg := range messages[incrementStart:] {
+		estimated += estimateTokens(msg)
+	}
+
+	return baseTokens + estimated, nil
+}
+
+// estimateTokens estimates token count for a single message (~4 chars/token).
+func estimateTokens(msg *schema.Message) int {
+	if msg == nil {
+		return 0
+	}
+	return len(msg.Content)/4 + len(msg.ReasoningContent)/4
 }
 
 // =============================================================================

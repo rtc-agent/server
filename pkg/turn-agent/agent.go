@@ -50,6 +50,14 @@ func New(cfg Config) (*Agent, error) {
 func (a *Agent) buildEinoConfig(sessionID, turnID, checkpointID string) adk.TurnLoopConfig[WorkPayload, *schema.Message] {
 	return adk.TurnLoopConfig[WorkPayload, *schema.Message]{
 		GenInput: func(ctx context.Context, loop *adk.TurnLoop[WorkPayload, *schema.Message], items []WorkPayload) (*adk.GenInputResult[WorkPayload, *schema.Message], error) {
+			// Inject sessionID/turnID into ctx BEFORE callbacks, so eino
+			// callback handlers (metrics, logging) can read them via
+			// SessionIDFromContext / TurnIDFromContext on every ChatModel call.
+			// This is what makes the callback handler able to label per-call
+			// records with the session/turn that produced them.
+			ctx = WithSessionID(ctx, sessionID)
+			ctx = WithTurnID(ctx, turnID)
+
 			// Inject eino callbacks into ctx so downstream model/tool calls
 			// pick up application-level tracing / metrics handlers. The empty
 			// RunInfo mirrors turn-loop's session-level injection — per-component
@@ -183,12 +191,17 @@ func (a *Agent) dispatchEvents(ctx context.Context, sessionID, turnID string, ev
 	}
 
 	// 4. Non-streaming: emit one message event.
+	var tokenUsage *TokenUsage
+	if mv.Message != nil && mv.Message.ResponseMeta != nil && mv.Message.ResponseMeta.Usage != nil {
+		tokenUsage = extractTokenUsage(mv.Message.ResponseMeta.Usage)
+	}
 	return a.cfg.PublishEvent(ctx, sessionID, turnID, &Event{
-		Kind:      EventKindMessage,
-		AgentName: ev.AgentName,
-		Role:      string(mv.Role),
-		ToolName:  mv.ToolName,
-		Message:   fromEinoMessage(mv.Message),
+		Kind:       EventKindMessage,
+		AgentName:  ev.AgentName,
+		Role:       string(mv.Role),
+		ToolName:   mv.ToolName,
+		Message:    fromEinoMessage(mv.Message),
+		TokenUsage: tokenUsage,
 	})
 }
 
@@ -210,6 +223,35 @@ func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName,
 		"agent_name": agentName,
 		"role":       role,
 	})
+
+	// Aggregate token usage across all chunks by taking the max of each field.
+	// This ensures that even when intermediate ChatModel calls in ReAct loops
+	// don't carry Usage on their final chunk, we still capture the usage data
+	// (which may appear on any chunk from the model provider).
+	var maxUsage *schema.TokenUsage
+	updateMaxUsage := func(usage *schema.TokenUsage) {
+		if usage == nil {
+			return
+		}
+		if maxUsage == nil {
+			maxUsage = &schema.TokenUsage{}
+		}
+		if usage.PromptTokens > maxUsage.PromptTokens {
+			maxUsage.PromptTokens = usage.PromptTokens
+		}
+		if usage.CompletionTokens > maxUsage.CompletionTokens {
+			maxUsage.CompletionTokens = usage.CompletionTokens
+		}
+		if usage.TotalTokens > maxUsage.TotalTokens {
+			maxUsage.TotalTokens = usage.TotalTokens
+		}
+		if usage.PromptTokenDetails.CachedTokens > maxUsage.PromptTokenDetails.CachedTokens {
+			maxUsage.PromptTokenDetails.CachedTokens = usage.PromptTokenDetails.CachedTokens
+		}
+		if usage.CompletionTokensDetails.ReasoningTokens > maxUsage.CompletionTokensDetails.ReasoningTokens {
+			maxUsage.CompletionTokensDetails.ReasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
+		}
+	}
 
 	type recvResult struct {
 		msg *schema.Message
@@ -246,11 +288,39 @@ func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName,
 					"turn_id":    turnID,
 				})
 				stream.Close()
+				// Extract aggregated token usage (max of all chunks) and pass it
+				// on StreamEnd. This ensures that even when the final chunk didn't
+				// carry Usage (common for intermediate ChatModel calls in ReAct
+				// loops), the application can still persist the token data.
+				var aggregatedTokenUsage *TokenUsage
+				if maxUsage != nil {
+					aggregatedTokenUsage = extractTokenUsage(maxUsage)
+					a.logIfEnabled(ctx, LogLevelInfo, "stream.eof.aggregated_usage", map[string]any{
+						"session_id":     sessionID,
+						"turn_id":        turnID,
+						"agent_name":     agentName,
+						"role":           role,
+						"prompt_tokens":  maxUsage.PromptTokens,
+						"completion_tokens": maxUsage.CompletionTokens,
+						"total_tokens":   maxUsage.TotalTokens,
+						"cached_tokens":  maxUsage.PromptTokenDetails.CachedTokens,
+						"reasoning_tokens": maxUsage.CompletionTokensDetails.ReasoningTokens,
+					})
+				} else {
+					a.logIfEnabled(ctx, LogLevelWarn, "stream.eof.no_usage", map[string]any{
+						"session_id": sessionID,
+						"turn_id":    turnID,
+						"agent_name": agentName,
+						"role":       role,
+						"message":    "maxUsage is nil after consuming all chunks",
+					})
+				}
 				return a.cfg.PublishEvent(ctx, sessionID, turnID, &Event{
-					Kind:      EventKindStreamEnd,
-					AgentName: agentName,
-					Role:      role,
-					ToolName:  toolName,
+					Kind:       EventKindStreamEnd,
+					AgentName:  agentName,
+					Role:       role,
+					ToolName:   toolName,
+					TokenUsage: aggregatedTokenUsage,
 				})
 			}
 			if res.err != nil {
@@ -276,8 +346,32 @@ func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName,
 
 			// Valid chunk. Translate and forward.
 			var finishReason string
+			var tokenUsage *TokenUsage
 			if res.msg.ResponseMeta != nil {
 				finishReason = res.msg.ResponseMeta.FinishReason
+				// Log ResponseMeta presence for debugging.
+				a.logIfEnabled(ctx, LogLevelDebug, "stream.chunk.response_meta", map[string]any{
+					"session_id":     sessionID,
+					"turn_id":        turnID,
+					"agent_name":     agentName,
+					"role":           role,
+					"has_usage":      res.msg.ResponseMeta.Usage != nil,
+					"finish_reason":  finishReason,
+					"usage_details": func() string {
+						if res.msg.ResponseMeta.Usage == nil {
+							return "nil"
+						}
+						u := res.msg.ResponseMeta.Usage
+						return fmt.Sprintf("prompt=%d completion=%d total=%d cached=%d reasoning=%d",
+							u.PromptTokens, u.CompletionTokens, u.TotalTokens,
+							u.PromptTokenDetails.CachedTokens, u.CompletionTokensDetails.ReasoningTokens)
+					}(),
+				})
+				// Accumulate usage (take max of each field across all chunks).
+				updateMaxUsage(res.msg.ResponseMeta.Usage)
+				if res.msg.ResponseMeta.Usage != nil {
+					tokenUsage = extractTokenUsage(res.msg.ResponseMeta.Usage)
+				}
 			}
 			a.logIfEnabled(ctx, LogLevelDebug, "stream.chunk", map[string]any{
 				"session_id":    sessionID,
@@ -296,6 +390,7 @@ func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName,
 				Content:          res.msg.Content,
 				ReasoningContent: res.msg.ReasoningContent,
 				FinishReason:     finishReason,
+				TokenUsage:       tokenUsage,
 			}); err != nil {
 				// PublishEvent error: close the stream before propagating so
 				// eino resources are released.

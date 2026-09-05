@@ -33,6 +33,9 @@ type MessageRepo interface {
 	DeleteByIDs(ctx context.Context, ids []uuid.UUID) error
 	// GetByIDs 批量查询消息，返回 map[id]*Message。未找到的 ID 不会出现在 map 中。
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Message, error)
+	// UpdateTokenUsage updates the token usage fields for a message.
+	// Used to record LLM token usage on assistant messages after stream finalization.
+	UpdateTokenUsage(ctx context.Context, id uuid.UUID, usage *model.TokenUsageUpdate) error
 }
 
 type messageRepo struct {
@@ -204,4 +207,24 @@ func (r *messageRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.U
 		result[m.ID] = m
 	}
 	return result, nil
+}
+
+func (r *messageRepo) UpdateTokenUsage(ctx context.Context, id uuid.UUID, usage *model.TokenUsageUpdate) error {
+	result := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.Message{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"input_tokens":     usage.InputTokens,
+			"output_tokens":    usage.OutputTokens,
+			"total_tokens":     usage.TotalTokens,
+			"cached_tokens":    usage.CachedTokens,
+			"reasoning_tokens": usage.ReasoningTokens,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("update message %s token usage: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("update message %s token usage: %w", id, ErrMessageNotFound)
+	}
+	return nil
 }

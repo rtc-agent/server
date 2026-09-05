@@ -8,6 +8,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/channel"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
@@ -32,15 +33,18 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	state := h.streamState.getOrCreate(turnID.String())
 
 	// Handle markdown content.
+	// Token usage is passed only to the markdown path (not thinking) to avoid
+	// double-counting: both messages originate from the same LLM call, and
+	// the markdown message is the primary assistant response.
 	if event.Content != "" {
-		if err := h.appendStreamChunk(ctx, sessionID, turnID, event.Content, event.FinishReason, &state.markdownMsgID, &state.markdownFinalized, primitives.MarkdownContentData, "markdown"); err != nil {
+		if err := h.appendStreamChunk(ctx, sessionID, turnID, event.Content, event.FinishReason, &state.markdownMsgID, &state.markdownFinalized, primitives.MarkdownContentData, "markdown", event.TokenUsage); err != nil {
 			return err
 		}
 	}
 
 	// Handle reasoning/thinking content.
 	if event.ReasoningContent != "" {
-		if err := h.appendStreamChunk(ctx, sessionID, turnID, event.ReasoningContent, event.FinishReason, &state.thinkingMsgID, &state.thinkingFinalized, primitives.ThinkingContentData, "thinking"); err != nil {
+		if err := h.appendStreamChunk(ctx, sessionID, turnID, event.ReasoningContent, event.FinishReason, &state.thinkingMsgID, &state.thinkingFinalized, primitives.ThinkingContentData, "thinking", nil); err != nil {
 			return err
 		}
 	}
@@ -49,7 +53,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	// finalize the thinking message (thinking and content are mutually
 	// exclusive phases).
 	if event.Content != "" && state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
-		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking"); err != nil {
+		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); err != nil {
 			return err
 		}
 		state.thinkingFinalized = true
@@ -62,7 +66,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	if event.FinishReason != "" && state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
 		if event.Content == "" {
 			// No content in this chunk, but we need to finalize the stream
-			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown"); err != nil {
+			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", event.TokenUsage); err != nil {
 				return err
 			}
 		}
@@ -71,7 +75,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	if event.FinishReason != "" && state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
 		if event.ReasoningContent == "" {
 			// No reasoning content in this chunk, but we need to finalize the stream
-			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking"); err != nil {
+			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); err != nil {
 				return err
 			}
 		}
@@ -86,12 +90,51 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 // Finalizes any pending streaming messages that haven't received a
 // FinishReason chunk (e.g., thinking messages that ended when content
 // started arriving).
+//
+// Token usage routing:
+//   - If a markdown message exists → tokens go to markdown (primary assistant response).
+//   - If no markdown message exists but a thinking message exists → tokens go to thinking.
+//     This handles intermediate ChatModel calls in ReAct loops where the model produces
+//     only thinking + tool calls with no markdown content.
+//   - If the target message was already finalized by handleStreamChunk, we still update
+//     its token fields from the aggregated data (max of all chunks at EOF).
 func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turnID uuid.UUID, event *turnagent.Event) error {
 	state := h.streamState.getOrCreate(turnID.String())
 
+	h.logIfEnabled(ctx, "handleStreamEnd.start", map[string]any{
+		"session_id":            sessionID.String(),
+		"turn_id":               turnID.String(),
+		"role":                  event.Role,
+		"markdown_msg_id":       state.markdownMsgID.String(),
+		"markdown_finalized":    state.markdownFinalized,
+		"thinking_msg_id":       state.thinkingMsgID.String(),
+		"thinking_finalized":    state.thinkingFinalized,
+		"has_token_usage":       event.TokenUsage != nil,
+		"token_usage_total":     func() int { if event.TokenUsage != nil { return event.TokenUsage.TotalTokens }; return -1 }(),
+	})
+
+	// Determine which message receives the token usage.
+	// Priority: markdown > thinking. When no markdown exists, thinking is the
+	// only assistant message for this ChatModel call and should carry the tokens.
+	tokenTargetID := uuid.Nil
+	tokenTargetKind := ""
+	if state.markdownMsgID != uuid.Nil {
+		tokenTargetID = state.markdownMsgID
+		tokenTargetKind = "markdown"
+	} else if state.thinkingMsgID != uuid.Nil {
+		tokenTargetID = state.thinkingMsgID
+		tokenTargetKind = "thinking"
+	}
+
 	// Finalize thinking if pending.
 	if state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
-		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking"); err != nil {
+		// When thinking is the token target (no markdown exists), pass tokenUsage
+		// during finalization. Otherwise pass nil to avoid double-counting.
+		var thinkingTokenUsage *turnagent.TokenUsage
+		if tokenTargetKind == "thinking" {
+			thinkingTokenUsage = event.TokenUsage
+		}
+		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", thinkingTokenUsage); err != nil {
 			return err
 		}
 		state.thinkingFinalized = true
@@ -99,10 +142,42 @@ func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turn
 
 	// Finalize markdown if pending.
 	if state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
-		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown"); err != nil {
+		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", event.TokenUsage); err != nil {
 			return err
 		}
 		state.markdownFinalized = true
+	}
+
+	// If the token target was already finalized (by handleStreamChunk via FinishReason),
+	// update its token usage from the aggregated data. This covers the case where the
+	// final chunk didn't carry Usage but the aggregated max-of-all-chunks does.
+	// Also covers thinking-only messages (intermediate ChatModel calls) that were
+	// just finalized above — UpdateTokenUsage is idempotent, so a redundant call is safe.
+	if tokenTargetID != uuid.Nil && event.TokenUsage != nil {
+		h.logIfEnabled(ctx, "handleStreamEnd.update_token_usage", map[string]any{
+			"session_id":       sessionID.String(),
+			"turn_id":          turnID.String(),
+			"target_kind":      tokenTargetKind,
+			"message_id":       tokenTargetID.String(),
+			"total_tokens":     event.TokenUsage.TotalTokens,
+			"input_tokens":     event.TokenUsage.InputTokens,
+			"output_tokens":    event.TokenUsage.OutputTokens,
+			"cached_tokens":    event.TokenUsage.CachedTokens,
+			"reasoning_tokens": event.TokenUsage.ReasoningTokens,
+		})
+		if err := h.deps.MessageRepo.UpdateTokenUsage(ctx, tokenTargetID, &model.TokenUsageUpdate{
+			InputTokens:     event.TokenUsage.InputTokens,
+			OutputTokens:    event.TokenUsage.OutputTokens,
+			TotalTokens:     event.TokenUsage.TotalTokens,
+			CachedTokens:    event.TokenUsage.CachedTokens,
+			ReasoningTokens: event.TokenUsage.ReasoningTokens,
+		}); err != nil {
+			h.logIfEnabled(ctx, "handleStreamEnd.update_token_usage_failed", map[string]any{
+				"target_kind": tokenTargetKind,
+				"message_id":  tokenTargetID.String(),
+				"error":       err.Error(),
+			})
+		}
 	}
 
 	// Clean up per-turn state.
@@ -167,11 +242,14 @@ func (h *helpers) handleMessage(ctx context.Context, sessionID uuid.UUID, turnID
 			Status:  protocol.MessageStreamingCompleted,
 		})
 	}
+	// Token usage is attached to the markdown (primary assistant) message only,
+	// matching the streaming path's behavior.
 	messagesToCreate = append(messagesToCreate, primitives.MessageToCreate{
-		Role:    protocol.MessageRoleAssistant,
-		Creator: usecase.SystemCreator{},
-		Content: markdownContent,
-		Status:  protocol.MessageStreamingCompleted,
+		Role:       protocol.MessageRoleAssistant,
+		Creator:    usecase.SystemCreator{},
+		Content:    markdownContent,
+		Status:     protocol.MessageStreamingCompleted,
+		TokenUsage: eventToTokenUsageUpdate(event.TokenUsage),
 	})
 
 	// Single RunAndPublish: create all messages in one DB batch and publish
@@ -218,4 +296,19 @@ func (h *helpers) handleEventError(ctx context.Context, sessionID uuid.UUID, tur
 		"error":      errMsg,
 	})
 	return nil
+}
+
+// eventToTokenUsageUpdate converts a pkg-level TokenUsage to a model-level
+// TokenUsageUpdate for persistence. Returns nil when the input is nil.
+func eventToTokenUsageUpdate(tu *turnagent.TokenUsage) *model.TokenUsageUpdate {
+	if tu == nil {
+		return nil
+	}
+	return &model.TokenUsageUpdate{
+		InputTokens:     tu.InputTokens,
+		OutputTokens:    tu.OutputTokens,
+		TotalTokens:     tu.TotalTokens,
+		CachedTokens:    tu.CachedTokens,
+		ReasoningTokens: tu.ReasoningTokens,
+	}
 }

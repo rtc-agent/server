@@ -90,6 +90,22 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 		return nil
 	}
 
+	// Build TokenUsage from DB fields (populated for assistant messages).
+	var tokenUsage *turnagent.TokenUsage
+	if msg.TotalTokens != nil {
+		tokenUsage = &turnagent.TokenUsage{
+			TotalTokens:  *msg.TotalTokens,
+			InputTokens:  intDeref(msg.InputTokens),
+			OutputTokens: intDeref(msg.OutputTokens),
+		}
+		if msg.CachedTokens != nil {
+			tokenUsage.CachedTokens = *msg.CachedTokens
+		}
+		if msg.ReasoningTokens != nil {
+			tokenUsage.ReasoningTokens = *msg.ReasoningTokens
+		}
+	}
+
 	switch contentData.Type {
 	case protocol.ContentTypeSummary:
 		return convertSummaryContent(contentData.Data)
@@ -97,8 +113,9 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 	case protocol.ContentTypeText, protocol.ContentTypeMarkdown:
 		text, _ := primitives.ContentDataString(contentData.Data)
 		return []*turnagent.Message{{
-			Role:    msg.Role,
-			Content: text,
+			Role:       msg.Role,
+			Content:    text,
+			TokenUsage: tokenUsage,
 		}}
 
 	case protocol.ContentTypeThinking:
@@ -139,6 +156,14 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 	default:
 		return nil
 	}
+}
+
+// intDeref safely dereferences a *int, returning 0 for nil.
+func intDeref(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 // convertSummaryContent expands a summary content block into multiple messages.

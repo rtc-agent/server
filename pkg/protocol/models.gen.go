@@ -309,9 +309,15 @@ type CloseSessionResult struct {
 	Success bool `json:"success"`
 }
 
-// ContentData 消息内容数据，Type 标识 Data 的具体结构，前端根据 Type 决定如何渲染
+// ContentData 消息内容数据，Type 标识 Data 的具体结构，前端根据 Type 决定如何渲染。
+// - `markdown`: Data 为字符串
+// - `summary`: Data 为 SummaryItem[]
+// - `text`: Data 为字符串
+// - `thinking`: Data 为字符串
+// - `toolcall_input`: Data 为 ToolCall 对象
+// - `toolcall_output`: Data 为 ToolCall 对象
 type ContentData struct {
-	// Data 具体内容（结构由 type 决定）
+	// Data 具体内容（结构由 type 决定），类型取决于 type 字段
 	Data interface{} `json:"data"`
 	Type ContentType `json:"type"`
 }
@@ -321,7 +327,13 @@ type ContentType string
 
 // ForkSessionRequest 分叉对话
 type ForkSessionRequest struct {
-	// ContentData 消息内容数据，Type 标识 Data 的具体结构，前端根据 Type 决定如何渲染
+	// ContentData 消息内容数据，Type 标识 Data 的具体结构，前端根据 Type 决定如何渲染。
+	// - `markdown`: Data 为字符串
+	// - `summary`: Data 为 SummaryItem[]
+	// - `text`: Data 为字符串
+	// - `thinking`: Data 为字符串
+	// - `toolcall_input`: Data 为 ToolCall 对象
+	// - `toolcall_output`: Data 为 ToolCall 对象
 	ContentData ContentData `json:"content_data"`
 
 	// Limit Fork 多少条消息？默认200；最多1000条；
@@ -387,6 +399,9 @@ type ListSessionsResponse struct {
 
 // Message defines model for Message.
 type Message struct {
+	// CachedTokens 缓存命中 token 数
+	CachedTokens *int `json:"cached_tokens,omitempty"`
+
 	// ClientId 客户端生成的幂等 ID
 	ClientId *string `json:"client_id,omitempty"`
 
@@ -409,13 +424,25 @@ type Message struct {
 	// Id protocol 内 UUID 类型，JSON 线上为字符串
 	Id UUID `json:"id"`
 
+	// InputTokens 输入 token 数（仅 assistant 消息）
+	InputTokens *int `json:"input_tokens,omitempty"`
+
+	// OutputTokens 输出 token 数（仅 assistant 消息）
+	OutputTokens *int `json:"output_tokens,omitempty"`
+
 	// ParentMessageId protocol 内 UUID 类型，JSON 线上为字符串
-	ParentMessageId *UUID       `json:"parent_message_id,omitempty"`
+	ParentMessageId *UUID `json:"parent_message_id,omitempty"`
+
+	// ReasoningTokens 推理 token 数
+	ReasoningTokens *int        `json:"reasoning_tokens,omitempty"`
 	Role            MessageRole `json:"role"`
 
 	// SessionId protocol 内 UUID 类型，JSON 线上为字符串
 	SessionId       UUID                   `json:"session_id"`
 	StreamingStatus MessageStreamingStatus `json:"streaming_status"`
+
+	// TotalTokens 总 token 数（仅 assistant 消息）
+	TotalTokens *int `json:"total_tokens,omitempty"`
 
 	// TurnId protocol 内 UUID 类型，JSON 线上为字符串
 	TurnId *UUID `json:"turn_id,omitempty"`
@@ -462,67 +489,76 @@ type MessageRole string
 // MessageStreamingStatus defines model for MessageStreamingStatus.
 type MessageStreamingStatus string
 
-// OAuth2AuthorizeResponse defines model for OAuth2AuthorizeResponse.
+// OAuth2AuthorizeResponse OAuth2 授权重定向信息
 type OAuth2AuthorizeResponse struct {
+	// RedirectUrl OAuth2 Provider 授权页面的完整 URL
 	RedirectUrl string `json:"redirect_url"`
-	State       string `json:"state"`
+
+	// State CSRF 防护随机状态参数，回调时需原样传回
+	State string `json:"state"`
 }
 
 // OAuth2Error OAuth2 通用错误响应
 type OAuth2Error struct {
-	// Error invalid_request / invalid_client / invalid_grant / server_error
-	Error            string  `json:"error"`
+	// Error 错误码：
+	// - `invalid_request`: 请求参数无效
+	// - `invalid_client`: 客户端认证失败
+	// - `invalid_grant`: 授权码无效或已过期
+	// - `server_error`: 服务器内部错误
+	Error string `json:"error"`
+
+	// ErrorDescription 人类可读的错误描述，用于调试
 	ErrorDescription *string `json:"error_description,omitempty"`
 }
 
-// OAuth2TokenExchangeRequest defines model for OAuth2TokenExchangeRequest.
+// OAuth2TokenExchangeRequest OAuth2 授权码交换请求，使用 Authorization Code 换取 access_token
 type OAuth2TokenExchangeRequest struct {
-	// Code OAuth2 授权码
+	// Code OAuth2 授权码，由授权回调 URL 的 query 参数携带
 	Code string `json:"code"`
 
-	// DeviceId 前端生成的设备 UUID
+	// DeviceId 前端生成的设备 UUID，用于标识客户端设备
 	DeviceId string `json:"device_id"`
 
-	// DeviceName 设备名称（如 "Chrome on Mac"）
+	// DeviceName 设备显示名称，如 "Chrome on Mac"
 	DeviceName *string `json:"device_name,omitempty"`
 
-	// RedirectUri 重定向 URI
+	// RedirectUri 必须与授权请求中的 redirect_uri 完全一致
 	RedirectUri string `json:"redirect_uri"`
 
-	// State CSRF 防护 state
+	// State CSRF 防护 state，必须与授权请求中的 state 一致且仅使用一次
 	State string `json:"state"`
 
-	// UserAgent User-Agent 字符串
+	// UserAgent 客户端 User-Agent 字符串，用于设备识别
 	UserAgent *string `json:"user_agent,omitempty"`
 }
 
-// OAuth2TokenExchangeResponse defines model for OAuth2TokenExchangeResponse.
+// OAuth2TokenExchangeResponse OAuth2 令牌交换成功响应
 type OAuth2TokenExchangeResponse struct {
-	// AccessToken JWT access token
+	// AccessToken JWT access token，有效期由 expires_in 指定
 	AccessToken string `json:"access_token"`
 
-	// ExpiresIn access token 过期时间（秒）
+	// ExpiresIn access token 过期时间（秒），通常为 900（15 分钟）
 	ExpiresIn int64 `json:"expires_in"`
 
-	// RefreshToken refresh token
+	// RefreshToken refresh token，用于在 access_token 过期后换取新 token
 	RefreshToken string `json:"refresh_token"`
 
-	// UserId 用户 ID
+	// UserId 已认证用户的唯一 ID
 	UserId string `json:"user_id"`
 }
 
-// OAuth2TokenRefreshRequest defines model for OAuth2TokenRefreshRequest.
+// OAuth2TokenRefreshRequest OAuth2 令牌刷新请求，使用 refresh_token 换取新的 access_token
 type OAuth2TokenRefreshRequest struct {
-	// RefreshToken refresh token
+	// RefreshToken refresh token，使用一次后即失效（rotation）
 	RefreshToken string `json:"refresh_token"`
 }
 
-// OAuth2TokenRefreshResponse defines model for OAuth2TokenRefreshResponse.
+// OAuth2TokenRefreshResponse OAuth2 令牌刷新成功响应
 type OAuth2TokenRefreshResponse struct {
 	// AccessToken 新的 JWT access token
 	AccessToken string `json:"access_token"`
 
-	// ExpiresIn access token 过期时间（秒）
+	// ExpiresIn 新 access token 过期时间（秒）
 	ExpiresIn int64 `json:"expires_in"`
 }
 
@@ -617,7 +653,13 @@ type SendMessageRequest struct {
 	// ClientSessionId 必填
 	ClientSessionId string `json:"client_session_id"`
 
-	// ContentData 消息内容数据，Type 标识 Data 的具体结构，前端根据 Type 决定如何渲染
+	// ContentData 消息内容数据，Type 标识 Data 的具体结构，前端根据 Type 决定如何渲染。
+	// - `markdown`: Data 为字符串
+	// - `summary`: Data 为 SummaryItem[]
+	// - `text`: Data 为字符串
+	// - `thinking`: Data 为字符串
+	// - `toolcall_input`: Data 为 ToolCall 对象
+	// - `toolcall_output`: Data 为 ToolCall 对象
 	ContentData ContentData `json:"content_data"`
 
 	// ServerSessionId protocol 内 UUID 类型，JSON 线上为字符串
