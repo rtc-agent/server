@@ -141,16 +141,20 @@ func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message)
 	}
 
 	// Record token usage for the summarization LLM call.
-	// This call bypasses the eino callback chain (it uses the raw ChatModel
-	// from deps), so we must record metrics and log manually.
-	h.recordSummarizeTokenUsage(ctx, resp)
+	// Metrics are recorded by the eino callback handler (OnEnd, registered in
+	// token_callback.go). The callback fires because the turn context carries
+	// the callback handlers via callbacks.InitCallbacks. We only keep a
+	// supplementary structured log here for the extra fields (cached_tokens,
+	// finish_reason) that the callback does not emit.
+	h.logSummarizeTokenUsage(ctx, resp)
 
 	return resp.Content, nil
 }
 
-// recordSummarizeTokenUsage extracts token usage from a summarization response
-// and records it to metrics + structured log.
-func (h *helpers) recordSummarizeTokenUsage(ctx context.Context, resp *schema.Message) {
+// logSummarizeTokenUsage emits a structured log line for a summarization LLM
+// call. Metrics are handled by the eino callback (see token_callback.go); this
+// function only logs the supplementary fields (cached_tokens, finish_reason).
+func (h *helpers) logSummarizeTokenUsage(ctx context.Context, resp *schema.Message) {
 	if resp.ResponseMeta == nil || resp.ResponseMeta.Usage == nil {
 		return
 	}
@@ -159,17 +163,6 @@ func (h *helpers) recordSummarizeTokenUsage(ctx context.Context, resp *schema.Me
 
 	sessionID := turnagent.SessionIDFromContext(ctx)
 	turnID := turnagent.TurnIDFromContext(ctx)
-
-	if h.metrics != nil {
-		h.metrics.RecordLLMCall(ctx, turnagent.LLMCallMetricsAttrs{
-			SessionID:    sessionID,
-			TurnID:       turnID,
-			Model:        "summarize",
-			InputTokens:  usage.PromptTokens,
-			OutputTokens: usage.CompletionTokens,
-			TotalTokens:  usage.TotalTokens,
-		})
-	}
 
 	h.logIfEnabled(ctx, "summarize.llm_complete", map[string]any{
 		"session_id":    sessionID,

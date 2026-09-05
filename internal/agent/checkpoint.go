@@ -10,6 +10,7 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/redis/go-redis/v9"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // redisCheckpointStore implements adk.CheckPointStore using Redis as the backend.
@@ -95,3 +96,77 @@ func (s *redisCheckpointStore) Delete(ctx context.Context, id string) error {
 
 // compile-time check: redisCheckpointStore implements adk.CheckPointStore.
 var _ adk.CheckPointStore = (*redisCheckpointStore)(nil)
+
+// metricsCheckpointStore wraps an adk.CheckPointStore and records metrics for
+// every Set/Get/Delete via turnagent.Metrics.RecordCheckpoint.
+//
+// This is the "instrumented decorator" pattern recommended by the Metrics
+// interface docs: turn-agent owns the CheckPointStore lifecycle (via eino
+// TurnLoop) but does not emit per-operation telemetry itself, so the
+// application layer wraps the store to bridge the gap.
+type metricsCheckpointStore struct {
+	inner   adk.CheckPointStore
+	metrics turnagent.Metrics
+}
+
+// newMetricsCheckpointStore wraps inner with metrics recording. If metrics is
+// nil the wrapper degrades to a passthrough (no metrics, no overhead beyond
+// the extra method call).
+func newMetricsCheckpointStore(inner adk.CheckPointStore, metrics turnagent.Metrics) adk.CheckPointStore {
+	if metrics == nil {
+		return inner
+	}
+	return &metricsCheckpointStore{inner: inner, metrics: metrics}
+}
+
+func (s *metricsCheckpointStore) Set(ctx context.Context, id string, data []byte) error {
+	start := time.Now()
+	err := s.inner.Set(ctx, id, data)
+	s.metrics.RecordCheckpoint(ctx, turnagent.CheckpointMetricsAttrs{
+		SessionID:  turnagent.SessionIDFromContext(ctx),
+		Operation:  "save",
+		DataSize:   len(data),
+		DurationMs: time.Since(start).Milliseconds(),
+		Error:      err,
+	})
+	return err
+}
+
+func (s *metricsCheckpointStore) Get(ctx context.Context, id string) ([]byte, bool, error) {
+	start := time.Now()
+	data, found, err := s.inner.Get(ctx, id)
+	s.metrics.RecordCheckpoint(ctx, turnagent.CheckpointMetricsAttrs{
+		SessionID:  turnagent.SessionIDFromContext(ctx),
+		Operation:  "load",
+		DataSize:   len(data),
+		DurationMs: time.Since(start).Milliseconds(),
+		Error:      err,
+	})
+	return data, found, err
+}
+
+func (s *metricsCheckpointStore) Delete(ctx context.Context, id string) error {
+	start := time.Now()
+	var err error
+	// adk.CheckPointStore only requires Get/Set; Delete lives on the optional
+	// adk.CheckPointDeleter interface. If the inner store doesn't implement it,
+	// deletion is a no-op (the inner relies on TTL for cleanup).
+	if deleter, ok := s.inner.(adk.CheckPointDeleter); ok {
+		err = deleter.Delete(ctx, id)
+	}
+	s.metrics.RecordCheckpoint(ctx, turnagent.CheckpointMetricsAttrs{
+		SessionID:  turnagent.SessionIDFromContext(ctx),
+		Operation:  "delete",
+		DurationMs: time.Since(start).Milliseconds(),
+		Error:      err,
+	})
+	return err
+}
+
+// compile-time check: metricsCheckpointStore implements adk.CheckPointStore.
+var _ adk.CheckPointStore = (*metricsCheckpointStore)(nil)
+
+// compile-time check: metricsCheckpointStore implements adk.CheckPointDeleter.
+// We always implement it; if the inner store doesn't support deletion, Delete
+// is a no-op (see implementation above).
+var _ adk.CheckPointDeleter = (*metricsCheckpointStore)(nil)

@@ -151,7 +151,10 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		PublishEvent: h.publishEvent,
 
 		// Checkpoint
-		CheckpointStore: newRedisCheckpointStore(cfg.Redis, defaultCheckpointTTL(cfg.CheckpointTTL)),
+		CheckpointStore: newMetricsCheckpointStore(
+			newRedisCheckpointStore(cfg.Redis, defaultCheckpointTTL(cfg.CheckpointTTL)),
+			cfg.Metrics,
+		),
 
 		// DeriveCheckpointID overrides the default key pattern to maintain
 		// backward compatibility with existing checkpoints in Redis.
