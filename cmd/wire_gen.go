@@ -97,7 +97,8 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	client := provideOAuth2ProviderClient(cfg)
 	oAuth2Handler := provideOAuth2Handler(serviceContext, jwtSigner, redisStore, client, cfg)
 	interruptHandler := provideInterruptHandler(universalClient, cfg)
-	agent, err := provideAgent(dependencies, universalClient, cfg)
+	prometheusMetrics := provideMetrics()
+	agent, err := provideAgent(dependencies, universalClient, cfg, prometheusMetrics)
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +132,7 @@ var UsecaseSet = wire.NewSet(
 var QueueSet = wire.NewSet(
 	provideQueue,
 	provideStreamStore,
+	provideMetrics,
 	provideAgent,
 	provideQueueWorker,
 )
@@ -234,6 +236,7 @@ func provideAgent(
 	deps *usecase.Dependencies,
 	redisClient redis.UniversalClient,
 	cfg *config.Config,
+	metrics *turnagent.PrometheusMetrics,
 ) (*turnagent.Agent, error) {
 	return agent.New(agent.Config{
 		Deps:               deps,
@@ -243,7 +246,13 @@ func provideAgent(
 		CheckpointTTL:      cfg.Worker.CheckpointTTL,
 		StreamChunkTTL:     cfg.Worker.StreamChunkTTL,
 		Logger:             agent.NewLogger(),
+		Metrics:            metrics,
 	})
+}
+
+// provideMetrics 创建 Prometheus 指标收集器
+func provideMetrics() *turnagent.PrometheusMetrics {
+	return turnagent.NewPrometheusMetrics()
 }
 
 func provideQueueWorker(

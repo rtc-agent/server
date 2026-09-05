@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/handler/http"
@@ -121,6 +122,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// 公开端点（无需鉴权）
 	mux.HandleFunc("GET /healthz", s.httpHandler.Healthz)
 	mux.HandleFunc("GET /readyz", s.httpHandler.Readyz)
+	mux.Handle("GET /metrics", promhttp.Handler()) // Prometheus 指标
 
 	// OAuth2 端点
 	s.oauth2Handler.RegisterRoutes(mux)

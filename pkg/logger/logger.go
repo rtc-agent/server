@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -105,29 +106,46 @@ func Sync() {
 	}
 }
 
+// extractTraceFields 从 context 中提取 OpenTelemetry trace 信息。
+// 返回的字段包含 trace_id 和 span_id（如果存在有效的 span）。
+func extractTraceFields(ctx context.Context) []zap.Field {
+	if ctx == nil {
+		return nil
+	}
+	span := trace.SpanFromContext(ctx)
+	if span == nil || !span.SpanContext().IsValid() {
+		return nil
+	}
+	sc := span.SpanContext()
+	return []zap.Field{
+		zap.String("trace_id", sc.TraceID().String()),
+		zap.String("span_id", sc.SpanID().String()),
+	}
+}
+
 // Debug 打印调试日志
 func Debug(ctx context.Context, msg string, fields ...zap.Field) {
-	log.Debug(msg, fields...)
+	log.Debug(msg, append(extractTraceFields(ctx), fields...)...)
 }
 
 // Info 打印信息日志
 func Info(ctx context.Context, msg string, fields ...zap.Field) {
-	log.Info(msg, fields...)
+	log.Info(msg, append(extractTraceFields(ctx), fields...)...)
 }
 
 // Warn 打印警告日志
 func Warn(ctx context.Context, msg string, fields ...zap.Field) {
-	log.Warn(msg, fields...)
+	log.Warn(msg, append(extractTraceFields(ctx), fields...)...)
 }
 
 // Error 打印错误日志
 func Error(ctx context.Context, msg string, fields ...zap.Field) {
-	log.Error(msg, fields...)
+	log.Error(msg, append(extractTraceFields(ctx), fields...)...)
 }
 
 // Fatal 打印致命错误日志并退出
 func Fatal(ctx context.Context, msg string, fields ...zap.Field) {
-	log.Fatal(msg, fields...)
+	log.Fatal(msg, append(extractTraceFields(ctx), fields...)...)
 }
 
 // CaptureStack 捕获当前调用栈，返回人类可读的字符串。
