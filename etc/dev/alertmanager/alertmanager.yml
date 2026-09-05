@@ -1,0 +1,22 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ["alertname", "service"]
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: "default"
+
+receivers:
+  - name: "default"
+    # Dev environment: no external notification configured.
+    # Alerts are visible in Grafana and Alertmanager UI.
+    # Add webhook/slack/email here for production.
+
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ["alertname", "service"]

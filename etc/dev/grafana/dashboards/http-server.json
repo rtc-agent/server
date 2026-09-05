@@ -1,0 +1,95 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Request Rate (by handler)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(http_requests_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{method}} {{handler}} {{code}}"
+      }]
+    },
+    {
+      "title": "Error Rate (5xx)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "5xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+      ] },
+      "targets": [
+        { "expr": "rate(http_requests_total{job=\"rtc-agent-server\",code=~\"5..\"}[5m])", "legendFormat": "5xx" },
+        { "expr": "rate(http_requests_total{job=\"rtc-agent-server\",code=~\"4..\"}[5m])", "legendFormat": "4xx" }
+      ]
+    },
+    {
+      "title": "Latency p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{
+        "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))",
+        "legendFormat": "p50"
+      }, {
+        "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))",
+        "legendFormat": "p95"
+      }, {
+        "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))",
+        "legendFormat": "p99"
+      }]
+    },
+    {
+      "title": "Request Size (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, rate(http_request_size_bytes_bucket{job=\"rtc-agent-server\"}[5m]))",
+        "legendFormat": "request_size_p95"
+      }]
+    },
+    {
+      "title": "Response Size (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, rate(http_response_size_bytes_bucket{job=\"rtc-agent-server\"}[5m]))",
+        "legendFormat": "response_size_p95"
+      }]
+    },
+    {
+      "title": "In-flight Requests",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "http_in_flight_requests{job=\"rtc-agent-server\"}",
+        "legendFormat": "{{handler}}"
+      }]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["http", "server"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "HTTP Server",
+  "uid": "http-server",
+  "version": 1
+}

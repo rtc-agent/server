@@ -1,0 +1,22 @@
+FROM golang:1.27-alpine AS builder
+
+WORKDIR /app
+
+# Copy all source (local module replacements require full source before go mod)
+COPY . .
+
+# Build the full binary (main.go + cmd package with mock-oauth2 subcommand)
+RUN CGO_ENABLED=0 go build -o /rtc-agent .
+
+# Runtime image
+FROM alpine:3.20
+
+RUN apk --no-cache add ca-certificates
+WORKDIR /app
+
+COPY --from=builder /rtc-agent /app/rtc-agent
+COPY etc/mock-oauth2.yaml /app/etc/mock-oauth2.yaml
+
+EXPOSE 10060
+
+CMD ["/app/rtc-agent", "mock-oauth2"]

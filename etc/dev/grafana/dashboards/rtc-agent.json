@@ -1,0 +1,141 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "LLM 用量",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "title": "Token 消耗速率 (by model)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(rtc_llm_tokens_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{model}} {{type}}"
+      }]
+    },
+    {
+      "title": "Token 累计消耗",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "sum by (model, type) (rtc_llm_tokens_total{job=\"rtc-agent-server\"})",
+        "legendFormat": "{{model}} {{type}}"
+      }]
+    },
+    {
+      "title": "LLM 请求延迟 p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(rtc_llm_request_duration_seconds_bucket{job=\"rtc-agent-server\",status=\"success\"}[5m]))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, rate(rtc_llm_request_duration_seconds_bucket{job=\"rtc-agent-server\",status=\"success\"}[5m]))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, rate(rtc_llm_request_duration_seconds_bucket{job=\"rtc-agent-server\",status=\"success\"}[5m]))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "title": "LLM 错误率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+      ] },
+      "targets": [{
+        "expr": "rate(rtc_llm_request_duration_seconds_count{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{model}} {{status}}"
+      }]
+    },
+    {
+      "type": "row",
+      "title": "Turn 执行",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "collapsed": false
+    },
+    {
+      "title": "Turn 完成率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "tps" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(rtc_turn_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{work_kind}} {{status}}"
+      }]
+    },
+    {
+      "title": "Turn 延迟 p50 / p95",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(rtc_turn_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, rate(rtc_turn_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "title": "Interrupt 事件",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "sum by (reason) (rtc_interrupt_total{job=\"rtc-agent-server\"})",
+        "legendFormat": "{{reason}}"
+      }]
+    },
+    {
+      "type": "row",
+      "title": "Checkpoint",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 },
+      "collapsed": false
+    },
+    {
+      "title": "Checkpoint 操作速率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 31 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(rtc_checkpoint_operations_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{operation}} {{status}}"
+      }]
+    },
+    {
+      "title": "Checkpoint 大小 p95",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 31 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, rate(rtc_checkpoint_data_bytes_bucket{job=\"rtc-agent-server\"}[5m]))",
+        "legendFormat": "{{operation}}"
+      }]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["rtc-agent", "llm"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "RTC Agent",
+  "uid": "rtc-agent",
+  "version": 1
+}

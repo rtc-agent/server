@@ -1,0 +1,100 @@
+groups:
+  - name: rtc-agent-alerts
+    rules:
+      # 服务存活
+      - alert: ServerDown
+        expr: up{job="rtc-agent-server"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "RTC Agent server 不可达"
+          description: "{{ $labels.instance }} 已持续 30s 无法采集"
+
+      # HTTP 错误率
+      - alert: HighHTTPErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="rtc-agent-server",code=~"5.."}[5m]))
+            / sum(rate(http_requests_total{job="rtc-agent-server"}[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTP 5xx 错误率 > 5%"
+          description: "当前 5xx 比率: {{ $value | humanizePercentage }}"
+
+      # HTTP 高延迟
+      - alert: HighHTTPLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(http_request_duration_seconds_bucket{job="rtc-agent-server"}[5m])
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTP p95 延迟 > 2s"
+          description: "当前 p95: {{ $value | humanizeDuration }}"
+
+      # LLM 错误
+      - alert: LLMHighErrorRate
+        expr: |
+          (
+            sum(rate(rtc_llm_request_duration_seconds_count{job="rtc-agent-server",status="error"}[5m]))
+            / sum(rate(rtc_llm_request_duration_seconds_count{job="rtc-agent-server"}[5m]))
+          ) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM 调用错误率 > 10%"
+          description: "当前错误率: {{ $value | humanizePercentage }}"
+
+      # Goroutine 泄漏
+      - alert: GoroutineLeak
+        expr: go_goroutines{job="rtc-agent-server"} > 5000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Goroutine 数量异常 ({{ $value }})"
+          description: "Goroutine 数量持续超过 5000，可能存在泄漏"
+
+      # 内存压力
+      - alert: HighMemoryUsage
+        expr: go_memstats_heap_alloc_bytes{job="rtc-agent-server"} > 1e9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "堆内存使用 > 1GB"
+          description: "当前堆内存: {{ $value | humanize1024 }}iB"
+
+      # 容器异常退出
+      - alert: ContainerRestarting
+        expr: changes(process_start_time_seconds{job="rtc-agent-server"}[10m]) > 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RTC Agent server 10 分钟内重启超过 2 次"
+
+  - name: infra-alerts
+    rules:
+      - alert: PostgresDown
+        expr: up{job="rtc-agent-server"} == 0 and on() (count(up{job="rtc-agent-server"}) == 0)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "server 不可达，可能依赖服务故障"
+
+      - alert: PrometheusTargetMissing
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "采集目标不可达: {{ $labels.job }}"

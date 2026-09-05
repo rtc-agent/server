@@ -1,0 +1,125 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Goroutines",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{ "expr": "go_goroutines{job=\"rtc-agent-server\"}", "legendFormat": "goroutines" }]
+    },
+    {
+      "title": "Threads",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{ "expr": "go_threads{job=\"rtc-agent-server\"}", "legendFormat": "threads" }]
+    },
+    {
+      "title": "Heap Allocated",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "expr": "go_memstats_heap_alloc_bytes{job=\"rtc-agent-server\"}", "legendFormat": "heap_alloc" },
+        { "expr": "go_memstats_heap_sys_bytes{job=\"rtc-agent-server\"}", "legendFormat": "heap_sys" },
+        { "expr": "go_memstats_heap_inuse_bytes{job=\"rtc-agent-server\"}", "legendFormat": "heap_inuse" }
+      ]
+    },
+    {
+      "title": "Stack In Use",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "expr": "go_memstats_stack_inuse_bytes{job=\"rtc-agent-server\"}", "legendFormat": "stack_inuse" },
+        { "expr": "go_memstats_stack_sys_bytes{job=\"rtc-agent-server\"}", "legendFormat": "stack_sys" }
+      ]
+    },
+    {
+      "title": "GC Pause Duration (last 2 min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(go_gc_duration_seconds_sum{job=\"rtc-agent-server\"}[2m])",
+        "legendFormat": "gc_pause_rate"
+      }]
+    },
+    {
+      "title": "GC Pause Quantiles",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{
+        "expr": "go_gc_duration_seconds{job=\"rtc-agent-server\"}",
+        "legendFormat": "{{quantile}}"
+      }]
+    },
+    {
+      "title": "Next GC Target",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [{ "expr": "go_memstats_next_gc_bytes{job=\"rtc-agent-server\"}", "legendFormat": "next_gc" }]
+    },
+    {
+      "title": "GC Cycles Total",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{ "expr": "go_gc_cycles_total{job=\"rtc-agent-server\"}", "legendFormat": "{{gc_cycle}}" }]
+    },
+    {
+      "title": "Lookups Total",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [{ "expr": "rate(go_memstats_lookups_total{job=\"rtc-agent-server\"}[5m])", "legendFormat": "lookups/s" }]
+    },
+    {
+      "title": "Mallocs / Frees Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "expr": "rate(go_memstats_mallocs_total{job=\"rtc-agent-server\"}[5m])", "legendFormat": "mallocs/s" },
+        { "expr": "rate(go_memstats_frees_total{job=\"rtc-agent-server\"}[5m])", "legendFormat": "frees/s" }
+      ]
+    },
+    {
+      "title": "Process Uptime",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{ "expr": "time() - process_start_time_seconds{job=\"rtc-agent-server\"}", "legendFormat": "uptime" }]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["go", "runtime"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Go Runtime",
+  "uid": "go-runtime",
+  "version": 1
+}
