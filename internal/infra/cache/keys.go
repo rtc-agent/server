@@ -1,4 +1,4 @@
-// Package rediskey 统一管理所有 Redis key 的前缀与构造函数。
+// Package cache 统一管理所有 Redis key 的前缀与构造函数。
 //
 // 规范：
 //   - 所有 key 前缀常量集中在此文件定义，禁止在业务代码中硬编码 key 字符串。

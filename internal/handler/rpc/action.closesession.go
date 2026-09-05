@@ -8,6 +8,7 @@ import (
 
 	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/infra/contextx"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -125,8 +126,12 @@ func (h *Handler) stopActiveTurns(ctx context.Context, sessionID uuid.UUID) {
 	// 3. Mark remaining active turns as cancelled in DB (belt-and-suspenders)
 	if affected, err := h.deps.Deps.TurnRepo.UpdateStatusBySession(
 		ctx, sessionID,
-		[]string{"pending", "running", "interrupted"},
-		"cancelled",
+		[]string{
+			string(model.TurnStatusPending),
+			string(model.TurnStatusRunning),
+			string(model.TurnStatusInterrupted),
+		},
+		protocol.TurnStatusCancelled,
 	); err != nil {
 		logger.Error(ctx, "[stopActiveTurns] update turns status failed", zap.String("session", sessionID.String()), zap.Error(err))
 	} else if affected > 0 {

@@ -38,16 +38,18 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 
 	// 检查数据库连通性
 	if err := h.svcCtx.DB.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
-		checks["db"] = "error: " + err.Error()
+		checks["db"] = "error"
 		allReady = false
+		logger.Warn(ctx, "Readyz: DB check failed", zap.Error(err))
 	} else {
 		checks["db"] = "ok"
 	}
 
 	// 检查 Redis 连通性
 	if err := h.svcCtx.Redis.Ping(ctx).Err(); err != nil {
-		checks["redis"] = "error: " + err.Error()
+		checks["redis"] = "error"
 		allReady = false
+		logger.Warn(ctx, "Readyz: Redis check failed", zap.Error(err))
 	} else {
 		checks["redis"] = "ok"
 	}
@@ -60,8 +62,9 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 		// Centrifuge node 没有直接的 Ping 方法，通过检查 node 是否 running 来判断
 		// 如果 node 已经 shutdown，NodeInfo() 会返回错误
 		if _, err := h.svcCtx.CentrifugeNode.Info(); err != nil {
-			checks["centrifuge"] = "error: " + err.Error()
+			checks["centrifuge"] = "error"
 			allReady = false
+			logger.Warn(ctx, "Readyz: Centrifuge check failed", zap.Error(err))
 		} else {
 			checks["centrifuge"] = "ok"
 		}

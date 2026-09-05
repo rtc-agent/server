@@ -1,4 +1,4 @@
-// Package statestore 提供 OAuth2 state（CSRF 防护）存储实现。
+// Package oauth 提供 OAuth2 state（CSRF 防护）存储实现。
 package oauth
 
 import (

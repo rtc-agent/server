@@ -152,11 +152,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.Handle("/connection/websocket", wsHandler)
 }
 
-// GetRPCHandler 返回 RPC handler（供 Centrifuge 注册使用）
-func (s *Server) GetRPCHandler() *rpchandler.Handler {
-	return s.rpcHandler
-}
-
 // NewWithDeps 创建服务器（Wire 兼容版本）。
 // 所有依赖由调用方提供，便于 Wire 注入。
 func NewWithDeps(

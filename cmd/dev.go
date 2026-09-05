@@ -16,30 +16,30 @@ var devCmd = &cobra.Command{
 	Long:  `Development utilities for rtc-agent`,
 }
 
-var devDependenceCmd = &cobra.Command{
-	Use:   "dependence",
+var devDependenciesCmd = &cobra.Command{
+	Use:   "dependencies",
 	Short: "Manage development dependencies",
 	Long:  `Manage development dependencies (Redis, PostgreSQL) via Docker Compose`,
 }
 
-var devDependenceStartCmd = &cobra.Command{
+var devDependenciesStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start development dependencies",
 	Long:  `Start Redis and PostgreSQL containers via Docker Compose`,
-	RunE:  runDevDependenceStart,
+	RunE:  runDevDependenciesStart,
 }
 
-var devDependenceFlushallCmd = &cobra.Command{
+var devDependenciesFlushallCmd = &cobra.Command{
 	Use:   "flushall",
 	Short: "Clear all data in development dependencies",
 	Long:  `Clear all data in Redis and PostgreSQL by removing Docker volumes and restarting`,
-	RunE:  runDevDependenceFlushall,
+	RunE:  runDevDependenciesFlushall,
 }
 
 func init() {
-	devDependenceCmd.AddCommand(devDependenceStartCmd)
-	devDependenceCmd.AddCommand(devDependenceFlushallCmd)
-	devCmd.AddCommand(devDependenceCmd)
+	devDependenciesCmd.AddCommand(devDependenciesStartCmd)
+	devDependenciesCmd.AddCommand(devDependenciesFlushallCmd)
+	devCmd.AddCommand(devDependenciesCmd)
 	rootCmd.AddCommand(devCmd)
 }
 
@@ -67,7 +67,7 @@ func getDevComposePath() (string, error) {
 	return "", fmt.Errorf("docker-compose.yml not found (searched cwd and source location)")
 }
 
-func runDevDependenceStart(cmd *cobra.Command, args []string) error {
+func runDevDependenciesStart(cmd *cobra.Command, args []string) error {
 	composePath, err := getDevComposePath()
 	if err != nil {
 		return err
@@ -85,7 +85,7 @@ func runDevDependenceStart(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runDevDependenceFlushall(cmd *cobra.Command, args []string) error {
+func runDevDependenciesFlushall(cmd *cobra.Command, args []string) error {
 	composePath, err := getDevComposePath()
 	if err != nil {
 		return err
