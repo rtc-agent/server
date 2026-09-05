@@ -90,14 +90,18 @@ func (r *sessionRepo) GetByUser(ctx context.Context, userID uuid.UUID, cursor *s
 }
 
 func (r *sessionRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.SessionStatus) error {
+	now := time.Now()
+	updates := map[string]any{
+		"status":     string(status),
+		"updated_at": now,
+	}
+	if status == model.SessionStatusClosed {
+		updates["closed_at"] = now
+	}
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.Session{}).
 		Where("id = ?", id).
-		Updates(map[string]any{
-			"status":     string(status),
-			"updated_at": time.Now(),
-			"closed_at":  gorm.Expr("CASE WHEN ? = ? THEN NOW() ELSE closed_at END", status, model.SessionStatusClosed),
-		})
+		Updates(updates)
 	if result.Error != nil {
 		return fmt.Errorf("update session %s status: %w", id, result.Error)
 	}

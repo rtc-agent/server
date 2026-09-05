@@ -49,10 +49,7 @@ func (h *Handler) loadOwnedSession(ctx context.Context, sessionID uuid.UUID, use
 				Message: fmt.Sprintf("session %s not found", sessionID),
 			}
 		}
-		return nil, &APIError{
-			Code:    "session.load_failed",
-			Message: fmt.Sprintf("failed to load session %s", sessionID),
-		}
+		return nil, h.internalError(ctx, "session.load_failed", fmt.Sprintf("failed to load session %s", sessionID), err)
 	}
 	creator := usecase.UserCreator{UserID: userID}
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {

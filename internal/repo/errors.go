@@ -1,3 +1,7 @@
+// Package repo 提供数据访问层（Repository）实现。
+//
+// 所有 repo 方法必须通过 DBFromContext 获取数据库句柄，以支持事务透传。
+// 哨兵错误集中在 errors.go 中定义，调用方可通过 errors.Is 判断错误类型。
 package repo
 
 import "errors"

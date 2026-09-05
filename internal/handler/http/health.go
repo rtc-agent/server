@@ -1,3 +1,7 @@
+// Package httphandler 提供 HTTP API 的协议适配层。
+//
+// 包含健康检查（healthz/readyz）、OAuth2 端点、Interrupt 提交等 HTTP 路由。
+// 所有 HTTP 响应通过 httputil 包统一格式化。
 package httphandler
 
 import (

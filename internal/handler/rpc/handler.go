@@ -1,3 +1,7 @@
+// Package rpchandler 提供 Centrifuge RPC 接口的协议适配层。
+//
+// 每个 RPC 方法对应一个 handler 函数，通过 registerRoutes 统一注册。
+// 所有对外返回的错误必须使用 APIError 类型，确保不泄露内部细节。
 package rpchandler
 
 import (
@@ -97,6 +101,12 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// SafeMessage 返回对客户端安全的错误描述（不含内部细节）。
+// 用于 svc 层在不导入 rpchandler 的前提下提取安全的错误消息。
+func (e *APIError) SafeMessage() string {
+	return e.Error()
 }
 
 // ========== HandleRPC ==========

@@ -1,3 +1,7 @@
+// Package middleware 提供 HTTP 中间件集合。
+//
+// 包含 CORS、安全响应头、请求日志、JWT 鉴权等中间件。
+// 通过 Chain 函数可组合多个中间件，按洋葱模型依次执行。
 package middleware
 
 import "net/http"

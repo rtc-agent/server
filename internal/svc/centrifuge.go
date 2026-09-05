@@ -200,14 +200,41 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 
 		resp, err := handler.HandleRPC(ctx, e.Method, e.Data)
 		if err != nil {
-			cb(centrifuge.RPCReply{}, &centrifuge.Error{
-				Code:    500,
-				Message: err.Error(),
-			})
+			// 仅转发 APIError（已脱敏的安全错误），其他错误返回通用提示，
+			// 防止数据库语句、连接信息等内部细节泄露给客户端。
+			if apiErr, ok := extractAPIError(err); ok {
+				cb(centrifuge.RPCReply{}, &centrifuge.Error{
+					Code:    500,
+					Message: apiErr,
+				})
+			} else {
+				logger.Error(ctx, "RPC handler returned non-API error",
+					zap.String("method", e.Method),
+					zap.Error(err))
+				cb(centrifuge.RPCReply{}, &centrifuge.Error{
+					Code:    500,
+					Message: "internal error",
+				})
+			}
 			return
 		}
 		cb(centrifuge.RPCReply{Data: resp}, nil)
 	})
+}
+
+// extractAPIError 尝试从 error 中提取安全的客户端可见错误消息。
+// 通过检查 error 是否实现了包含 Code/Message 字段的结构体来判断。
+func extractAPIError(err error) (string, bool) {
+	// rpchandler.APIError 有 Code 和 Message 字段。
+	// 使用 structural typing 避免直接导入 rpchandler 包。
+	type safeError interface {
+		Error() string
+		SafeMessage() string
+	}
+	if se, ok := err.(safeError); ok {
+		return se.SafeMessage(), true
+	}
+	return "", false
 }
 
 // RegisterRPCHandler 注册 RPC 处理器。
