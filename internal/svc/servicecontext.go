@@ -37,7 +37,7 @@ type ServiceContext struct {
 	UpdatePublisher *updates.UpdatePublisher
 	CentrifugeNode  *centrifuge.Node
 	Broker          *centrifugeplus.DualBroker
-	JwtSigner       *auth.JWTSigner
+	JWTSigner       *auth.JWTSigner
 }
 
 // NewServiceContext 创建服务上下文
@@ -85,7 +85,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		UpdatePublisher:  updatePublisher,
 		CentrifugeNode:   node,
 		Broker:           dualBroker,
-		JwtSigner:        jwtSigner,
+		JWTSigner:        jwtSigner,
 	}
 }
 
@@ -124,6 +124,6 @@ func NewServiceContextWithDeps(
 		UpdatePublisher:  updatePublisher,
 		CentrifugeNode:   node,
 		Broker:           broker,
-		JwtSigner:        jwtSigner,
+		JWTSigner:        jwtSigner,
 	}
 }

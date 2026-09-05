@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/rtc-agent/server/internal/infra/auth"
-	"github.com/rtc-agent/server/internal/infra/context"
+	"github.com/rtc-agent/server/internal/infra/contextx"
 
 	"github.com/google/uuid"
 )

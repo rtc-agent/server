@@ -10,7 +10,7 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
 
-	"github.com/rtc-agent/server/internal/infra/context"
+	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/protocol"

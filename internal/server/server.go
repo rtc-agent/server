@@ -140,7 +140,7 @@ func New(cfg *config.Config, svcCtx *svc.ServiceContext) *Server {
 		svcCtx:           svcCtx,
 		rpcHandler:       rpcHandler,
 		httpHandler:      httphandler.NewHandler(svcCtx),
-		oauth2Handler:    httphandler.NewOAuth2Handler(svcCtx, svcCtx.JwtSigner, stateStore, providerClient, cfg.Auth),
+		oauth2Handler:    httphandler.NewOAuth2Handler(svcCtx, svcCtx.JWTSigner, stateStore, providerClient, cfg.Auth),
 		interruptHandler: httphandler.NewInterruptHandler(svcCtx.Redis, cfg.Worker),
 		queueWorker:      queueWorker,
 	}

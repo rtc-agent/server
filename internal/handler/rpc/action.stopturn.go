@@ -4,7 +4,7 @@ package rpchandler
 import (
 	"context"
 
-	"github.com/rtc-agent/server/internal/infra/context"
+	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"

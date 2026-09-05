@@ -14,7 +14,7 @@ import (
 	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
-	"github.com/rtc-agent/server/internal/infra/context"
+	"github.com/rtc-agent/server/internal/infra/contextx"
 	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/logger"
 )
