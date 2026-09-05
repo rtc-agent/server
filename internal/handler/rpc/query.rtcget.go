@@ -8,6 +8,7 @@ import (
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.uber.org/zap"
 )
 
 // RtcGet 获取当前用户会话中的单个 RTC。
@@ -37,7 +38,9 @@ func (h *Handler) RtcGet(ctx context.Context, req *protocol.RtcGetRequest) (*pro
 		return nil, err
 	}
 
-	logger.Info("[RtcGet] user=%s rtc=%s", userID, req.RtcId)
+	logger.Info(ctx, "[RtcGet]",
+		zap.String("user", userID.String()),
+		zap.String("rtc", string(req.RtcId)))
 	return &protocol.RtcGetResponse{
 		Item: model.ToProtocolRtc(rtc),
 	}, nil

@@ -12,6 +12,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -39,15 +40,15 @@ func runServe(cmd *cobra.Command, args []string) {
 	logger.Init(cfg.Log.Level)
 	defer logger.Sync()
 
-	logger.Info("Starting RTC Agent server...")
+	logger.Info(context.Background(), "Starting RTC Agent server...")
 	if logger.DebugMode {
-		logger.Info("DEBUG mode enabled — extra logs writing to logs/debug.log")
+		logger.Info(context.Background(), "DEBUG mode enabled — extra logs writing to logs/debug.log")
 	}
 
 	// Init database
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{})
 	if err != nil {
-		logger.Fatal("Failed to connect database: %v", err)
+		logger.Fatal(context.Background(), "Failed to connect database", zap.Error(err))
 	}
 
 	// 注意：schema 迁移请使用独立命令 `rtc-agent migrate`，不在 serve 中自动执行
@@ -60,18 +61,18 @@ func runServe(cmd *cobra.Command, args []string) {
 	})
 	// 启动时验证 Redis 连接
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		logger.Fatal("Failed to connect Redis: %v", err)
+		logger.Fatal(context.Background(), "Failed to connect Redis", zap.Error(err))
 	}
 	defer func() { _ = rdb.Close() }()
 
 	// Init server (Wire-generated)
 	srv, err := InitializeServer(cfg, db, rdb)
 	if err != nil {
-		logger.Fatal("Failed to initialize server: %v", err)
+		logger.Fatal(context.Background(), "Failed to initialize server", zap.Error(err))
 	}
 	go func() {
 		if err := srv.Start(); err != nil {
-			logger.Fatal("Server failed: %v", err)
+			logger.Fatal(context.Background(), "Server failed", zap.Error(err))
 		}
 	}()
 
@@ -80,6 +81,6 @@ func runServe(cmd *cobra.Command, args []string) {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	logger.Info("Shutting down server...")
+	logger.Info(context.Background(), "Shutting down server...")
 	srv.Stop()
 }

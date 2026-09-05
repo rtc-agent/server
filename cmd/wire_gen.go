@@ -7,6 +7,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"github.com/centrifugal/centrifuge"
 	"github.com/cloudwego/eino/components/model"
@@ -26,6 +27,7 @@ import (
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 	"github.com/rtc-agent/server/pkg/rtc-queue"
 	"github.com/rtc-agent/server/pkg/turn-agent"
 	"gorm.io/gorm"
@@ -220,16 +222,16 @@ type chatModelResult struct {
 
 func provideChatModel(cfg *config.Config) (*chatModelResult, error) {
 	if cfg.LLM.Provider == "" || cfg.LLM.Model == "" {
-		logger.Warn("LLM not configured (provider/model missing), agent features will be disabled")
+		logger.Warn(context.Background(), "LLM not configured (provider/model missing), agent features will be disabled")
 		return &chatModelResult{model: nil}, nil
 	}
 
 	m, err := server.NewChatModel(cfg)
 	if err != nil {
-		logger.Error("Failed to create chat model: %v (agent features will be disabled)", err)
+		logger.Error(context.Background(), "Failed to create chat model (agent features will be disabled)", zap.Error(err))
 		return &chatModelResult{model: nil}, nil
 	}
-	logger.Info("LLM initialized: provider=%s model=%s", cfg.LLM.Provider, cfg.LLM.Model)
+	logger.Info(context.Background(), "LLM initialized", zap.String("provider", cfg.LLM.Provider), zap.String("model", cfg.LLM.Model))
 	return &chatModelResult{model: m}, nil
 }
 
@@ -289,7 +291,7 @@ func provideQueueWorker(
 		Concurrency: cfg.Worker.BackgroundConcurrency,
 		OnWork:      agent2.Process,
 		OnError: func(err error) {
-			logger.Error("[rtcqueue.Worker] error: %v", err)
+			logger.Error(context.Background(), "[rtcqueue.Worker] error", zap.Error(err))
 		},
 	})
 }

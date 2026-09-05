@@ -8,6 +8,7 @@ import (
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.uber.org/zap"
 )
 
 // TurnGet 获取当前用户会话中的单个 Turn。
@@ -37,7 +38,9 @@ func (h *Handler) TurnGet(ctx context.Context, req *protocol.TurnGetRequest) (*p
 		return nil, err
 	}
 
-	logger.Info("[TurnGet] user=%s turn=%s", userID, req.TurnId)
+	logger.Info(ctx, "[TurnGet]",
+		zap.String("user", userID.String()),
+		zap.String("turn", string(req.TurnId)))
 	return &protocol.TurnGetResponse{
 		Item: model.ToProtocolTurn(turn),
 	}, nil

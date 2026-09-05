@@ -15,6 +15,7 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // CloseSession 关闭会话。
@@ -30,11 +31,11 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		return nil, apiErr
 	}
 
-	logger.Info("[CloseSession] user=%s session=%s", userID, req.SessionId)
+	logger.Info(ctx, "[CloseSession]", zap.String("user", userID.String()), zap.String("session", string(req.SessionId)))
 
 	// Debug: trace close entry
 	if logger.DebugMode {
-		logger.Debug("[CloseSession] stack_trace:\n%s", logger.CaptureStack(0))
+		logger.Debug(ctx, "[CloseSession] stack_trace", zap.String("stack", logger.CaptureStack(0)))
 	}
 
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionUUID)
@@ -48,7 +49,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		return nil, &APIError{Code: "permission_denied", Message: fmt.Sprintf("session %s does not belong to user", session.ID)}
 	}
 	if protocol.SessionStatus(session.Status) == protocol.SessionStatusClosed {
-		logger.Info("[CloseSession] session already closed: %s", session.ID)
+		logger.Info(ctx, "[CloseSession] session already closed", zap.String("session", session.ID.String()))
 		return &protocol.CloseSessionResponse{
 			Result: protocol.CloseSessionResult{Success: true},
 		}, nil
@@ -102,14 +103,14 @@ func (h *Handler) stopActiveTurns(ctx context.Context, sessionID uuid.UUID) {
 	// 1. Cancel all pending/processing work via rtc-queue
 	if h.deps.Queue != nil {
 		if err := h.deps.Queue.CancelSession(ctx, sessionID.String(), "stopped_by_user"); err != nil {
-			logger.Error("[stopActiveTurns] cancel session failed: session=%s err=%v", sessionID, err)
+			logger.Error(ctx, "[stopActiveTurns] cancel session failed", zap.String("session", sessionID.String()), zap.Error(err))
 		}
 	}
 
 	// 2. Query active turns BEFORE updating (so we can publish events for each)
 	activeTurns, err := h.deps.Deps.TurnRepo.FindActiveBySession(ctx, sessionID)
 	if err != nil {
-		logger.Error("[stopActiveTurns] find active turns failed: session=%s err=%v", sessionID, err)
+		logger.Error(ctx, "[stopActiveTurns] find active turns failed", zap.String("session", sessionID.String()), zap.Error(err))
 		return
 	}
 
@@ -119,9 +120,9 @@ func (h *Handler) stopActiveTurns(ctx context.Context, sessionID uuid.UUID) {
 		[]string{"pending", "running", "interrupted"},
 		"cancelled",
 	); err != nil {
-		logger.Error("[stopActiveTurns] update turns status failed: session=%s err=%v", sessionID, err)
+		logger.Error(ctx, "[stopActiveTurns] update turns status failed", zap.String("session", sessionID.String()), zap.Error(err))
 	} else if affected > 0 {
-		logger.Info("[stopActiveTurns] cancelled %d turns: session=%s", affected, sessionID)
+		logger.Info(ctx, "[stopActiveTurns] cancelled turns", zap.Int("affected", int(affected)), zap.String("session", sessionID.String()))
 	}
 
 	// 4. Publish turn.updated events for all cancelled turns in a single batch.
@@ -136,7 +137,7 @@ func (h *Handler) stopActiveTurns(ctx context.Context, sessionID uuid.UUID) {
 	// Load session once for all events (need OwnerRefID for routing).
 	session, sessErr := h.deps.Deps.SessionRepo.GetByID(ctx, sessionID)
 	if sessErr != nil {
-		logger.Error("[stopActiveTurns] load session failed: session=%s err=%v", sessionID, sessErr)
+		logger.Error(ctx, "[stopActiveTurns] load session failed", zap.String("session", sessionID.String()), zap.Error(sessErr))
 		return
 	}
 
@@ -155,7 +156,6 @@ func (h *Handler) stopActiveTurns(ctx context.Context, sessionID uuid.UUID) {
 	ch := channel.UserTopic(session.OwnerRefID)
 	merged := []updates.UpdatePublishItem{{Channel: ch, Items: allItems}}
 	if _, err := h.deps.Deps.UpdatePublisher.Publish(ctx, merged...); err != nil {
-		logger.Error("[stopActiveTurns] batch publish turn updates failed: session=%s turn_count=%d err=%v",
-			sessionID, len(activeTurns), err)
+		logger.Error(ctx, "[stopActiveTurns] batch publish turn updates failed", zap.String("session", sessionID.String()), zap.Int("turn_count", len(activeTurns)), zap.Error(err))
 	}
 }

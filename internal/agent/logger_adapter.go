@@ -6,6 +6,7 @@ import (
 
 	"github.com/rtc-agent/server/pkg/logger"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
+	"go.uber.org/zap"
 )
 
 // appLogger adapts the application's logger to turn-agent's Logger interface.
@@ -17,17 +18,34 @@ func NewLogger() turnagent.Logger {
 }
 
 func (l *appLogger) Debug(ctx context.Context, msg string, fields map[string]any) {
-	logger.Debug("[turnagent] %s: %v", msg, fields)
+	logger.Debug(ctx, "[turnagent] "+msg, mapToFields(fields)...)
 }
 
 func (l *appLogger) Info(ctx context.Context, msg string, fields map[string]any) {
-	logger.Info("[turnagent] %s: %v", msg, fields)
+	logger.Info(ctx, "[turnagent] "+msg, mapToFields(fields)...)
 }
 
 func (l *appLogger) Warn(ctx context.Context, msg string, fields map[string]any) {
-	logger.Warn("[turnagent] %s: %v", msg, fields)
+	logger.Warn(ctx, "[turnagent] "+msg, mapToFields(fields)...)
 }
 
 func (l *appLogger) Error(ctx context.Context, msg string, fields map[string]any) {
-	logger.Error("[turnagent] %s: %v", msg, fields)
+	logger.Error(ctx, "[turnagent] "+msg, mapToFields(fields)...)
+}
+
+// mapToFields converts a map[string]any to []zap.Field for the structured logger.
+func mapToFields(m map[string]any) []zap.Field {
+	fields := make([]zap.Field, 0, len(m))
+	for k, v := range m {
+		fields = append(fields, zap.Any(k, v))
+	}
+	return fields
+}
+
+// logIfEnabled logs a message using the configured logger, if available.
+// This is a convenience wrapper to avoid nil-checking the logger at every call site.
+func (h *helpers) logIfEnabled(ctx context.Context, msg string, fields map[string]any) {
+	if h.logger != nil {
+		h.logger.Info(ctx, msg, fields)
+	}
 }

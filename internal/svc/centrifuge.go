@@ -1,7 +1,7 @@
 package svc
 
 import (
-	"context"
+	stdcontext "context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/infra/auth"
@@ -27,7 +28,7 @@ var (
 
 // RPCHandler RPC 处理接口，用于打断 svc 对 rpchandler 的反向依赖。
 type RPCHandler interface {
-	HandleRPC(ctx context.Context, method string, data []byte) ([]byte, error)
+	HandleRPC(ctx stdcontext.Context, method string, data []byte) ([]byte, error)
 }
 
 // NewCentrifugeBroker 创建 DualBroker（需要先有 centrifuge.Node 供 RedisShard 使用）。
@@ -109,11 +110,11 @@ func setupCentrifuge(
 	node.SetBroker(broker)
 
 	// OnConnecting: JWT 验证 → 提取 userID/deviceID → 写入 Credentials.Info
-	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+	node.OnConnecting(func(ctx stdcontext.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		// JWT 验证
 		claims, err := signer.ParseAccessToken(e.Token)
 		if err != nil {
-			logger.Warn("JWT 验证失败: %v", err)
+			logger.Warn(ctx, "JWT 验证失败", zap.Error(err))
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 		}
 
@@ -180,7 +181,7 @@ func setupCentrifuge(
 
 		// RPC 处理回调
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
-			ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+			ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), rpcTimeout)
 			defer cancel()
 
 			// 注入 userID/deviceID 到 context
@@ -210,8 +211,9 @@ func setupCentrifuge(
 			cb(centrifuge.RPCReply{Data: resp}, nil)
 		})
 
-		logger.Info("[Centrifuge] client connected: client_id=%s user_id=%s",
-			client.ID(), userID,
+		logger.Info(stdcontext.Background(), "[Centrifuge] client connected",
+			zap.String("client_id", client.ID()),
+			zap.String("user_id", userID.String()),
 		)
 	})
 
@@ -219,7 +221,7 @@ func setupCentrifuge(
 		return fmt.Errorf("run node: %w", err)
 	}
 
-	logger.Info("centrifuge node started")
+	logger.Info(stdcontext.Background(), "centrifuge node started")
 
 	return nil
 }

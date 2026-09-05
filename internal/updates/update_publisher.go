@@ -18,6 +18,7 @@ import (
 	"github.com/centrifugal/centrifuge"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 
 	"gorm.io/gorm"
 )
@@ -82,12 +83,15 @@ func NewUpdatePublisher(
 			chunks, chunksErr := u.streamStore.GetAllChunks(m.ID.String())
 			if chunksErr != nil {
 				// 降级：返回 DB 原始数据，记录 warn 日志
-				logger.Warn("[UpdatePublisher] get chunks for streaming message %s: %v (falling back to DB data)", m.ID, chunksErr)
+				logger.Warn(ctx, "[UpdatePublisher] get chunks for streaming message failed, falling back to DB data",
+					zap.String("message_id", m.ID.String()),
+					zap.Error(chunksErr),
+				)
 			} else if len(chunks) > 0 {
 				v := &protocol.ContentData{}
 				e := json.Unmarshal([]byte(m.Content), v)
 				if e != nil {
-					logger.Warn("[UpdatePublisher] unmarshal content: %v", e)
+					logger.Warn(ctx, "[UpdatePublisher] unmarshal content failed", zap.Error(e))
 					m.Content = strings.Join(chunks, "")
 				} else {
 					v.Data = strings.Join(chunks, "")
@@ -204,7 +208,7 @@ func (u *UpdatePublisher) RunAndPublish(
 	// 事务提交成功后推送；推送失败只记录，不回滚
 	pushUpdates, pushErr := u.Push(ctx, items, saved)
 	if pushErr != nil {
-		logger.Error("[UpdatePublisher] push failed (data already committed): %v", pushErr)
+		logger.Error(ctx, "[UpdatePublisher] push failed (data already committed)", zap.Error(pushErr))
 	}
 	return pushUpdates, nil
 }
@@ -227,12 +231,16 @@ func (u *UpdatePublisher) publishUpdates(ctx context.Context, items []UpdatePubl
 
 			_, err = u.broker.PublishWithContext(ctx, item.Channel, data, centrifuge.PublishOptions{})
 			if err != nil {
-				logger.Error("[UpdatePublisher] publish to centrifuge failed: channel=%s update_id=%s err=%v",
-					item.Channel, update.Id, err)
+				logger.Error(ctx, "[UpdatePublisher] publish to centrifuge failed",
+					zap.String("channel", item.Channel),
+					zap.String("update_id", update.Id),
+					zap.Error(err))
 				return nil, fmt.Errorf("publish to centrifuge: %w", err)
 			}
-			logger.Debug("[UpdatePublisher] published update: channel=%s offset=%d items=%d",
-				item.Channel, update.Offset, len(update.Items))
+			logger.Debug(ctx, "[UpdatePublisher] published update",
+				zap.String("channel", item.Channel),
+				zap.Uint32("offset", uint32(update.Offset)),
+				zap.Int("items", len(update.Items)))
 		}
 	}
 	return pushUpdates, nil
@@ -380,11 +388,13 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 	}
 
 	if err := repo.DBFromContext(ctx, u.db).WithContext(ctx).Create(&userUpdates).Error; err != nil {
-		logger.Error("[UpdatePublisher] batch insert user_updates failed: count=%d err=%v", len(userUpdates), err)
+		logger.Error(ctx, "[UpdatePublisher] batch insert user_updates failed",
+			zap.Int("count", len(userUpdates)),
+			zap.Error(err))
 		return nil, fmt.Errorf("batch insert user updates: %w", err)
 	}
 
-	logger.Debug("[UpdatePublisher] saved %d user_updates", len(userUpdates))
+	logger.Debug(ctx, "[UpdatePublisher] saved user_updates", zap.Int("count", len(userUpdates)))
 	return userUpdates, nil
 }
 

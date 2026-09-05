@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
@@ -12,10 +14,10 @@ func RequestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		logger.Info("HTTP %s %s %s",
-			r.Method,
-			r.URL.Path,
-			time.Since(start),
+		logger.Info(r.Context(), "HTTP request",
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.Duration("duration", time.Since(start)),
 		)
 	})
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.uber.org/zap"
 )
 
 // TurnList 获取当前用户会话的 Turn 列表（按创建时间升序，游标分页）。
@@ -45,7 +46,11 @@ func (h *Handler) TurnList(ctx context.Context, req *protocol.TurnListRequest) (
 		nextCursor = &last
 	}
 
-	logger.Info("[TurnList] user=%s session=%s count=%d has_next=%v", userID, req.SessionId, len(items), nextCursor != nil)
+	logger.Info(ctx, "[TurnList]",
+		zap.String("user", userID.String()),
+		zap.String("session", string(req.SessionId)),
+		zap.Int("count", len(items)),
+		zap.Bool("has_next", nextCursor != nil))
 	return &protocol.TurnListResponse{
 		Items:      items,
 		NextCursor: nextCursor,

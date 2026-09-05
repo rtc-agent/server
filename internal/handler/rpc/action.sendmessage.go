@@ -18,6 +18,7 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // SendMessage 发送消息（自动创建 session + turn）。
@@ -59,12 +60,16 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		}
 	}
 
-	logger.Info("[SendMessage] user=%s device=%s content_len=%d session_id=%v client_id=%s",
-		userID, deviceID, len(content), req.ClientSessionId, req.ClientId)
+	logger.Info(ctx, "[SendMessage]",
+		zap.String("user", userID.String()),
+		zap.String("device", deviceID),
+		zap.Int("content_len", len(content)),
+		zap.String("session_id", req.ClientSessionId),
+		zap.String("client_id", req.ClientId))
 
 	// Debug: trace the full request entry
 	if logger.DebugMode {
-		logger.Debug("[SendMessage] stack_trace:\n%s", logger.CaptureStack(0))
+		logger.Debug(ctx, "[SendMessage] stack_trace", zap.String("trace", logger.CaptureStack(0)))
 	}
 
 	initialTitle := primitives.TruncateTitle(content, 50)
@@ -132,8 +137,10 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 				return nil, fmt.Errorf("queue publish: %w", err)
 			}
 			if logger.DebugMode {
-				logger.Debug("[SendMessage] Queue.Publish success: session=%s message=%s work_id=%s",
-					session.ID, msg.ID, workID)
+				logger.Debug(txCtx, "[SendMessage] Queue.Publish success",
+					zap.String("session", session.ID.String()),
+					zap.String("message", msg.ID.String()),
+					zap.String("work_id", workID))
 			}
 		}
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/infra/context"
 	"github.com/rtc-agent/server/internal/repo"
@@ -106,12 +107,17 @@ func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]
 
 	userID, _ := contextx.GetUserID(ctx)
 	deviceID, _ := contextx.GetDeviceID(ctx)
-	logger.Info("[RPC] → %s user=%s device=%s", method, userID, deviceID)
+	logger.Info(ctx, "[RPC] ->",
+		zap.String("method", method),
+		zap.String("user", userID.String()),
+		zap.String("device", deviceID))
 
 	// Debug: trace every RPC entry with stack
 	if logger.DebugMode {
-		logger.Debug("[RPC] entry: method=%s data_len=%d stack:\n%s",
-			method, len(data), logger.CaptureStack(0))
+		logger.Debug(ctx, "[RPC] entry",
+			zap.String("method", method),
+			zap.Int("data_len", len(data)),
+			zap.String("stack", logger.CaptureStack(0)))
 	}
 
 	route, ok := h.routes[protocol.RpcMethod(method)]
@@ -124,18 +130,25 @@ func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]
 
 	resp, err := route(ctx, data)
 	if err != nil {
-		logger.Warn("[RPC] ← %s err=%v (%s)", method, err, time.Since(start))
+		logger.Warn(ctx, "[RPC] <- err",
+			zap.String("method", method),
+			zap.Error(err),
+			zap.Duration("elapsed", time.Since(start)))
 		return nil, err
 	}
 
 	result, jsonErr := json.Marshal(resp)
 	if jsonErr != nil {
-		logger.Error("[RPC] marshal response failed: method=%s err=%v", method, jsonErr)
+		logger.Error(ctx, "[RPC] marshal response failed",
+			zap.String("method", method),
+			zap.Error(jsonErr))
 		return nil, &APIError{
 			Code:    "internal_error",
 			Message: "failed to serialize response",
 		}
 	}
-	logger.Info("[RPC] ← %s ok (%s)", method, time.Since(start))
+	logger.Info(ctx, "[RPC] <- ok",
+		zap.String("method", method),
+		zap.Duration("elapsed", time.Since(start)))
 	return result, nil
 }

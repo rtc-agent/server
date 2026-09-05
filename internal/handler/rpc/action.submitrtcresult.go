@@ -16,6 +16,7 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
+	"go.uber.org/zap"
 )
 
 // ResumePriority is the priority used for resume work items. rtc-queue's
@@ -37,12 +38,19 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		return nil, apiErr
 	}
 
-	logger.Info("[SubmitRtcResult] user=%s rtc=%s success=%v", userID, req.RtcId, req.Success)
+	logger.Info(ctx, "[SubmitRtcResult]",
+		zap.String("user", userID.String()),
+		zap.String("rtc", string(req.RtcId)),
+		zap.Bool("success", req.Success))
 
 	// Debug: trace the full RTC result submission
 	if logger.DebugMode {
-		logger.Debug("[SubmitRtcResult] entry: rtc=%s success=%v has_result=%v has_error=%v stack:\n%s",
-			req.RtcId, req.Success, req.Result != nil, req.Error != nil, logger.CaptureStack(0))
+		logger.Debug(ctx, "[SubmitRtcResult] entry",
+			zap.String("rtc", string(req.RtcId)),
+			zap.Bool("success", req.Success),
+			zap.Bool("has_result", req.Result != nil),
+			zap.Bool("has_error", req.Error != nil),
+			zap.String("stack", logger.CaptureStack(0)))
 	}
 
 	// 加载 RTC 并校验存在
@@ -60,8 +68,10 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
 		// 终态 + 同一 ClientID → 视为重复上报，接受并返回成功
 		if req.ClientId != nil && *req.ClientId == rtc.ClientID {
-			logger.Info("[SubmitRtcResult] idempotent repeat: rtc=%s status=%s client_id=%s",
-				req.RtcId, rtc.Status, rtc.ClientID)
+			logger.Info(ctx, "[SubmitRtcResult] idempotent repeat",
+				zap.String("rtc", string(req.RtcId)),
+				zap.String("status", rtc.Status),
+				zap.String("client_id", rtc.ClientID))
 			return &protocol.SubmitRtcResultResponse{
 				Result: protocol.SubmitRtcResultResult{Success: true},
 			}, nil
@@ -121,8 +131,9 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	// published. The frontend can poll for the latest state.
 	sessionBefore, sessionLoadErr := h.deps.SessionRepo.GetByID(ctx, rtc.SessionID)
 	if sessionLoadErr != nil {
-		logger.Warn("[SubmitRtcResult] pre-load session failed (will use best-effort event publishing): session=%s err=%v",
-			rtc.SessionID, sessionLoadErr)
+		logger.Warn(ctx, "[SubmitRtcResult] pre-load session failed (will use best-effort event publishing)",
+			zap.String("session", rtc.SessionID.String()),
+			zap.Error(sessionLoadErr))
 	}
 
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
@@ -182,7 +193,9 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 
 		// 回填 RTC 的 OutputMessageID
 		if err := h.deps.Deps.RtcRepo.UpdateOutputMessageID(txCtx, rtcUUID, outputMsg.ID); err != nil {
-			logger.Error("[SubmitRtcResult] update output_message_id: rtc=%s err=%v", rtcUUID, err)
+			logger.Error(txCtx, "[SubmitRtcResult] update output_message_id",
+				zap.String("rtc", rtcUUID.String()),
+				zap.Error(err))
 			// 不阻塞主流程
 		}
 
@@ -235,30 +248,37 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 // persisted, and a failure here just means the agent won't auto-continue.
 func (h *Handler) resumeTurnAfterRtc(ctx context.Context, rtc *model.Rtc) {
 	if h.deps.Queue == nil {
-		logger.Warn("[resumeTurnAfterRtc] Queue is nil, cannot resume: rtc=%s", rtc.ID)
+		logger.Warn(ctx, "[resumeTurnAfterRtc] Queue is nil, cannot resume",
+			zap.String("rtc", rtc.ID.String()))
 		return
 	}
 
 	if logger.DebugMode {
-		logger.Debug("[resumeTurnAfterRtc] entry: rtc=%s session=%s",
-			rtc.ID, rtc.SessionID)
+		logger.Debug(ctx, "[resumeTurnAfterRtc] entry",
+			zap.String("rtc", rtc.ID.String()),
+			zap.String("session", rtc.SessionID.String()))
 	}
 
 	// 0. 前置检查：session 已 closed 则不触发新 turn
 	session, err := h.deps.SessionRepo.GetByID(ctx, rtc.SessionID)
 	if err != nil {
-		logger.Error("[resumeTurnAfterRtc] get session %s: %v", rtc.SessionID, err)
+		logger.Error(ctx, "[resumeTurnAfterRtc] get session",
+			zap.String("session", rtc.SessionID.String()),
+			zap.Error(err))
 		return
 	}
 	if protocol.SessionStatus(session.Status) == protocol.SessionStatusClosed {
-		logger.Info("[resumeTurnAfterRtc] skip: session closed, session=%s", rtc.SessionID)
+		logger.Info(ctx, "[resumeTurnAfterRtc] skip: session closed",
+			zap.String("session", rtc.SessionID.String()))
 		return
 	}
 
 	// 1. Check if there's an active turn for this session.
 	activeTurns, err := h.deps.Deps.TurnRepo.FindActiveBySession(ctx, rtc.SessionID)
 	if err != nil {
-		logger.Error("[resumeTurnAfterRtc] find active turns: session=%s err=%v", rtc.SessionID, err)
+		logger.Error(ctx, "[resumeTurnAfterRtc] find active turns",
+			zap.String("session", rtc.SessionID.String()),
+			zap.Error(err))
 		return
 	}
 
@@ -271,11 +291,15 @@ func (h *Handler) resumeTurnAfterRtc(ctx context.Context, rtc *model.Rtc) {
 			SessionID: rtc.SessionID.String(),
 		})
 		if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), ResumePriority); err != nil {
-			logger.Error("[resumeTurnAfterRtc] Queue.Publish resume failed: rtc=%s session=%s err=%v",
-				rtc.ID, rtc.SessionID, err)
+			logger.Error(ctx, "[resumeTurnAfterRtc] Queue.Publish resume failed",
+				zap.String("rtc", rtc.ID.String()),
+				zap.String("session", rtc.SessionID.String()),
+				zap.Error(err))
 		} else {
-			logger.Info("[resumeTurnAfterRtc] resume published: rtc=%s session=%s turn=%s",
-				rtc.ID, rtc.SessionID, activeTurns[len(activeTurns)-1].ID)
+			logger.Info(ctx, "[resumeTurnAfterRtc] resume published",
+				zap.String("rtc", rtc.ID.String()),
+				zap.String("session", rtc.SessionID.String()),
+				zap.String("turn", activeTurns[len(activeTurns)-1].ID.String()))
 		}
 		return
 	}
@@ -285,11 +309,14 @@ func (h *Handler) resumeTurnAfterRtc(ctx context.Context, rtc *model.Rtc) {
 	orphanKey := cache.RtcOrphanTriggered(rtc.ID.String())
 	ok, setnxErr := h.deps.Deps.Redis.SetNX(ctx, orphanKey, "1", h.deps.Deps.WorkerConfig.OrphanTriggerTTL).Result()
 	if setnxErr != nil {
-		logger.Error("[resumeTurnAfterRtc] setnx orphan key: rtc=%s err=%v", rtc.ID, setnxErr)
+		logger.Error(ctx, "[resumeTurnAfterRtc] setnx orphan key",
+			zap.String("rtc", rtc.ID.String()),
+			zap.Error(setnxErr))
 		return
 	}
 	if !ok {
-		logger.Info("[resumeTurnAfterRtc] skip orphan: already triggered, rtc=%s", rtc.ID)
+		logger.Info(ctx, "[resumeTurnAfterRtc] skip orphan: already triggered",
+			zap.String("rtc", rtc.ID.String()))
 		return
 	}
 
@@ -309,12 +336,17 @@ func (h *Handler) resumeTurnAfterRtc(ctx context.Context, rtc *model.Rtc) {
 	if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), 0); err != nil {
 		// Roll back orphan key to allow retry
 		if delErr := h.deps.Deps.Redis.Del(ctx, orphanKey).Err(); delErr != nil {
-			logger.Warn("[resumeTurnAfterRtc] failed to del orphan key: key=%s err=%v", orphanKey, delErr)
+			logger.Warn(ctx, "[resumeTurnAfterRtc] failed to del orphan key",
+				zap.String("key", orphanKey),
+				zap.Error(delErr))
 		}
-		logger.Error("[resumeTurnAfterRtc] Queue.Publish submit failed: rtc=%s session=%s err=%v",
-			rtc.ID, rtc.SessionID, err)
+		logger.Error(ctx, "[resumeTurnAfterRtc] Queue.Publish submit failed",
+			zap.String("rtc", rtc.ID.String()),
+			zap.String("session", rtc.SessionID.String()),
+			zap.Error(err))
 	} else {
-		logger.Info("[resumeTurnAfterRtc] orphan submit published: rtc=%s session=%s",
-			rtc.ID, rtc.SessionID)
+		logger.Info(ctx, "[resumeTurnAfterRtc] orphan submit published",
+			zap.String("rtc", rtc.ID.String()),
+			zap.String("session", rtc.SessionID.String()))
 	}
 }

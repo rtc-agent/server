@@ -6,6 +6,7 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.uber.org/zap"
 )
 
 // MessageList 获取当前用户会话的消息列表（按 global_offset 升序，游标分页）。
@@ -45,7 +46,11 @@ func (h *Handler) MessageList(ctx context.Context, req *protocol.MessageListRequ
 		nextCursor = &last
 	}
 
-	logger.Info("[MessageList] user=%s session=%s count=%d has_next=%v", userID, req.SessionId, len(items), nextCursor != nil)
+	logger.Info(ctx, "[MessageList]",
+		zap.String("user", userID.String()),
+		zap.String("session", string(req.SessionId)),
+		zap.Int("count", len(items)),
+		zap.Bool("has_next", nextCursor != nil))
 	return &protocol.MessageListResponse{
 		Items:      items,
 		NextCursor: nextCursor,

@@ -10,6 +10,7 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.uber.org/zap"
 )
 
 // UpdateSession 更新会话（目前仅支持标题）。
@@ -25,7 +26,9 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 		return nil, apiErr
 	}
 
-	logger.Info("[UpdateSession] user=%s session=%s", userID, req.SessionId)
+	logger.Info(ctx, "[UpdateSession]",
+		zap.String("user", userID.String()),
+		zap.String("session", string(req.SessionId)))
 
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, sessionUUID, creator); err != nil {
 		return nil, &APIError{Code: "permission_denied", Message: err.Error()}
@@ -49,8 +52,9 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 	// the latest state when it notices the session title change.
 	sessionBefore, sessionLoadErr := h.deps.SessionRepo.GetByID(ctx, sessionUUID)
 	if sessionLoadErr != nil {
-		logger.Warn("[UpdateSession] pre-load session failed (will skip event publishing): session=%s err=%v",
-			sessionUUID, sessionLoadErr)
+		logger.Warn(ctx, "[UpdateSession] pre-load session failed (will skip event publishing)",
+			zap.String("session", sessionUUID.String()),
+			zap.Error(sessionLoadErr))
 	}
 
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {

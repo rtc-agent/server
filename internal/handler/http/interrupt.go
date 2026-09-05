@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 // InterruptHandler handles interrupt answer submission from the frontend.
@@ -73,31 +74,44 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 	ctx := r.Context()
 
 	if logger.DebugMode {
-		logger.Debug("[interrupt.HTTP] entry: session=%s interrupt=%s answer_len=%d stack:\n%s",
-			sessionID, interruptID, len(req.Answer), logger.CaptureStack(0))
+		logger.Debug(ctx, "[interrupt.HTTP] entry",
+			zap.String("session", sessionID.String()),
+			zap.String("interrupt", interruptID),
+			zap.Int("answer_len", len(req.Answer)),
+			zap.String("stack", logger.CaptureStack(0)))
 	}
 
 	// SET+PUBLISH pattern:
 	// 1. SET answer with TTL (catches early arrivals before subscriber is ready).
 	answerKey := cache.InterruptAnswer(sessionID.String(), interruptID)
 	if err := h.redis.Set(ctx, answerKey, req.Answer, h.interruptTTL.InterruptAnswerTTL).Err(); err != nil {
-		logger.Error("[interrupt] redis SET failed: session=%s interrupt=%s err=%v", sessionID, interruptID, err)
+		logger.Error(ctx, "[interrupt] redis SET failed",
+			zap.String("session", sessionID.String()),
+			zap.String("interrupt", interruptID),
+			zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "interrupt.store_failed", "store answer failed, please retry later")
 		return
 	} else if logger.DebugMode {
-		logger.Debug("[interrupt.HTTP] SET answer: session=%s interrupt=%s key=%s",
-			sessionID, interruptID, answerKey)
+		logger.Debug(ctx, "[interrupt.HTTP] SET answer",
+			zap.String("session", sessionID.String()),
+			zap.String("interrupt", interruptID),
+			zap.String("key", answerKey))
 	}
 
 	// 2. PUBLISH to notify the waiting subscriber.
 	channel := cache.InterruptChannel(sessionID.String(), interruptID)
 	if err := h.redis.Publish(ctx, channel, req.Answer).Err(); err != nil {
-		logger.Error("[interrupt] redis PUBLISH failed: session=%s interrupt=%s err=%v", sessionID, interruptID, err)
+		logger.Error(ctx, "[interrupt] redis PUBLISH failed",
+			zap.String("session", sessionID.String()),
+			zap.String("interrupt", interruptID),
+			zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "interrupt.publish_failed", "publish failed, please retry later")
 		return
 	} else if logger.DebugMode {
-		logger.Debug("[interrupt.HTTP] PUBLISH answer: session=%s interrupt=%s channel=%s",
-			sessionID, interruptID, channel)
+		logger.Debug(ctx, "[interrupt.HTTP] PUBLISH answer",
+			zap.String("session", sessionID.String()),
+			zap.String("interrupt", interruptID),
+			zap.String("channel", channel))
 	}
 
 	httputil.WriteJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})

@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"runtime/debug"
 
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
-
-	"gorm.io/gorm"
 )
 
 // TurnRepo Turn 仓储接口
@@ -48,7 +49,9 @@ func (r *turnRepo) Create(ctx context.Context, turn *model.Turn) error {
 func (r *turnRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Turn, error) {
 	// Debug: print stack trace when querying with zero UUID
 	if id == uuid.Nil {
-		logger.Warn("[TurnRepo.GetByID] querying with zero UUID, stack trace:\n%s", string(debug.Stack()))
+		logger.Warn(ctx, "[TurnRepo.GetByID] querying with zero UUID, stack trace",
+			zap.String("stack_trace", string(debug.Stack())),
+		)
 	}
 	var turn model.Turn
 	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&turn, "id = ?", id).Error

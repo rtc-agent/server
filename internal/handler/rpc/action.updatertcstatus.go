@@ -12,6 +12,7 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.uber.org/zap"
 )
 
 // UpdateRtcStatus 更新 RTC 执行状态（executing/failed/timeout/rejected）。
@@ -27,7 +28,10 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		return nil, apiErr
 	}
 
-	logger.Info("[UpdateRtcStatus] user=%s rtc=%s status=%s", userID, req.RtcId, req.Status)
+	logger.Info(ctx, "[UpdateRtcStatus]",
+		zap.String("user", userID.String()),
+		zap.String("rtc", string(req.RtcId)),
+		zap.String("status", string(req.Status)))
 
 	// 校验目标状态合法性
 	switch req.Status {
@@ -78,8 +82,9 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 	// the latest state when it notices the RTC status change.
 	sessionBefore, sessionLoadErr := h.deps.SessionRepo.GetByID(ctx, rtc.SessionID)
 	if sessionLoadErr != nil {
-		logger.Warn("[UpdateRtcStatus] pre-load session failed (will skip event publishing): session=%s err=%v",
-			rtc.SessionID, sessionLoadErr)
+		logger.Warn(ctx, "[UpdateRtcStatus] pre-load session failed (will skip event publishing)",
+			zap.String("session", rtc.SessionID.String()),
+			zap.Error(sessionLoadErr))
 	}
 
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {

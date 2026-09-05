@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/infra/httputil"
@@ -80,7 +82,7 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	// 生成随机 state
 	state, err := generateState()
 	if err != nil {
-		logger.Error("生成 state 失败: %v", err)
+		logger.Error(r.Context(), "生成 state 失败", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "生成 state 失败")
 		return
 	}
@@ -95,7 +97,7 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	// 存入 StateStore（key=state, value=provider, TTL=10min）
 	ctx := r.Context()
 	if err := h.stateStore.Set(ctx, state, provider, h.authConfig.OAuth2StateTTL); err != nil {
-		logger.Error("存储 state 失败: %v", err)
+		logger.Error(ctx, "存储 state 失败", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "存储 state 失败")
 		return
 	}
@@ -137,7 +139,7 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 	// 2. 用授权码换取用户信息
 	userInfo, err := h.providerClient.ExchangeCode(ctx, provider, req.Code, req.RedirectUri)
 	if err != nil {
-		logger.Error("ExchangeCode 失败: provider=%s, err=%v", provider, err)
+		logger.Error(ctx, "ExchangeCode 失败", zap.String("provider", provider), zap.Error(err))
 		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "授权码交换失败")
 		return
 	}
@@ -145,7 +147,7 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 	// 3. 查找或创建 OAuth2User
 	user, err := h.findOrCreateUser(ctx, provider, userInfo)
 	if err != nil {
-		logger.Error("查找或创建用户失败: %v", err)
+		logger.Error(ctx, "查找或创建用户失败", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "认证失败")
 		return
 	}
@@ -153,19 +155,19 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 	// 4. 查找或更新 Device
 	if req.DeviceId != "" {
 		if err := h.upsertDevice(ctx, user.ID, req); err != nil {
-			logger.Warn("更新设备信息失败: %v", err)
+			logger.Warn(ctx, "更新设备信息失败", zap.Error(err))
 		}
 	}
 
 	// 5. 签发 token pair
 	resp, err := h.issueTokenPair(ctx, user.ID, req.DeviceId)
 	if err != nil {
-		logger.Error("签发 token 失败: %v", err)
+		logger.Error(ctx, "签发 token 失败", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "签发 token 失败")
 		return
 	}
 
-	logger.Info("authorization_code 认证成功: provider=%s, user_id=%s", provider, user.ID)
+	logger.Info(ctx, "authorization_code 认证成功", zap.String("provider", provider), zap.String("user_id", user.ID.String()))
 	httputil.WriteJSON(w, http.StatusOK, *resp)
 }
 
@@ -191,7 +193,7 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		if repo.IsNotFound(err) {
 			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token 无效")
 		} else {
-			logger.Error("查找 refresh_token 失败: %v", err)
+			logger.Error(ctx, "查找 refresh_token 失败", zap.Error(err))
 			httputil.WriteError(w, http.StatusInternalServerError, "server_error", "内部错误")
 		}
 		return
@@ -210,12 +212,12 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// 3. 签发新 access_token
 	accessToken, expiresAt, err := h.signer.SignAccessToken(rt.UserID, rt.DeviceID)
 	if err != nil {
-		logger.Error("签发 access_token 失败: %v", err)
+		logger.Error(ctx, "签发 access_token 失败", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "签发 token 失败")
 		return
 	}
 
-	logger.Info("refresh_token 刷新成功: user_id=%s", rt.UserID)
+	logger.Info(ctx, "refresh_token 刷新成功", zap.String("user_id", rt.UserID.String()))
 	httputil.WriteJSON(w, http.StatusOK, protocol.OAuth2TokenRefreshResponse{
 		AccessToken: accessToken,
 		ExpiresIn:   int64(time.Until(expiresAt).Seconds()),
@@ -290,7 +292,7 @@ func (h *OAuth2Handler) findOrCreateUser(ctx context.Context, provider string, u
 	user.Email = userInfo.Email
 	user.AvatarURL = userInfo.AvatarURL
 	if err := h.svcCtx.OAuth2UserRepo.Update(ctx, user); err != nil {
-		logger.Warn("更新用户信息失败: %v", err)
+		logger.Warn(ctx, "更新用户信息失败", zap.Error(err))
 	}
 	return user, nil
 }

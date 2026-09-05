@@ -9,6 +9,7 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.uber.org/zap"
 )
 
 // StopTurn 停止正在执行的 Turn（取消 LLM 调用）。
@@ -25,11 +26,13 @@ func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (
 		return nil, apiErr
 	}
 
-	logger.Info("[StopTurn] user=%s session=%s", userID, req.SessionId)
+	logger.Info(ctx, "[StopTurn]",
+		zap.String("user", userID.String()),
+		zap.String("session", string(req.SessionId)))
 
 	// Debug: trace the full stop request
 	if logger.DebugMode {
-		logger.Debug("[StopTurn] stack_trace:\n%s", logger.CaptureStack(0))
+		logger.Debug(ctx, "[StopTurn] stack_trace", zap.String("trace", logger.CaptureStack(0)))
 	}
 
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, sessionUUID, creator); err != nil {

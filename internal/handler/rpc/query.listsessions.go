@@ -6,6 +6,7 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.uber.org/zap"
 )
 
 // ListSessions 默认分页大小（最大复用 queryMaxLimit）。
@@ -41,7 +42,10 @@ func (h *Handler) ListSessions(ctx context.Context, req *protocol.ListSessionsRe
 		nextCursor = &last
 	}
 
-	logger.Info("[ListSessions] user=%s count=%d has_next=%v", userID, len(items), nextCursor != nil)
+	logger.Info(ctx, "[ListSessions]",
+		zap.String("user", userID.String()),
+		zap.Int("count", len(items)),
+		zap.Bool("has_next", nextCursor != nil))
 	return &protocol.ListSessionsResponse{
 		Items:      items,
 		NextCursor: nextCursor,

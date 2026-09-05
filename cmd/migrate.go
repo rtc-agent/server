@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/rtc-agent/server/internal/infra/config"
@@ -32,7 +33,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	logger.Init(cfg.Log.Level)
 	defer logger.Sync()
 
-	logger.Info("Running database migration...")
+	logger.Info(context.Background(), "Running database migration...")
 
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{})
 	if err != nil {
@@ -55,6 +56,6 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("migrate owner stage 4: %w", err)
 	}
 
-	logger.Info("Database migration completed successfully")
+	logger.Info(context.Background(), "Database migration completed successfully")
 	return nil
 }

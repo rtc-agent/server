@@ -8,6 +8,7 @@ import (
 	"github.com/centrifugal/centrifuge"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/handler/http"
@@ -51,12 +52,12 @@ func New(cfg *config.Config, svcCtx *svc.ServiceContext) *Server {
 		var err error
 		chatModel, err = newChatModel(context.Background(), &cfg.LLM)
 		if err != nil {
-			logger.Error("Failed to create chat model: %v (agent features will be disabled)", err)
+			logger.Error(context.Background(), "Failed to create chat model (agent features will be disabled)", zap.Error(err))
 		} else {
-			logger.Info("LLM initialized: provider=%s model=%s", cfg.LLM.Provider, cfg.LLM.Model)
+			logger.Info(context.Background(), "LLM initialized", zap.String("provider", cfg.LLM.Provider), zap.String("model", cfg.LLM.Model))
 		}
 	} else {
-		logger.Warn("LLM not configured (provider/model missing), agent features will be disabled")
+		logger.Warn(context.Background(), "LLM not configured (provider/model missing), agent features will be disabled")
 	}
 
 	// 创建 UseCase 层依赖（业务逻辑，不存放在 ServiceContext 中）
@@ -91,7 +92,7 @@ func New(cfg *config.Config, svcCtx *svc.ServiceContext) *Server {
 	// cmd/serve.go), so the assertion is safe.
 	rdb, ok := svcCtx.Redis.(*redis.Client)
 	if !ok {
-		logger.Error("rtc-queue requires *redis.Client, got %T", svcCtx.Redis)
+		logger.Error(context.Background(), "rtc-queue requires *redis.Client", zap.String("type", fmt.Sprintf("%T", svcCtx.Redis)))
 		return nil
 	}
 	q := rtcqueue.New(rdb)
@@ -108,7 +109,7 @@ func New(cfg *config.Config, svcCtx *svc.ServiceContext) *Server {
 		StreamChunkTTL:     cfg.Worker.StreamChunkTTL,
 	})
 	if err != nil {
-		logger.Error("Failed to create turn-agent: %v", err)
+		logger.Error(context.Background(), "Failed to create turn-agent", zap.Error(err))
 		return nil
 	}
 
@@ -120,7 +121,7 @@ func New(cfg *config.Config, svcCtx *svc.ServiceContext) *Server {
 		Concurrency: cfg.Worker.BackgroundConcurrency,
 		OnWork:      turnAgent.Process,
 		OnError: func(err error) {
-			logger.Error("[rtcqueue.Worker] error: %v", err)
+			logger.Error(context.Background(), "[rtcqueue.Worker] error", zap.Error(err))
 		},
 	})
 
@@ -164,17 +165,17 @@ func BuildProviderClients(cfg *config.Config) []*oauth.ProviderConfig {
 func (s *Server) Start() error {
 	// 启动 rtc-queue Worker（分布式 turn 执行）
 	if logger.DebugMode {
-		logger.Debug("[Server] starting rtc-queue Worker...")
+		logger.Debug(context.Background(), "[Server] starting rtc-queue Worker...")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.workerCancel = cancel
 	go func() {
 		if err := s.queueWorker.Run(ctx); err != nil && ctx.Err() == nil {
-			logger.Error("[Server] rtc-queue Worker exited with error: %v", err)
+			logger.Error(ctx, "[Server] rtc-queue Worker exited with error", zap.Error(err))
 		}
 	}()
 	if logger.DebugMode {
-		logger.Debug("[Server] rtc-queue Worker started successfully")
+		logger.Debug(ctx, "[Server] rtc-queue Worker started successfully")
 	}
 
 	// 启动 HTTP 服务器
@@ -195,30 +196,30 @@ func (s *Server) Start() error {
 		Handler: handler,
 	}
 
-	logger.Info("HTTP server listening on %s", addr)
+	logger.Info(ctx, "HTTP server listening", zap.String("addr", addr))
 	return s.httpServer.ListenAndServe()
 }
 
 // Stop 停止服务器
 func (s *Server) Stop() {
 	if logger.DebugMode {
-		logger.Debug("[Server] stopping...")
+		logger.Debug(context.Background(), "[Server] stopping...")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Server.ShutdownTimeout)
 	defer cancel()
 
 	// 停止 rtc-queue Worker
 	if logger.DebugMode {
-		logger.Debug("[Server] stopping rtc-queue Worker...")
+		logger.Debug(ctx, "[Server] stopping rtc-queue Worker...")
 	}
 	if s.workerCancel != nil {
 		s.workerCancel()
 	}
 	if err := s.queueWorker.Stop(ctx); err != nil {
-		logger.Error("[Server] rtc-queue Worker stop error: %v", err)
+		logger.Error(ctx, "[Server] rtc-queue Worker stop error", zap.Error(err))
 	}
 	if logger.DebugMode {
-		logger.Debug("[Server] rtc-queue Worker stopped")
+		logger.Debug(ctx, "[Server] rtc-queue Worker stopped")
 	}
 
 	_ = s.svcCtx.CentrifugeNode.Shutdown(ctx)
@@ -226,7 +227,7 @@ func (s *Server) Stop() {
 
 	// 关闭 HTTP Server
 	if err := s.httpServer.Shutdown(ctx); err != nil {
-		logger.Error("Server shutdown error: %v", err)
+		logger.Error(ctx, "Server shutdown error", zap.Error(err))
 	}
 }
 

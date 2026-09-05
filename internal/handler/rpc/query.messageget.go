@@ -8,6 +8,7 @@ import (
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.uber.org/zap"
 )
 
 // MessageGet 获取当前用户会话中的单个消息。
@@ -37,7 +38,9 @@ func (h *Handler) MessageGet(ctx context.Context, req *protocol.MessageGetReques
 		return nil, err
 	}
 
-	logger.Info("[MessageGet] user=%s message=%s", userID, req.MessageId)
+	logger.Info(ctx, "[MessageGet]",
+		zap.String("user", userID.String()),
+		zap.String("message", string(req.MessageId)))
 	return &protocol.MessageGetResponse{
 		Item: model.ToProtocolMessage(msg),
 	}, nil

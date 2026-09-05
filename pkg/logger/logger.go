@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -10,7 +11,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var log = zap.NewNop().Sugar()
+var log = zap.NewNop()
 
 // DebugMode 表示是否开启了 DEBUG 日志（通过环境变量 DEBUG=true 启用）。
 // 开启后会额外输出到文件 logs/debug.log，使用人类可读的 console 编码。
@@ -90,7 +91,7 @@ func Init(level string) {
 		}
 	}
 
-	log = l.Sugar()
+	log = l
 
 	// Replace the global logger so zap.L() / zap.S() across the project
 	// (including turnloop adapters) point to this configured logger.
@@ -105,28 +106,28 @@ func Sync() {
 }
 
 // Debug 打印调试日志
-func Debug(template string, args ...interface{}) {
-	log.Debugf(template, args...)
+func Debug(ctx context.Context, msg string, fields ...zap.Field) {
+	log.Debug(msg, fields...)
 }
 
 // Info 打印信息日志
-func Info(template string, args ...interface{}) {
-	log.Infof(template, args...)
+func Info(ctx context.Context, msg string, fields ...zap.Field) {
+	log.Info(msg, fields...)
 }
 
 // Warn 打印警告日志
-func Warn(template string, args ...interface{}) {
-	log.Warnf(template, args...)
+func Warn(ctx context.Context, msg string, fields ...zap.Field) {
+	log.Warn(msg, fields...)
 }
 
 // Error 打印错误日志
-func Error(template string, args ...interface{}) {
-	log.Errorf(template, args...)
+func Error(ctx context.Context, msg string, fields ...zap.Field) {
+	log.Error(msg, fields...)
 }
 
 // Fatal 打印致命错误日志并退出
-func Fatal(template string, args ...interface{}) {
-	log.Fatalf(template, args...)
+func Fatal(ctx context.Context, msg string, fields ...zap.Field) {
+	log.Fatal(msg, fields...)
 }
 
 // CaptureStack 捕获当前调用栈，返回人类可读的字符串。

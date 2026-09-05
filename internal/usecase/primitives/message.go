@@ -12,6 +12,7 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // MessageToCreate 批量创建消息的输入参数。
@@ -86,8 +87,15 @@ func CreateMessage(
 	if turnID != nil {
 		turnIDLog = turnID.String()
 	}
-	logger.Info("[primitives.CreateMessage] id=%s client_id=%s session=%s turn=%s role=%s creator=%s/%s content_type=%s",
-		message.ID, clientID, sessionID, turnIDLog, role, creator.Kind(), creator.ReferenceID(), content.Type)
+	logger.Info(txCtx, "[primitives.CreateMessage]",
+		zap.String("id", message.ID.String()),
+		zap.String("client_id", clientID),
+		zap.String("session", sessionID.String()),
+		zap.String("turn", turnIDLog),
+		zap.String("role", string(role)),
+		zap.String("creator_kind", string(creator.Kind())),
+		zap.String("creator_ref_id", creator.ReferenceID()),
+		zap.String("content_type", string(content.Type)))
 	return message, nil
 }
 
@@ -166,8 +174,11 @@ func BatchCreateMessages(
 	if turnID != nil {
 		turnIDLog = turnID.String()
 	}
-	logger.Info("[primitives.BatchCreateMessages] session=%s turn=%s count=%d start_offset=%d",
-		sessionID, turnIDLog, count, startGlobalOffset)
+	logger.Info(txCtx, "[primitives.BatchCreateMessages]",
+		zap.String("session", sessionID.String()),
+		zap.String("turn", turnIDLog),
+		zap.Int("count", count),
+		zap.Uint32("start_offset", startGlobalOffset))
 
 	return dbMessages, nil
 }

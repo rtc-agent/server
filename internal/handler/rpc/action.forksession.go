@@ -17,6 +17,7 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // ForkSession 分叉对话：基于旧 session 创建新 session，批量复制消息并替换指定消息。
@@ -57,8 +58,11 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		}
 	}
 
-	logger.Info("[ForkSession] user=%s old_session=%s old_message=%s limit=%d",
-		userID, oldSessionID, oldMessageID, limit)
+	logger.Info(ctx, "[ForkSession] start",
+		zap.String("user", userID.String()),
+		zap.String("old_session", oldSessionID.String()),
+		zap.String("old_message", oldMessageID.String()),
+		zap.Int("limit", limit))
 
 	// 4. 校验旧 session 归属
 	oldSession, err := h.deps.SessionRepo.GetByID(ctx, oldSessionID)
@@ -170,8 +174,9 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 				return nil, fmt.Errorf("queue publish: %w", err)
 			}
 			if logger.DebugMode {
-				logger.Debug("[ForkSession] Queue.Publish success: session=%s work_id=%s",
-					newSession.ID, workID)
+				logger.Debug(txCtx, "[ForkSession] Queue.Publish success",
+					zap.String("session", newSession.ID.String()),
+					zap.String("work_id", workID))
 			}
 		}
 

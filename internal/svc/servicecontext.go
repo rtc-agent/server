@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"context"
 	"time"
 
 	"github.com/centrifugal/centrifuge"
@@ -59,12 +60,12 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second,
 	)
 	if err != nil {
-		logger.Fatal("初始化 JWT 签名器失败: %v", err)
+		logger.Fatal(context.Background(), "初始化 JWT 签名器失败", zap.Error(err))
 	}
 
 	node, dualBroker, err := newCentrifugeBroker(cfg, updatePublisher, jwtSigner)
 	if err != nil {
-		logger.Fatal("new centrifuge", zap.Error(err))
+		logger.Fatal(context.Background(), "new centrifuge", zap.Error(err))
 	}
 
 	// 注入 broker 到 UpdatePublisher（解决循环依赖）
