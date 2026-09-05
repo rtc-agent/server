@@ -47,6 +47,10 @@ type StreamStore struct {
 // AppendChunk atomically appends a chunk to the Redis list and refreshes
 // the TTL using the AppendChunk Lua script from cache.
 // This replaces the previous non-atomic RPush + Expire two-command sequence.
+//
+// Uses context.Background() because stream chunks are buffered in Redis as
+// an intermediate step; the caller's context may be cancelled mid-stream,
+// but partial chunks already written should remain consistent.
 func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error) {
 	key := cache.MessageStream(messageID)
 	ttlSeconds := int(s.chunkTTL / time.Second)

@@ -271,7 +271,29 @@ func provideQueueWorker(
 		OnError: func(err error) {
 			logger.Error(context.Background(), "[rtcqueue.Worker] error", zap.Error(err))
 		},
+		Logger: &workerLogger{},
 	})
+}
+
+// workerLogger adapts the application logger to rtcqueue.WorkerLogger interface.
+type workerLogger struct{}
+
+func (l *workerLogger) Info(msg string, keysAndValues ...any) {
+	logger.Info(context.Background(), "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+}
+
+func (l *workerLogger) Error(msg string, keysAndValues ...any) {
+	logger.Error(context.Background(), "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+}
+
+// toZapFields converts key-value pairs to []zap.Field.
+func toZapFields(kv []any) []zap.Field {
+	fields := make([]zap.Field, 0, len(kv)/2)
+	for i := 0; i+1 < len(kv); i += 2 {
+		key, _ := kv[i].(string)
+		fields = append(fields, zap.Any(key, kv[i+1]))
+	}
+	return fields
 }
 
 func provideStateStore(redisClient redis.UniversalClient) *oauth.RedisStore {

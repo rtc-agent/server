@@ -71,8 +71,10 @@ func (s *Server) Start() error {
 	s.registerRoutes(mux)
 
 	// 挂载中间件（Chain 模式：第一个最外层，最后一个最接近 handler）
+	isDev := s.cfg.Server.Env == "development"
 	handler := middleware.Chain(
-		middleware.CORS(s.cfg.CORS.AllowOrigins),
+		middleware.CORS(s.cfg.CORS.AllowOrigins, isDev),
+		middleware.SecurityHeaders,
 		middleware.RequestLogger,
 	)(mux)
 

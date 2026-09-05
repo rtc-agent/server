@@ -41,6 +41,17 @@ type WorkerConfig struct {
 	// RenewInterval is how often the worker renews the session lock.
 	// Defaults to DefaultRenewIntervalSec (30s). Set shorter for tests.
 	RenewInterval time.Duration
+
+	// Logger provides structured logging for worker lifecycle events.
+	// If nil, falls back to the standard library log package.
+	Logger WorkerLogger
+}
+
+// WorkerLogger is the logging interface used by Worker.
+// Compatible with most structured loggers via adapter.
+type WorkerLogger interface {
+	Info(msg string, keysAndValues ...any)
+	Error(msg string, keysAndValues ...any)
 }
 
 // Worker manages the lifecycle of processing work items from a Queue.
@@ -81,8 +92,24 @@ func NewWorker(q *Queue, cfg WorkerConfig) *Worker {
 
 // logIfEnabled logs a message for debugging worker lifecycle.
 func (w *Worker) logIfEnabled(event string, fields map[string]any) {
-	// Simple debug logging - in production use a proper logger
+	if w.cfg.Logger != nil {
+		kv := make([]any, 0, len(fields)*2)
+		for k, v := range fields {
+			kv = append(kv, k, v)
+		}
+		w.cfg.Logger.Info(event, kv...)
+		return
+	}
 	log.Printf("[rtcqueue.Worker] %s: %v", event, fields)
+}
+
+// logError logs an error message using the configured logger or stdlib fallback.
+func (w *Worker) logError(msg string, keysAndValues ...any) {
+	if w.cfg.Logger != nil {
+		w.cfg.Logger.Error(msg, keysAndValues...)
+		return
+	}
+	log.Printf("[rtcqueue.Worker] %s: %v", msg, keysAndValues)
 }
 
 // Run starts the worker loop. It blocks until ctx is cancelled or an
@@ -124,8 +151,8 @@ func (w *Worker) Run(ctx context.Context) error {
 				defer w.wg.Done()
 				defer func() {
 					if r := recover(); r != nil {
-						log.Printf("[rtc-queue] goroutine panic: session=%s recover=%v stack=%s",
-							sessionID, r, debug.Stack())
+						w.logError("goroutine panic",
+							"session", sessionID, "recover", r, "stack", string(debug.Stack()))
 					}
 				}()
 				// acquire semaphore slot (blocks if at concurrency limit)
@@ -268,6 +295,12 @@ func (w *Worker) processWork(ctx context.Context, claim *ClaimResult) {
 	cancelSub := w.q.SubscribeCancel(workCtx, claim.SessionID)
 	defer cancelSub.Close()
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				w.logError("cancel listener panic",
+					"session", claim.SessionID, "recover", r, "stack", string(debug.Stack()))
+			}
+		}()
 		for msg := range cancelSub.Channel() {
 			var cm CancelMessage
 			if err := json.Unmarshal([]byte(msg.Payload), &cm); err != nil {
@@ -289,6 +322,12 @@ func (w *Worker) processWork(ctx context.Context, claim *ClaimResult) {
 	var lockLost atomic.Bool
 	renewDone := make(chan struct{})
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				w.logError("lock renewal panic",
+					"session", claim.SessionID, "recover", r, "stack", string(debug.Stack()))
+			}
+		}()
 		t := time.NewTicker(w.cfg.RenewInterval)
 		defer t.Stop()
 		for {

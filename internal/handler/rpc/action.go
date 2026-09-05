@@ -1,4 +1,4 @@
-// internal/rpchandler/action.go
+// internal/handler/rpc/action.go
 //
 // RPC action 方法按领域拆分到独立文件：
 //   - action.sendmessage.go

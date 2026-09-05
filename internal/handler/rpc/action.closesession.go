@@ -1,4 +1,4 @@
-// internal/rpchandler/action.closesession.go
+// internal/handler/rpc/action.closesession.go
 package rpchandler
 
 import (

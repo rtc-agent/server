@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -50,6 +51,15 @@ func runServe(cmd *cobra.Command, args []string) {
 	if err != nil {
 		logger.Fatal(context.Background(), "Failed to connect database", zap.Error(err))
 	}
+
+	// 配置数据库连接池
+	sqlDB, err := db.DB()
+	if err != nil {
+		logger.Fatal(context.Background(), "Failed to get underlying sql.DB", zap.Error(err))
+	}
+	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetMaxOpenConns(100)
+	sqlDB.SetConnMaxLifetime(time.Hour)
 
 	// 注意：schema 迁移请使用独立命令 `rtc-agent migrate`，不在 serve 中自动执行
 

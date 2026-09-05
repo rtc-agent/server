@@ -38,6 +38,7 @@ func (s *Session) BeforeCreate(tx *gorm.DB) error {
 // 会话状态常量（protocol 为单一真相源，此处 re-export 便于本包内使用）
 const (
 	SessionStatusActive = protocol.SessionStatusActive
+	SessionStatusIdle   = protocol.SessionStatusIdle
 	SessionStatusClosed = protocol.SessionStatusClosed
 )
 

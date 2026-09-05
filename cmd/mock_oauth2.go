@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -98,6 +99,11 @@ func runMockOAuth2(configPath string) {
 
 	// 启动 HTTP Server
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Mock OAuth2 Server panic: %v\n%s", r, debug.Stack())
+			}
+		}()
 		log.Printf("Mock OAuth2 Server 启动在 :%s", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("监听失败: %v", err)

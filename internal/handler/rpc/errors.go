@@ -15,7 +15,9 @@ import (
 // 用于数据库、Redis、事务等内部错误——这些错误的 err.Error() 可能包含
 // 表名、SQL 语句、连接信息等内部细节，绝不应该暴露给客户端。
 func (h *Handler) internalError(ctx context.Context, code, publicMsg string, err error) *APIError {
-	logger.Error(ctx, publicMsg, zap.Error(err))
+	logger.Error(ctx, publicMsg,
+		zap.String("error_code", code),
+		zap.Error(err))
 	return &APIError{Code: code, Message: publicMsg}
 }
 
