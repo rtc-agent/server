@@ -25,13 +25,13 @@ import (
 // The subscriber (handleInterrupt) does SUBSCRIBE then GET to catch answers
 // that arrived before the subscription was established.
 type InterruptHandler struct {
-	redis        redis.UniversalClient
-	interruptTTL config.WorkerConfig
+	redis     redis.UniversalClient
+	workerCfg config.WorkerConfig
 }
 
 // NewInterruptHandler creates an InterruptHandler.
 func NewInterruptHandler(redis redis.UniversalClient, workerCfg config.WorkerConfig) *InterruptHandler {
-	return &InterruptHandler{redis: redis, interruptTTL: workerCfg}
+	return &InterruptHandler{redis: redis, workerCfg: workerCfg}
 }
 
 // RegisterRoutes registers interrupt-related routes on the given ServeMux.
@@ -77,8 +77,7 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 		logger.Debug(ctx, "[interrupt.HTTP] entry",
 			zap.String("session", sessionID.String()),
 			zap.String("interrupt", interruptID),
-			zap.Int("answer_len", len(req.Answer)),
-			zap.String("stack", logger.CaptureStack(0)))
+			zap.Int("answer_len", len(req.Answer)))
 	}
 
 	// 原子执行 SET + PUBLISH（Lua 脚本保证一致性）：
@@ -86,7 +85,7 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 	// 2. PUBLISH to notify the waiting subscriber
 	answerKey := cache.InterruptAnswer(sessionID.String(), interruptID)
 	channel := cache.InterruptChannel(sessionID.String(), interruptID)
-	ttlSeconds := int(h.interruptTTL.InterruptAnswerTTL.Seconds())
+	ttlSeconds := int(h.workerCfg.InterruptAnswerTTL.Seconds())
 
 	if err := cache.InterruptSetPublish.Run(ctx, h.redis,
 		[]string{answerKey, channel},

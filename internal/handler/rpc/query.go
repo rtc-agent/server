@@ -92,11 +92,3 @@ func clampLimit(reqLimit *int, defaultLimit, maxLimit int) (int, *APIError) {
 	}
 	return *reqLimit, nil
 }
-
-// derefStr 解引用 *string，nil 返回空字符串。
-func derefStr(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}

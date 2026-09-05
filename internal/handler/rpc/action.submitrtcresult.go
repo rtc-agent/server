@@ -44,16 +44,6 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		zap.String("rtc", string(req.RtcId)),
 		zap.Bool("success", req.Success))
 
-	// Debug: trace the full RTC result submission
-	if logger.DebugMode {
-		logger.Debug(ctx, "[SubmitRtcResult] entry",
-			zap.String("rtc", string(req.RtcId)),
-			zap.Bool("success", req.Success),
-			zap.Bool("has_result", req.Result != nil),
-			zap.Bool("has_error", req.Error != nil),
-			zap.String("stack", logger.CaptureStack(0)))
-	}
-
 	// 加载 RTC 并校验存在
 	rtc, err := h.deps.Deps.RtcRepo.GetByID(ctx, rtcUUID)
 	if err != nil {
@@ -138,7 +128,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	}
 
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
-		if err := primitives.UpdateRtcResult(txCtx, h.deps.Deps, rtcUUID, targetStatus, resultJSON, derefStr(req.Error)); err != nil {
+		if err := primitives.UpdateRtcResult(txCtx, h.deps.Deps, rtcUUID, targetStatus, resultJSON, model.DerefStr(req.Error)); err != nil {
 			return nil, err
 		}
 
@@ -251,7 +241,16 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 //
 // Errors are logged but never returned — the RTC result has already been
 // persisted, and a failure here just means the agent won't auto-continue.
-func (h *Handler) resumeTurnAfterRtc(ctx context.Context, rtc *model.Rtc) {
+//
+// The function detaches from the caller's context: the RPC handler's
+// context may be cancelled when the RPC returns, but the resume/submit
+// operations (DB queries, Redis SetNX, Queue.Publish) must complete
+// independently since they are fire-and-forget.
+func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) {
+	// Detach from the RPC handler's context. The RTC result is already
+	// persisted; the resume is fire-and-forget and must not be aborted
+	// by the RPC context timeout/cancellation.
+	ctx := context.WithoutCancel(callerCtx)
 	if h.deps.Queue == nil {
 		logger.Warn(ctx, "[resumeTurnAfterRtc] Queue is nil, cannot resume",
 			zap.String("rtc", rtc.ID.String()))

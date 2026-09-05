@@ -30,11 +30,6 @@ func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (
 		zap.String("user", userID.String()),
 		zap.String("session", string(req.SessionId)))
 
-	// Debug: trace the full stop request
-	if logger.DebugMode {
-		logger.Debug(ctx, "[StopTurn] stack_trace", zap.String("trace", logger.CaptureStack(0)))
-	}
-
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, sessionUUID, creator); err != nil {
 		return nil, h.ownershipError(ctx, err)
 	}

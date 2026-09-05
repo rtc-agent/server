@@ -250,8 +250,8 @@ func parseTokenExchangeRequest(r *http.Request) (*protocol.OAuth2TokenExchangeRe
 		req.RedirectUri = r.FormValue("redirect_uri")
 		req.State = r.FormValue("state")
 		req.DeviceId = r.FormValue("device_id")
-		req.DeviceName = strPtr(r.FormValue("device_name"))
-		req.UserAgent = strPtr(r.FormValue("user_agent"))
+		req.DeviceName = model.StrPtr(r.FormValue("device_name"))
+		req.UserAgent = model.StrPtr(r.FormValue("user_agent"))
 	}); err != nil {
 		return nil, err
 	}
@@ -322,8 +322,8 @@ func (h *OAuth2Handler) upsertDevice(ctx context.Context, userID uuid.UUID, req 
 	device := &model.Device{
 		UserID:       userID,
 		DeviceID:     req.DeviceId,
-		Name:         derefStr(req.DeviceName),
-		UserAgent:    derefStr(req.UserAgent),
+		Name:         model.DerefStr(req.DeviceName),
+		UserAgent:    model.DerefStr(req.UserAgent),
 		LastActiveAt: time.Now(),
 	}
 	return h.svcCtx.DeviceRepo.Upsert(ctx, device)
@@ -383,20 +383,4 @@ func generateRefreshToken() (string, error) {
 func hashRefreshToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])
-}
-
-// strPtr 将非空字符串转为 *string，空字符串返回 nil。
-func strPtr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-// derefStr 解引用 *string，nil 返回空字符串。
-func derefStr(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }

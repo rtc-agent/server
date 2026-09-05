@@ -112,14 +112,6 @@ func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]
 		zap.String("user", userID.String()),
 		zap.String("device", deviceID))
 
-	// Debug: trace every RPC entry with stack
-	if logger.DebugMode {
-		logger.Debug(ctx, "[RPC] entry",
-			zap.String("method", method),
-			zap.Int("data_len", len(data)),
-			zap.String("stack", logger.CaptureStack(0)))
-	}
-
 	route, ok := h.routes[protocol.RpcMethod(method)]
 	if !ok {
 		return nil, &APIError{

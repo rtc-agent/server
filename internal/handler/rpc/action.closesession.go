@@ -34,11 +34,6 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 
 	logger.Info(ctx, "[CloseSession]", zap.String("user", userID.String()), zap.String("session", string(req.SessionId)))
 
-	// Debug: trace close entry
-	if logger.DebugMode {
-		logger.Debug(ctx, "[CloseSession] stack_trace", zap.String("stack", logger.CaptureStack(0)))
-	}
-
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionUUID)
 	if err != nil {
 		if repo.IsNotFound(err) {
@@ -79,10 +74,18 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	// user doesn't need to wait for all turns to stop before the session
 	// close response is returned.
 	//
+	// Detach from the RPC handler's context: it will be cancelled when the
+	// RPC returns (or when rpc_timeout fires), but stopActiveTurns performs
+	// multi-step cleanup (DB queries, Redis publish) that must complete
+	// independently of the RPC lifetime.
+	//
 	// If synchronous behavior is needed in the future, this can be changed
 	// to block until Queue.CancelSession completes. The trade-off is higher
 	// API latency vs. stronger consistency guarantees on close.
-	go h.stopActiveTurns(ctx, session.ID)
+	detachedCtx := context.WithoutCancel(ctx)
+	logger.SafeGo("stop-active-turns", func() {
+		h.stopActiveTurns(detachedCtx, session.ID)
+	})
 
 	return &protocol.CloseSessionResponse{
 		Result:  protocol.CloseSessionResult{Success: true},

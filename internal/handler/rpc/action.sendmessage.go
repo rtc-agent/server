@@ -67,11 +67,6 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		zap.String("session_id", req.ClientSessionId),
 		zap.String("client_id", req.ClientId))
 
-	// Debug: trace the full request entry
-	if logger.DebugMode {
-		logger.Debug(ctx, "[SendMessage] stack_trace", zap.String("trace", logger.CaptureStack(0)))
-	}
-
 	initialTitle := primitives.TruncateTitle(content, 50)
 	session, isNew, err := primitives.PrepareSession(ctx, h.deps.Deps, sessionUUIDPtr, req.ClientSessionId, creator, initialTitle)
 	if err != nil {
