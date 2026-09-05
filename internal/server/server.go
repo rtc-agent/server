@@ -137,15 +137,28 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	wsHandler := centrifuge.NewWebsocketHandler(s.svcCtx.CentrifugeNode, centrifuge.WebsocketConfig{
 		CheckOrigin: func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
+			logger.Info(r.Context(), "CheckOrigin called",
+				zap.String("origin", origin),
+				zap.String("server_env", s.cfg.Server.Env),
+				zap.Strings("allow_origins", s.cfg.CORS.AllowOrigins),
+			)
+
 			if s.cfg.Server.Env == "development" && len(s.cfg.CORS.AllowOrigins) == 0 {
 				// 仅开发模式回退：允许任意 origin
+				logger.Info(r.Context(), "CheckOrigin: development mode, allowing all origins")
 				return true
 			}
 			for _, allowed := range s.cfg.CORS.AllowOrigins {
 				if allowed == "*" || strings.EqualFold(allowed, origin) {
+					logger.Info(r.Context(), "CheckOrigin: origin allowed",
+						zap.String("matched", allowed),
+					)
 					return true
 				}
 			}
+			logger.Error(r.Context(), "CheckOrigin: origin NOT allowed",
+				zap.String("origin", origin),
+			)
 			return false
 		},
 	})

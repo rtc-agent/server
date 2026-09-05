@@ -52,7 +52,8 @@ func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore 
 			RedisPassword: cfg.Redis.Password,
 			RedisDB:       cfg.Redis.DB,
 			HistoryStore:  historyStore,
-			// TODO: 注入 Logger（待 centrifuge-plus 支持 Logger 配置）
+			Logger:        &centrifugeLogger{ctx: stdcontext.Background()},
+			Tracing:       centrifugeplus.TracingConfig{Enabled: true},
 		},
 	})
 	if err != nil {
@@ -82,7 +83,7 @@ func parseClientInfo(info []byte) *clientInfo {
 	return ci
 }
 
-// setupCentrifuge 配置 centrifuge.Node 的事件处理（JWT 鉴权、频道订阅校验）
+// setupCentrifuge 配置 centrifuge.Node 的事件处理（JWT 验证、频道订阅校验）
 func setupCentrifuge(
 	node *centrifuge.Node, broker *centrifugeplus.DualBroker,
 	signer *auth.JWTSigner, rpcTimeout time.Duration,
@@ -100,12 +101,37 @@ func setupCentrifuge(
 	return nil
 }
 
+// centrifugeLogger 适配器：将 zap logger 适配到 centrifuge-plus 的 Logger 接口
+type centrifugeLogger struct {
+	ctx stdcontext.Context
+}
+
+func (l *centrifugeLogger) Info(msg string, args ...any) {
+	logger.Info(l.ctx, msg, zap.Any("args", args))
+}
+
+func (l *centrifugeLogger) Warn(msg string, args ...any) {
+	logger.Warn(l.ctx, msg, zap.Any("args", args))
+}
+
+func (l *centrifugeLogger) Error(msg string, args ...any) {
+	logger.Error(l.ctx, msg, zap.Any("args", args))
+}
+
 // createOnConnectingHandler 返回 OnConnecting 回调：JWT 验证 → 提取身份 → 写入 Credentials。
 func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 	return func(ctx stdcontext.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		logger.Info(ctx, "[Centrifuge] OnConnecting started",
+			zap.String("token_length", fmt.Sprintf("%d", len(e.Token))),
+			zap.Bool("has_token", len(e.Token) > 0),
+		)
+
 		claims, err := signer.ParseAccessToken(e.Token)
 		if err != nil {
-			logger.Warn(ctx, "JWT 验证失败", zap.Error(err))
+			logger.Error(ctx, "[Centrifuge] JWT 验证失败，拒绝连接",
+				zap.Error(err),
+				zap.String("token_preview", previewToken(e.Token)),
+			)
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 		}
 
@@ -114,6 +140,12 @@ func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, 
 			DeviceID: claims.DeviceID,
 		}
 		info, _ := json.Marshal(ci)
+
+		logger.Info(ctx, "[Centrifuge] OnConnecting 成功",
+			zap.String("user_id", claims.UserID.String()),
+			zap.String("device_id", claims.DeviceID),
+		)
+
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: claims.UserID.String(),
@@ -124,12 +156,57 @@ func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, 
 	}
 }
 
+// previewToken 截取 token 的前 20 个字符用于日志（避免记录完整 token）
+func previewToken(token string) string {
+	if len(token) == 0 {
+		return "<empty>"
+	}
+	if len(token) <= 20 {
+		return token
+	}
+	return token[:20] + "..."
+}
+
 // createOnConnectHandler 返回 OnConnect 回调：订阅校验 + History + RPC 处理。
 func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.Duration) func(*centrifuge.Client) {
 	return func(client *centrifuge.Client) {
+		// 添加 panic recovery，捕获并记录任何未处理的错误
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error(stdcontext.Background(), "[Centrifuge] OnConnect panic",
+					zap.Any("panic", r),
+					zap.String("client_id", client.ID()),
+					zap.String("user_id", client.UserID()),
+					zap.Stack("stack"),
+				)
+			}
+		}()
+
+		logger.Info(stdcontext.Background(), "[Centrifuge] OnConnect started",
+			zap.String("client_id", client.ID()),
+			zap.String("user_id", client.UserID()),
+		)
+
 		userIDStr := client.UserID()
-		userID, _ := uuid.Parse(userIDStr)
+		userID, err := uuid.Parse(userIDStr)
+		if err != nil {
+			logger.Error(stdcontext.Background(), "[Centrifuge] Failed to parse user_id",
+				zap.Error(err),
+				zap.String("user_id_str", userIDStr),
+				zap.String("client_id", client.ID()),
+			)
+			// 断开连接
+			client.Disconnect(centrifuge.DisconnectBadRequest)
+			return
+		}
+
 		ci := parseClientInfo(client.Info())
+
+		logger.Info(stdcontext.Background(), "[Centrifuge] Setting up handlers",
+			zap.String("client_id", client.ID()),
+			zap.String("user_id", userID.String()),
+			zap.String("device_id", ci.DeviceID),
+		)
 
 		setupSubscribeHandler(client, broker)
 		setupHistoryHandler(client)

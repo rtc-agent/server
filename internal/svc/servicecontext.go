@@ -64,7 +64,8 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	}
 
 	node, err := centrifuge.New(centrifuge.Config{
-		LogLevel: centrifuge.LogLevelInfo,
+		LogLevel:   centrifuge.LogLevelInfo,
+		LogHandler: createCentrifugeLogHandler(),
 	})
 	if err != nil {
 		logger.Fatal(context.Background(), "create centrifuge node", zap.Error(err))
@@ -132,5 +133,37 @@ func NewServiceContextWithDeps(
 		CentrifugeNode:   node,
 		Broker:           broker,
 		JWTSigner:        jwtSigner,
+	}
+}
+
+// createCentrifugeLogHandler 创建 Centrifuge 日志处理器，将日志转发到 zap logger
+func createCentrifugeLogHandler() centrifuge.LogHandler {
+	return func(entry centrifuge.LogEntry) {
+		ctx := context.Background()
+		fields := make([]zap.Field, 0, len(entry.Fields)+1)
+
+		// 添加 Centrifuge 的字段
+		for k, v := range entry.Fields {
+			fields = append(fields, zap.Any(k, v))
+		}
+
+		// 添加错误信息（如果有）
+		if entry.Error != nil {
+			fields = append(fields, zap.Error(entry.Error))
+		}
+
+		// 根据 Centrifuge 的日志级别映射到 zap 的日志级别
+		switch entry.Level {
+		case centrifuge.LogLevelTrace, centrifuge.LogLevelDebug:
+			logger.Debug(ctx, "[centrifuge] "+entry.Message, fields...)
+		case centrifuge.LogLevelInfo:
+			logger.Info(ctx, "[centrifuge] "+entry.Message, fields...)
+		case centrifuge.LogLevelWarn:
+			logger.Warn(ctx, "[centrifuge] "+entry.Message, fields...)
+		case centrifuge.LogLevelError:
+			logger.Error(ctx, "[centrifuge] "+entry.Message, fields...)
+		default:
+			logger.Info(ctx, "[centrifuge] "+entry.Message, fields...)
+		}
 	}
 }

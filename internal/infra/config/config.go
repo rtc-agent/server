@@ -18,6 +18,7 @@ type Config struct {
 	Worker    WorkerConfig    `mapstructure:"worker"`
 	LLM       LLMConfig       `mapstructure:"llm"`
 	API       APIConfig       `mapstructure:"api"`
+	Tracing   TracingConfig   `mapstructure:"tracing"`
 }
 
 // ServerConfig HTTP/WebSocket 服务器监听地址配置。
@@ -168,6 +169,18 @@ type APIConfig struct {
 	QueryMaxLimit int `mapstructure:"query_max_limit"`
 }
 
+// TracingConfig OpenTelemetry 分布式追踪配置
+type TracingConfig struct {
+	// Enabled 是否启用 tracing
+	Enabled bool `mapstructure:"enabled"`
+
+	// Endpoint OTLP endpoint (例如: "localhost:4317")
+	Endpoint string `mapstructure:"endpoint"`
+
+	// SampleRate 采样率 (0.0 - 1.0)，默认 1.0（全量采样）
+	SampleRate float64 `mapstructure:"sample_rate"`
+}
+
 // Load 加载配置。使用局部 viper 实例，不污染全局状态，可安全并行测试。
 func Load(cfgFile string) (*Config, error) {
 	v := viper.New()
@@ -211,6 +224,9 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("llm.reasoning_effort", "medium")
 	v.SetDefault("api.query_default_limit", 50)
 	v.SetDefault("api.query_max_limit", 100)
+	v.SetDefault("tracing.enabled", false)
+	v.SetDefault("tracing.endpoint", "localhost:4317")
+	v.SetDefault("tracing.sample_rate", 1.0)
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, err

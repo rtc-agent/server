@@ -84,3 +84,9 @@ worker:
   # summarize_prompt: "Please summarize..."
   # 触发上下文压缩的 token 阈值（默认 25000）
   context_tokens_limit: 25000
+
+# OpenTelemetry 分布式追踪配置
+tracing:
+  enabled: true  # 开发环境启用 tracing
+  endpoint: "localhost:4317"  # Jaeger OTLP gRPC endpoint
+  sample_rate: 1.0  # 全量采样（开发环境）

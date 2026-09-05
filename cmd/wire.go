@@ -111,8 +111,45 @@ func provideJWTSigner(cfg *config.Config) (*auth.JWTSigner, error) {
 
 func provideCentrifugeNode() (*centrifuge.Node, error) {
 	return centrifuge.New(centrifuge.Config{
-		LogLevel: centrifuge.LogLevelInfo,
+		LogLevel:   centrifuge.LogLevelDebug, // 提高到 Debug 级别
+		LogHandler: newCentrifugeLogHandler(),
 	})
+}
+
+// centrifugeLogHandler 将 Centrifuge 的日志转发到 zap logger
+type centrifugeLogHandler struct{}
+
+func newCentrifugeLogHandler() centrifuge.LogHandler {
+	return (&centrifugeLogHandler{}).handle
+}
+
+func (h *centrifugeLogHandler) handle(entry centrifuge.LogEntry) {
+	ctx := context.Background()
+	fields := make([]zap.Field, 0, len(entry.Fields)+1)
+
+	// 添加 Centrifuge 的字段
+	for k, v := range entry.Fields {
+		fields = append(fields, zap.Any(k, v))
+	}
+
+	// 添加错误信息（如果有）
+	if entry.Error != nil {
+		fields = append(fields, zap.Error(entry.Error))
+	}
+
+	// 根据 Centrifuge 的日志级别映射到 zap 的日志级别
+	switch entry.Level {
+	case centrifuge.LogLevelTrace, centrifuge.LogLevelDebug:
+		logger.Debug(ctx, "[centrifuge] "+entry.Message, fields...)
+	case centrifuge.LogLevelInfo:
+		logger.Info(ctx, "[centrifuge] "+entry.Message, fields...)
+	case centrifuge.LogLevelWarn:
+		logger.Warn(ctx, "[centrifuge] "+entry.Message, fields...)
+	case centrifuge.LogLevelError:
+		logger.Error(ctx, "[centrifuge] "+entry.Message, fields...)
+	default:
+		logger.Info(ctx, "[centrifuge] "+entry.Message, fields...)
+	}
 }
 
 func provideDualBroker(

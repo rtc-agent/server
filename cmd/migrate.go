@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
@@ -35,7 +36,12 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 	logger.Info(context.Background(), "Running database migration...")
 
-	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
+		Logger: logger.NewGormLogger(
+			false,        // 迁移时不忽略 ErrRecordNotFound
+			200*time.Millisecond,
+		),
+	})
 	if err != nil {
 		return fmt.Errorf("connect database: %w", err)
 	}

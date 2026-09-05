@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/infra/tracing"
 	"github.com/rtc-agent/server/pkg/logger"
 
 	"github.com/redis/go-redis/v9"
@@ -46,8 +47,41 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Info(context.Background(), "DEBUG mode enabled — extra logs writing to logs/debug.log")
 	}
 
+	// Init tracing (OpenTelemetry + Jaeger)
+	var shutdownTracing func(context.Context) error
+	if cfg.Tracing.Enabled {
+		var err error
+		shutdownTracing, err = tracing.Init(tracing.Config{
+			ServiceName: "rtc-agent",
+			Endpoint:    cfg.Tracing.Endpoint,
+			Insecure:    true, // 开发环境使用非加密连接
+			SampleRate:  cfg.Tracing.SampleRate,
+		})
+		if err != nil {
+			logger.Fatal(context.Background(), "Failed to initialize tracing", zap.Error(err))
+		}
+		logger.Info(context.Background(), "Tracing enabled",
+			zap.String("endpoint", cfg.Tracing.Endpoint),
+			zap.Float64("sample_rate", cfg.Tracing.SampleRate),
+		)
+	}
+	defer func() {
+		if shutdownTracing != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := shutdownTracing(ctx); err != nil {
+				logger.Error(context.Background(), "Failed to shutdown tracing", zap.Error(err))
+			}
+		}
+	}()
+
 	// Init database
-	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
+		Logger: logger.NewGormLogger(
+			true,         // 忽略 ErrRecordNotFound
+			200*time.Millisecond, // 慢查询阈值
+		),
+	})
 	if err != nil {
 		logger.Fatal(context.Background(), "Failed to connect database", zap.Error(err))
 	}
