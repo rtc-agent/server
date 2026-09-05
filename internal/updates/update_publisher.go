@@ -4,6 +4,7 @@ package updates
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -22,6 +23,10 @@ import (
 
 	"gorm.io/gorm"
 )
+
+// ErrPushAfterCommit 表示事务已提交成功，但后续推送到 Centrifuge 失败。
+// 调用方可通过 errors.Is 检测此错误：数据已安全持久化，推送失败不影响业务结果。
+var ErrPushAfterCommit = errors.New("push failed after successful commit")
 
 // Broker 发布接口，用于打断 UpdatePublisher 与具体 broker 实现的循环依赖。
 type Broker interface {
@@ -95,8 +100,13 @@ func NewUpdatePublisher(
 					m.Content = strings.Join(chunks, "")
 				} else {
 					v.Data = strings.Join(chunks, "")
-					tmp, _ := json.Marshal(v)
-					m.Content = string(tmp)
+					tmp, marshalErr := json.Marshal(v)
+					if marshalErr != nil {
+						logger.Warn(ctx, "[UpdatePublisher] marshal content with chunks failed", zap.Error(marshalErr))
+						m.Content = strings.Join(chunks, "")
+					} else {
+						m.Content = string(tmp)
+					}
 				}
 			}
 		}
@@ -174,8 +184,9 @@ func (u *UpdatePublisher) Push(ctx context.Context, items []UpdatePublishItem, s
 // 提交后统一推送到 Centrifuge。fn 内的所有 DB 写入应使用传入的 txCtx。
 //
 // 流程：Begin tx → fn(txCtx) 返回 items → save(items) → commit → push。
-// 任何一步失败都会回滚事务并返回错误；commit 成功后 push 失败只记录日志，
-// 不影响业务结果（数据已持久化）。
+// 任何一步失败都会回滚事务并返回错误；commit 成功后 push 失败返回
+// ErrPushAfterCommit 包装的错误，调用方通过 errors.Is 检测后可安全忽略
+// （数据已持久化，客户端将通过重连同步获取最新状态）。
 func (u *UpdatePublisher) RunAndPublish(
 	ctx context.Context,
 	fn func(txCtx context.Context) ([]UpdatePublishItem, error),
@@ -205,10 +216,11 @@ func (u *UpdatePublisher) RunAndPublish(
 		return nil, fmt.Errorf("commit transaction: %w", err)
 	}
 
-	// 事务提交成功后推送；推送失败只记录，不回滚
+	// 事务提交成功后推送；推送失败通过 ErrPushAfterCommit 告知调用方
 	pushUpdates, pushErr := u.Push(ctx, items, saved)
 	if pushErr != nil {
 		logger.Error(ctx, "[UpdatePublisher] push failed (data already committed)", zap.Error(pushErr))
+		return pushUpdates, fmt.Errorf("%w: %v", ErrPushAfterCommit, pushErr)
 	}
 	return pushUpdates, nil
 }

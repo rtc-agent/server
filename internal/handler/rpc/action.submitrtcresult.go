@@ -4,6 +4,7 @@ package rpchandler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/rtc-agent/server/internal/infra/cache"
@@ -221,7 +222,11 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		return items, nil
 	})
 	if err != nil {
-		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
+		if errors.Is(err, updates.ErrPushAfterCommit) {
+			logger.Warn(ctx, "[SubmitRtcResult] push failed after commit (data safe)", zap.Error(err))
+		} else {
+			return nil, h.internalError(ctx, "rtc.error", "internal error", err)
+		}
 	}
 
 	// Resume the interrupted turn via rtc-queue. The old architecture used
@@ -286,10 +291,14 @@ func (h *Handler) resumeTurnAfterRtc(ctx context.Context, rtc *model.Rtc) {
 		// Happy path: there's an active (most likely interrupted) turn.
 		// Publish a Resume work item at high priority so it's claimed before
 		// any pending Submit items.
-		payload, _ := json.Marshal(turnagent.WorkPayload{
+		payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 			Kind:      turnagent.WorkKindResume,
 			SessionID: rtc.SessionID.String(),
 		})
+		if marshalErr != nil {
+			logger.Error(ctx, "[resumeTurnAfterRtc] marshal resume payload", zap.Error(marshalErr))
+			return
+		}
 		if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), ResumePriority); err != nil {
 			logger.Error(ctx, "[resumeTurnAfterRtc] Queue.Publish resume failed",
 				zap.String("rtc", rtc.ID.String()),
@@ -329,10 +338,14 @@ func (h *Handler) resumeTurnAfterRtc(ctx context.Context, rtc *model.Rtc) {
 	// RTC result. The tool can then check the RTC status and proceed accordingly.
 
 	// Publish Submit work item. turn-agent will create the turn when processing it.
-	payload, _ := json.Marshal(turnagent.WorkPayload{
+	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: rtc.SessionID.String(),
 	})
+	if marshalErr != nil {
+		logger.Error(ctx, "[resumeTurnAfterRtc] marshal submit payload", zap.Error(marshalErr))
+		return
+	}
 	if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), 0); err != nil {
 		// Roll back orphan key to allow retry
 		if delErr := h.deps.Deps.Redis.Del(ctx, orphanKey).Err(); delErr != nil {

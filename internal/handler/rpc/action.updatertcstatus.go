@@ -3,6 +3,7 @@ package rpchandler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
@@ -97,7 +98,11 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		return primitives.BuildRtcStatusUpdates(sessionBefore, rtcUUID), nil
 	})
 	if err != nil {
-		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
+		if errors.Is(err, updates.ErrPushAfterCommit) {
+			logger.Warn(ctx, "[UpdateRtcStatus] push failed after commit (data safe)", zap.Error(err))
+		} else {
+			return nil, h.internalError(ctx, "rtc.error", "internal error", err)
+		}
 	}
 
 	return &protocol.UpdateRtcStatusResponse{

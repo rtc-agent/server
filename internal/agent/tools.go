@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -300,7 +301,11 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		return items, nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("create rtc and message: %w", err)
+		if errors.Is(err, updates.ErrPushAfterCommit) {
+			r.helpers.logIfEnabled(ctx, "rtcToolBase.push_after_commit", map[string]any{"error": err.Error()})
+		} else {
+			return "", fmt.Errorf("create rtc and message: %w", err)
+		}
 	}
 
 	r.helpers.logIfEnabled(ctx, "rtcToolBase.rtc_created", map[string]any{

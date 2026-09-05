@@ -3,6 +3,7 @@ package rpchandler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/rtc-agent/server/internal/channel"
@@ -63,7 +64,11 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		return primitives.BuildSessionCloseUpdates(session), nil
 	})
 	if err != nil {
-		return nil, h.internalError(ctx, "close.error", "internal error", err)
+		if errors.Is(err, updates.ErrPushAfterCommit) {
+			logger.Warn(ctx, "[CloseSession] push failed after commit (data safe)", zap.Error(err))
+		} else {
+			return nil, h.internalError(ctx, "close.error", "internal error", err)
+		}
 	}
 
 	// 2. Stop any active turns (best-effort, failures are OK).

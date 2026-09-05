@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/cloudwego/eino/schema"
@@ -191,7 +192,11 @@ func (h *helpers) handleMessage(ctx context.Context, sessionID uuid.UUID, turnID
 		return []updates.UpdatePublishItem{{Channel: ch, Items: allItems}}, nil
 	})
 	if err != nil {
-		return fmt.Errorf("handleMessage: %w", err)
+		if errors.Is(err, updates.ErrPushAfterCommit) {
+			h.logIfEnabled(ctx, "handleMessage.push_after_commit", map[string]any{"error": err.Error()})
+		} else {
+			return fmt.Errorf("handleMessage: %w", err)
+		}
 	}
 
 	return nil

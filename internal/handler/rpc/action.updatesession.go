@@ -3,6 +3,7 @@ package rpchandler
 
 import (
 	"context"
+	"errors"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/updates"
@@ -67,7 +68,11 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 		return primitives.BuildSessionUpdateUpdates(sessionBefore), nil
 	})
 	if err != nil {
-		return nil, h.internalError(ctx, "update.error", "internal error", err)
+		if errors.Is(err, updates.ErrPushAfterCommit) {
+			logger.Warn(ctx, "[UpdateSession] push failed after commit (data safe)", zap.Error(err))
+		} else {
+			return nil, h.internalError(ctx, "update.error", "internal error", err)
+		}
 	}
 
 	return &protocol.UpdateSessionResponse{

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -73,7 +74,11 @@ func (h *helpers) createAndPublishMessage(
 		}}, nil
 	})
 	if err != nil {
-		return nil, err
+		if errors.Is(err, updates.ErrPushAfterCommit) {
+			h.logIfEnabled(ctx, "createAndPublishMessage.push_after_commit", map[string]any{"error": err.Error()})
+		} else {
+			return nil, err
+		}
 	}
 	return newMsg, nil
 }
@@ -208,7 +213,11 @@ func (h *helpers) appendStreamChunk(
 			},
 		}}, nil
 	}); pubErr != nil {
-		return fmt.Errorf("appendStreamChunk: run and publish: %w", pubErr)
+		if errors.Is(pubErr, updates.ErrPushAfterCommit) {
+			h.logIfEnabled(ctx, "appendStreamChunk.push_after_commit", map[string]any{"error": pubErr.Error()})
+		} else {
+			return fmt.Errorf("appendStreamChunk: run and publish: %w", pubErr)
+		}
 	}
 
 	// 4. Delete Redis chunks.

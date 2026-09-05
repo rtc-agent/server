@@ -4,6 +4,7 @@ package rpchandler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
@@ -166,10 +167,13 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		// messages without a work item. If Commit fails after Publish
 		// succeeds, a reconciliation job cleans up the orphan work item.
 		if h.deps.Queue != nil {
-			payload, _ := json.Marshal(turnagent.WorkPayload{
+			payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 				Kind:      turnagent.WorkKindSubmit,
 				SessionID: newSession.ID.String(),
 			})
+			if marshalErr != nil {
+				return nil, fmt.Errorf("marshal work payload: %w", marshalErr)
+			}
 			if _, err := h.deps.Queue.Publish(txCtx, newSession.ID.String(), string(payload), 0); err != nil {
 				return nil, fmt.Errorf("queue publish: %w", err)
 			}
@@ -183,7 +187,11 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		return primitives.BuildForkSessionUpdates(newSession, createdMessages), nil
 	})
 	if err != nil {
-		return nil, h.internalError(ctx, "fork.error", "internal error", err)
+		if errors.Is(err, updates.ErrPushAfterCommit) {
+			logger.Warn(ctx, "[ForkSession] push failed after commit (data safe)", zap.Error(err))
+		} else {
+			return nil, h.internalError(ctx, "fork.error", "internal error", err)
+		}
 	}
 
 	// 11. 构建响应

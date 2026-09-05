@@ -129,10 +129,13 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		// DB changes are not persisted. A reconciliation job can clean up
 		// orphan work items later.
 		if h.deps.Queue != nil {
-			payload, _ := json.Marshal(turnagent.WorkPayload{
+			payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 				Kind:      turnagent.WorkKindSubmit,
 				SessionID: session.ID.String(),
 			})
+			if marshalErr != nil {
+				return nil, fmt.Errorf("marshal work payload: %w", marshalErr)
+			}
 			if _, err := h.deps.Queue.Publish(txCtx, session.ID.String(), string(payload), 0); err != nil {
 				return nil, fmt.Errorf("queue publish: %w", err)
 			}
@@ -150,7 +153,11 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		return primitives.BuildSendMessageUpdates(session, isNew, nil, msg.ID), nil
 	})
 	if err != nil {
-		return nil, h.internalError(ctx, "send.error", "internal error", err)
+		if errors.Is(err, updates.ErrPushAfterCommit) {
+			logger.Warn(ctx, "[SendMessage] push failed after commit (data safe)", zap.Error(err))
+		} else {
+			return nil, h.internalError(ctx, "send.error", "internal error", err)
+		}
 	}
 
 	// TODO: Title summarization for new sessions. The old code pushed a
