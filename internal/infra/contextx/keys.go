@@ -12,7 +12,7 @@ import (
 type contextKey struct{ name string }
 
 var (
-	userIDKey  = contextKey{"user_id"}
+	userIDKey   = contextKey{"user_id"}
 	deviceIDKey = contextKey{"device_id"}
 )
 

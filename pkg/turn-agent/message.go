@@ -112,13 +112,13 @@ func toEinoMessage(m *Message) *schema.Message {
 		return nil
 	}
 	em := &schema.Message{
-		Role:               schema.RoleType(m.Role),
-		Content:            m.Content,
-		ReasoningContent:   m.ReasoningContent,
-		ToolName:           m.ToolName,
-		ToolCallID:         m.ToolCallID,
-		Name:               m.Name,
-		Extra:              m.Extra,
+		Role:             schema.RoleType(m.Role),
+		Content:          m.Content,
+		ReasoningContent: m.ReasoningContent,
+		ToolName:         m.ToolName,
+		ToolCallID:       m.ToolCallID,
+		Name:             m.Name,
+		Extra:            m.Extra,
 	}
 	for _, tc := range m.ToolCalls {
 		em.ToolCalls = append(em.ToolCalls, schema.ToolCall{

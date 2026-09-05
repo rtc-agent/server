@@ -19,8 +19,8 @@ type Claims struct {
 
 // JWTSigner 基于 HMAC-SHA256 的 TokenSigner 实现
 type JWTSigner struct {
-	secret      []byte
-	accessTTL   time.Duration
+	secret    []byte
+	accessTTL time.Duration
 }
 
 // NewJWTSigner 创建 JWT 签名器

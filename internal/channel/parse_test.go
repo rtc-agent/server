@@ -114,9 +114,9 @@ func TestIsUser(t *testing.T) {
 
 func TestParseUser(t *testing.T) {
 	tests := []struct {
-		ch           string
-		expectedUID  string
-		expectedOK   bool
+		ch          string
+		expectedUID string
+		expectedOK  bool
 	}{
 		{"topic:u=123", "123", true},
 		{"live:u=456", "456", true},

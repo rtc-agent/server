@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -13,18 +14,18 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/agent"
-	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/channel"
-	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/handler/http"
+	"github.com/rtc-agent/server/internal/handler/rpc"
+	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/repo"
-	"github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/server"
-	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/svc"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -161,17 +162,16 @@ type chatModelResult struct {
 
 func provideChatModel(cfg *config.Config) (*chatModelResult, error) {
 	if cfg.LLM.Provider == "" || cfg.LLM.Model == "" {
-		logger.Warn("LLM not configured (provider/model missing), agent features will be disabled")
+		logger.Warn(context.Background(), "LLM not configured (provider/model missing), agent features will be disabled")
 		return &chatModelResult{model: nil}, nil
 	}
 
 	m, err := server.NewChatModel(cfg)
 	if err != nil {
-		logger.Error("Failed to create chat model: %v (agent features will be disabled)", err)
+		logger.Error(context.Background(), "Failed to create chat model (agent features will be disabled)", zap.Error(err))
 		return &chatModelResult{model: nil}, nil
 	}
-
-	logger.Info("LLM initialized: provider=%s model=%s", cfg.LLM.Provider, cfg.LLM.Model)
+	logger.Info(context.Background(), "LLM initialized", zap.String("provider", cfg.LLM.Provider), zap.String("model", cfg.LLM.Model))
 	return &chatModelResult{model: m}, nil
 }
 
@@ -233,18 +233,18 @@ func provideQueueWorker(
 		Concurrency: cfg.Worker.BackgroundConcurrency,
 		OnWork:      agent.Process,
 		OnError: func(err error) {
-			logger.Error("[rtcqueue.Worker] error: %v", err)
+			logger.Error(context.Background(), "[rtcqueue.Worker] error", zap.Error(err))
 		},
 	})
 }
 
-func provideStateStore(redisClient redis.UniversalClient) *statestore.RedisStore {
-	return statestore.NewRedisStore(redisClient)
+func provideStateStore(redisClient redis.UniversalClient) *oauth.RedisStore {
+	return oauth.NewRedisStore(redisClient)
 }
 
-func provideOAuth2ProviderClient(cfg *config.Config) *oauth2provider.Client {
+func provideOAuth2ProviderClient(cfg *config.Config) *oauth.Client {
 	providers := server.BuildProviderClients(cfg)
-	return oauth2provider.NewClient(providers, cfg.Providers.HTTPTimeout)
+	return oauth.NewClient(providers, cfg.Providers.HTTPTimeout)
 }
 
 func provideRPCHandler(
@@ -271,8 +271,8 @@ func provideHTTPHandler(svcCtx *svc.ServiceContext) *httphandler.Handler {
 func provideOAuth2Handler(
 	svcCtx *svc.ServiceContext,
 	jwtSigner *auth.JWTSigner,
-	stateStore *statestore.RedisStore,
-	providerClient *oauth2provider.Client,
+	stateStore *oauth.RedisStore,
+	providerClient *oauth.Client,
 	cfg *config.Config,
 ) *httphandler.OAuth2Handler {
 	return httphandler.NewOAuth2Handler(svcCtx, jwtSigner, stateStore, providerClient, cfg.Auth)

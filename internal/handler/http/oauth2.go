@@ -15,8 +15,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/infra/config"
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/infra/httputil"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/svc"

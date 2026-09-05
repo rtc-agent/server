@@ -11,12 +11,12 @@ import (
 // UserUpdate 用户更新记录，用于 Topic 频道的离线恢复
 // 每条记录对应一批实体变化事件（session/turn/message/rtc 的 created/updated/deleted）
 type UserUpdate struct {
-	ID        uuid.UUID      `gorm:"type:uuid;primaryKey"`
-	UserID    uuid.UUID      `gorm:"type:uuid;index:idx_user_offset,unique;index;not null"` // 所属用户
-	Offset    uint32         `gorm:"index:idx_user_offset,unique;not null"`                 // 用户维度单调递增 offset
-	Items     UpdateItemArray `gorm:"type:jsonb;not null"`                  // 变化条目列表
-	DataList  StringArray    `gorm:"type:jsonb" json:"data_list,omitempty"` // 富内容缓存（可选）
-	CreatedAt time.Time      `gorm:"autoCreateTime;not null"`
+	ID        uuid.UUID       `gorm:"type:uuid;primaryKey"`
+	UserID    uuid.UUID       `gorm:"type:uuid;index:idx_user_offset,unique;index;not null"` // 所属用户
+	Offset    uint32          `gorm:"index:idx_user_offset,unique;not null"`                 // 用户维度单调递增 offset
+	Items     UpdateItemArray `gorm:"type:jsonb;not null"`                                   // 变化条目列表
+	DataList  StringArray     `gorm:"type:jsonb" json:"data_list,omitempty"`                 // 富内容缓存（可选）
+	CreatedAt time.Time       `gorm:"autoCreateTime;not null"`
 }
 
 // TableName 指定表名

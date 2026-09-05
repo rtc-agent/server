@@ -57,9 +57,9 @@ const (
 
 // Redis key prefixes.
 const (
-	keyPrefixQueue = "queue:session:"
-	keyPrefixWork  = "work:"
-	keyPrefixLock  = "session:lock:"
+	keyPrefixQueue  = "queue:session:"
+	keyPrefixWork   = "work:"
+	keyPrefixLock   = "session:lock:"
 	keyPrefixActive = "session:active:"
 )
 

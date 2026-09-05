@@ -14,7 +14,7 @@ var (
 	ErrSessionClosedOrNotFound = errors.New("session is closed or not found")
 
 	// Turn
-	ErrTurnNotFound = errors.New("turn not found")
+	ErrTurnNotFound   = errors.New("turn not found")
 	ErrTurnNotPending = errors.New("turn is not in pending status")
 
 	// Message
