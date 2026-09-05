@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -121,6 +122,12 @@ func (w *Worker) Run(ctx context.Context) error {
 			w.wg.Add(1)
 			go func() {
 				defer w.wg.Done()
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[rtc-queue] goroutine panic: session=%s recover=%v stack=%s",
+							sessionID, r, debug.Stack())
+					}
+				}()
 				// acquire semaphore slot (blocks if at concurrency limit)
 				select {
 				case w.sem <- struct{}{}:

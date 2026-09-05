@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rtc-agent/server/internal/channel"
@@ -48,6 +49,7 @@ type StreamStoreAccessor interface {
 type UpdatePublisher struct {
 	db          *gorm.DB
 	redis       redis.UniversalClient
+	mu          sync.RWMutex // 保护 broker 和 streamStore 的并发读写
 	broker      Broker
 	resolvers   map[string]EntityResolver
 	streamStore StreamStoreAccessor // 可选：用于读取 streaming 状态消息的 chunks
@@ -84,28 +86,33 @@ func NewUpdatePublisher(
 
 		// 流式消息：从 Redis 读取 chunks 拼接到 content。
 		// 竞争条件：chunks 可能未完全写入，接受最终一致性（前端通过后续 update 获取最新内容）。
-		if protocol.MessageStreamingStatus(m.StreamingStatus) == protocol.MessageStreamingStreaming && u.streamStore != nil {
-			chunks, chunksErr := u.streamStore.GetAllChunks(m.ID.String())
-			if chunksErr != nil {
-				// 降级：返回 DB 原始数据，记录 warn 日志
-				logger.Warn(ctx, "[UpdatePublisher] get chunks for streaming message failed, falling back to DB data",
-					zap.String("message_id", m.ID.String()),
-					zap.Error(chunksErr),
-				)
-			} else if len(chunks) > 0 {
-				v := &protocol.ContentData{}
-				e := json.Unmarshal([]byte(m.Content), v)
-				if e != nil {
-					logger.Warn(ctx, "[UpdatePublisher] unmarshal content failed", zap.Error(e))
-					m.Content = strings.Join(chunks, "")
-				} else {
-					v.Data = strings.Join(chunks, "")
-					tmp, marshalErr := json.Marshal(v)
-					if marshalErr != nil {
-						logger.Warn(ctx, "[UpdatePublisher] marshal content with chunks failed", zap.Error(marshalErr))
+		if protocol.MessageStreamingStatus(m.StreamingStatus) == protocol.MessageStreamingStreaming {
+			u.mu.RLock()
+			ss := u.streamStore
+			u.mu.RUnlock()
+			if ss != nil {
+				chunks, chunksErr := ss.GetAllChunks(m.ID.String())
+				if chunksErr != nil {
+					// 降级：返回 DB 原始数据，记录 warn 日志
+					logger.Warn(ctx, "[UpdatePublisher] get chunks for streaming message failed, falling back to DB data",
+						zap.String("message_id", m.ID.String()),
+						zap.Error(chunksErr),
+					)
+				} else if len(chunks) > 0 {
+					v := &protocol.ContentData{}
+					e := json.Unmarshal([]byte(m.Content), v)
+					if e != nil {
+						logger.Warn(ctx, "[UpdatePublisher] unmarshal content failed", zap.Error(e))
 						m.Content = strings.Join(chunks, "")
 					} else {
-						m.Content = string(tmp)
+						v.Data = strings.Join(chunks, "")
+						tmp, marshalErr := json.Marshal(v)
+						if marshalErr != nil {
+							logger.Warn(ctx, "[UpdatePublisher] marshal content with chunks failed", zap.Error(marshalErr))
+							m.Content = strings.Join(chunks, "")
+						} else {
+							m.Content = string(tmp)
+						}
 					}
 				}
 			}
@@ -147,13 +154,17 @@ func NewUpdatePublisher(
 
 // SetBroker 注入 broker（解决循环依赖：broker 创建时需要 UpdatePublisher 作为 HistoryStore）
 func (u *UpdatePublisher) SetBroker(broker Broker) {
+	u.mu.Lock()
 	u.broker = broker
+	u.mu.Unlock()
 }
 
 // SetStreamStore 注入 StreamStoreAccessor（用于读取 streaming 状态消息的 chunks）。
 // 可选调用：未调用时 streaming 消息返回 DB 原始数据（content 可能不完整）。
 func (u *UpdatePublisher) SetStreamStore(s StreamStoreAccessor) {
+	u.mu.Lock()
 	u.streamStore = s
+	u.mu.Unlock()
 }
 
 // UpdatePublishItem 一条更新事件，描述一批实体变化
@@ -227,6 +238,10 @@ func (u *UpdatePublisher) RunAndPublish(
 
 // publishUpdates 把已转好的 []*protocol.Update 按 items 顺序发布到对应频道。
 func (u *UpdatePublisher) publishUpdates(ctx context.Context, items []UpdatePublishItem, pushUpdates []*protocol.Update) ([]*protocol.Update, error) {
+	u.mu.RLock()
+	broker := u.broker
+	u.mu.RUnlock()
+
 	pushIdx := 0
 	for _, item := range items {
 		for range item.Items {
@@ -241,7 +256,7 @@ func (u *UpdatePublisher) publishUpdates(ctx context.Context, items []UpdatePubl
 				return nil, fmt.Errorf("marshal update: %w", err)
 			}
 
-			_, err = u.broker.PublishWithContext(ctx, item.Channel, data, centrifuge.PublishOptions{})
+			_, err = broker.PublishWithContext(ctx, item.Channel, data, centrifuge.PublishOptions{})
 			if err != nil {
 				logger.Error(ctx, "[UpdatePublisher] publish to centrifuge failed",
 					zap.String("channel", item.Channel),
@@ -301,6 +316,10 @@ func (u *UpdatePublisher) publishTopic(ctx context.Context, items []UpdatePublis
 }
 
 func (u *UpdatePublisher) publishLive(ctx context.Context, items []UpdatePublishItem) ([]*protocol.Update, error) {
+	u.mu.RLock()
+	broker := u.broker
+	u.mu.RUnlock()
+
 	var allUpdates []*protocol.Update
 
 	for _, item := range items {
@@ -320,7 +339,7 @@ func (u *UpdatePublisher) publishLive(ctx context.Context, items []UpdatePublish
 				return nil, fmt.Errorf("marshal update: %w", err)
 			}
 
-			_, err = u.broker.PublishWithContext(ctx, item.Channel, data, centrifuge.PublishOptions{})
+			_, err = broker.PublishWithContext(ctx, item.Channel, data, centrifuge.PublishOptions{})
 			if err != nil {
 				return nil, fmt.Errorf("publish to centrifuge: %w", err)
 			}

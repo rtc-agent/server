@@ -54,11 +54,11 @@ func (s *Server) Start() error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.workerCancel = cancel
-	go func() {
+	logger.SafeGo("queue-worker", func() {
 		if err := s.queueWorker.Run(ctx); err != nil && ctx.Err() == nil {
 			logger.Error(ctx, "[Server] rtc-queue Worker exited with error", zap.Error(err))
 		}
-	}()
+	})
 	if logger.DebugMode {
 		logger.Debug(ctx, "[Server] rtc-queue Worker started successfully")
 	}

@@ -70,11 +70,11 @@ func runServe(cmd *cobra.Command, args []string) {
 	if err != nil {
 		logger.Fatal(context.Background(), "Failed to initialize server", zap.Error(err))
 	}
-	go func() {
+	logger.SafeGo("http-server", func() {
 		if err := srv.Start(); err != nil {
 			logger.Fatal(context.Background(), "Server failed", zap.Error(err))
 		}
-	}()
+	})
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
