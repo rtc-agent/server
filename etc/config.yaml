@@ -41,6 +41,9 @@ llm:
   model: "google/gemma-4-e4b"
   base_url: "http://127.0.0.1:1234/v1"
   max_tokens: 131072
+  # 重试配置（可选）
+  # retry_max_attempts: 3  # 最大重试次数，0 表示不重试（默认）
+  # retry_base_delay: 1s   # 重试基础退避时间，实际退避 = base_delay * 2^(attempt-1)
 
 # Worker 配置（开发环境）
 worker:

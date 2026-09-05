@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
@@ -286,12 +287,30 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		handlers = append(handlers, h.summarizeMW)
 	}
 
+	// Build retry config if configured
+	var retryConfig *adk.ModelRetryConfig
+	if h.deps.LLMConfig.RetryMaxAttempts > 0 {
+		retryConfig = &adk.ModelRetryConfig{
+			MaxRetries: h.deps.LLMConfig.RetryMaxAttempts,
+		}
+		// Custom backoff function if base delay is configured
+		if h.deps.LLMConfig.RetryBaseDelay > 0 {
+			baseDelay := h.deps.LLMConfig.RetryBaseDelay
+			retryConfig.BackoffFunc = func(ctx context.Context, attempt int) time.Duration {
+				// Exponential backoff: baseDelay * 2^(attempt-1)
+				// attempt starts at 1 for the first retry
+				return baseDelay * time.Duration(1<<uint(attempt-1))
+			}
+		}
+	}
+
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        fmt.Sprintf("session-%s", sessionID),
 		Description: "RTC Agent session handler",
 		Instruction: h.deps.SystemPrompt,
 		Model:       h.deps.ChatModel,
 		Handlers:    handlers,
+		ModelRetryConfig: retryConfig,
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools: tools,

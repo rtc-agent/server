@@ -39,9 +39,10 @@ type Dependencies struct {
 
 	// ChatModel is the eino ChatModel for LLM interactions.
 	// Required for agent execution in turn-loop sessions.
-	//
-	//nolint:staticcheck // TODO: migrate to ToolCallingChatModel
-	ChatModel model.ChatModel
+	ChatModel model.ToolCallingChatModel
+
+	// LLMConfig provides access to LLM-level configuration (retry, etc.)
+	LLMConfig config.LLMConfig
 
 	// SystemPrompt is the agent's instruction/system message.
 	// Defines the agent's behavior and capabilities.

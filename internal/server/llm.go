@@ -13,16 +13,12 @@ import (
 )
 
 // NewChatModel 根据配置创建 ChatModel（支持 Claude 和 OpenAI）
-//
-//nolint:staticcheck // TODO: migrate to ToolCallingChatModel
-func NewChatModel(cfg *config.Config) (model.ChatModel, error) {
+func NewChatModel(cfg *config.Config) (model.ToolCallingChatModel, error) {
 	return newChatModel(context.Background(), &cfg.LLM)
 }
 
 // newChatModel 根据配置创建 ChatModel（支持 Claude 和 OpenAI）
-//
-//nolint:staticcheck // TODO: migrate to ToolCallingChatModel
-func newChatModel(ctx context.Context, cfg *config.LLMConfig) (model.ChatModel, error) {
+func newChatModel(ctx context.Context, cfg *config.LLMConfig) (model.ToolCallingChatModel, error) {
 	if cfg.Provider == "" {
 		return nil, fmt.Errorf("llm.provider not configured")
 	}
@@ -41,9 +37,7 @@ func newChatModel(ctx context.Context, cfg *config.LLMConfig) (model.ChatModel, 
 }
 
 // newClaudeModel 创建 Claude 模型
-//
-//nolint:staticcheck // TODO: migrate to ToolCallingChatModel
-func newClaudeModel(ctx context.Context, cfg *config.LLMConfig) (model.ChatModel, error) {
+func newClaudeModel(ctx context.Context, cfg *config.LLMConfig) (model.ToolCallingChatModel, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("llm.api_key required for claude provider")
 	}
@@ -67,9 +61,7 @@ func newClaudeModel(ctx context.Context, cfg *config.LLMConfig) (model.ChatModel
 }
 
 // newOpenAIModel 创建 OpenAI 模型
-//
-//nolint:staticcheck // TODO: migrate to ToolCallingChatModel
-func newOpenAIModel(ctx context.Context, cfg *config.LLMConfig) (model.ChatModel, error) {
+func newOpenAIModel(ctx context.Context, cfg *config.LLMConfig) (model.ToolCallingChatModel, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("llm.api_key required for openai provider")
 	}

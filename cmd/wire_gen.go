@@ -222,7 +222,7 @@ func provideDualBroker(
 
 // chatModelResult wraps the optional ChatModel to handle Wire's error semantics.
 type chatModelResult struct {
-	model model.ChatModel
+	model model.ToolCallingChatModel
 }
 
 func provideChatModel(cfg *config.Config) (*chatModelResult, error) {
@@ -253,6 +253,7 @@ func provideUsecaseDependencies(
 		RtcRepo:         svcCtx.RtcRepo,
 		UpdatePublisher: svcCtx.UpdatePublisher,
 		ChatModel:       chatModelResult2.model,
+		LLMConfig:       cfg.LLM,
 		SystemPrompt:    cfg.Worker.SystemPrompt,
 		WorkerConfig:    cfg.Worker,
 	}

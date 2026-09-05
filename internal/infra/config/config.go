@@ -158,6 +158,14 @@ type LLMConfig struct {
 	// ReasoningEffort OpenAI reasoning 模型的推理力度（可选）
 	// 可选值: "low", "medium", "high"，默认 "medium"
 	ReasoningEffort string `mapstructure:"reasoning_effort"`
+
+	// RetryMaxAttempts 模型调用失败时的最大重试次数（可选）
+	// 默认 0（不重试）。建议生产环境设置为 3
+	RetryMaxAttempts int `mapstructure:"retry_max_attempts"`
+
+	// RetryBaseDelay 重试的基础退避时间（可选）
+	// 默认 1s。实际退避时间 = RetryBaseDelay * 2^(attempt-1)，即指数退避
+	RetryBaseDelay time.Duration `mapstructure:"retry_base_delay"`
 }
 
 // APIConfig API 层配置（分页、限流等）
@@ -222,6 +230,8 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("worker.lock_ttl_sec", 120)
 	v.SetDefault("llm.thinking_budget_tokens", 50000)
 	v.SetDefault("llm.reasoning_effort", "medium")
+	v.SetDefault("llm.retry_max_attempts", 0)
+	v.SetDefault("llm.retry_base_delay", 1*time.Second)
 	v.SetDefault("api.query_default_limit", 50)
 	v.SetDefault("api.query_max_limit", 100)
 	v.SetDefault("tracing.enabled", false)
