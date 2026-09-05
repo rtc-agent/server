@@ -104,7 +104,7 @@ func (c *Client) ExchangeCode(ctx context.Context, provider string, code string,
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("exchange code: status %d, body: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("exchange code: provider returned status %d", resp.StatusCode)
 	}
 
 	var result struct {

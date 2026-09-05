@@ -483,40 +483,65 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 
 // convertUpdates 将瘦引用（model.UserUpdate）转换成富内容（protocol.Update）。
 // 按实体类型分组批量查询，避免 N+1 问题：N 个 item 只需 E 次 DB 查询（E = 实体类型数）。
+//
+// 三阶段流程：
+//  1. collectEntityRefs — 按实体类型收集所有需要查询的 ID（去重）
+//  2. resolveEntities  — 按实体类型批量查询
+//  3. buildUpdates     — 按原始顺序回填 dataList
 func (u *UpdatePublisher) convertUpdates(ctx context.Context, uus []*model.UserUpdate) ([]*protocol.Update, error) {
-	// Phase 1: 按实体类型收集所有需要查询的 ID（去重）
-	type entityRef struct {
-		entityType string
-		entityID   protocol.UUID
-		uuid       uuid.UUID
+	allRefs, groupedIDs, err := collectEntityRefs(uus, u.resolvers)
+	if err != nil {
+		return nil, err
 	}
-	var allRefs []entityRef                    // 保持原始顺序，用于 Phase 3 回填
-	groupedIDs := make(map[string][]uuid.UUID) // entity → unique IDs
+
+	resolved, err := u.resolveEntities(ctx, groupedIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	return buildUpdates(uus, allRefs, resolved), nil
+}
+
+// entityRef 记录一个实体引用的元数据，用于 Phase 3 按原始顺序回填。
+type entityRef struct {
+	entityType string
+	entityID   protocol.UUID
+	uuid       uuid.UUID
+}
+
+// collectEntityRefs 遍历所有 UserUpdate，按实体类型收集需要查询的 UUID（去重）。
+// 返回保持原始顺序的 allRefs 和按类型分组的 groupedIDs。
+func collectEntityRefs(uus []*model.UserUpdate, resolvers map[string]EntityResolver) ([]entityRef, map[string][]uuid.UUID, error) {
+	var allRefs []entityRef
+	groupedIDs := make(map[string][]uuid.UUID)
 
 	for _, uu := range uus {
 		for _, item := range uu.Items {
 			entityUUID, parseErr := uuid.Parse(string(item.EntityId))
 			if parseErr != nil {
-				return nil, fmt.Errorf("parse entity ID %s: %w", item.EntityId, parseErr)
+				return nil, nil, fmt.Errorf("parse entity ID %s: %w", item.EntityId, parseErr)
 			}
 			allRefs = append(allRefs, entityRef{
 				entityType: string(item.Entity),
 				entityID:   item.EntityId,
 				uuid:       entityUUID,
 			})
-			if _, ok := u.resolvers[string(item.Entity)]; ok {
+			if _, ok := resolvers[string(item.Entity)]; ok {
 				groupedIDs[string(item.Entity)] = append(groupedIDs[string(item.Entity)], entityUUID)
 			}
 		}
 	}
 
-	// 去重
 	for entity, ids := range groupedIDs {
 		groupedIDs[entity] = uniqueUUIDs(ids)
 	}
 
-	// Phase 2: 按实体类型批量查询
-	resolved := make(map[string]map[uuid.UUID]any) // entity → id → data
+	return allRefs, groupedIDs, nil
+}
+
+// resolveEntities 按实体类型批量查询富内容。
+func (u *UpdatePublisher) resolveEntities(ctx context.Context, groupedIDs map[string][]uuid.UUID) (map[string]map[uuid.UUID]any, error) {
+	resolved := make(map[string]map[uuid.UUID]any, len(groupedIDs))
 	for entity, ids := range groupedIDs {
 		if len(ids) == 0 {
 			continue
@@ -528,10 +553,14 @@ func (u *UpdatePublisher) convertUpdates(ctx context.Context, uus []*model.UserU
 		}
 		resolved[entity] = data
 	}
+	return resolved, nil
+}
 
-	// Phase 3: 按原始顺序回填 dataList
+// buildUpdates 按原始顺序将查询结果回填到 protocol.Update 的 DataList。
+func buildUpdates(uus []*model.UserUpdate, allRefs []entityRef, resolved map[string]map[uuid.UUID]any) []*protocol.Update {
 	refIdx := 0
 	var result []*protocol.Update
+
 	for _, uu := range uus {
 		update := &protocol.Update{
 			Id:     protocol.UUID(uu.ID.String()),
@@ -547,14 +576,12 @@ func (u *UpdatePublisher) convertUpdates(ctx context.Context, uus []*model.UserU
 
 			entityData, hasResolver := resolved[ref.entityType]
 			if !hasResolver {
-				// 未知实体类型，跳过
 				continue
 			}
 
 			if data, ok := entityData[ref.uuid]; ok {
 				dataList[i] = data
 			} else {
-				// 实体已删除或不存在，返回带 DeletedAt 的占位数据
 				dataList[i] = map[string]any{
 					"id":         ref.entityID,
 					"deleted_at": time.Now(),
@@ -566,7 +593,7 @@ func (u *UpdatePublisher) convertUpdates(ctx context.Context, uus []*model.UserU
 		result = append(result, update)
 	}
 
-	return result, nil
+	return result
 }
 
 // uniqueUUIDs 对 UUID 切片去重，保持首次出现的顺序。

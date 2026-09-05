@@ -82,7 +82,11 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 	logger.SafeGo("http-server", func() {
 		if err := srv.Start(); err != nil {
-			logger.Fatal(context.Background(), "Server failed", zap.Error(err))
+			logger.Error(context.Background(), "Server failed", zap.Error(err))
+			// Signal the main goroutine to exit.
+			// Using signal.Notify + kill self preserves the deferred cleanup
+			// (logger.Sync, rdb.Close) that logger.Fatal would bypass.
+			_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
 		}
 	})
 

@@ -108,8 +108,13 @@ func (r *sessionRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status pro
 }
 
 func (r *sessionRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]any) error {
-	fields["updated_at"] = time.Now()
-	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Session{}).Where("id = ?", id).Updates(fields)
+	// Copy to avoid mutating the caller's map.
+	updates := make(map[string]any, len(fields)+1)
+	for k, v := range fields {
+		updates[k] = v
+	}
+	updates["updated_at"] = time.Now()
+	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Session{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
 		return fmt.Errorf("update session %s: %w", id, result.Error)
 	}
@@ -134,11 +139,16 @@ func (r *sessionRepo) TouchActive(ctx context.Context, id uuid.UUID) error {
 }
 
 func (r *sessionRepo) UpdateFieldsActive(ctx context.Context, id uuid.UUID, fields map[string]any) error {
-	fields["updated_at"] = time.Now()
+	// Copy to avoid mutating the caller's map.
+	updates := make(map[string]any, len(fields)+1)
+	for k, v := range fields {
+		updates[k] = v
+	}
+	updates["updated_at"] = time.Now()
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.Session{}).
 		Where("id = ? AND status != ?", id, model.SessionStatusClosed).
-		Updates(fields)
+		Updates(updates)
 	if result.Error != nil {
 		return fmt.Errorf("update session %s fields: %w", id, result.Error)
 	}

@@ -88,114 +88,8 @@ func setupCentrifuge(
 	signer *auth.JWTSigner, rpcTimeout time.Duration,
 ) error {
 	node.SetBroker(broker)
-
-	// OnConnecting: JWT 验证 → 提取 userID/deviceID → 写入 Credentials.Info
-	node.OnConnecting(func(ctx stdcontext.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
-		// JWT 验证
-		claims, err := signer.ParseAccessToken(e.Token)
-		if err != nil {
-			logger.Warn(ctx, "JWT 验证失败", zap.Error(err))
-			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
-		}
-
-		userID := claims.UserID
-		deviceID := claims.DeviceID
-
-		ci := &clientInfo{
-			UserID:   userID,
-			DeviceID: deviceID,
-		}
-		info, _ := json.Marshal(ci)
-		return centrifuge.ConnectReply{
-			Credentials: &centrifuge.Credentials{
-				UserID: userID.String(),
-				Info:   info,
-			},
-			Data: info,
-		}, nil
-	})
-
-	// OnConnect: 连接建立后的处理（订阅校验 + RPC 回调注册）
-	// 合并为单个 handler，避免重复注册和 clientInfo 解析
-	node.OnConnect(func(client *centrifuge.Client) {
-		userIDStr := client.UserID()
-		userID, _ := uuid.Parse(userIDStr)
-
-		// 从 client.Info() 解析 deviceID（统一解析逻辑）
-		ci := parseClientInfo(client.Info())
-
-		// 订阅时校验频道归属
-		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-			ch := e.Channel
-
-			// 用户频道校验（支持 topic: 和 live: 前缀）
-			// 频道格式：{prefix}:u={userID}
-			// 校验：userID 必须等于当前连接的 UserID
-			if ownerIDStr, ok := channel.ParseUser(ch); ok {
-				if ownerIDStr != client.UserID() {
-					cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
-					return
-				}
-			}
-
-			// 注册频道类型并启用 recovery
-			if channel.IsTopic(ch) {
-				broker.RegisterChannelType(ch, centrifugeplus.Topic)
-				cb(centrifuge.SubscribeReply{
-					Options: centrifuge.SubscribeOptions{
-						EnableRecovery: true,
-					},
-				}, nil)
-				return
-			}
-			if channel.IsLive(ch) {
-				broker.RegisterChannelType(ch, centrifugeplus.Live)
-			}
-			cb(centrifuge.SubscribeReply{}, nil)
-		})
-
-		// 注册 History 命令处理：返回空 Result 使 centrifuge 回退到 node.History()
-		client.OnHistory(func(e centrifuge.HistoryEvent, cb centrifuge.HistoryCallback) {
-			cb(centrifuge.HistoryReply{}, nil)
-		})
-
-		// RPC 处理回调
-		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
-			ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), rpcTimeout)
-			defer cancel()
-
-			// 注入 userID/deviceID 到 context
-			ctx = contextx.WithClientInfo(ctx, userID, ci.DeviceID)
-
-			rpcHandlerMu.RLock()
-			handler := rpcHandlerInstance
-			rpcHandlerMu.RUnlock()
-
-			if handler == nil {
-				cb(centrifuge.RPCReply{}, &centrifuge.Error{
-					Code:    500,
-					Message: "RPC handler not registered",
-				})
-				return
-			}
-
-			resp, err := handler.HandleRPC(ctx, e.Method, e.Data)
-			if err != nil {
-				// 保留错误信息，否则 Centrifuge 会返回 "internal server error"
-				cb(centrifuge.RPCReply{}, &centrifuge.Error{
-					Code:    500,
-					Message: err.Error(),
-				})
-				return
-			}
-			cb(centrifuge.RPCReply{Data: resp}, nil)
-		})
-
-		logger.Info(stdcontext.Background(), "[Centrifuge] client connected",
-			zap.String("client_id", client.ID()),
-			zap.String("user_id", userID.String()),
-		)
-	})
+	node.OnConnecting(createOnConnectingHandler(signer))
+	node.OnConnect(createOnConnectHandler(broker, rpcTimeout))
 
 	if err := node.Run(); err != nil {
 		return fmt.Errorf("run node: %w", err)
@@ -204,6 +98,116 @@ func setupCentrifuge(
 	logger.Info(stdcontext.Background(), "centrifuge node started")
 
 	return nil
+}
+
+// createOnConnectingHandler 返回 OnConnecting 回调：JWT 验证 → 提取身份 → 写入 Credentials。
+func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+	return func(ctx stdcontext.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		claims, err := signer.ParseAccessToken(e.Token)
+		if err != nil {
+			logger.Warn(ctx, "JWT 验证失败", zap.Error(err))
+			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
+		}
+
+		ci := &clientInfo{
+			UserID:   claims.UserID,
+			DeviceID: claims.DeviceID,
+		}
+		info, _ := json.Marshal(ci)
+		return centrifuge.ConnectReply{
+			Credentials: &centrifuge.Credentials{
+				UserID: claims.UserID.String(),
+				Info:   info,
+			},
+			Data: info,
+		}, nil
+	}
+}
+
+// createOnConnectHandler 返回 OnConnect 回调：订阅校验 + History + RPC 处理。
+func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.Duration) func(*centrifuge.Client) {
+	return func(client *centrifuge.Client) {
+		userIDStr := client.UserID()
+		userID, _ := uuid.Parse(userIDStr)
+		ci := parseClientInfo(client.Info())
+
+		setupSubscribeHandler(client, broker)
+		setupHistoryHandler(client)
+		setupRPCHandler(client, userID, ci.DeviceID, rpcTimeout)
+
+		logger.Info(stdcontext.Background(), "[Centrifuge] client connected",
+			zap.String("client_id", client.ID()),
+			zap.String("user_id", userID.String()),
+		)
+	}
+}
+
+// setupSubscribeHandler 注册频道订阅回调：校验归属、注册频道类型、启用 recovery。
+func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.DualBroker) {
+	client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+		ch := e.Channel
+
+		// 用户频道校验：userID 必须等于当前连接的 UserID
+		if ownerIDStr, ok := channel.ParseUser(ch); ok {
+			if ownerIDStr != client.UserID() {
+				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
+				return
+			}
+		}
+
+		if channel.IsTopic(ch) {
+			broker.RegisterChannelType(ch, centrifugeplus.Topic)
+			cb(centrifuge.SubscribeReply{
+				Options: centrifuge.SubscribeOptions{
+					EnableRecovery: true,
+				},
+			}, nil)
+			return
+		}
+		if channel.IsLive(ch) {
+			broker.RegisterChannelType(ch, centrifugeplus.Live)
+		}
+		cb(centrifuge.SubscribeReply{}, nil)
+	})
+}
+
+// setupHistoryHandler 注册 History 命令处理：返回空 Result 使 centrifuge 回退到 node.History()。
+func setupHistoryHandler(client *centrifuge.Client) {
+	client.OnHistory(func(e centrifuge.HistoryEvent, cb centrifuge.HistoryCallback) {
+		cb(centrifuge.HistoryReply{}, nil)
+	})
+}
+
+// setupRPCHandler 注册 RPC 处理回调：注入身份 context → 分发到全局 RPCHandler。
+func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, rpcTimeout time.Duration) {
+	client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
+		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), rpcTimeout)
+		defer cancel()
+
+		ctx = contextx.WithClientInfo(ctx, userID, deviceID)
+
+		rpcHandlerMu.RLock()
+		handler := rpcHandlerInstance
+		rpcHandlerMu.RUnlock()
+
+		if handler == nil {
+			cb(centrifuge.RPCReply{}, &centrifuge.Error{
+				Code:    500,
+				Message: "RPC handler not registered",
+			})
+			return
+		}
+
+		resp, err := handler.HandleRPC(ctx, e.Method, e.Data)
+		if err != nil {
+			cb(centrifuge.RPCReply{}, &centrifuge.Error{
+				Code:    500,
+				Message: err.Error(),
+			})
+			return
+		}
+		cb(centrifuge.RPCReply{Data: resp}, nil)
+	})
 }
 
 // RegisterRPCHandler 注册 RPC 处理器。

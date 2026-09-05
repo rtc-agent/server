@@ -34,8 +34,15 @@ func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (
 		return nil, h.ownershipError(ctx, err)
 	}
 
-	// 停止 session 的所有活跃 turn（复用 CloseSession 的逻辑）
-	h.stopActiveTurns(ctx, sessionUUID)
+	// Stop all active turns asynchronously. The RPC returns immediately;
+	// turn cancellation proceeds independently of the RPC context lifetime.
+	// This mirrors CloseSession's approach: detaching from the RPC context
+	// ensures multi-step cleanup (DB queries, Redis publish) is not aborted
+	// by an early context cancellation (e.g. rpc_timeout).
+	detachedCtx := context.WithoutCancel(ctx)
+	logger.SafeGo("stop-active-turns", func() {
+		h.stopActiveTurns(detachedCtx, sessionUUID)
+	})
 
 	return &protocol.StopTurnResponse{
 		Result: protocol.StopTurnResult{Success: true},

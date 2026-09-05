@@ -164,8 +164,8 @@ func (r *rtcRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]
 		return nil, fmt.Errorf("get rtcs by ids: %w", err)
 	}
 	result := make(map[uuid.UUID]*model.Rtc, len(rtcs))
-	for _, r := range rtcs {
-		result[r.ID] = r
+	for _, rtc := range rtcs {
+		result[rtc.ID] = rtc
 	}
 	return result, nil
 }

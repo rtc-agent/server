@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -141,7 +142,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 				return true
 			}
 			for _, allowed := range s.cfg.CORS.AllowOrigins {
-				if allowed == "*" || allowed == origin {
+				if allowed == "*" || strings.EqualFold(allowed, origin) {
 					return true
 				}
 			}
