@@ -31,25 +31,14 @@ type RPCHandler interface {
 	HandleRPC(ctx stdcontext.Context, method string, data []byte) ([]byte, error)
 }
 
-// NewCentrifugeBroker 创建 DualBroker（需要先有 centrifuge.Node 供 RedisShard 使用）。
-// 导出供 Wire 使用。
-func NewCentrifugeBroker(cfg *config.Config, historyStore centrifugeplus.HistoryStore, jwtSigner *auth.JWTSigner) (*centrifuge.Node, *centrifugeplus.DualBroker, error) {
-	return newCentrifugeBroker(cfg, historyStore, jwtSigner)
-}
-
-// newCentrifugeBroker 创建 DualBroker（需要先有 centrifuge.Node 供 RedisShard 使用）
-func newCentrifugeBroker(cfg *config.Config, historyStore centrifugeplus.HistoryStore, jwtSigner *auth.JWTSigner) (*centrifuge.Node, *centrifugeplus.DualBroker, error) {
-	node, err := centrifuge.New(centrifuge.Config{
-		LogLevel: centrifuge.LogLevelInfo,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("create centrifuge node: %w", err)
-	}
+// AssembleDualBroker 组装 DualBroker 的核心逻辑：创建 Redis shard → 构建 DualBroker → 配置事件处理。
+// 供 Wire 路径（provideDualBroker）和非 Wire 路径（servicecontext.go）共享。
+func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore centrifugeplus.HistoryStore, jwtSigner *auth.JWTSigner) (*centrifugeplus.DualBroker, error) {
 	redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
 		Address: cfg.Redis.Addr,
 	})
 	if err != nil {
-		return node, nil, fmt.Errorf("create redis shard: %w", err)
+		return nil, fmt.Errorf("create redis shard: %w", err)
 	}
 
 	broker, err := centrifugeplus.NewDualBroker(node, centrifugeplus.DualBrokerConfig{
@@ -67,14 +56,14 @@ func newCentrifugeBroker(cfg *config.Config, historyStore centrifugeplus.History
 		},
 	})
 	if err != nil {
-		return node, nil, fmt.Errorf("create broker: %w", err)
+		return nil, fmt.Errorf("create broker: %w", err)
 	}
 
 	if err := setupCentrifuge(node, broker, jwtSigner, cfg.Server.RPCTimeout); err != nil {
-		return node, nil, fmt.Errorf("setup centrifuge: %w", err)
+		return nil, fmt.Errorf("setup centrifuge: %w", err)
 	}
 
-	return node, broker, nil
+	return broker, nil
 }
 
 // clientInfo 存储在 Credentials.Info 中的额外信息
@@ -91,15 +80,6 @@ func parseClientInfo(info []byte) *clientInfo {
 		_ = json.Unmarshal(info, ci)
 	}
 	return ci
-}
-
-// SetupCentrifuge 配置 centrifuge.Node 的事件处理（JWT 鉴权、频道订阅校验）。
-// 导出供 Wire 使用。
-func SetupCentrifuge(
-	node *centrifuge.Node, broker *centrifugeplus.DualBroker,
-	signer *auth.JWTSigner, rpcTimeout time.Duration,
-) error {
-	return setupCentrifuge(node, broker, signer, rpcTimeout)
 }
 
 // setupCentrifuge 配置 centrifuge.Node 的事件处理（JWT 鉴权、频道订阅校验）

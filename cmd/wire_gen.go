@@ -8,13 +8,11 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"github.com/centrifugal/centrifuge"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/internal/agent"
-	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/handler/http"
 	"github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/auth"
@@ -183,36 +181,7 @@ func provideDualBroker(
 	updatePublisher *updates.UpdatePublisher,
 	jwtSigner *auth.JWTSigner,
 ) (*centrifugeplus.DualBroker, error) {
-
-	redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
-		Address: cfg.Redis.Addr,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create redis shard: %w", err)
-	}
-
-	broker, err := centrifugeplus.NewDualBroker(node, centrifugeplus.DualBrokerConfig{
-		Live: centrifuge.RedisBrokerConfig{
-			Prefix: channel.LivePrefix,
-			Shards: []*centrifuge.RedisShard{redisShard},
-		},
-		Topic: centrifugeplus.TopicBrokerConfig{
-			Prefix:        channel.TopicPrefix,
-			RedisAddr:     cfg.Redis.Addr,
-			RedisPassword: cfg.Redis.Password,
-			RedisDB:       cfg.Redis.DB,
-			HistoryStore:  updatePublisher,
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create broker: %w", err)
-	}
-
-	if err := svc.SetupCentrifuge(node, broker, jwtSigner, cfg.Server.RPCTimeout); err != nil {
-		return nil, fmt.Errorf("setup centrifuge: %w", err)
-	}
-
-	return broker, nil
+	return svc.AssembleDualBroker(node, cfg, updatePublisher, jwtSigner)
 }
 
 // chatModelResult wraps the optional ChatModel to handle Wire's error semantics.

@@ -6,18 +6,14 @@ import (
 	"net/http"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/cloudwego/eino/components/model"
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
-	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/handler/http"
 	"github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/svc"
-	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 )
@@ -33,117 +29,6 @@ type Server struct {
 	httpServer       *http.Server
 	queueWorker      *rtcqueue.Worker // rtc-queue distributed worker
 	workerCancel     context.CancelFunc
-}
-
-// New 创建服务器
-func New(cfg *config.Config, svcCtx *svc.ServiceContext) *Server {
-	// 构造 Redis state 存储（分布式环境使用 Redis）
-	stateStore := oauth.NewRedisStore(svcCtx.Redis)
-
-	// 构造 ProviderClient（注册启用的 provider）
-	providers := BuildProviderClients(cfg)
-	providerClient := oauth.NewClient(providers, cfg.Providers.HTTPTimeout)
-
-	// 创建 ChatModel（LLM 客户端）
-	//
-	//nolint:staticcheck // TODO: migrate to ToolCallingChatModel
-	var chatModel model.ChatModel
-	if cfg.LLM.Provider != "" && cfg.LLM.Model != "" {
-		var err error
-		chatModel, err = newChatModel(context.Background(), &cfg.LLM)
-		if err != nil {
-			logger.Error(context.Background(), "Failed to create chat model (agent features will be disabled)", zap.Error(err))
-		} else {
-			logger.Info(context.Background(), "LLM initialized", zap.String("provider", cfg.LLM.Provider), zap.String("model", cfg.LLM.Model))
-		}
-	} else {
-		logger.Warn(context.Background(), "LLM not configured (provider/model missing), agent features will be disabled")
-	}
-
-	// 创建 UseCase 层依赖（业务逻辑，不存放在 ServiceContext 中）
-	usecaseDeps := &usecase.Dependencies{
-		DB:              svcCtx.DB,
-		Redis:           svcCtx.Redis,
-		SessionRepo:     svcCtx.SessionRepo,
-		MessageRepo:     svcCtx.MessageRepo,
-		TurnRepo:        svcCtx.TurnRepo,
-		RtcRepo:         svcCtx.RtcRepo,
-		UpdatePublisher: svcCtx.UpdatePublisher,
-		ChatModel:       chatModel,
-		SystemPrompt:    cfg.Worker.SystemPrompt,
-		WorkerConfig:    cfg.Worker,
-	}
-	// 创建 RPC Handler（协议适配层，委托 usecase 处理业务逻辑）
-	// WorkerID: 优先从配置读取，否则用主机名生成
-	workerID := cfg.Worker.WorkerID
-	if workerID == "" {
-		workerID = "worker-" + cfg.Server.Host
-	}
-
-	// 注入 StreamStore 到 UpdatePublisher（用于读取 streaming 状态消息的 chunks）
-	// agent.NewStreamStore 使用与 agent 内部相同的 Redis key 格式（rediskey.MessageStream）
-	svcCtx.UpdatePublisher.SetStreamStore(agent.NewStreamStore(svcCtx.Redis, cfg.Worker.StreamChunkTTL))
-
-	// Construct the rtc-queue for publishing/cancelling work items.
-	// The turn-agent worker uses this same Queue instance to claim and
-	// process work items.
-	// svcCtx.Redis is redis.UniversalClient, but rtcqueue.New needs
-	// *redis.Client. The concrete client is always *redis.Client (see
-	// cmd/serve.go), so the assertion is safe.
-	rdb, ok := svcCtx.Redis.(*redis.Client)
-	if !ok {
-		logger.Error(context.Background(), "rtc-queue requires *redis.Client", zap.String("type", fmt.Sprintf("%T", svcCtx.Redis)))
-		return nil
-	}
-	q := rtcqueue.New(rdb)
-
-	// Create the turn-agent with all callbacks wired to the application's
-	// dependencies. The agent is stateless: each Process call handles one
-	// work item from rtc-queue.
-	turnAgent, err := agent.New(agent.Config{
-		Deps:               usecaseDeps,
-		Redis:              svcCtx.Redis,
-		ContextTokensLimit: cfg.Worker.ContextTokensLimit,
-		EnableLLMLogging:   logger.DebugMode,
-		CheckpointTTL:      cfg.Worker.CheckpointTTL,
-		StreamChunkTTL:     cfg.Worker.StreamChunkTTL,
-	})
-	if err != nil {
-		logger.Error(context.Background(), "Failed to create turn-agent", zap.Error(err))
-		return nil
-	}
-
-	// Create the rtc-queue Worker. It subscribes to session:new notifications,
-	// claims work items, manages session-level locks, and dispatches to the
-	// turn-agent's Process method.
-	queueWorker := rtcqueue.NewWorker(q, rtcqueue.WorkerConfig{
-		WorkerID:    workerID,
-		Concurrency: cfg.Worker.BackgroundConcurrency,
-		OnWork:      turnAgent.Process,
-		OnError: func(err error) {
-			logger.Error(context.Background(), "[rtcqueue.Worker] error", zap.Error(err))
-		},
-	})
-
-	rpcHandler := rpchandler.NewHandler(&rpchandler.Dependencies{
-		Deps:        usecaseDeps,
-		SessionRepo: svcCtx.SessionRepo,
-		Queue:       q,
-		API:         cfg.API,
-	})
-
-	// 注册 RPC 处理器（由已连接客户端的 OnRPC 回调使用）
-	svc.RegisterRPCHandler(rpcHandler)
-
-	return &Server{
-		cfg:              cfg,
-		svcCtx:           svcCtx,
-		rpcHandler:       rpcHandler,
-		httpHandler:      httphandler.NewHandler(svcCtx),
-		oauth2Handler:    httphandler.NewOAuth2Handler(svcCtx, svcCtx.JWTSigner, stateStore, providerClient, cfg.Auth),
-		interruptHandler: httphandler.NewInterruptHandler(svcCtx.Redis, cfg.Worker),
-		queueWorker:      queueWorker,
-	}
 }
 
 // BuildProviderClients 根据配置构造 Provider 列表

@@ -63,9 +63,16 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		logger.Fatal(context.Background(), "初始化 JWT 签名器失败", zap.Error(err))
 	}
 
-	node, dualBroker, err := newCentrifugeBroker(cfg, updatePublisher, jwtSigner)
+	node, err := centrifuge.New(centrifuge.Config{
+		LogLevel: centrifuge.LogLevelInfo,
+	})
 	if err != nil {
-		logger.Fatal(context.Background(), "new centrifuge", zap.Error(err))
+		logger.Fatal(context.Background(), "create centrifuge node", zap.Error(err))
+	}
+	dualBroker, err := AssembleDualBroker(node, cfg, updatePublisher, jwtSigner)
+	if err != nil {
+		_ = node.Shutdown(context.Background())
+		logger.Fatal(context.Background(), "assemble dual broker", zap.Error(err))
 	}
 
 	// 注入 broker 到 UpdatePublisher（解决循环依赖）
