@@ -23,6 +23,8 @@ type RtcRepo interface {
 	UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.RtcStatus) error
 	UpdateResult(ctx context.Context, id uuid.UUID, status protocol.RtcStatus, result *string, errMsg string) error
 	UpdateOutputMessageID(ctx context.Context, id uuid.UUID, outputMessageID uuid.UUID) error
+	// GetByIDs 批量查询 RTC，返回 map[id]*Rtc。未找到的 ID 不会出现在 map 中。
+	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Rtc, error)
 }
 
 type rtcRepo struct {
@@ -151,4 +153,19 @@ func (r *rtcRepo) UpdateOutputMessageID(ctx context.Context, id uuid.UUID, outpu
 		return fmt.Errorf("update rtc %s output_message_id: %w", id, ErrRtcNotFound)
 	}
 	return nil
+}
+
+func (r *rtcRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Rtc, error) {
+	if len(ids) == 0 {
+		return make(map[uuid.UUID]*model.Rtc), nil
+	}
+	var rtcs []*model.Rtc
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).Where("id IN ?", ids).Find(&rtcs).Error; err != nil {
+		return nil, fmt.Errorf("get rtcs by ids: %w", err)
+	}
+	result := make(map[uuid.UUID]*model.Rtc, len(rtcs))
+	for _, r := range rtcs {
+		result[r.ID] = r
+	}
+	return result, nil
 }

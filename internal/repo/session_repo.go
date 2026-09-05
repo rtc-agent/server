@@ -27,6 +27,8 @@ type SessionRepo interface {
 	// UpdateFieldsActive 原子更新活跃会话的指定字段（自动带 updated_at）；
 	// 若会话不存在或已关闭返回错误。
 	UpdateFieldsActive(ctx context.Context, id uuid.UUID, fields map[string]any) error
+	// GetByIDs 批量查询会话，返回 map[id]*Session。未找到的 ID 不会出现在 map 中。
+	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Session, error)
 }
 
 type sessionRepo struct {
@@ -144,4 +146,19 @@ func (r *sessionRepo) UpdateFieldsActive(ctx context.Context, id uuid.UUID, fiel
 		return fmt.Errorf("update session %s fields: %w", id, ErrSessionClosedOrNotFound)
 	}
 	return nil
+}
+
+func (r *sessionRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Session, error) {
+	if len(ids) == 0 {
+		return make(map[uuid.UUID]*model.Session), nil
+	}
+	var sessions []*model.Session
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).Where("id IN ?", ids).Find(&sessions).Error; err != nil {
+		return nil, fmt.Errorf("get sessions by ids: %w", err)
+	}
+	result := make(map[uuid.UUID]*model.Session, len(sessions))
+	for _, s := range sessions {
+		result[s.ID] = s
+	}
+	return result, nil
 }

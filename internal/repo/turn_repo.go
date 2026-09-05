@@ -28,6 +28,8 @@ type TurnRepo interface {
 	// rows affected. Used by stopActiveTurns to cancel pending/running turns
 	// as a belt-and-suspenders measure after rtc-queue CancelSession.
 	UpdateStatusBySession(ctx context.Context, sessionID uuid.UUID, fromStatuses []string, toStatus protocol.TurnStatus) (int64, error)
+	// GetByIDs 批量查询 Turn，返回 map[id]*Turn。未找到的 ID 不会出现在 map 中。
+	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Turn, error)
 }
 
 type turnRepo struct {
@@ -157,4 +159,19 @@ func (r *turnRepo) UpdateStatusBySession(ctx context.Context, sessionID uuid.UUI
 		return 0, fmt.Errorf("update turns for session %s to %s: %w", sessionID, toStatus, result.Error)
 	}
 	return result.RowsAffected, nil
+}
+
+func (r *turnRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Turn, error) {
+	if len(ids) == 0 {
+		return make(map[uuid.UUID]*model.Turn), nil
+	}
+	var turns []*model.Turn
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).Where("id IN ?", ids).Find(&turns).Error; err != nil {
+		return nil, fmt.Errorf("get turns by ids: %w", err)
+	}
+	result := make(map[uuid.UUID]*model.Turn, len(turns))
+	for _, t := range turns {
+		result[t.ID] = t
+	}
+	return result, nil
 }

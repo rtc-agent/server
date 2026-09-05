@@ -31,6 +31,8 @@ type MessageRepo interface {
 	UpdateStreamingStatus(ctx context.Context, id uuid.UUID, status protocol.MessageStreamingStatus, content string) error
 	// DeleteByIDs soft-deletes messages by their IDs.
 	DeleteByIDs(ctx context.Context, ids []uuid.UUID) error
+	// GetByIDs 批量查询消息，返回 map[id]*Message。未找到的 ID 不会出现在 map 中。
+	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Message, error)
 }
 
 type messageRepo struct {
@@ -187,4 +189,19 @@ func (r *messageRepo) ListBySessionBeforeOffset(ctx context.Context, sessionID u
 		messages[i], messages[j] = messages[j], messages[i]
 	}
 	return messages, nil
+}
+
+func (r *messageRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Message, error) {
+	if len(ids) == 0 {
+		return make(map[uuid.UUID]*model.Message), nil
+	}
+	var messages []*model.Message
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).Where("id IN ?", ids).Find(&messages).Error; err != nil {
+		return nil, fmt.Errorf("get messages by ids: %w", err)
+	}
+	result := make(map[uuid.UUID]*model.Message, len(messages))
+	for _, m := range messages {
+		result[m.ID] = m
+	}
+	return result, nil
 }

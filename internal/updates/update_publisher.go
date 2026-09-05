@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,8 +35,9 @@ type Broker interface {
 	PublishWithContext(ctx context.Context, channel string, data []byte, opts centrifuge.PublishOptions) (centrifuge.PublishResult, error)
 }
 
-// EntityResolver 根据实体类型和 ID 查询富内容。
-type EntityResolver func(ctx context.Context, id uuid.UUID) (any, error)
+// EntityResolver 根据实体类型批量查询富内容。
+// 接收一组 UUID，返回 id→实体 的 map。未找到的 ID 不出现在 map 中（调用方按"已删除"处理）。
+type EntityResolver func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error)
 
 // StreamStoreAccessor 提供读取流式消息 chunks 的能力。
 // 由 agent.NewStreamStore 实现，通过 SetStreamStore 注入。
@@ -70,27 +72,33 @@ func NewUpdatePublisher(
 		resolvers: make(map[string]EntityResolver),
 	}
 
-	// 注册实体解析器（registry 模式，替代大 switch）
-	u.resolvers[string(protocol.EntitySession)] = func(ctx context.Context, id uuid.UUID) (any, error) {
-		s, err := sessionRepo.GetByID(ctx, id)
+	// 注册实体解析器（registry 模式，批量查询）
+	u.resolvers[string(protocol.EntitySession)] = func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
+		sessions, err := sessionRepo.GetByIDs(ctx, ids)
 		if err != nil {
 			return nil, err
 		}
-		return toProtocolSession(s), nil
+		result := make(map[uuid.UUID]any, len(sessions))
+		for id, s := range sessions {
+			result[id] = toProtocolSession(s)
+		}
+		return result, nil
 	}
-	u.resolvers[string(protocol.EntityMessage)] = func(ctx context.Context, id uuid.UUID) (any, error) {
-		m, err := messageRepo.GetByID(ctx, id)
+	u.resolvers[string(protocol.EntityMessage)] = func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
+		messages, err := messageRepo.GetByIDs(ctx, ids)
 		if err != nil {
 			return nil, err
 		}
 
 		// 流式消息：从 Redis 读取 chunks 拼接到 content。
 		// 竞争条件：chunks 可能未完全写入，接受最终一致性（前端通过后续 update 获取最新内容）。
-		if protocol.MessageStreamingStatus(m.StreamingStatus) == protocol.MessageStreamingStreaming {
-			u.mu.RLock()
-			ss := u.streamStore
-			u.mu.RUnlock()
-			if ss != nil {
+		u.mu.RLock()
+		ss := u.streamStore
+		u.mu.RUnlock()
+
+		result := make(map[uuid.UUID]any, len(messages))
+		for id, m := range messages {
+			if ss != nil && protocol.MessageStreamingStatus(m.StreamingStatus) == protocol.MessageStreamingStreaming {
 				chunks, chunksErr := ss.GetAllChunks(m.ID.String())
 				if chunksErr != nil {
 					// 降级：返回 DB 原始数据，记录 warn 日志
@@ -100,14 +108,12 @@ func NewUpdatePublisher(
 					)
 				} else if len(chunks) > 0 {
 					v := &protocol.ContentData{}
-					e := json.Unmarshal([]byte(m.Content), v)
-					if e != nil {
+					if e := json.Unmarshal([]byte(m.Content), v); e != nil {
 						logger.Warn(ctx, "[UpdatePublisher] unmarshal content failed", zap.Error(e))
 						m.Content = strings.Join(chunks, "")
 					} else {
 						v.Data = strings.Join(chunks, "")
-						tmp, marshalErr := json.Marshal(v)
-						if marshalErr != nil {
+						if tmp, marshalErr := json.Marshal(v); marshalErr != nil {
 							logger.Warn(ctx, "[UpdatePublisher] marshal content with chunks failed", zap.Error(marshalErr))
 							m.Content = strings.Join(chunks, "")
 						} else {
@@ -116,37 +122,79 @@ func NewUpdatePublisher(
 					}
 				}
 			}
+			result[id] = toProtocolMessage(m)
+		}
+		return result, nil
+	}
+	u.resolvers[string(protocol.EntityTurn)] = func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
+		// 分离 nil UUID（占位符）与真实 ID
+		var realIDs []uuid.UUID
+		for _, id := range ids {
+			if id != uuid.Nil {
+				realIDs = append(realIDs, id)
+			}
 		}
 
-		return toProtocolMessage(m), nil
+		var turns map[uuid.UUID]*model.Turn
+		if len(realIDs) > 0 {
+			var err error
+			turns, err = turnRepo.GetByIDs(ctx, realIDs)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			turns = make(map[uuid.UUID]*model.Turn)
+		}
+
+		result := make(map[uuid.UUID]any, len(ids))
+		for _, id := range ids {
+			if id == uuid.Nil {
+				result[id] = map[string]any{
+					"id":         id.String(),
+					"deleted_at": time.Now(),
+				}
+				continue
+			}
+			if t, ok := turns[id]; ok {
+				result[id] = toProtocolTurn(t)
+			}
+		}
+		return result, nil
 	}
-	u.resolvers[string(protocol.EntityTurn)] = func(ctx context.Context, id uuid.UUID) (any, error) {
-		// Skip zero UUID to prevent invalid DB queries - return placeholder
-		if id == uuid.Nil {
-			return map[string]any{
-				"id":         id.String(),
-				"deleted_at": time.Now(),
-			}, nil
+	u.resolvers[string(protocol.EntityRtc)] = func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
+		// 分离 nil UUID（占位符）与真实 ID
+		var realIDs []uuid.UUID
+		for _, id := range ids {
+			if id != uuid.Nil {
+				realIDs = append(realIDs, id)
+			}
 		}
-		t, err := turnRepo.GetByID(ctx, id)
-		if err != nil {
-			return nil, err
+
+		var rtcs map[uuid.UUID]*model.Rtc
+		if len(realIDs) > 0 {
+			var err error
+			rtcs, err = rtcRepo.GetByIDs(ctx, realIDs)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			rtcs = make(map[uuid.UUID]*model.Rtc)
 		}
-		return toProtocolTurn(t), nil
-	}
-	u.resolvers[string(protocol.EntityRtc)] = func(ctx context.Context, id uuid.UUID) (any, error) {
-		// Skip zero UUID to prevent invalid DB queries - return placeholder
-		if id == uuid.Nil {
-			return map[string]any{
-				"id":         id.String(),
-				"deleted_at": time.Now(),
-			}, nil
+
+		result := make(map[uuid.UUID]any, len(ids))
+		for _, id := range ids {
+			if id == uuid.Nil {
+				result[id] = map[string]any{
+					"id":         id.String(),
+					"deleted_at": time.Now(),
+				}
+				continue
+			}
+			if r, ok := rtcs[id]; ok {
+				result[id] = toProtocolRtc(r)
+			}
 		}
-		r, err := rtcRepo.GetByID(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		return toProtocolRtc(r), nil
+		return result, nil
 	}
 
 	return u
@@ -358,9 +406,13 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 
 	var channels []string
 	var batchSizes []int
-	for ch, channelItems := range channelItemsMap {
+	// 排序 channel 确保遍历顺序确定（map 迭代顺序不确定），便于调试与日志追踪。
+	for ch := range channelItemsMap {
 		channels = append(channels, ch)
-		batchSizes = append(batchSizes, len(channelItems))
+	}
+	sort.Strings(channels)
+	for _, ch := range channels {
+		batchSizes = append(batchSizes, len(channelItemsMap[ch]))
 	}
 
 	offsetKeys := make([]string, len(channels))
@@ -430,48 +482,84 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 }
 
 // convertUpdates 将瘦引用（model.UserUpdate）转换成富内容（protocol.Update）。
-// 使用 registry 模式分派实体查询，替代硬编码 switch。
+// 按实体类型分组批量查询，避免 N+1 问题：N 个 item 只需 E 次 DB 查询（E = 实体类型数）。
 func (u *UpdatePublisher) convertUpdates(ctx context.Context, uus []*model.UserUpdate) ([]*protocol.Update, error) {
-	var result []*protocol.Update
+	// Phase 1: 按实体类型收集所有需要查询的 ID（去重）
+	type entityRef struct {
+		entityType string
+		entityID   protocol.UUID
+		uuid       uuid.UUID
+	}
+	var allRefs []entityRef                    // 保持原始顺序，用于 Phase 3 回填
+	groupedIDs := make(map[string][]uuid.UUID) // entity → unique IDs
 
+	for _, uu := range uus {
+		for _, item := range uu.Items {
+			entityUUID, parseErr := uuid.Parse(string(item.EntityId))
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse entity ID %s: %w", item.EntityId, parseErr)
+			}
+			allRefs = append(allRefs, entityRef{
+				entityType: string(item.Entity),
+				entityID:   item.EntityId,
+				uuid:       entityUUID,
+			})
+			if _, ok := u.resolvers[string(item.Entity)]; ok {
+				groupedIDs[string(item.Entity)] = append(groupedIDs[string(item.Entity)], entityUUID)
+			}
+		}
+	}
+
+	// 去重
+	for entity, ids := range groupedIDs {
+		groupedIDs[entity] = uniqueUUIDs(ids)
+	}
+
+	// Phase 2: 按实体类型批量查询
+	resolved := make(map[string]map[uuid.UUID]any) // entity → id → data
+	for entity, ids := range groupedIDs {
+		if len(ids) == 0 {
+			continue
+		}
+		resolver := u.resolvers[entity]
+		data, err := resolver(ctx, ids)
+		if err != nil {
+			return nil, fmt.Errorf("batch resolve entity %s: %w", entity, err)
+		}
+		resolved[entity] = data
+	}
+
+	// Phase 3: 按原始顺序回填 dataList
+	refIdx := 0
+	var result []*protocol.Update
 	for _, uu := range uus {
 		update := &protocol.Update{
 			Id:     protocol.UUID(uu.ID.String()),
 			Items:  make([]protocol.UpdateItem, len(uu.Items)),
 			Offset: uu.Offset,
 		}
-
-		// 复制 items 引用
 		copy(update.Items, uu.Items)
 
-		// 根据 items 查询富内容
-		var dataList []any
-		for _, item := range uu.Items {
-			resolver, ok := u.resolvers[string(item.Entity)]
-			if !ok {
-				// 未知实体类型，跳过富内容
-				dataList = append(dataList, nil)
+		dataList := make([]any, len(uu.Items))
+		for i := range uu.Items {
+			ref := allRefs[refIdx]
+			refIdx++
+
+			entityData, hasResolver := resolved[ref.entityType]
+			if !hasResolver {
+				// 未知实体类型，跳过
 				continue
 			}
 
-			entityUUID, parseErr := uuid.Parse(string(item.EntityId))
-			if parseErr != nil {
-				return nil, fmt.Errorf("parse entity ID %s: %w", item.EntityId, parseErr)
-			}
-			data, err := resolver(ctx, entityUUID)
-			if err != nil {
-				if repo.IsNotFound(err) {
-					// 实体已删除，返回带 DeletedAt 的占位数据
-					now := time.Now()
-					dataList = append(dataList, map[string]any{
-						"id":         item.EntityId,
-						"deleted_at": now,
-					})
-					continue
+			if data, ok := entityData[ref.uuid]; ok {
+				dataList[i] = data
+			} else {
+				// 实体已删除或不存在，返回带 DeletedAt 的占位数据
+				dataList[i] = map[string]any{
+					"id":         ref.entityID,
+					"deleted_at": time.Now(),
 				}
-				return nil, fmt.Errorf("resolve entity %s/%s: %w", item.Entity, item.EntityId, err)
 			}
-			dataList = append(dataList, data)
 		}
 
 		update.DataList = &dataList
@@ -479,4 +567,17 @@ func (u *UpdatePublisher) convertUpdates(ctx context.Context, uus []*model.UserU
 	}
 
 	return result, nil
+}
+
+// uniqueUUIDs 对 UUID 切片去重，保持首次出现的顺序。
+func uniqueUUIDs(ids []uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	result := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			result = append(result, id)
+		}
+	}
+	return result
 }
