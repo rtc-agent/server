@@ -31,7 +31,7 @@ func (h *Handler) MessageGet(ctx context.Context, req *protocol.MessageGetReques
 				Message: fmt.Sprintf("message %s not found", req.MessageId),
 			}
 		}
-		return nil, &APIError{Code: "message.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "message.error", "internal error", err)
 	}
 
 	if _, err := h.loadOwnedSession(ctx, msg.SessionID, userID); err != nil {

@@ -49,7 +49,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	if req.ClientId != "" {
 		existing, err := h.deps.Deps.MessageRepo.FindByClientID(ctx, req.ClientId)
 		if err != nil {
-			return nil, &APIError{Code: "idempotency.error", Message: err.Error()}
+			return nil, h.internalError(ctx, "idempotency.error", "internal error", err)
 		}
 		if existing != nil {
 			// client_id 已存在，返回冲突错误
@@ -75,12 +75,12 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	initialTitle := primitives.TruncateTitle(content, 50)
 	session, isNew, err := primitives.PrepareSession(ctx, h.deps.Deps, sessionUUIDPtr, req.ClientSessionId, creator, initialTitle)
 	if err != nil {
-		return nil, &APIError{Code: "session.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
 	// 仅对已有 session 做归属校验；新 session 的 owner 由 PrepareSession 按 creator 设置，无需校验
 	if !isNew {
 		if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, session.ID, creator); err != nil {
-			return nil, &APIError{Code: "permission_denied", Message: err.Error()}
+			return nil, h.ownershipError(ctx, err)
 		}
 	}
 
@@ -150,7 +150,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		return primitives.BuildSendMessageUpdates(session, isNew, nil, msg.ID), nil
 	})
 	if err != nil {
-		return nil, &APIError{Code: "send.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "send.error", "internal error", err)
 	}
 
 	// TODO: Title summarization for new sessions. The old code pushed a

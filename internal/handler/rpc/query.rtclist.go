@@ -32,7 +32,7 @@ func (h *Handler) RtcList(ctx context.Context, req *protocol.RtcListRequest) (*p
 
 	rtcs, err := h.deps.Deps.RtcRepo.ListBySession(ctx, sessionUUID, req.Cursor, limit)
 	if err != nil {
-		return nil, &APIError{Code: "rtc.list_failed", Message: err.Error()}
+		return nil, h.internalError(ctx, "rtc.list_failed", "internal error", err)
 	}
 
 	items := make([]protocol.Rtc, 0, len(rtcs))

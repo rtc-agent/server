@@ -51,7 +51,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		if repo.IsNotFound(err) {
 			return nil, &APIError{Code: "rtc.not_found", Message: fmt.Sprintf("rtc %s not found", req.RtcId)}
 		}
-		return nil, &APIError{Code: "rtc.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
 	}
 
 	// 状态校验：终态不允许再变更（幂等：目标状态与当前一致时直接返回成功）
@@ -71,7 +71,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 
 	// 归属校验：通过 RTC 的 sessionID 校验用户权限
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, rtc.SessionID, creator); err != nil {
-		return nil, &APIError{Code: "permission_denied", Message: err.Error()}
+		return nil, h.ownershipError(ctx, err)
 	}
 
 	// Load session BEFORE the transaction for event publishing.
@@ -97,7 +97,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		return primitives.BuildRtcStatusUpdates(sessionBefore, rtcUUID), nil
 	})
 	if err != nil {
-		return nil, &APIError{Code: "rtc.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
 	}
 
 	return &protocol.UpdateRtcStatusResponse{

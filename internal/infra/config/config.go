@@ -25,6 +25,10 @@ type ServerConfig struct {
 	Host string `mapstructure:"host"`
 	Port int    `mapstructure:"port"`
 
+	// Env 运行环境：development / production
+	// 默认 production；development 允许部分宽松回退（如 WebSocket 允许任意 Origin）
+	Env string `mapstructure:"env"`
+
 	// ShutdownTimeout 优雅停机超时时间（等待 in-flight 请求完成）
 	// 默认 10s
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
@@ -179,6 +183,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.AutomaticEnv()
 
 	// 默认值（必须在 ReadInConfig 之前设置）
+	v.SetDefault("server.env", "production")
 	v.SetDefault("auth.access_token_ttl_seconds", 3600)
 	v.SetDefault("auth.refresh_token_ttl", 30*24*time.Hour)
 	v.SetDefault("auth.oauth2_state_ttl", 10*time.Minute)

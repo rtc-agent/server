@@ -27,7 +27,7 @@ func (h *Handler) ListSessions(ctx context.Context, req *protocol.ListSessionsRe
 
 	sessions, err := h.deps.SessionRepo.GetByUser(ctx, userID, req.Cursor, limit)
 	if err != nil {
-		return nil, &APIError{Code: "session.list_failed", Message: err.Error()}
+		return nil, h.internalError(ctx, "session.list_failed", "internal error", err)
 	}
 
 	items := make([]protocol.Session, 0, len(sessions))

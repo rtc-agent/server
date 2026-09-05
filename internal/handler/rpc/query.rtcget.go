@@ -31,7 +31,7 @@ func (h *Handler) RtcGet(ctx context.Context, req *protocol.RtcGetRequest) (*pro
 				Message: fmt.Sprintf("rtc %s not found", req.RtcId),
 			}
 		}
-		return nil, &APIError{Code: "rtc.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
 	}
 
 	if _, err := h.loadOwnedSession(ctx, rtc.SessionID, userID); err != nil {

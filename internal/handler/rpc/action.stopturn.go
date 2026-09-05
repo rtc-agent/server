@@ -36,7 +36,7 @@ func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (
 	}
 
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, sessionUUID, creator); err != nil {
-		return nil, &APIError{Code: "permission_denied", Message: err.Error()}
+		return nil, h.ownershipError(ctx, err)
 	}
 
 	// 停止 session 的所有活跃 turn（复用 CloseSession 的逻辑）

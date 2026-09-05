@@ -43,7 +43,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		if repo.IsNotFound(err) {
 			return nil, &APIError{Code: "session.not_found", Message: fmt.Sprintf("session %s not found", req.SessionId)}
 		}
-		return nil, &APIError{Code: "session.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
 		return nil, &APIError{Code: "permission_denied", Message: fmt.Sprintf("session %s does not belong to user", session.ID)}
@@ -63,7 +63,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		return primitives.BuildSessionCloseUpdates(session), nil
 	})
 	if err != nil {
-		return nil, &APIError{Code: "close.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "close.error", "internal error", err)
 	}
 
 	// 2. Stop any active turns (best-effort, failures are OK).

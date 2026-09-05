@@ -31,7 +31,7 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 		zap.String("session", string(req.SessionId)))
 
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, sessionUUID, creator); err != nil {
-		return nil, &APIError{Code: "permission_denied", Message: err.Error()}
+		return nil, h.ownershipError(ctx, err)
 	}
 
 	fields := map[string]any{}
@@ -67,7 +67,7 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 		return primitives.BuildSessionUpdateUpdates(sessionBefore), nil
 	})
 	if err != nil {
-		return nil, &APIError{Code: "update.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "update.error", "internal error", err)
 	}
 
 	return &protocol.UpdateSessionResponse{

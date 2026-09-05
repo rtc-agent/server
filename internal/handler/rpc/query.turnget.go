@@ -31,7 +31,7 @@ func (h *Handler) TurnGet(ctx context.Context, req *protocol.TurnGetRequest) (*p
 				Message: fmt.Sprintf("turn %s not found", req.TurnId),
 			}
 		}
-		return nil, &APIError{Code: "turn.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "turn.error", "internal error", err)
 	}
 
 	if _, err := h.loadOwnedSession(ctx, turn.SessionID, userID); err != nil {

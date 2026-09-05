@@ -32,7 +32,7 @@ func (h *Handler) TurnList(ctx context.Context, req *protocol.TurnListRequest) (
 
 	turns, err := h.deps.Deps.TurnRepo.ListBySession(ctx, sessionUUID, req.Cursor, limit)
 	if err != nil {
-		return nil, &APIError{Code: "turn.list_failed", Message: err.Error()}
+		return nil, h.internalError(ctx, "turn.list_failed", "internal error", err)
 	}
 
 	items := make([]protocol.Turn, 0, len(turns))

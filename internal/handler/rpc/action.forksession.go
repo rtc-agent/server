@@ -70,10 +70,10 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		if repo.IsNotFound(err) {
 			return nil, &APIError{Code: "session.not_found", Message: fmt.Sprintf("old session %s not found", req.OldServerSessionId)}
 		}
-		return nil, &APIError{Code: "session.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, oldSessionID, creator); err != nil {
-		return nil, &APIError{Code: "permission_denied", Message: err.Error()}
+		return nil, h.ownershipError(ctx, err)
 	}
 
 	// 5. 校验旧消息存在并获取其 offset
@@ -82,13 +82,13 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		if repo.IsNotFound(err) {
 			return nil, &APIError{Code: "message.not_found", Message: fmt.Sprintf("old message %s not found", req.OldServerMessageId)}
 		}
-		return nil, &APIError{Code: "message.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "message.error", "internal error", err)
 	}
 
 	// 6. 查询旧消息（从 oldMessage 往前最多 limit 条）
 	oldMessages, err := h.deps.Deps.MessageRepo.ListBySessionBeforeOffset(ctx, oldSessionID, oldMessage.GlobalOffset, limit)
 	if err != nil {
-		return nil, &APIError{Code: "message.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "message.error", "internal error", err)
 	}
 	if len(oldMessages) == 0 {
 		return nil, &APIError{Code: "message.not_found", Message: "no messages found to fork"}
@@ -183,7 +183,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		return primitives.BuildForkSessionUpdates(newSession, createdMessages), nil
 	})
 	if err != nil {
-		return nil, &APIError{Code: "fork.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "fork.error", "internal error", err)
 	}
 
 	// 11. 构建响应

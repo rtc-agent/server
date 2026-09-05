@@ -31,6 +31,9 @@ var (
 
 	// RefreshToken
 	ErrRefreshTokenNotFound = errors.New("refresh token not found")
+
+	// Permission
+	ErrPermissionDenied = errors.New("permission denied")
 )
 
 // IsNotFound 判断是否为 not found 类错误

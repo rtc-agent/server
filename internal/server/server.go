@@ -132,8 +132,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	wsHandler := centrifuge.NewWebsocketHandler(s.svcCtx.CentrifugeNode, centrifuge.WebsocketConfig{
 		CheckOrigin: func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
-			if len(s.cfg.CORS.AllowOrigins) == 0 {
-				// 开发回退：允许任意 origin
+			if s.cfg.Server.Env == "development" && len(s.cfg.CORS.AllowOrigins) == 0 {
+				// 仅开发模式回退：允许任意 origin
 				return true
 			}
 			for _, allowed := range s.cfg.CORS.AllowOrigins {

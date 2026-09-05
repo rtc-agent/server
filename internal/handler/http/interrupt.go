@@ -81,36 +81,30 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 			zap.String("stack", logger.CaptureStack(0)))
 	}
 
-	// SET+PUBLISH pattern:
-	// 1. SET answer with TTL (catches early arrivals before subscriber is ready).
+	// 原子执行 SET + PUBLISH（Lua 脚本保证一致性）：
+	// 1. SET answer with TTL（catches early arrivals before subscriber is ready）
+	// 2. PUBLISH to notify the waiting subscriber
 	answerKey := cache.InterruptAnswer(sessionID.String(), interruptID)
-	if err := h.redis.Set(ctx, answerKey, req.Answer, h.interruptTTL.InterruptAnswerTTL).Err(); err != nil {
-		logger.Error(ctx, "[interrupt] redis SET failed",
+	channel := cache.InterruptChannel(sessionID.String(), interruptID)
+	ttlSeconds := int(h.interruptTTL.InterruptAnswerTTL.Seconds())
+
+	if err := cache.InterruptSetPublish.Run(ctx, h.redis,
+		[]string{answerKey, channel},
+		req.Answer, ttlSeconds,
+	).Err(); err != nil {
+		logger.Error(ctx, "[interrupt] SET+PUBLISH failed",
 			zap.String("session", sessionID.String()),
 			zap.String("interrupt", interruptID),
 			zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "interrupt.store_failed", "store answer failed, please retry later")
 		return
-	} else if logger.DebugMode {
-		logger.Debug(ctx, "[interrupt.HTTP] SET answer",
-			zap.String("session", sessionID.String()),
-			zap.String("interrupt", interruptID),
-			zap.String("key", answerKey))
 	}
 
-	// 2. PUBLISH to notify the waiting subscriber.
-	channel := cache.InterruptChannel(sessionID.String(), interruptID)
-	if err := h.redis.Publish(ctx, channel, req.Answer).Err(); err != nil {
-		logger.Error(ctx, "[interrupt] redis PUBLISH failed",
+	if logger.DebugMode {
+		logger.Debug(ctx, "[interrupt.HTTP] SET+PUBLISH answer",
 			zap.String("session", sessionID.String()),
 			zap.String("interrupt", interruptID),
-			zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "interrupt.publish_failed", "publish failed, please retry later")
-		return
-	} else if logger.DebugMode {
-		logger.Debug(ctx, "[interrupt.HTTP] PUBLISH answer",
-			zap.String("session", sessionID.String()),
-			zap.String("interrupt", interruptID),
+			zap.String("key", answerKey),
 			zap.String("channel", channel))
 	}
 

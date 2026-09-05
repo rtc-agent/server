@@ -244,3 +244,18 @@ else
     return 0
 end
 `)
+
+// InterruptSetPublish 原子执行 SET + PUBLISH，保证答案存储与通知的一致性。
+//
+//	KEYS[1] = answer key（interrupt:answer:{sessionID}:{interruptID}）
+//	KEYS[2] = pub/sub channel（interrupt:channel:{sessionID}:{interruptID}）
+//	ARGV[1] = answer 内容
+//	ARGV[2] = TTL（秒）
+//	返回：PUBLISH 的订阅者数量（int）
+//
+// 原子性保证：SET 成功但 PUBLISH 失败的不一致状态不再可能出现。
+// 订阅方先 SUBSCRIBE 再 GET 的容错逻辑仍然保留，作为兜底。
+var InterruptSetPublish = redis.NewScript(`
+redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+return redis.call('PUBLISH', KEYS[2], ARGV[1])
+`)

@@ -32,7 +32,7 @@ func (h *Handler) MessageList(ctx context.Context, req *protocol.MessageListRequ
 
 	messages, err := h.deps.Deps.MessageRepo.ListBySession(ctx, sessionUUID, req.Cursor, limit)
 	if err != nil {
-		return nil, &APIError{Code: "message.list_failed", Message: err.Error()}
+		return nil, h.internalError(ctx, "message.list_failed", "internal error", err)
 	}
 
 	items := make([]protocol.Message, 0, len(messages))

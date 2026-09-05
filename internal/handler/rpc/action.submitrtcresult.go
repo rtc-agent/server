@@ -59,7 +59,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		if repo.IsNotFound(err) {
 			return nil, &APIError{Code: "rtc.not_found", Message: fmt.Sprintf("rtc %s not found", req.RtcId)}
 		}
-		return nil, &APIError{Code: "rtc.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
 	}
 
 	// 幂等校验（spec Section 8）
@@ -85,7 +85,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 
 	// 归属校验：通过 RTC 的 sessionID 校验用户权限
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, rtc.SessionID, creator); err != nil {
-		return nil, &APIError{Code: "permission_denied", Message: err.Error()}
+		return nil, h.ownershipError(ctx, err)
 	}
 
 	// ClientID 校验：如果客户端传了 ClientID，必须与 RTC 的 ClientID 匹配
@@ -221,7 +221,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		return items, nil
 	})
 	if err != nil {
-		return nil, &APIError{Code: "rtc.error", Message: err.Error()}
+		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
 	}
 
 	// Resume the interrupted turn via rtc-queue. The old architecture used

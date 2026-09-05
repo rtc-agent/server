@@ -6,12 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/infra/config"
@@ -267,7 +269,10 @@ func parseRefreshRequest(r *http.Request) (*protocol.OAuth2TokenRefreshRequest, 
 	return &req, nil
 }
 
-// findOrCreateUser 查找或创建 OAuth2 用户（「先查后建」模式）
+// findOrCreateUser 查找或创建 OAuth2 用户（「先查后建 + 唯一约束回退」模式）。
+//
+// 并发安全：两个相同 provider+sub 的请求同时到达时，一个 Create 成功，
+// 另一个触发唯一约束冲突（23505），回退到重新查找。
 func (h *OAuth2Handler) findOrCreateUser(ctx context.Context, provider string, userInfo *oauth.ProviderUserInfo) (*model.OAuth2User, error) {
 	user, err := h.svcCtx.OAuth2UserRepo.FindByProvider(ctx, provider, userInfo.ProviderUserID)
 	if err != nil {
@@ -283,6 +288,12 @@ func (h *OAuth2Handler) findOrCreateUser(ctx context.Context, provider string, u
 			AvatarURL: userInfo.AvatarURL,
 		}
 		if err := h.svcCtx.OAuth2UserRepo.Create(ctx, user); err != nil {
+			// 唯一约束冲突 → 并发创建 → 重新查找
+			if isDuplicateKeyError(err) {
+				logger.Info(ctx, "findOrCreateUser: concurrent create detected, re-fetching",
+					zap.String("provider", provider))
+				return h.svcCtx.OAuth2UserRepo.FindByProvider(ctx, provider, userInfo.ProviderUserID)
+			}
 			return nil, fmt.Errorf("create user: %w", err)
 		}
 		return user, nil
@@ -295,6 +306,15 @@ func (h *OAuth2Handler) findOrCreateUser(ctx context.Context, provider string, u
 		logger.Warn(ctx, "更新用户信息失败", zap.Error(err))
 	}
 	return user, nil
+}
+
+// isDuplicateKeyError 判断是否为 PostgreSQL 唯一约束冲突错误（code 23505）。
+func isDuplicateKeyError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return false
 }
 
 // upsertDevice 查找或更新设备信息
