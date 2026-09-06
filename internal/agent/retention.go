@@ -34,9 +34,9 @@ type RetentionConfig struct {
 // DefaultRetentionConfig returns the default retention configuration.
 func DefaultRetentionConfig() RetentionConfig {
 	return RetentionConfig{
-		MinTokens:           10000,
+		MinTokens:            10000,
 		MinTextBlockMessages: 5,
-		MaxTokens:           40000,
+		MaxTokens:            40000,
 	}
 }
 

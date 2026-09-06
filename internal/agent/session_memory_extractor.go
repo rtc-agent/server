@@ -37,6 +37,9 @@ type SessionMemoryExtractor struct {
 	InitThreshold   int // 初始化阈值，默认 10000
 	UpdateThreshold int // 更新阈值，默认 5000
 	MinToolCalls    int // 最小 tool call 数量，默认 3
+
+	// noThinkingOptions 禁用 thinking 的选项（压缩任务不需要推理）
+	noThinkingOptions []einomodel.Option
 }
 
 // NewSessionMemoryExtractor 创建 SessionMemoryExtractor
@@ -45,15 +48,17 @@ func NewSessionMemoryExtractor(
 	memoryRepo repo.SessionMemoryRepo,
 	tokenCounter turnagent.TokenCounterFunc,
 	logger turnagent.Logger,
+	noThinkingOptions []einomodel.Option,
 ) *SessionMemoryExtractor {
 	return &SessionMemoryExtractor{
-		chatModel:       chatModel,
-		memoryRepo:      memoryRepo,
-		tokenCounter:    tokenCounter,
-		logger:          logger,
-		InitThreshold:   10000,
-		UpdateThreshold: 5000,
-		MinToolCalls:    3,
+		chatModel:         chatModel,
+		memoryRepo:        memoryRepo,
+		tokenCounter:      tokenCounter,
+		logger:            logger,
+		InitThreshold:     10000,
+		UpdateThreshold:   5000,
+		MinToolCalls:      3,
+		noThinkingOptions: noThinkingOptions,
 	}
 }
 
@@ -176,10 +181,10 @@ func (e *SessionMemoryExtractor) extractMemories(
 	// 构建提示词
 	prompt := e.buildExtractPrompt(messages, existingMemories)
 
-	// 调用 LLM
+	// 调用 LLM（禁用 thinking 以节省 token）
 	resp, err := e.chatModel.Generate(ctx, []*schema.Message{
 		schema.UserMessage(prompt),
-	})
+	}, e.noThinkingOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("chat model generate: %w", err)
 	}
@@ -449,6 +454,7 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 			return total, nil
 		},
 		h.logger,
+		h.noThinkingOptions(), // 禁用 thinking，节省 token
 	)
 
 	// Load extraction state from session metadata (if available)

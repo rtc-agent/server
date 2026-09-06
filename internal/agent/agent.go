@@ -33,6 +33,7 @@ package agent
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/rtc-agent/server/internal/infra/cache"
@@ -186,7 +187,8 @@ func New(cfg Config) (*turnagent.Agent, error) {
 	// Build the summarization middleware. It is created once and shared
 	// across all turns (it is stateless — the per-turn state lives in the
 	// CompressContext / OnCompress closures).
-	summarizeMW, err := h.buildSummarizationMiddleware()
+	var err error
+	h.summarizeMW, err = h.buildSummarizationMiddleware()
 	if err != nil {
 		return nil, fmt.Errorf("agent: build summarization middleware: %w", err)
 	}
@@ -228,7 +230,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 
 		// Middleware — the summarization middleware is injected into the
 		// agent by CreateAgent via this field.
-		AgentMiddlewares: []adk.ChatModelAgentMiddleware{summarizeMW},
+		AgentMiddlewares: []adk.ChatModelAgentMiddleware{h.summarizeMW},
 
 		// eino Callbacks — the token usage handler records metrics and logs
 		// for every ChatModel call (including summarizeMessages).
@@ -295,6 +297,12 @@ type helpers struct {
 	// dynamic attachments (TodoList, SessionMemory, UserMemory).
 	// Created once in New() and shared across all turns.
 	attachmentManager *AttachmentManager
+
+	// persistedSummaryMsgIDs tracks summary messages that have been persisted
+	// during compression. Used to prevent double persistence by OnCompress.
+	// Key: sessionID (string), Value: summaryMsgID (string).
+	// Concurrent-safe since compressions are sequential per session.
+	persistedSummaryMsgIDs sync.Map
 }
 
 // defaultCheckpointTTL returns the configured checkpoint TTL, defaulting to 24h.
@@ -305,10 +313,12 @@ func defaultCheckpointTTL(d time.Duration) time.Duration {
 	return d
 }
 
-// defaultStreamChunkTTL returns the configured stream chunk TTL, defaulting to 5m.
+// defaultStreamChunkTTL returns the configured stream chunk TTL, defaulting to 15m.
+// Increased from 5m to handle long-running LLM thinking/reasoning streams that may
+// exceed the original TTL, causing chunk loss and incomplete message persistence.
 func defaultStreamChunkTTL(d time.Duration) time.Duration {
 	if d <= 0 {
-		return 5 * time.Minute
+		return 15 * time.Minute
 	}
 	return d
 }

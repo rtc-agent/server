@@ -36,11 +36,46 @@ type SummaryItem struct {
 	Content string
 }
 
+// SummaryMetadata 压缩操作的元数据
+type SummaryMetadata struct {
+	// TokensBefore 压缩前的上下文 token 数
+	TokensBefore int `json:"tokens_before"`
+	// TokensAfter 压缩后的上下文 token 数（估算）
+	TokensAfter int `json:"tokens_after"`
+	// DurationMs 压缩耗时（毫秒）
+	DurationMs int64 `json:"duration_ms"`
+	// Mode 压缩模式: "full" 或 "partial"
+	Mode string `json:"mode"`
+	// SessionMemoryUsed 是否使用了 session memory（零成本压缩）
+	SessionMemoryUsed bool `json:"session_memory_used,omitempty"`
+}
+
+// SummaryContent 完整的 summary content 结构（包含 items 和 metadata）
+// 向后兼容：旧数据 Data 为 []SummaryItem（JSON 数组），新数据为 SummaryContent（JSON 对象）
+type SummaryContent struct {
+	Items    []SummaryItem    `json:"items"`
+	Metadata *SummaryMetadata `json:"metadata,omitempty"`
+}
+
 // SummaryContentData 创建 上下文摘要 类型的 ContentData
 func SummaryContentData(summaryList []SummaryItem) (protocol.ContentData, error) {
 	return protocol.ContentData{
 		Type: protocol.ContentTypeSummary,
 		Data: summaryList,
+	}, nil
+}
+
+// SummaryContentDataWithMetadata 创建带元数据的 summary ContentData
+func SummaryContentDataWithMetadata(
+	items []SummaryItem,
+	metadata *SummaryMetadata,
+) (protocol.ContentData, error) {
+	return protocol.ContentData{
+		Type: protocol.ContentTypeSummary,
+		Data: SummaryContent{
+			Items:    items,
+			Metadata: metadata,
+		},
 	}, nil
 }
 

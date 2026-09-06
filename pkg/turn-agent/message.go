@@ -164,6 +164,26 @@ func toEinoMessage(m *Message) *schema.Message {
 			em.ResponseMeta.Usage.CompletionTokensDetails.ReasoningTokens = m.TokenUsage.ReasoningTokens
 		}
 	}
+
+	// Safety net: if the message would be empty (no content, no tool calls,
+	// no reasoning), the Claude adapter's convSchemaMessage falls back to
+	// creating an empty text block {"text": "", "type": "text"}.
+	// When ReasoningContent is set but Extra lacks the Claude-specific
+	// thinking keys (_eino_claude_thinking / _eino_claude_thinking_signature),
+	// the adapter doesn't recognize the thinking and the message ends up empty.
+	// Fix: populate Extra from ReasoningContent so the thinking is visible.
+	// This is a defensive measure — the primary fix lives in
+	// data_context.go's mergeAssistantMessages which eliminates the empty
+	// messages before they reach this conversion.
+	if em.Role == schema.Assistant && em.Content == "" && len(em.ToolCalls) == 0 && em.ReasoningContent != "" {
+		if em.Extra == nil {
+			em.Extra = make(map[string]any)
+		}
+		if _, hasThinking := em.Extra["_eino_claude_thinking"]; !hasThinking {
+			em.Extra["_eino_claude_thinking"] = em.ReasoningContent
+		}
+	}
+
 	return em
 }
 

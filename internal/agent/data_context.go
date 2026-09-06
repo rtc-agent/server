@@ -76,6 +76,13 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		messages = append(messages, converted...)
 	}
 
+	// Merge consecutive thinking + text messages from the same assistant turn.
+	// The streaming handler stores thinking and text as separate DB messages;
+	// when loaded back, the thinking-only message has Content="" which causes
+	// the Claude adapter to produce an empty text block fallback.
+	// This merge eliminates those empty-content messages before they reach the LLM.
+	messages = mergeAssistantMessages(messages)
+
 	// Apply tool result budget (in-memory, not persisted).
 	// This truncates oversized tool results to free context space before
 	// sending to the LLM. Must run before Microcompact for efficiency.
@@ -213,15 +220,30 @@ func intDeref(p *int) int {
 }
 
 // convertSummaryContent expands a summary content block into multiple messages.
+// Supports both old format ([]SummaryItem) and new format (SummaryContent{items, metadata}).
 func convertSummaryContent(data any, createdAt time.Time) []*turnagent.Message {
 	dataBytes, err := primitives.ContentDataBytes(data)
 	if err != nil {
 		return nil
 	}
-	var items []primitives.SummaryItem
-	if err := json.Unmarshal(dataBytes, &items); err != nil {
-		return nil
+
+	// Try new format first (SummaryContent with items and metadata)
+	var content primitives.SummaryContent
+	if err := json.Unmarshal(dataBytes, &content); err == nil && content.Items != nil {
+		return buildMessagesFromSummaryItems(content.Items, createdAt)
 	}
+
+	// Fallback to old format ([]SummaryItem)
+	var items []primitives.SummaryItem
+	if err := json.Unmarshal(dataBytes, &items); err == nil {
+		return buildMessagesFromSummaryItems(items, createdAt)
+	}
+
+	return nil
+}
+
+// buildMessagesFromSummaryItems converts SummaryItem slice to turnagent messages.
+func buildMessagesFromSummaryItems(items []primitives.SummaryItem, createdAt time.Time) []*turnagent.Message {
 	var msgs []*turnagent.Message
 	for _, item := range items {
 		msgs = append(msgs, &turnagent.Message{
@@ -231,4 +253,73 @@ func convertSummaryContent(data any, createdAt time.Time) []*turnagent.Message {
 		})
 	}
 	return msgs
+}
+
+// mergeAssistantMessages merges consecutive thinking + text/tool messages from
+// the same assistant turn into single messages.
+//
+// The streaming handler (handleStreamChunk) stores thinking and markdown as
+// separate DB messages. When loaded back via convertDBMessage, a thinking-only
+// message has Content="" and ReasoningContent set. The eino-ext Claude adapter
+// reads thinking from Extra["_eino_claude_thinking"] (not ReasoningContent),
+// so without Extra populated the message appears empty. The adapter's fallback
+// then produces {"text": "", "type": "text"} — the empty content blocks seen
+// in the LLM-API log.
+//
+// This function fixes that by:
+//  1. Merging thinking → text pairs: the thinking's ReasoningContent is moved
+//     into the next assistant text message's ReasoningContent, and the
+//     thinking-only message is dropped.
+//  2. Converting standalone thinking messages (no following text) to text
+//     messages so they still carry useful context instead of becoming empty.
+//
+// This is an in-memory-only transformation; the DB is not modified.
+func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	result := make([]*turnagent.Message, 0, len(messages))
+	i := 0
+	for i < len(messages) {
+		msg := messages[i]
+
+		// Check for thinking-only assistant message: has ReasoningContent
+		// but no Content, no ToolCalls.
+		if msg.Role == turnagent.RoleAssistant &&
+			msg.ReasoningContent != "" &&
+			msg.Content == "" &&
+			len(msg.ToolCalls) == 0 {
+
+			// Look ahead for the next assistant text/tool message.
+			next := i + 1
+			for next < len(messages) &&
+				messages[next].Role == turnagent.RoleAssistant &&
+				messages[next].Content == "" &&
+				messages[next].ReasoningContent != "" &&
+				len(messages[next].ToolCalls) == 0 {
+				// Skip consecutive thinking-only messages — accumulate
+				// their reasoning into the current one.
+				msg.ReasoningContent += "\n" + messages[next].ReasoningContent
+				next++
+			}
+
+			if next < len(messages) && messages[next].Role == turnagent.RoleAssistant {
+				// Merge: move thinking into the next message's ReasoningContent.
+				messages[next].ReasoningContent = msg.ReasoningContent
+				// Drop the thinking-only message; advance past it.
+				i = next
+				continue
+			}
+
+			// No following assistant message — convert thinking to text
+			// so the content is preserved as a text block (not lost).
+			msg.Content = msg.ReasoningContent
+			msg.ReasoningContent = ""
+		}
+
+		result = append(result, msg)
+		i++
+	}
+	return result
 }

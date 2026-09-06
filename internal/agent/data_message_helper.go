@@ -195,6 +195,25 @@ func (h *helpers) appendStreamChunk(
 			return fmt.Errorf("appendStreamChunk: get all chunks: %w", readErr)
 		}
 		fullContent = strings.Join(chunks, "")
+
+		// Detect potential chunk loss due to TTL expiration or Redis failures.
+		// If we have very few chunks but the message was streaming for a while,
+		// log a warning for monitoring and debugging.
+		if len(chunks) == 0 {
+			h.logIfEnabled(ctx, "appendStreamChunk.no_chunks_in_redis", map[string]any{
+				"message_id": msgIDStr,
+				"kind":       kind,
+				"hint":       "possible TTL expiration or Redis connectivity issue",
+			})
+		} else if len(chunks) <= 2 && !isFirst {
+			// Only 1-2 chunks but this is not the first chunk (meaning more chunks were expected)
+			h.logIfEnabled(ctx, "appendStreamChunk.few_chunks_detected", map[string]any{
+				"message_id":  msgIDStr,
+				"kind":        kind,
+				"chunk_count": len(chunks),
+				"hint":        "possible partial chunk loss due to TTL expiration",
+			})
+		}
 	} else {
 		fullContent = chunkContent
 	}

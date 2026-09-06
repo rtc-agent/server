@@ -3,10 +3,16 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
+	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
+	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/google/uuid"
 
 	"github.com/rtc-agent/server/internal/usecase"
@@ -14,6 +20,26 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
+
+// noThinkingOptions returns model options that disable thinking/reasoning
+// for the configured LLM provider. Used for compression tasks where
+// extended thinking is unnecessary and wasteful.
+func (h *helpers) noThinkingOptions() []model.Option {
+	var opts []model.Option
+	switch h.deps.LLMConfig.Provider {
+	case "claude":
+		opts = append(opts, einoclaude.WithThinkingConfig(
+			&anthropic.ThinkingConfigParamUnion{
+				OfDisabled: &anthropic.ThinkingConfigDisabledParam{},
+			},
+		))
+	case "openai":
+		opts = append(opts, einoopenai.WithExtraFields(map[string]any{
+			"chat_template_kwargs": map[string]any{"enable_thinking": false},
+		}))
+	}
+	return opts
+}
 
 // buildSummarizationMiddleware constructs the summarization middleware for
 // context compression.
@@ -23,9 +49,23 @@ import (
 // to compress, session identity) is captured in the CompressContext and
 // OnCompress closures.
 func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, error) {
+	// Calculate actual trigger threshold: context_tokens_limit - auto_compact_buffer_tokens
+	// This ensures compression triggers before hitting the hard limit.
+	actualTriggerThreshold := h.contextTokensLimit - h.autoCompactBufferTokens
+	if actualTriggerThreshold <= 0 {
+		// If the calculated threshold is non-positive, use a small value to trigger immediately
+		actualTriggerThreshold = 1
+	}
+
+	h.logIfEnabled(context.Background(), "summarize.middleware_config", map[string]any{
+		"context_tokens_limit":      h.contextTokensLimit,
+		"auto_compact_buffer":       h.autoCompactBufferTokens,
+		"actual_trigger_threshold":  actualTriggerThreshold,
+	})
+
 	mw, err := turnagent.NewSummarizationMiddleware(&turnagent.SummarizationConfig{
 		Trigger: &turnagent.TriggerCondition{
-			ContextTokens: h.contextTokensLimit,
+			ContextTokens: actualTriggerThreshold,
 		},
 		TokenCounter:    cumulativeTokenCounter,
 		CompressContext: h.compressContext,
@@ -56,6 +96,11 @@ func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, 
 //   - Before calling LLM to generate summary, try to use existing session memories.
 //   - If session memories exist, use them as the summary (zero API cost).
 //   - Otherwise, fall back to LLM summarization.
+//
+// Streaming flow:
+//   1. Create pending summary message (published to topic channel)
+//   2. During LLM streaming, publish chunks to live channel in real-time
+//   3. On completion, finalize message with metadata and publish to topic channel
 func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message) ([]*schema.Message, error) {
 	if !shouldCompressByTokenCount(msgs) {
 		return msgs, nil
@@ -69,9 +114,32 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message) (
 		return msgs, nil
 	}
 
+	compressStart := time.Now()
+	tokensBefore, _ := cumulativeTokenCounter(ctx, msgs)
+
+	// Get sessionID once — needed for streaming path and logging.
+	// The middleware may receive context from different paths:
+	//   - createAgent's withSessionID (custom key)
+	//   - eino GenInput's WithSessionID (turnagent key)
+	// Try both to handle all call paths.
+	sessionID := getSessionIDFromContext(ctx)
+	if sessionID == uuid.Nil {
+		if sidStr := turnagent.SessionIDFromContext(ctx); sidStr != "" {
+			if sid, err := uuid.Parse(sidStr); err == nil {
+				sessionID = sid
+			}
+		}
+	}
+
+	// summaryMsgID is set when streaming path is taken (LLM fallback).
+	// Remains uuid.Nil for session-memory path (no streaming needed).
+	var summaryMsgID uuid.UUID
+	var summaryFinalized bool
+
 	var (
-		summary string
-		err     error
+		summary           string
+		err               error
+		sessionMemoryUsed bool
 	)
 
 	// Try to use session memory for compression (zero API cost)
@@ -81,23 +149,99 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message) (
 	}
 
 	if summaryPtr != nil {
-		// Successfully used session memory
+		// Successfully used session memory (zero-cost path)
 		summary = *summaryPtr
+		sessionMemoryUsed = true
 	} else {
-		// Fall back to LLM summarization
+		// Fall back to LLM summarization with streaming.
+		// Reuse appendStreamChunk — the same implementation used by thinking
+		// streaming. It handles: first-chunk message creation, Redis chunk
+		// buffering, live channel publish, finalization with RunAndPublish,
+		// and Redis cleanup.
+		buildSummaryContent := func(text string) (protocol.ContentData, error) {
+			return primitives.SummaryContentData([]primitives.SummaryItem{
+				{Role: "system", Content: text},
+			})
+		}
+
+		onChunk := func(chunk string) error {
+			return h.appendStreamChunk(ctx, sessionID, uuid.Nil,
+				chunk, "", // finishReason="" for intermediate chunks
+				&summaryMsgID, &summaryFinalized,
+				buildSummaryContent, "summary", nil)
+		}
+
 		if retentionIndex == 0 {
-			// Full compact: summarize all messages.
-			summary, err = h.summarizeMessages(ctx, msgs, CompactModeFull)
+			var llmTokenUsage *turnagent.TokenUsage
+			summary, llmTokenUsage, err = h.summarizeMessagesStreaming(ctx, msgs, CompactModeFull, onChunk)
 			if err != nil {
+				if summaryMsgID != uuid.Nil && !summaryFinalized {
+					// Mark as failed using the same finalization path
+					_ = h.appendStreamChunk(ctx, sessionID, uuid.Nil,
+						"", "stream_failed",
+						&summaryMsgID, &summaryFinalized,
+						buildSummaryContent, "summary", nil)
+				}
 				return nil, fmt.Errorf("summarize all messages: %w", err)
 			}
+			_ = llmTokenUsage
 		} else {
-			// Partial compact: summarize older messages, keep recent.
 			oldMsgs := msgs[:retentionIndex]
-			summary, err = h.summarizeMessages(ctx, oldMsgs, CompactModePartial)
+			var llmTokenUsage *turnagent.TokenUsage
+			summary, llmTokenUsage, err = h.summarizeMessagesStreaming(ctx, oldMsgs, CompactModePartial, onChunk)
 			if err != nil {
+				if summaryMsgID != uuid.Nil && !summaryFinalized {
+					_ = h.appendStreamChunk(ctx, sessionID, uuid.Nil,
+						"", "stream_failed",
+						&summaryMsgID, &summaryFinalized,
+						buildSummaryContent, "summary", nil)
+				}
 				return nil, fmt.Errorf("summarize old messages: %w", err)
 			}
+			_ = llmTokenUsage
+		}
+
+		// Finalize the streaming message with complete content + metadata
+		if summaryMsgID != uuid.Nil && !summaryFinalized {
+			compressDuration := time.Since(compressStart)
+			tokensAfter := estimateTokensAfterCompact(msgs, retentionIndex, summary)
+			metadata := &primitives.SummaryMetadata{
+				TokensBefore:      tokensBefore,
+				TokensAfter:       tokensAfter,
+				DurationMs:        compressDuration.Milliseconds(),
+				Mode:              compressModeString(retentionIndex),
+				SessionMemoryUsed: sessionMemoryUsed,
+			}
+			// Build a final content builder that includes metadata.
+			// appendStreamChunk will call this with the full concatenated text
+			// from Redis chunks, then serialize + write to DB + publish.
+			finalBuildContent := func(text string) (protocol.ContentData, error) {
+				return primitives.SummaryContentDataWithMetadata(
+					[]primitives.SummaryItem{{Role: "system", Content: text}},
+					metadata,
+				)
+			}
+			_ = h.appendStreamChunk(ctx, sessionID, uuid.Nil,
+				"", "stream_finalize",
+				&summaryMsgID, &summaryFinalized,
+				finalBuildContent, "summary", nil)
+		}
+	}
+
+	// Mark as persisted to prevent double persistence by OnCompress callback
+	if summaryMsgID != uuid.Nil && sessionID != uuid.Nil {
+		h.persistedSummaryMsgIDs.Store(sessionID.String(), summaryMsgID.String())
+	}
+
+	// If no streaming message was created (session memory path, or message creation failed),
+	// fall back to direct persistence
+	if summaryMsgID == uuid.Nil {
+		if err := h.persistCompressedMessages(ctx, []*schema.Message{
+			{Role: schema.User, Content: formatCompactUserMessage(formatCompactSummary(summary))},
+		}); err != nil {
+			h.logIfEnabled(ctx, "compress.fallback_persist_error", map[string]any{
+				"error": err.Error(),
+			})
 		}
 	}
 
@@ -110,8 +254,24 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message) (
 		Content: summaryContent,
 	}
 
-	result := make([]*schema.Message, 0, 1+len(msgs)-retentionIndex)
+	// Preserve system messages from the discarded portion.
+	// System messages carry dynamic attachments (AgentPrompt, TodoList,
+	// SessionMemory, UserMemory) that are injected by loadMessages.
+	// formatMessagesForCompact already skips them when building the
+	// summarization prompt (they are meta-instructions, not conversation),
+	// but without explicit preservation they would be lost after compression.
+	// This ensures the LLM always has access to behavioral rules and
+	// persistent context, even after aggressive compression.
+	var systemMsgs []*schema.Message
+	for _, msg := range msgs[:retentionIndex] {
+		if msg.Role == schema.System {
+			systemMsgs = append(systemMsgs, msg)
+		}
+	}
+
+	result := make([]*schema.Message, 0, 1+len(systemMsgs)+len(msgs)-retentionIndex)
 	result = append(result, summaryMsg)
+	result = append(result, systemMsgs...)
 	if retentionIndex < len(msgs) {
 		result = append(result, msgs[retentionIndex:]...)
 	}
@@ -122,6 +282,19 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message) (
 	// re-reading files it was just working with.
 	discarded := msgs[:retentionIndex]
 	result = appendPostCompactAttachments(ctx, h, result, discarded)
+
+	compressDuration := time.Since(compressStart)
+	tokensAfter := estimateTokensAfterCompact(msgs, retentionIndex, summary)
+
+	h.logIfEnabled(ctx, "compress.completed", map[string]any{
+		"session_id":          sessionID.String(),
+		"summary_msg_id":      summaryMsgID.String(),
+		"tokens_before":       tokensBefore,
+		"tokens_after":        tokensAfter,
+		"duration_ms":         compressDuration.Milliseconds(),
+		"mode":                compressModeString(retentionIndex),
+		"session_memory_used": sessionMemoryUsed,
+	})
 
 	return result, nil
 }
@@ -140,21 +313,107 @@ func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message,
 	// Build the full prompt with conversation history.
 	prompt := buildSummarizePrompt(msgs, mode)
 
-	// Call the LLM to generate the summary.
+	// Call the LLM to generate the summary using streaming (required for long operations).
+	// Disable thinking to save tokens and reduce latency - compression doesn't need reasoning.
 	userPrompt := schema.UserMessage(prompt)
-	resp, err := h.deps.ChatModel.Generate(ctx, []*schema.Message{userPrompt})
+	stream, err := h.deps.ChatModel.Stream(ctx, []*schema.Message{userPrompt}, h.noThinkingOptions()...)
 	if err != nil {
-		return "", fmt.Errorf("chat model generate: %w", err)
+		return "", fmt.Errorf("chat model stream: %w", err)
+	}
+	defer stream.Close()
+
+	// Consume the stream to build the complete response.
+	var contentBuilder strings.Builder
+	var lastMsg *schema.Message
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", fmt.Errorf("stream recv: %w", err)
+		}
+		if msg == nil {
+			continue
+		}
+		lastMsg = msg
+		contentBuilder.WriteString(msg.Content)
 	}
 
-	if resp == nil || len(resp.Content) == 0 {
+	content := contentBuilder.String()
+	if content == "" {
 		return "", fmt.Errorf("chat model returned empty response")
 	}
 
 	// Record token usage for the summarization LLM call.
-	h.logSummarizeTokenUsage(ctx, resp)
+	if lastMsg != nil {
+		h.logSummarizeTokenUsage(ctx, lastMsg)
+	}
 
-	return resp.Content, nil
+	return content, nil
+}
+
+// summarizeMessagesStreaming generates a summary using streaming LLM calls with real-time callbacks.
+// The onChunk callback is invoked for each content chunk received, enabling live progress updates.
+// Returns the complete summary text and token usage metadata.
+func (h *helpers) summarizeMessagesStreaming(
+	ctx context.Context,
+	msgs []*schema.Message,
+	mode CompactMode,
+	onChunk func(chunk string) error,
+) (summary string, tokenUsage *turnagent.TokenUsage, err error) {
+	prompt := buildSummarizePrompt(msgs, mode)
+	userPrompt := schema.UserMessage(prompt)
+
+	stream, err := h.deps.ChatModel.Stream(ctx, []*schema.Message{userPrompt}, h.noThinkingOptions()...)
+	if err != nil {
+		return "", nil, fmt.Errorf("chat model stream: %w", err)
+	}
+	defer stream.Close()
+
+	var contentBuilder strings.Builder
+	var lastMsg *schema.Message
+	for {
+		msg, recvErr := stream.Recv()
+		if recvErr != nil {
+			if recvErr == io.EOF {
+				break
+			}
+			return "", nil, fmt.Errorf("stream recv: %w", recvErr)
+		}
+		if msg == nil {
+			continue
+		}
+		lastMsg = msg
+		contentBuilder.WriteString(msg.Content)
+
+		// Invoke chunk callback for live updates
+		if onChunk != nil && msg.Content != "" {
+			if cbErr := onChunk(msg.Content); cbErr != nil {
+				// Log but don't fail the stream
+				h.logIfEnabled(ctx, "summarize.on_chunk_error", map[string]any{"error": cbErr.Error()})
+			}
+		}
+	}
+
+	summary = contentBuilder.String()
+	if summary == "" {
+		return "", nil, fmt.Errorf("chat model returned empty response")
+	}
+
+	// Extract token usage from the last message
+	if lastMsg != nil {
+		h.logSummarizeTokenUsage(ctx, lastMsg)
+		if lastMsg.ResponseMeta != nil && lastMsg.ResponseMeta.Usage != nil {
+			tokenUsage = &turnagent.TokenUsage{
+				InputTokens:  lastMsg.ResponseMeta.Usage.PromptTokens,
+				OutputTokens: lastMsg.ResponseMeta.Usage.CompletionTokens,
+				TotalTokens:  lastMsg.ResponseMeta.Usage.TotalTokens,
+			}
+		}
+	}
+
+	return summary, tokenUsage, nil
 }
 
 // buildSummarizePrompt constructs the full prompt for summarization.
@@ -290,11 +549,28 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 		return nil
 	}
 
-	// Extract sessionID from context (injected by createAgent via withSessionID).
+	// Extract sessionID from context — try both custom key (set by createAgent)
+	// and turnagent key (set by eino GenInput).
 	sessionID := getSessionIDFromContext(ctx)
+	if sessionID == uuid.Nil {
+		if sidStr := turnagent.SessionIDFromContext(ctx); sidStr != "" {
+			if sid, err := uuid.Parse(sidStr); err == nil {
+				sessionID = sid
+			}
+		}
+	}
 	if sessionID == uuid.Nil {
 		h.logIfEnabled(ctx, "persistCompressedMessages.skip_no_session_id", map[string]any{
 			"compressed_count": len(compressed),
+		})
+		return nil
+	}
+
+	// Check if we've already persisted the summary message in compressContext
+	// (streaming flow). If so, skip to prevent double persistence.
+	if _, loaded := h.persistedSummaryMsgIDs.LoadAndDelete(sessionID.String()); loaded {
+		h.logIfEnabled(ctx, "persistCompressedMessages.skip_already_persisted", map[string]any{
+			"session_id": sessionID.String(),
 		})
 		return nil
 	}
@@ -444,6 +720,34 @@ func estimateTokens(msg *schema.Message) int {
 }
 
 // =============================================================================
+// Streaming compression helpers
+// =============================================================================
+
+// estimateTokensAfterCompact estimates the token count after compression.
+func estimateTokensAfterCompact(msgs []*schema.Message, retentionIndex int, summaryText string) int {
+	// Estimate tokens for the summary
+	summaryTokens := len(summaryText) / 4 // Rough estimate: 4 chars per token
+
+	// Estimate tokens for retained messages
+	retainedTokens := 0
+	if retentionIndex < len(msgs) {
+		for _, msg := range msgs[retentionIndex:] {
+			retainedTokens += estimateMessageTokensPrecise(msg)
+		}
+	}
+
+	return summaryTokens + retainedTokens
+}
+
+// compressModeString returns the compression mode as a string.
+func compressModeString(retentionIndex int) string {
+	if retentionIndex == 0 {
+		return "full"
+	}
+	return "partial"
+}
+
+// =============================================================================
 // Session context helpers
 // =============================================================================
 
@@ -462,3 +766,4 @@ func getSessionIDFromContext(ctx context.Context) uuid.UUID {
 	id, _ := ctx.Value(sessionIDKey{}).(uuid.UUID)
 	return id
 }
+

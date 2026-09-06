@@ -8,6 +8,7 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/compose"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -125,7 +126,18 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 		tools = append(tools, listUserMemoryTool)
 	}
 
-	return tools, nil
+	// Wrap all tools with error handler: convert tool errors to string results
+	// so the LLM can see error messages and self-correct, instead of terminating
+	// the entire turn with NodeRunError. Interrupt errors are preserved (not wrapped).
+	errorHandler := func(ctx context.Context, err error) string {
+		return fmt.Sprintf("Error: %s. Please adjust your arguments and try again.", err.Error())
+	}
+	wrappedTools := make([]tool.BaseTool, len(tools))
+	for i, t := range tools {
+		wrappedTools[i] = utils.WrapToolWithErrorHandler(t, errorHandler)
+	}
+
+	return wrappedTools, nil
 }
 
 // createAgent builds the eino agent from the session's tools.
@@ -192,7 +204,6 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 					return fmt.Sprintf("<system>\nExit with code: 404, tool %s not found\n</system>", name), nil
 				},
 				ExecuteSequentially: true,
-				ToolCallMiddlewares: nil,
 			},
 			ReturnDirectly:     nil,
 			EmitInternalEvents: false,
