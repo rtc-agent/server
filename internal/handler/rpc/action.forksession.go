@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/model"
@@ -97,13 +98,19 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 
 	// 7. 构造新 session
 	newSession := &model.Session{
-		ID:         uuid.Must(uuid.NewV7()),
-		ClientID:   string(req.NewClientSessionId),
-		OwnerKind:  string(creator.Kind()),
-		OwnerRefID: creator.ReferenceID(),
-		Title:      oldSession.Title, // 继承旧 session 标题
-		Status:     string(protocol.SessionStatusActive),
-		DeviceID:   deviceID,
+		ID:          uuid.Must(uuid.NewV7()),
+		ClientID:    string(req.NewClientSessionId),
+		OwnerKind:   string(creator.Kind()),
+		OwnerRefID:  creator.ReferenceID(),
+		DeviceID:    deviceID,
+		Title:       oldSession.Title, // 继承旧 session 标题
+		Status:      string(protocol.SessionStatusActive),
+		AgentPrompt: oldSession.AgentPrompt,
+		TodoList:    oldSession.TodoList,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+		ClosedAt:    nil,
+		DeletedAt:   nil,
 	}
 
 	// Generate a workID for debug tracing. Do NOT pre-create the turn — it
@@ -127,14 +134,37 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		} else {
 			// 复制旧消息（保留原始时间戳）
 			content, _ := primitives.ParseContentData(oldMsg.Content)
+			tokenUsageUpdate := &model.TokenUsageUpdate{
+				InputTokens:     0,
+				OutputTokens:    0,
+				TotalTokens:     0,
+				CachedTokens:    0,
+				ReasoningTokens: 0,
+			}
+			if oldMsg.InputTokens != nil {
+				tokenUsageUpdate.InputTokens = *oldMsg.InputTokens
+			}
+			if oldMsg.OutputTokens != nil {
+				tokenUsageUpdate.OutputTokens = *oldMsg.OutputTokens
+			}
+			if oldMsg.TotalTokens != nil {
+				tokenUsageUpdate.TotalTokens = *oldMsg.TotalTokens
+			}
+			if oldMsg.CachedTokens != nil {
+				tokenUsageUpdate.CachedTokens = *oldMsg.CachedTokens
+			}
+			if oldMsg.ReasoningTokens != nil {
+				tokenUsageUpdate.ReasoningTokens = *oldMsg.ReasoningTokens
+			}
 			messagesToCreate[i] = primitives.MessageToCreate{
-				Role:      protocol.MessageRole(oldMsg.Role),
-				Creator:   creator,
-				Content:   content,
-				Status:    protocol.MessageStreamingStatus(oldMsg.StreamingStatus),
-				ClientID:  "", // 系统生成新 client_id
-				CreatedAt: oldMsg.CreatedAt,
-				UpdatedAt: oldMsg.UpdatedAt,
+				Role:       protocol.MessageRole(oldMsg.Role),
+				Creator:    creator,
+				Content:    content,
+				Status:     protocol.MessageStreamingStatus(oldMsg.StreamingStatus),
+				ClientID:   "", // 系统生成新 client_id
+				CreatedAt:  oldMsg.CreatedAt,
+				UpdatedAt:  oldMsg.UpdatedAt,
+				TokenUsage: tokenUsageUpdate,
 			}
 		}
 	}
