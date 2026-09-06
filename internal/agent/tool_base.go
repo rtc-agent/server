@@ -28,6 +28,14 @@ type rtcToolBase struct {
 	session *model.Session
 	helpers *helpers
 	turnID  uuid.UUID
+
+	// formatResult is an optional per-tool hook that converts the RTC record
+	// into the string returned to the LLM on resume. When nil, the default
+	// behavior (raw Result bytes, with ErrorMessage substitution on failed
+	// status) is used, matching the original formatToolCallOutput semantics.
+	// Used by askUserTool to assemble a human-readable "User has answered..."
+	// string from the client-submitted JSON answers.
+	formatResult func(dbRtc *model.Rtc) string
 }
 
 // rtcInterruptInfo is passed to StatefulInterrupt as the info parameter.

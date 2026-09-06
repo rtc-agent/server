@@ -196,9 +196,16 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		switch protocol.RtcStatus(dbRtc.Status) {
 		case protocol.RtcStatusCompleted, protocol.RtcStatusFailed,
 			protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
-			toolOutput := string(dbRtc.Result)
-			if dbRtc.Status == string(protocol.RtcStatusFailed) && dbRtc.ErrorMessage != "" {
-				toolOutput = dbRtc.ErrorMessage
+			// Per-tool formatter hook (e.g. askUserTool assembles human-readable
+			// answer text). Falls back to raw Result bytes when unset.
+			var toolOutput string
+			if r.formatResult != nil {
+				toolOutput = r.formatResult(dbRtc)
+			} else {
+				toolOutput = string(dbRtc.Result)
+				if dbRtc.Status == string(protocol.RtcStatusFailed) && dbRtc.ErrorMessage != "" {
+					toolOutput = dbRtc.ErrorMessage
+				}
 			}
 			tc := protocol.ToolCall{
 				Id:       protocol.UUID(state.ToolCallID),

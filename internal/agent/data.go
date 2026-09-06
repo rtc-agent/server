@@ -98,6 +98,15 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 		&grepTool{base: base},
 		&findTool{base: base},
 		&scriptTool{base: base},
+		// askUserTool needs its own rtcToolBase with a custom result formatter
+		// that assembles "User has answered your questions: ..." from the JSON
+		// answers submitted by the client.
+		&askUserTool{base: &rtcToolBase{
+			session:      session,
+			helpers:      h,
+			turnID:       tid,
+			formatResult: formatAskUserResult,
+		}},
 		&todoWriteTool{helper: h, session: session},
 	}
 
