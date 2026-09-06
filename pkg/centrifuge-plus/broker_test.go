@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -64,9 +65,35 @@ func doCleanup(prefix string) {
 	if err != nil {
 		return
 	}
+
+	// Also clean up channel:offset:* and channel:epoch:* keys (used by getStreamPosition / PublishWithUserOffset).
+	// These keys are not prefix-scoped, so we must clean them separately.
+	for _, pattern := range []string{"channel:offset:*", "channel:epoch:*"} {
+		extraKeys, err := client.Do(ctx, client.B().Keys().Pattern(pattern).Build()).AsStrSlice()
+		if err == nil {
+			keys = append(keys, extraKeys...)
+		}
+	}
+
 	if len(keys) > 0 {
 		client.Do(ctx, client.B().Del().Key(keys...).Build())
 	}
+}
+
+// setChannelOffset manually sets the channel:offset:{ch} key in Redis,
+// simulating what UpdatePublisher.save() does in production.
+// getStreamPosition reads from this key, so tests must set it before
+// calling History() or getStreamPosition().
+func setChannelOffset(t *testing.T, ch string, offset uint64) {
+	t.Helper()
+	client, err := newTestRedisClient()
+	if err != nil {
+		t.Fatalf("create redis client: %v", err)
+	}
+	defer client.Close()
+	ctx := context.Background()
+	key := "channel:offset:" + ch
+	client.Do(ctx, client.B().Set().Key(key).Value(strconv.FormatUint(offset, 10)).Build())
 }
 
 // TestTopicBroker_Publish tests basic publish functionality
@@ -231,25 +258,23 @@ func TestTopicBroker_History(t *testing.T) {
 		t.Fatalf("failed to register event handler: %v", err)
 	}
 
-	// Publish messages to allocate offsets
-	for i := 0; i < 5; i++ {
+	ctx := context.Background()
+
+	// Publish messages using PublishWithUserOffset and persist to history store.
+	// setChannelOffset simulates what UpdatePublisher.save() does — writes offset
+	// to channel:offset:{ch} so that getStreamPosition / History can read it.
+	for i := 1; i <= 5; i++ {
 		data := fmt.Appendf(nil, `{"message": "message %d"}`, i)
+		setChannelOffset(t, "test-channel", uint64(i))
 		opts := centrifuge.PublishOptions{
 			HistorySize: 10,
 			HistoryTTL:  time.Hour,
 		}
-		_, err := broker.Publish("test-channel", data, opts)
+		_, err := broker.PublishWithUserOffset(ctx, "test-channel", data, uint32(i), opts) //nolint:gosec // i <= 5
 		if err != nil {
 			t.Fatalf("publish failed: %v", err)
 		}
-	}
-
-	// Add messages to history store (simulating DB persistence)
-	for i := 0; i < 5; i++ {
-		pub := &centrifuge.Publication{
-			Data: fmt.Appendf(nil, `{"message": "message %d"}`, i),
-		}
-		historyStore.Save("test-channel", pub)
+		historyStore.SaveWithOffset("test-channel", &centrifuge.Publication{Data: data}, uint64(i))
 	}
 
 	opts := centrifuge.HistoryOptions{
@@ -301,14 +326,17 @@ func TestTopicBroker_HistoryNilStore(t *testing.T) {
 		t.Fatalf("register event handler: %v", err)
 	}
 
-	// Publish messages to allocate offsets
+	ctx := context.Background()
+
+	// Publish messages using PublishWithUserOffset with manual offset writes.
 	for i := 1; i <= 3; i++ {
 		data := fmt.Appendf(nil, `{"seq":%d}`, i)
+		setChannelOffset(t, "test-channel", uint64(i))
 		opts := centrifuge.PublishOptions{
 			HistorySize: 10,
 			HistoryTTL:  time.Hour,
 		}
-		_, err := broker.Publish("test-channel", data, opts)
+		_, err := broker.PublishWithUserOffset(ctx, "test-channel", data, uint32(i), opts) //nolint:gosec // i <= 3
 		if err != nil {
 			t.Fatalf("publish %d: %v", i, err)
 		}
@@ -344,25 +372,21 @@ func TestTopicBroker_HistoryWithFilterSince(t *testing.T) {
 	broker, _, cleanup := setupTestBroker(t, prefix, withHistoryStore(historyStore))
 	defer cleanup()
 
-	// Publish 5 messages
-	for i := 0; i < 5; i++ {
-		data := fmt.Appendf(nil, `{"seq":%d}`, i+1)
+	ctx := context.Background()
+
+	// Publish 5 messages using PublishWithUserOffset with manual offset writes.
+	for i := 1; i <= 5; i++ {
+		data := fmt.Appendf(nil, `{"seq":%d}`, i)
+		setChannelOffset(t, "filter-channel", uint64(i))
 		opts := centrifuge.PublishOptions{
 			HistorySize: 10,
 			HistoryTTL:  time.Hour,
 		}
-		_, err := broker.Publish("filter-channel", data, opts)
+		_, err := broker.PublishWithUserOffset(ctx, "filter-channel", data, uint32(i), opts) //nolint:gosec // i <= 5
 		if err != nil {
-			t.Fatalf("publish %d: %v", i+1, err)
+			t.Fatalf("publish %d: %v", i, err)
 		}
-	}
-
-	// Add to history store
-	for i := 0; i < 5; i++ {
-		pub := &centrifuge.Publication{
-			Data: fmt.Appendf(nil, `{"seq":%d}`, i+1),
-		}
-		historyStore.Save("filter-channel", pub)
+		historyStore.SaveWithOffset("filter-channel", &centrifuge.Publication{Data: data}, uint64(i))
 	}
 
 	// Query with Since filter at offset 2
@@ -1266,13 +1290,16 @@ func TestTopicBroker_DirtyDataIsolation(t *testing.T) {
 	broker, _, cleanup := setupTestBroker(t, prefix)
 	defer cleanup()
 
+	ctx := context.Background()
+
 	data := []byte(`{"msg": "first publish"}`)
 	opts := centrifuge.PublishOptions{
 		HistorySize: 10,
 		HistoryTTL:  time.Hour,
 	}
 
-	result, err := broker.Publish("isolated-channel", data, opts)
+	setChannelOffset(t, "isolated-channel", 1)
+	result, err := broker.PublishWithUserOffset(ctx, "isolated-channel", data, 1, opts)
 	sp1 := result.StreamPosition
 	if err != nil {
 		t.Fatalf("first publish: %v", err)
@@ -1281,7 +1308,8 @@ func TestTopicBroker_DirtyDataIsolation(t *testing.T) {
 		t.Errorf("expected offset 1, got %d", sp1.Offset)
 	}
 
-	result, err = broker.Publish("isolated-channel", data, opts)
+	setChannelOffset(t, "isolated-channel", 2)
+	result, err = broker.PublishWithUserOffset(ctx, "isolated-channel", data, 2, opts)
 	sp2 := result.StreamPosition
 	if err != nil {
 		t.Fatalf("second publish: %v", err)
@@ -1290,7 +1318,7 @@ func TestTopicBroker_DirtyDataIsolation(t *testing.T) {
 		t.Errorf("expected offset 2, got %d", sp2.Offset)
 	}
 
-	sp := broker.getStreamPosition(context.Background(), "isolated-channel")
+	sp := broker.getStreamPosition(ctx, "isolated-channel")
 	if sp.Offset != 2 {
 		t.Errorf("expected stream position offset 2, got %d", sp.Offset)
 	}
@@ -1474,14 +1502,17 @@ func TestTopicBroker_PublishCrossChannelMetadataIsolation(t *testing.T) {
 	broker, _, cleanup := setupTestBroker(t, prefix)
 	defer cleanup()
 
+	ctx := context.Background()
+
 	channels := []string{"ch-alpha", "ch-beta", "ch-gamma"}
 	for _, ch := range channels {
 		data := fmt.Appendf(nil, `{"ch":"%s"}`, ch)
+		setChannelOffset(t, ch, 1)
 		opts := centrifuge.PublishOptions{
 			HistorySize: 10,
 			HistoryTTL:  time.Hour,
 		}
-		result, err := broker.Publish(ch, data, opts)
+		result, err := broker.PublishWithUserOffset(ctx, ch, data, 1, opts)
 		sp := result.StreamPosition
 		if err != nil {
 			t.Fatalf("publish %s: %v", ch, err)
@@ -1492,7 +1523,7 @@ func TestTopicBroker_PublishCrossChannelMetadataIsolation(t *testing.T) {
 	}
 
 	for _, ch := range channels {
-		pos := broker.getStreamPosition(context.Background(), ch)
+		pos := broker.getStreamPosition(ctx, ch)
 		if pos.Offset != 1 {
 			t.Errorf("channel %s: expected stream position offset 1, got %d", ch, pos.Offset)
 		}
@@ -1812,8 +1843,9 @@ func TestDualBroker_PublishWithOffset(t *testing.T) {
 	}
 }
 
-// TestTopicBroker_GapScenario simulates: BatchIncrby succeeds, DB transaction rolls back,
-// offset is consumed but not persisted. The next successful publish should have a gap in offsets.
+// TestTopicBroker_GapScenario simulates: offset 2 is allocated externally but DB
+// transaction rolls back. The next successful publish uses offset 3, creating a gap.
+// getStreamPosition reads from channel:offset:{ch} which reflects the latest written offset.
 func TestTopicBroker_GapScenario(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode")
@@ -1827,61 +1859,28 @@ func TestTopicBroker_GapScenario(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
+	opts := centrifuge.PublishOptions{
+		HistorySize: 100,
+		HistoryTTL:  time.Hour,
+	}
 
 	// Step 1: Publish message 1 — succeeds end-to-end
-	positions1, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{{Channel: "ch-1"}})
+	setChannelOffset(t, "ch-1", 1)
+	historyStore.SaveWithOffset("ch-1", &centrifuge.Publication{Data: []byte(`{"msg":1}`)}, 1)
+	_, err := broker.PublishWithUserOffset(ctx, "ch-1", []byte(`{"msg":1}`), 1, opts)
 	if err != nil {
-		t.Fatalf("BatchIncrby 1: %v", err)
-	}
-	sp1 := positions1["ch-1"]
-	if sp1.Offset != 1 {
-		t.Fatalf("expected offset 1, got %d", sp1.Offset)
+		t.Fatalf("PublishWithUserOffset 1: %v", err)
 	}
 
-	// Save to DB (simulate successful transaction)
-	historyStore.SaveWithOffset("ch-1", &centrifuge.Publication{Data: []byte(`{"msg":1}`)}, sp1.Offset)
+	// Step 2: Offset 2 is allocated externally but DB transaction ROLLS BACK.
+	// channel:offset:{ch} is NOT updated, historyStore is NOT updated, no push.
 
-	// Publish to PUB/SUB
-	err = broker.PublishWithOffset(ctx, "ch-1", []byte(`{"msg":1}`), centrifuge.PublishOptions{
-		HistorySize: 100,
-		HistoryTTL:  time.Hour,
-	}, sp1)
+	// Step 3: Publish message 3 — succeeds end-to-end (offset 2 is a gap)
+	setChannelOffset(t, "ch-1", 3)
+	historyStore.SaveWithOffset("ch-1", &centrifuge.Publication{Data: []byte(`{"msg":3}`)}, 3)
+	_, err = broker.PublishWithUserOffset(ctx, "ch-1", []byte(`{"msg":3}`), 3, opts)
 	if err != nil {
-		t.Fatalf("PublishWithOffset 1: %v", err)
-	}
-
-	// Step 2: BatchIncrby for message 2 — succeeds (offset 2 allocated)
-	positions2, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{{Channel: "ch-1"}})
-	if err != nil {
-		t.Fatalf("BatchIncrby 2: %v", err)
-	}
-	sp2 := positions2["ch-1"]
-	if sp2.Offset != 2 {
-		t.Fatalf("expected offset 2, got %d", sp2.Offset)
-	}
-
-	// DB transaction ROLLS BACK — offset 2 is consumed but NOT persisted
-	// (do NOT call historyStore.SaveWithOffset)
-	// Do NOT call PublishWithOffset either (data not committed, no push)
-
-	// Step 3: Publish message 3 — succeeds end-to-end
-	positions3, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{{Channel: "ch-1"}})
-	if err != nil {
-		t.Fatalf("BatchIncrby 3: %v", err)
-	}
-	sp3 := positions3["ch-1"]
-	if sp3.Offset != 3 {
-		t.Fatalf("expected offset 3, got %d", sp3.Offset)
-	}
-
-	historyStore.SaveWithOffset("ch-1", &centrifuge.Publication{Data: []byte(`{"msg":3}`)}, sp3.Offset)
-
-	err = broker.PublishWithOffset(ctx, "ch-1", []byte(`{"msg":3}`), centrifuge.PublishOptions{
-		HistorySize: 100,
-		HistoryTTL:  time.Hour,
-	}, sp3)
-	if err != nil {
-		t.Fatalf("PublishWithOffset 3: %v", err)
+		t.Fatalf("PublishWithUserOffset 3: %v", err)
 	}
 
 	// Verify: HistoryStore has 2 publications (offset 1 and 3), offset 2 is a gap
@@ -1899,8 +1898,8 @@ func TestTopicBroker_GapScenario(t *testing.T) {
 		t.Errorf("expected second pub offset 3 (gap at 2), got %d", pubs[1].Offset)
 	}
 
-	// Verify: stream position is at offset 3 (all offsets consumed)
-	sp := broker.getStreamPosition(context.Background(), "ch-1")
+	// Verify: stream position is at offset 3 (latest written to channel:offset:{ch})
+	sp := broker.getStreamPosition(ctx, "ch-1")
 	if sp.Offset != 3 {
 		t.Errorf("expected stream position offset 3, got %d", sp.Offset)
 	}
@@ -2023,7 +2022,7 @@ func TestTopicBroker_PublishWithOffset_IdempotentCache(t *testing.T) {
 }
 
 // TestTopicBroker_PublishEndToEnd tests the full "persist first, then push" flow:
-// BatchIncrby → Save to HistoryStore → PublishWithOffset → History reads from HistoryStore.
+// Set channel:offset → Save to HistoryStore → PublishWithUserOffset → History reads from HistoryStore.
 func TestTopicBroker_PublishEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode")
@@ -2045,27 +2044,26 @@ func TestTopicBroker_PublishEndToEnd(t *testing.T) {
 		`{"text":"foo","sender":"user1"}`,
 	}
 
+	opts := centrifuge.PublishOptions{
+		HistorySize: 100,
+		HistoryTTL:  time.Hour,
+	}
+
 	for i, msg := range messages {
 		ch := "ch-1"
+		offset := uint32(i + 1) //nolint:gosec // i < 3
 
-		// Step 1: Pre-allocate offset
-		positions, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{{Channel: ch}})
-		if err != nil {
-			t.Fatalf("BatchIncrby msg %d: %v", i+1, err)
-		}
-		sp := positions[ch]
+		// Step 1: Write offset to channel:offset:{ch} (simulates UpdatePublisher.save())
+		setChannelOffset(t, ch, uint64(offset))
 
 		// Step 2: Save to DB (simulate DB transaction)
 		pub := &centrifuge.Publication{Data: []byte(msg)}
-		historyStore.SaveWithOffset(ch, pub, sp.Offset)
+		historyStore.SaveWithOffset(ch, pub, uint64(offset))
 
-		// Step 3: Push (best-effort)
-		err = broker.PublishWithOffset(ctx, ch, []byte(msg), centrifuge.PublishOptions{
-			HistorySize: 100,
-			HistoryTTL:  time.Hour,
-		}, sp)
+		// Step 3: Push to PUB/SUB
+		_, err := broker.PublishWithUserOffset(ctx, ch, []byte(msg), offset, opts)
 		if err != nil {
-			t.Fatalf("PublishWithOffset msg %d: %v", i+1, err)
+			t.Fatalf("PublishWithUserOffset msg %d: %v", i+1, err)
 		}
 	}
 
@@ -2713,18 +2711,19 @@ func TestTopicBroker_History_NoSince(t *testing.T) {
 	broker, _, cleanup := setupTestBroker(t, prefix, withHistoryStore(historyStore))
 	defer cleanup()
 
-	// 发布消息
-	for i := 0; i < 3; i++ {
-		data := fmt.Appendf(nil, `{"seq":%d}`, i+1)
-		_, err := broker.Publish("ch-nosince", data, centrifuge.PublishOptions{})
+	ctx := context.Background()
+
+	// 发布消息 — 使用 PublishWithUserOffset 并手动写入 channel:offset:{ch}
+	for i := 1; i <= 3; i++ {
+		data := fmt.Appendf(nil, `{"seq":%d}`, i)
+		setChannelOffset(t, "ch-nosince", uint64(i))
+		_, err := broker.PublishWithUserOffset(ctx, "ch-nosince", data, uint32(i), centrifuge.PublishOptions{}) //nolint:gosec // i <= 3
 		if err != nil {
-			t.Fatalf("publish %d: %v", i+1, err)
+			t.Fatalf("publish %d: %v", i, err)
 		}
-	}
-	for i := 0; i < 3; i++ {
-		historyStore.Save("ch-nosince", &centrifuge.Publication{
-			Data: fmt.Appendf(nil, `{"seq":%d}`, i+1),
-		})
+		historyStore.SaveWithOffset("ch-nosince", &centrifuge.Publication{
+			Data: fmt.Appendf(nil, `{"seq":%d}`, i),
+		}, uint64(i))
 	}
 
 	// 不传 Since filter，应返回所有消息

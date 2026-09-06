@@ -24,6 +24,9 @@ var incrbyOffsetLua string
 //go:embed lua/publish_with_offset.lua
 var publishWithOffsetLua string
 
+//go:embed lua/publish_user_update.lua
+var publishUserUpdateLua string
+
 // ChannelIncrbyRequest represents a channel to pre-allocate offsets for.
 // Count specifies how many consecutive offsets to reserve (default 1 if zero).
 // The returned StreamPosition for the channel carries the HIGHEST allocated offset;
@@ -44,6 +47,7 @@ type TopicBroker struct {
 
 	incrbyOffsetScript      *rueidis.Lua
 	publishWithOffsetScript *rueidis.Lua
+	publishUserUpdateScript *rueidis.Lua
 
 	prefix string
 	logger Logger
@@ -83,6 +87,7 @@ func NewTopicBroker(config TopicBrokerConfig) (*TopicBroker, error) {
 
 	incrbyOffsetScript := rueidis.NewLuaScript(incrbyOffsetLua)
 	publishWithOffsetScript := rueidis.NewLuaScript(publishWithOffsetLua)
+	publishUserUpdateScript := rueidis.NewLuaScript(publishUserUpdateLua)
 
 	return &TopicBroker{
 		config:                  config,
@@ -90,6 +95,7 @@ func NewTopicBroker(config TopicBrokerConfig) (*TopicBroker, error) {
 		historyStore:            config.HistoryStore,
 		incrbyOffsetScript:      incrbyOffsetScript,
 		publishWithOffsetScript: publishWithOffsetScript,
+		publishUserUpdateScript: publishUserUpdateScript,
 		prefix:                  prefix,
 		logger:                  config.Logger,
 		tracer:                  config.Tracing.tracer(),
@@ -491,6 +497,90 @@ func (b *TopicBroker) PublishWithOffset(ctx context.Context, ch string, data []b
 	return nil
 }
 
+// PublishWithUserOffset publishes a user_update using the caller's pre-allocated offset.
+// Unlike PublishWithContext (which calls BatchIncrby to allocate a separate stream offset),
+// this method uses the user_update offset directly, ensuring consistency between
+// the inner data.offset and the outer Publication.Offset.
+//
+// The epoch is lazily initialized via SETNX on first call for each channel,
+// then read from Redis for subsequent calls. All within a single Lua script invocation.
+func (b *TopicBroker) PublishWithUserOffset(ctx context.Context, ch string, data []byte, offset uint32, opts centrifuge.PublishOptions) (result centrifuge.PublishResult, err error) {
+	ctx, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.publish_user_update",
+		trace.WithAttributes(
+			AttributeChannel.String(ch),
+			AttributeOffset.Int64(int64(offset)),
+		),
+	)
+	defer func() {
+		span.SetAttributes(
+			AttributeEpoch.String(result.Epoch),
+			AttributeFromCache.Bool(result.Suppressed),
+		)
+		recordError(span, err)
+		span.End()
+	}()
+
+	epochKey := b.channelEpochKey(ch)
+	resultKey := ""
+	resultKeyExpire := ""
+
+	// Build result key for idempotency
+	if opts.IdempotencyKey != "" {
+		resultKey = b.prefix + ":idempotent:" + ch + ":" + opts.IdempotencyKey
+		ttl := int64(300)
+		if opts.IdempotentResultTTL > 0 {
+			ttl = int64(opts.IdempotentResultTTL.Seconds())
+		}
+		resultKeyExpire = strconv.FormatInt(ttl, 10)
+	}
+
+	payload := string(data)
+	pubSubChannel := b.pubSubKey(ch)
+	publishCommand := "publish"
+	traceparent := encodeTraceParent(span.SpanContext())
+	defaultEpoch := generateEpoch()
+
+	keys := []string{epochKey, resultKey}
+	args := []string{
+		defaultEpoch,
+		pubSubChannel,
+		strconv.FormatUint(uint64(offset), 10),
+		payload,
+		publishCommand,
+		resultKeyExpire,
+		traceparent,
+	}
+
+	// Execute Lua script
+	_, luaSpan := b.tracer.Start(ctx, "centrifugeplus.topicbroker.publish_user_update.lua")
+	scriptResult, scriptErr := b.publishUserUpdateScript.Exec(ctx, b.redisClient, keys, args).AsStrSlice()
+	if scriptErr != nil {
+		recordError(luaSpan, scriptErr)
+		luaSpan.End()
+		return centrifuge.PublishResult{}, fmt.Errorf("failed to execute publish_user_update script: %w", scriptErr)
+	}
+	luaSpan.End()
+
+	if len(scriptResult) < 3 {
+		return centrifuge.PublishResult{}, fmt.Errorf("unexpected publish_user_update script result: %v", scriptResult)
+	}
+
+	resultOffset, parseErr := strconv.ParseUint(scriptResult[0], 10, 64)
+	if parseErr != nil {
+		return centrifuge.PublishResult{}, fmt.Errorf("parse offset from script result: %w", parseErr)
+	}
+	resultEpoch := scriptResult[1]
+	fromCache := scriptResult[2] == "1"
+	if fromCache {
+		span.SetAttributes(AttributeFromCache.Bool(true))
+	}
+
+	return centrifuge.PublishResult{
+		StreamPosition: centrifuge.StreamPosition{Offset: resultOffset, Epoch: resultEpoch},
+		Suppressed:     fromCache,
+	}, nil
+}
+
 // Publish is a convenience method that internally calls BatchIncrby + PublishWithOffset.
 // For IM scenarios, use BatchIncrby → DB transaction → PublishWithOffset instead.
 func (b *TopicBroker) Publish(ch string, data []byte, opts centrifuge.PublishOptions) (centrifuge.PublishResult, error) {
@@ -631,10 +721,16 @@ func (b *TopicBroker) History(ch string, opts centrifuge.HistoryOptions) (pubs [
 	return pubs, sp, nil
 }
 
-// getStreamPosition returns the current stream position for a channel from Redis meta key.
+// getStreamPosition returns the current stream position for a channel.
+// Reads offset from channel:offset:{ch} (same key as UpdatePublisher.save() writes to)
+// and epoch from channel:epoch:{ch} (lazily initialized by PublishWithUserOffset).
+// This ensures History returns the same offset sequence as real-time pushes.
 func (b *TopicBroker) getStreamPosition(ctx context.Context, ch string) centrifuge.StreamPosition {
-	metaKey := b.metaKey(ch)
-	result, err := b.redisClient.Do(ctx, b.redisClient.B().Hmget().Key(metaKey).Field("s", "e").Build()).AsStrSlice()
+	offsetKey := b.channelOffsetKey(ch)
+	epochKey := b.channelEpochKey(ch)
+
+	// Use MGET to read both keys in a single round-trip
+	result, err := b.redisClient.Do(ctx, b.redisClient.B().Mget().Key(offsetKey, epochKey).Build()).AsStrSlice()
 	if err != nil {
 		b.logger.Warn("getStreamPosition Redis query failed for channel %s: %v", ch, err)
 		return centrifuge.StreamPosition{}
@@ -642,16 +738,19 @@ func (b *TopicBroker) getStreamPosition(ctx context.Context, ch string) centrifu
 	if len(result) < 2 {
 		return centrifuge.StreamPosition{}
 	}
-	// 新频道 meta key 不存在时，Redis 返回空字符串，直接返回零值
+
+	// Offset key may not exist for new channels
 	if result[0] == "" {
 		return centrifuge.StreamPosition{}
 	}
+
 	offset, err := strconv.ParseUint(result[0], 10, 64)
 	if err != nil {
 		b.logger.Warn("getStreamPosition: offset parse failed for channel %s: %v", ch, err)
 		return centrifuge.StreamPosition{}
 	}
-	epoch := result[1]
+
+	epoch := result[1] // May be empty if epoch not yet initialized (first publish hasn't happened)
 	return centrifuge.StreamPosition{Offset: offset, Epoch: epoch}
 }
 
@@ -665,9 +764,14 @@ func (b *TopicBroker) RemoveHistory(ch string) error {
 		}
 	}
 
-	metaKey := b.metaKey(ch)
+	// Clean up meta key (legacy), offset key, and epoch key
+	keysToDelete := []string{
+		b.metaKey(ch),
+		b.channelOffsetKey(ch),
+		b.channelEpochKey(ch),
+	}
 
-	if err := b.redisClient.Do(context.Background(), b.redisClient.B().Del().Key(metaKey).Build()).Error(); err != nil {
+	if err := b.redisClient.Do(context.Background(), b.redisClient.B().Del().Key(keysToDelete...).Build()).Error(); err != nil {
 		errs = append(errs, fmt.Errorf("redis DEL: %w", err))
 	}
 
@@ -699,6 +803,19 @@ func (b *TopicBroker) pubSubKey(ch string) string {
 
 func (b *TopicBroker) metaKey(ch string) string {
 	return b.prefix + ":meta:" + ch
+}
+
+// channelOffsetKey 返回频道 offset 计数器的 Redis key。
+// 与 cache.ChannelOffset(ch) 保持一致（"channel:offset:" + ch）。
+// 注：centrifuge-plus 是独立模块，无法导入 internal/infra/cache，因此硬编码 key 格式。
+func (b *TopicBroker) channelOffsetKey(ch string) string {
+	return "channel:offset:" + ch
+}
+
+// channelEpochKey 返回频道 epoch 的 Redis key。
+// 与 cache.ChannelEpoch(ch) 保持一致（"channel:epoch:" + ch）。
+func (b *TopicBroker) channelEpochKey(ch string) string {
+	return "channel:epoch:" + ch
 }
 
 // generateEpoch generates a unique epoch string using UUID v7 (time-ordered).

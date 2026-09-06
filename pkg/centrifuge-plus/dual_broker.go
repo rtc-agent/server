@@ -184,6 +184,36 @@ func (d *DualBroker) BatchIncrby(ctx context.Context, reqs []ChannelIncrbyReques
 	return d.topicBroker.BatchIncrby(ctx, reqs)
 }
 
+// PublishWithUserOffset publishes using the caller's pre-allocated user_update offset.
+// Topic channels route to TopicBroker.PublishWithUserOffset (unified offset).
+// Live channels route to liveBroker.Publish (offset ignored — live doesn't use offset).
+func (d *DualBroker) PublishWithUserOffset(ctx context.Context, ch string, data []byte, offset uint32, opts centrifuge.PublishOptions) (result centrifuge.PublishResult, err error) {
+	ct, getErr := d.getChannelType(ch)
+	if getErr != nil {
+		err = getErr
+		return
+	}
+	ctx, span := d.tracer.Start(ctx, "centrifugeplus.dualbroker.publish_user_update",
+		trace.WithAttributes(
+			AttributeChannel.String(ch),
+			AttributeChannelType.String(ct.String()),
+		),
+	)
+	defer func() {
+		recordError(span, err)
+		span.End()
+	}()
+
+	switch ct {
+	case Topic:
+		result, err = d.topicBroker.PublishWithUserOffset(ctx, ch, data, offset, opts)
+		return
+	default: // Live — offset 无意义，直接走 liveBroker.Publish
+		result, err = d.liveBroker.Publish(ch, data, opts)
+		return
+	}
+}
+
 // PublishWithOffset publishes a message using a pre-allocated offset.
 // Routes to TopicBroker.
 func (d *DualBroker) PublishWithOffset(ctx context.Context, ch string, data []byte, opts centrifuge.PublishOptions, sp centrifuge.StreamPosition) error {
