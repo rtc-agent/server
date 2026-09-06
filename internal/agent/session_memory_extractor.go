@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -181,20 +182,38 @@ func (e *SessionMemoryExtractor) extractMemories(
 	// 构建提示词
 	prompt := e.buildExtractPrompt(messages, existingMemories)
 
-	// 调用 LLM（禁用 thinking 以节省 token）
-	resp, err := e.chatModel.Generate(ctx, []*schema.Message{
+	// 调用 LLM（使用 Stream，禁用 thinking 以节省 token）
+	stream, err := e.chatModel.Stream(ctx, []*schema.Message{
 		schema.UserMessage(prompt),
 	}, e.noThinkingOptions...)
 	if err != nil {
-		return nil, fmt.Errorf("chat model generate: %w", err)
+		return nil, fmt.Errorf("chat model stream: %w", err)
+	}
+	defer stream.Close()
+
+	// 消费流以构建完整响应
+	var contentBuilder strings.Builder
+	for {
+		msg, recvErr := stream.Recv()
+		if recvErr != nil {
+			if recvErr == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("stream recv: %w", recvErr)
+		}
+		if msg == nil {
+			continue
+		}
+		contentBuilder.WriteString(msg.Content)
 	}
 
-	if resp == nil || len(resp.Content) == 0 {
+	content := contentBuilder.String()
+	if content == "" {
 		return nil, fmt.Errorf("chat model returned empty response")
 	}
 
 	// 解析响应
-	memories, err := e.parseExtractResponse(resp.Content, sessionID)
+	memories, err := e.parseExtractResponse(content, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("parse extract response: %w", err)
 	}

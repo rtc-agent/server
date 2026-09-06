@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -159,12 +161,34 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		}
 	}
 
-	// TODO: Title summarization for new sessions. The old code pushed a
-	// BackgroundTaskTypeSummarizeTitle to the worker's background stream.
-	// In the new architecture this needs a separate mechanism (likely a
-	// dedicated rtc-queue priority lane or a standalone background worker).
-	// Re-enable once that mechanism is in place.
-	// if isNew { ... }
+	// Title summarization for new sessions.
+	// Run asynchronously to avoid blocking the response.
+	if isNew && h.deps.Deps.ChatModel != nil {
+		summarizer := agent.NewSessionTitleSummarizer(
+			h.deps.Deps.ChatModel,
+			h.deps.Deps.SessionRepo,
+			h.deps.Deps.MessageRepo,
+				h.deps.Deps.LLMConfig,
+		)
+		// Use a detached context so the summarization continues even if the
+		// request context is cancelled. Set a reasonable timeout.
+		detachedCtx := context.WithoutCancel(ctx)
+		go func() {
+			// Limit summarization to 30 seconds
+			summarizeCtx, cancel := context.WithTimeout(detachedCtx, 30*time.Second)
+			defer cancel()
+			if title, err := summarizer.SummarizeIfNeeded(summarizeCtx, session.ID); err != nil || title == "" {
+				logger.Warn(summarizeCtx, "[SendMessage] title summarization failed",
+					zap.String("session", session.ID.String()),
+					zap.Error(err))
+			} else {
+				_, _ = h.UpdateSession(detachedCtx, &protocol.UpdateSessionRequest{
+					SessionId: session.ID.String(),
+					Title:     &title,
+				})
+			}
+		}()
+	}
 
 	return &protocol.SendMessageResponse{
 		Result: protocol.SendMessageResult{
