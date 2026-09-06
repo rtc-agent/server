@@ -98,7 +98,8 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 		return nil, err
 	}
 	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, service, updatePublisher, node, dualBroker, jwtSigner)
-	cmdChatModelResult, err := provideChatModel(cfg)
+	prometheusMetrics := provideMetrics()
+	cmdChatModelResult, err := provideChatModel(cfg, prometheusMetrics)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +111,6 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	client := provideOAuth2ProviderClient(cfg)
 	oAuth2Handler := provideOAuth2Handler(serviceContext, jwtSigner, redisStore, client, cfg)
 	interruptHandler := provideInterruptHandler(universalClient, cfg)
-	prometheusMetrics := provideMetrics()
 	agent, err := provideAgent(dependencies, universalClient, cfg, prometheusMetrics)
 	if err != nil {
 		return nil, err
@@ -138,6 +138,7 @@ var ServiceSet = wire.NewSet(
 
 // UsecaseSet provides usecase layer dependencies.
 var UsecaseSet = wire.NewSet(
+	provideMetrics,
 	provideChatModel,
 	provideUsecaseDependencies,
 )
@@ -146,7 +147,6 @@ var UsecaseSet = wire.NewSet(
 var QueueSet = wire.NewSet(
 	provideQueue,
 	provideStreamStore,
-	provideMetrics,
 	provideAgent,
 	provideQueueWorker,
 )
@@ -249,13 +249,13 @@ type chatModelResult struct {
 	model model.ToolCallingChatModel
 }
 
-func provideChatModel(cfg *config.Config) (*chatModelResult, error) {
+func provideChatModel(cfg *config.Config, metrics *turnagent.PrometheusMetrics) (*chatModelResult, error) {
 	if cfg.LLM.Provider == "" || cfg.LLM.Model == "" {
 		logger.Warn(context.Background(), "LLM not configured (provider/model missing), agent features will be disabled")
 		return &chatModelResult{model: nil}, nil
 	}
 
-	m, err := server.NewChatModel(cfg)
+	m, err := server.NewChatModel(cfg, metrics)
 	if err != nil {
 		logger.Error(context.Background(), "Failed to create chat model (agent features will be disabled)", zap.Error(err))
 		return &chatModelResult{model: nil}, nil

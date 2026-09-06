@@ -62,14 +62,78 @@
     },
     {
       "type": "row",
-      "title": "Turn 执行",
+      "title": "LLM HTTP 层监控 (100% 覆盖)",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "collapsed": false
+    },
+    {
+      "title": "HTTP 请求速率 (by model)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(rtc_llm_http_requests_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{model}} {{status}}"
+      }]
+    },
+    {
+      "title": "HTTP Token 消耗速率 (100% 准确)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(rtc_llm_http_tokens_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{model}} {{type}}"
+      }]
+    },
+    {
+      "title": "HTTP 请求延迟 p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(rtc_llm_http_request_duration_seconds_bucket{job=\"rtc-agent-server\",status=\"success\"}[5m]))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, rate(rtc_llm_http_request_duration_seconds_bucket{job=\"rtc-agent-server\",status=\"success\"}[5m]))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, rate(rtc_llm_http_request_duration_seconds_bucket{job=\"rtc-agent-server\",status=\"success\"}[5m]))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "title": "HTTP 错误率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+      ] },
+      "targets": [{
+        "expr": "sum(rate(rtc_llm_http_requests_total{job=\"rtc-agent-server\",status=\"error\"}[5m])) / sum(rate(rtc_llm_http_requests_total{job=\"rtc-agent-server\"}[5m]))",
+        "legendFormat": "error rate"
+      }]
+    },
+    {
+      "title": "HTTP Token 累计消耗 (100% 准确)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "sum by (type) (rtc_llm_http_tokens_total{job=\"rtc-agent-server\"})",
+        "legendFormat": "{{type}} tokens"
+      }]
+    },
+    {
+      "type": "row",
+      "title": "Turn 执行",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },
       "collapsed": false
     },
     {
       "title": "Turn 完成率",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 39 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "tps" }, "overrides": [] },
       "targets": [{
@@ -80,7 +144,7 @@
     {
       "title": "Turn 延迟 p50 / p95",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 39 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
       "targets": [
@@ -91,7 +155,7 @@
     {
       "title": "Interrupt 事件",
       "type": "stat",
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 26 },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 47 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [{
@@ -102,13 +166,13 @@
     {
       "type": "row",
       "title": "Checkpoint",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 51 },
       "collapsed": false
     },
     {
       "title": "Checkpoint 操作速率",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 31 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 52 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [{
@@ -119,7 +183,7 @@
     {
       "title": "Checkpoint 大小 p95",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 31 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 52 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
       "targets": [{

@@ -63,6 +63,10 @@ type Metrics interface {
 	// Attachments are dynamic content injected into LLM context (e.g., TodoList,
 	// SessionMemory, UserMemory).
 	RecordAttachment(ctx context.Context, attrs AttachmentMetricsAttrs)
+
+	// RecordLLMHTTPRequest records HTTP-level metrics for an LLM API request.
+	// This is called from the HTTP transport layer, ensuring 100% coverage.
+	RecordLLMHTTPRequest(ctx context.Context, attrs LLMHTTPMetricsAttrs)
 }
 
 // TurnMetricsAttrs contains attributes for a turn event.
@@ -151,4 +155,19 @@ type AttachmentMetricsAttrs struct {
 	Status string
 	// Error is set if the build failed (nil for success/truncated).
 	Error error
+}
+
+// LLMHTTPMetricsAttrs contains attributes for an HTTP-level LLM API request.
+// This is captured at the transport layer, ensuring 100% coverage.
+type LLMHTTPMetricsAttrs struct {
+	// Model is the model identifier extracted from the request.
+	Model string
+	// StatusCode is the HTTP response status code.
+	StatusCode int
+	// InputTokens is the number of input tokens from the response.
+	InputTokens int
+	// OutputTokens is the number of output tokens from the response.
+	OutputTokens int
+	// DurationMs is the HTTP request duration in milliseconds.
+	DurationMs int64
 }

@@ -11,16 +11,18 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/claude"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/components/model"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // NewChatModel 根据配置创建 ChatModel（支持 Claude 和 OpenAI）
-func NewChatModel(cfg *config.Config) (model.ToolCallingChatModel, error) {
-	return newChatModel(context.Background(), &cfg.LLM, cfg.Log.LLMPayload)
+func NewChatModel(cfg *config.Config, metrics *turnagent.PrometheusMetrics) (model.ToolCallingChatModel, error) {
+	return newChatModel(context.Background(), &cfg.LLM, cfg.Log.LLMPayload, metrics)
 }
 
 // newChatModel 根据配置创建 ChatModel（支持 Claude 和 OpenAI）
-// llmPayloadLog 启用时在 HTTP 层拦截完整 API 请求/响应。
-func newChatModel(ctx context.Context, cfg *config.LLMConfig, llmPayloadLog bool) (model.ToolCallingChatModel, error) {
+// observability transport 始终注入，保证 metrics 统计 100% 覆盖。
+// llmPayloadLog 启用时额外记录完整 API 请求/响应到 logs/llm-payload.log。
+func newChatModel(ctx context.Context, cfg *config.LLMConfig, llmPayloadLog bool, metrics *turnagent.PrometheusMetrics) (model.ToolCallingChatModel, error) {
 	if cfg.Provider == "" {
 		return nil, fmt.Errorf("llm.provider not configured")
 	}
@@ -28,11 +30,14 @@ func newChatModel(ctx context.Context, cfg *config.LLMConfig, llmPayloadLog bool
 		return nil, fmt.Errorf("llm.model not configured")
 	}
 
-	// 当 llm_payload 日志开启时，构造带 logging transport 的 HTTPClient
-	var httpClient *http.Client
-	if llmPayloadLog {
-		httpClient = newLoggingHTTPClient()
+	// 创建 metrics observer（如果 metrics 不为 nil）
+	var observer LLMResponseObserver
+	if metrics != nil {
+		observer = NewHTTPMetricsObserver(metrics)
 	}
+
+	// 始终创建 observability HTTP client，确保 metrics 统计全覆盖
+	httpClient := newObservabilityHTTPClient(llmPayloadLog, observer)
 
 	switch cfg.Provider {
 	case "claude":
@@ -65,10 +70,8 @@ func newClaudeModel(ctx context.Context, cfg *config.LLMConfig, httpClient *http
 		claudeCfg.BaseURL = &cfg.BaseURL
 	}
 
-	// HTTPClient 可选（llm_payload 日志开启时注入）
-	if httpClient != nil {
-		claudeCfg.HTTPClient = httpClient
-	}
+	// HTTPClient 始终注入 observability transport（用于 metrics 统计）
+	claudeCfg.HTTPClient = httpClient
 
 	return claude.NewChatModel(ctx, claudeCfg)
 }
@@ -111,10 +114,8 @@ func newOpenAIModel(ctx context.Context, cfg *config.LLMConfig, httpClient *http
 		openaiCfg.Temperature = cfg.Temperature
 	}
 
-	// HTTPClient 可选（llm_payload 日志开启时注入）
-	if httpClient != nil {
-		openaiCfg.HTTPClient = httpClient
-	}
+	// HTTPClient 始终注入 observability transport（用于 metrics 统计）
+	openaiCfg.HTTPClient = httpClient
 
 	return openai.NewChatModel(ctx, openaiCfg)
 }

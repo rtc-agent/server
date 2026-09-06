@@ -62,6 +62,7 @@ var ServiceSet = wire.NewSet(
 
 // UsecaseSet provides usecase layer dependencies.
 var UsecaseSet = wire.NewSet(
+	provideMetrics,
 	provideChatModel,
 	provideUsecaseDependencies,
 )
@@ -70,7 +71,6 @@ var UsecaseSet = wire.NewSet(
 var QueueSet = wire.NewSet(
 	provideQueue,
 	provideStreamStore,
-	provideMetrics,
 	provideAgent,
 	provideQueueWorker,
 )
@@ -180,13 +180,13 @@ type chatModelResult struct {
 	model model.ToolCallingChatModel
 }
 
-func provideChatModel(cfg *config.Config) (*chatModelResult, error) {
+func provideChatModel(cfg *config.Config, metrics *turnagent.PrometheusMetrics) (*chatModelResult, error) {
 	if cfg.LLM.Provider == "" || cfg.LLM.Model == "" {
 		logger.Warn(context.Background(), "LLM not configured (provider/model missing), agent features will be disabled")
 		return &chatModelResult{model: nil}, nil
 	}
 
-	m, err := server.NewChatModel(cfg)
+	m, err := server.NewChatModel(cfg, metrics)
 	if err != nil {
 		logger.Error(context.Background(), "Failed to create chat model (agent features will be disabled)", zap.Error(err))
 		return &chatModelResult{model: nil}, nil

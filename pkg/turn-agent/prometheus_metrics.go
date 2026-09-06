@@ -23,6 +23,11 @@ type PrometheusMetrics struct {
 	attachmentDuration  *prometheus.HistogramVec
 	attachmentOps       *prometheus.CounterVec
 	attachmentTruncated *prometheus.CounterVec
+
+	// HTTP-level LLM API metrics (captured at transport layer, 100% coverage)
+	llmHTTPRequestCount    *prometheus.CounterVec
+	llmHTTPRequestDuration *prometheus.HistogramVec
+	llmHTTPResponseTokens  *prometheus.CounterVec
 }
 
 // NewPrometheusMetrics 创建并注册所有 Prometheus 指标。
@@ -109,6 +114,29 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name:      "budget_truncated_total",
 			Help:      "Total times attachment was truncated due to budget limit.",
 		}, []string{"name"}),
+
+		// HTTP-level LLM API metrics (captured at transport layer, 100% coverage)
+		llmHTTPRequestCount: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "llm",
+			Name:      "http_requests_total",
+			Help:      "Total HTTP requests to LLM API (transport layer, 100% coverage).",
+		}, []string{"model", "status"}), // status: "success" or "error"
+
+		llmHTTPRequestDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rtc",
+			Subsystem: "llm",
+			Name:      "http_request_duration_seconds",
+			Help:      "HTTP request duration to LLM API in seconds (transport layer).",
+			Buckets:   prometheus.ExponentialBuckets(0.5, 2, 10), // 0.5s ~ 256s
+		}, []string{"model", "status"}),
+
+		llmHTTPResponseTokens: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "llm",
+			Name:      "http_tokens_total",
+			Help:      "Total tokens from LLM HTTP responses (transport layer, 100% coverage).",
+		}, []string{"model", "type"}), // type: "input" or "output"
 	}
 }
 
@@ -133,6 +161,25 @@ func (m *PrometheusMetrics) RecordLLMCall(ctx context.Context, attrs LLMCallMetr
 	m.llmTokens.WithLabelValues(attrs.Model, "input").Add(float64(attrs.InputTokens))
 	m.llmTokens.WithLabelValues(attrs.Model, "output").Add(float64(attrs.OutputTokens))
 	m.llmLatency.WithLabelValues(attrs.Model, status).Observe(float64(attrs.LatencyMs) / 1000)
+}
+
+// RecordLLMHTTPRequest records HTTP-level metrics for an LLM API request.
+// This is called from the HTTP transport layer, ensuring 100% coverage.
+func (m *PrometheusMetrics) RecordLLMHTTPRequest(ctx context.Context, attrs LLMHTTPMetricsAttrs) {
+	status := "success"
+	if attrs.StatusCode >= 400 {
+		status = "error"
+	}
+
+	m.llmHTTPRequestCount.WithLabelValues(attrs.Model, status).Inc()
+	m.llmHTTPRequestDuration.WithLabelValues(attrs.Model, status).Observe(float64(attrs.DurationMs) / 1000)
+
+	if attrs.InputTokens > 0 {
+		m.llmHTTPResponseTokens.WithLabelValues(attrs.Model, "input").Add(float64(attrs.InputTokens))
+	}
+	if attrs.OutputTokens > 0 {
+		m.llmHTTPResponseTokens.WithLabelValues(attrs.Model, "output").Add(float64(attrs.OutputTokens))
+	}
 }
 
 // RecordInterrupt records an interrupt event.
