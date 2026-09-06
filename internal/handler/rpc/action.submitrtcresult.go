@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/model"
@@ -68,10 +69,23 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 			}, nil
 		}
 		// 终态 + 不同 ClientID → 冲突，返回已有状态
-		return nil, &APIError{
-			Code:    "rtc.already_completed",
-			Message: fmt.Sprintf("rtc %s is already %s", req.RtcId, rtc.Status),
-		}
+		ups := make([]protocol.Update, 0)
+		ups = append(ups, protocol.Update{
+			DataList: new([]interface{}{
+				model.ToProtocolRtc(rtc),
+			}),
+			Id: uuid.NewString(),
+			Items: []protocol.UpdateItem{protocol.UpdateItem{
+				Action:   protocol.ActionUpdated,
+				Entity:   protocol.EntityRtc,
+				EntityId: rtc.ID.String(),
+			}},
+			Offset: 0,
+		})
+		return &protocol.SubmitRtcResultResponse{
+			Result:  protocol.SubmitRtcResultResult{Success: true},
+			Updates: &ups,
+		}, nil
 	}
 
 	// 归属校验：通过 RTC 的 sessionID 校验用户权限

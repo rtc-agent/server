@@ -33,6 +33,9 @@ var ErrPushAfterCommit = errors.New("push failed after successful commit")
 // Broker 发布接口，用于打断 UpdatePublisher 与具体 broker 实现的循环依赖。
 type Broker interface {
 	PublishWithContext(ctx context.Context, channel string, data []byte, opts centrifuge.PublishOptions) (centrifuge.PublishResult, error)
+	// PublishWithUserOffset 使用调用方预分配的 user_update offset 发布消息。
+	// 保证 push body 的外层 Publication.Offset 与内层 data.offset 一致。
+	PublishWithUserOffset(ctx context.Context, channel string, data []byte, offset uint32, opts centrifuge.PublishOptions) (centrifuge.PublishResult, error)
 }
 
 // EntityResolver 根据实体类型批量查询富内容。
@@ -304,7 +307,7 @@ func (u *UpdatePublisher) publishUpdates(ctx context.Context, items []UpdatePubl
 				return nil, fmt.Errorf("marshal update: %w", err)
 			}
 
-			_, err = broker.PublishWithContext(ctx, item.Channel, data, centrifuge.PublishOptions{})
+			_, err = broker.PublishWithUserOffset(ctx, item.Channel, data, update.Offset, centrifuge.PublishOptions{})
 			if err != nil {
 				logger.Error(ctx, "[UpdatePublisher] publish to centrifuge failed",
 					zap.String("channel", item.Channel),

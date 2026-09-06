@@ -134,7 +134,7 @@ func (t *scriptTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 				Required: false,
 			},
 			"name": {Type: schema.String, Desc: "The script name. Required for 'save' and 'run'.", Required: false},
-			"code": {Type: schema.String, Desc: "Inline JavaScript code to execute", Required: false},
+			"code": {Type: schema.String, Desc: "Inline JavaScript code to execute. Must not contain infinite loops (while, do...while, for(;;)); use for...of, for...in, or Array iteration methods instead.", Required: false},
 		}),
 	}, nil
 }

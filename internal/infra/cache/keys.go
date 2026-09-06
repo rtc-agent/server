@@ -29,6 +29,11 @@ const (
 	// value: 当前最大 offset（uint64）；无 TTL（持久化）
 	PrefixChannelOffset = "channel:offset:"
 
+	// PrefixChannelEpoch 频道 epoch 前缀（首次写入后不变）
+	// 完整 key: channel:epoch:{channel}
+	// value: UUID v7 epoch 字符串；无 TTL（持久化）
+	PrefixChannelEpoch = "channel:epoch:"
+
 	// PrefixSessionMsgOffset session 内消息全局 offset 计数器前缀
 	// 完整 key: session:msg_offset:{sessionID}
 	// value: 当前最大 global_offset（uint64）；无 TTL（持久化）
@@ -146,6 +151,11 @@ func IDEMarker(domain, idempotencyKey string) string {
 // ChannelOffset 返回频道 offset 计数器的 Redis key
 func ChannelOffset(channel string) string {
 	return PrefixChannelOffset + channel
+}
+
+// ChannelEpoch 返回频道 epoch 的 Redis key
+func ChannelEpoch(channel string) string {
+	return PrefixChannelEpoch + channel
 }
 
 // SessionMsgOffset 返回 session 内消息全局 offset 计数器的 Redis key
