@@ -49,6 +49,11 @@ type DatabaseConfig struct {
 // LogConfig 日志级别配置。
 type LogConfig struct {
 	Level string `mapstructure:"level"`
+
+	// LLMPayload 启用后，将每次 LLM API 调用的完整请求/响应
+	// 以 JSON Lines 格式写入 logs/llm-payload.log。
+	// 仅用于开发/调试环境，生产环境请勿开启。
+	LLMPayload bool `mapstructure:"llm_payload"`
 }
 
 // RedisConfig Redis 连接配置
@@ -100,10 +105,6 @@ type WorkerConfig struct {
 	BackgroundConcurrency int           `mapstructure:"background_concurrency"` // 默认 5
 	SystemPrompt          string        `mapstructure:"system_prompt"`          // agent 系统提示词
 
-	// SummarizePrompt 上下文压缩时的摘要提示词（可选）
-	// 为空时使用默认英文提示词
-	SummarizePrompt string `mapstructure:"summarize_prompt"`
-
 	// ContextTokensLimit 触发上下文压缩的 token 阈值（可选）
 	// 默认 25000（约为模型上下文窗口的 20%）
 	ContextTokensLimit int `mapstructure:"context_tokens_limit"`
@@ -122,7 +123,8 @@ type WorkerConfig struct {
 	CheckpointTTL time.Duration `mapstructure:"checkpoint_ttl"`
 
 	// StreamChunkTTL 流式消息 chunk 在 Redis 中的存活时间
-	// 默认 5m。chunks 是短生命周期数据，生成完成后即删除
+	// 默认 15m。chunks 是短生命周期数据，生成完成后即删除
+	// 注意：较长的 thinking/reasoning 流可能需要更长的 TTL，避免 chunk 丢失
 	StreamChunkTTL time.Duration `mapstructure:"stream_chunk_ttl"`
 
 	// InterruptAnswerTTL interrupt 答案在 Redis 中的存活时间
@@ -273,6 +275,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("tracing.enabled", false)
 	v.SetDefault("tracing.endpoint", "localhost:4317")
 	v.SetDefault("tracing.sample_rate", 1.0)
+	v.SetDefault("log.llm_payload", false)
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, err

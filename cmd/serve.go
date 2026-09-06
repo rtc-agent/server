@@ -42,9 +42,19 @@ func runServe(cmd *cobra.Command, args []string) {
 	logger.Init(cfg.Log.Level)
 	defer logger.Sync()
 
+	// Init LLM payload logger (dev only — writes full LLM request/response to logs/llm-payload.log)
+	logger.InitLLMPayloadLogger(logger.LLMPayloadConfig{
+		Enabled:  cfg.Log.LLMPayload,
+		LogLevel: cfg.Log.Level,
+	})
+	defer logger.SyncLLMPayload()
+
 	logger.Info(context.Background(), "Starting RTC Agent server...")
 	if logger.DebugMode {
 		logger.Info(context.Background(), "DEBUG mode enabled — extra logs writing to logs/debug.log")
+	}
+	if cfg.Log.LLMPayload {
+		logger.Info(context.Background(), "LLM payload logging enabled — writing to logs/llm-payload.log")
 	}
 
 	// Init tracing (OpenTelemetry + Jaeger)
@@ -78,7 +88,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	// Init database
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
 		Logger: logger.NewGormLogger(
-			true,         // 忽略 ErrRecordNotFound
+			true,                 // 忽略 ErrRecordNotFound
 			200*time.Millisecond, // 慢查询阈值
 		),
 	})

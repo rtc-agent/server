@@ -15,6 +15,9 @@ redis:
 
 log:
   level: "info"  # debug, info, warn, error
+  # 启用后将完整 LLM 请求/响应写入 logs/llm-payload.log（JSON Lines）
+  # 仅开发环境使用，生产环境请勿开启
+  llm_payload: false
 
 auth:
   # JWT 签名密钥（开发环境示例值，生产环境请使用强随机字符串）

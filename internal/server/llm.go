@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/rtc-agent/server/internal/infra/config"
 
@@ -14,11 +15,12 @@ import (
 
 // NewChatModel 根据配置创建 ChatModel（支持 Claude 和 OpenAI）
 func NewChatModel(cfg *config.Config) (model.ToolCallingChatModel, error) {
-	return newChatModel(context.Background(), &cfg.LLM)
+	return newChatModel(context.Background(), &cfg.LLM, cfg.Log.LLMPayload)
 }
 
 // newChatModel 根据配置创建 ChatModel（支持 Claude 和 OpenAI）
-func newChatModel(ctx context.Context, cfg *config.LLMConfig) (model.ToolCallingChatModel, error) {
+// llmPayloadLog 启用时在 HTTP 层拦截完整 API 请求/响应。
+func newChatModel(ctx context.Context, cfg *config.LLMConfig, llmPayloadLog bool) (model.ToolCallingChatModel, error) {
 	if cfg.Provider == "" {
 		return nil, fmt.Errorf("llm.provider not configured")
 	}
@@ -26,18 +28,24 @@ func newChatModel(ctx context.Context, cfg *config.LLMConfig) (model.ToolCalling
 		return nil, fmt.Errorf("llm.model not configured")
 	}
 
+	// 当 llm_payload 日志开启时，构造带 logging transport 的 HTTPClient
+	var httpClient *http.Client
+	if llmPayloadLog {
+		httpClient = newLoggingHTTPClient()
+	}
+
 	switch cfg.Provider {
 	case "claude":
-		return newClaudeModel(ctx, cfg)
+		return newClaudeModel(ctx, cfg, httpClient)
 	case "openai":
-		return newOpenAIModel(ctx, cfg)
+		return newOpenAIModel(ctx, cfg, httpClient)
 	default:
 		return nil, fmt.Errorf("unsupported llm.provider: %s (supported: claude, openai)", cfg.Provider)
 	}
 }
 
 // newClaudeModel 创建 Claude 模型
-func newClaudeModel(ctx context.Context, cfg *config.LLMConfig) (model.ToolCallingChatModel, error) {
+func newClaudeModel(ctx context.Context, cfg *config.LLMConfig, httpClient *http.Client) (model.ToolCallingChatModel, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("llm.api_key required for claude provider")
 	}
@@ -57,11 +65,16 @@ func newClaudeModel(ctx context.Context, cfg *config.LLMConfig) (model.ToolCalli
 		claudeCfg.BaseURL = &cfg.BaseURL
 	}
 
+	// HTTPClient 可选（llm_payload 日志开启时注入）
+	if httpClient != nil {
+		claudeCfg.HTTPClient = httpClient
+	}
+
 	return claude.NewChatModel(ctx, claudeCfg)
 }
 
 // newOpenAIModel 创建 OpenAI 模型
-func newOpenAIModel(ctx context.Context, cfg *config.LLMConfig) (model.ToolCallingChatModel, error) {
+func newOpenAIModel(ctx context.Context, cfg *config.LLMConfig, httpClient *http.Client) (model.ToolCallingChatModel, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("llm.api_key required for openai provider")
 	}
@@ -96,6 +109,11 @@ func newOpenAIModel(ctx context.Context, cfg *config.LLMConfig) (model.ToolCalli
 	// Temperature 可选
 	if cfg.Temperature != nil {
 		openaiCfg.Temperature = cfg.Temperature
+	}
+
+	// HTTPClient 可选（llm_payload 日志开启时注入）
+	if httpClient != nil {
+		openaiCfg.HTTPClient = httpClient
 	}
 
 	return openai.NewChatModel(ctx, openaiCfg)
