@@ -15,7 +15,7 @@ import (
 // todoWriteTool 实现 Claude Code 风格的 TodoWrite 工具
 // 单工具 + 全量替换模式，更新后通过 publish update 通知前端
 type todoWriteTool struct {
-	helper *helpers
+	helper  *helpers
 	session *model.Session
 }
 
@@ -25,9 +25,30 @@ func (t *todoWriteTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 		Desc: "Update the todo list for the current session. Replaces the entire list. Use proactively to track progress and pending tasks. Make sure that at least one task is in_progress at all times. Always provide both content (imperative) and active_form (present continuous) for each task.",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"todos": {
-				Type: schema.String,
-				Desc: "JSON array of todo items (complete replacement). Each item has: content (string), status (pending|in_progress|completed), active_form (string)",
-				Required: true,
+				Type:     schema.Array,
+				Desc:     "Array of todo items (complete replacement)",
+				Required: false,
+				ElemInfo: &schema.ParameterInfo{
+					Type: schema.Object,
+					SubParams: map[string]*schema.ParameterInfo{
+						"content": {
+							Type:     schema.String,
+							Desc:     "Task description (imperative)",
+							Required: true,
+						},
+						"status": {
+							Type:     schema.String,
+							Desc:     "Task status",
+							Enum:     []string{"pending", "in_progress", "completed"},
+							Required: true,
+						},
+						"active_form": {
+							Type:     schema.String,
+							Desc:     "Task in progress description (present continuous)",
+							Required: true,
+						},
+					},
+				},
 			},
 		}),
 	}, nil
@@ -36,10 +57,14 @@ func (t *todoWriteTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	// 解析参数
 	var args struct {
-		Todos []model.TodoItem `json:"todos"`
+		Todos []model.TodoItem `json:"todos,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil {
 		return "", fmt.Errorf("parse todos: %w", err)
+	}
+
+	if len(args.Todos) == 0 {
+		args.Todos = make([]model.TodoItem, 0)
 	}
 
 	// 验证 todos
@@ -69,7 +94,7 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		return primitives.BuildSessionUpdatedUpdates(t.session), nil
 	})
 	if err != nil {
-		// 日志记录但不返回错误（todo 已更新成功）
+		// 日志记录但不返回错误（\t\o\d\o 已更新成功）
 		t.helper.logIfEnabled(ctx, "todoWriteTool.publish_update", map[string]any{
 			"session_id": t.session.ID.String(),
 			"error":      err.Error(),
