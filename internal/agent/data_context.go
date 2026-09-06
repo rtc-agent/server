@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
@@ -75,6 +76,47 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		messages = append(messages, converted...)
 	}
 
+	// Apply tool result budget (in-memory, not persisted).
+	// This truncates oversized tool results to free context space before
+	// sending to the LLM. Must run before Microcompact for efficiency.
+	messages = applyToolResultBudget(messages, h.toolResultBudgetConfig())
+
+	// Apply time-based Microcompact (in-memory only, not persisted).
+	// This clears old tool results when the user has been idle for a while,
+	// freeing context space before the messages are sent to the LLM.
+	messages = microcompactMessages(messages, h.microcompactConfig())
+
+	// Build and inject all attachments (TodoList, SessionMemory, UserMemory).
+	// Attachments are dynamic content that provides the LLM with persistent
+	// context beyond the conversation history.
+	if len(messages) > 0 && h.attachmentManager != nil {
+		// Get userID from session
+		var userID uuid.UUID
+		if session, sessionErr := h.deps.SessionRepo.GetByID(ctx, sid); sessionErr == nil && session != nil {
+			if parsedID, parseErr := uuid.Parse(session.OwnerRefID); parseErr == nil {
+				userID = parsedID
+			}
+		}
+
+		// Build attachments
+		attachmentMsgs, err := h.attachmentManager.BuildAttachments(ctx, sid, userID)
+		if err != nil {
+			h.logIfEnabled(ctx, "loadMessages.build_attachments_failed", map[string]any{
+				"session_id": sid.String(),
+				"error":      err.Error(),
+			})
+		} else if len(attachmentMsgs) > 0 {
+			messages = append(messages, attachmentMsgs...)
+		}
+	}
+
+	// Trigger background Session Memory extraction (async, non-blocking).
+	// The extractor checks whether extraction is needed based on token growth
+	// and tool call count.
+	if len(messages) > 0 {
+		h.triggerSessionMemoryExtraction(ctx, sid, messages)
+	}
+
 	return messages, nil
 }
 
@@ -108,7 +150,7 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 
 	switch contentData.Type {
 	case protocol.ContentTypeSummary:
-		return convertSummaryContent(contentData.Data)
+		return convertSummaryContent(contentData.Data, msg.CreatedAt)
 
 	case protocol.ContentTypeText, protocol.ContentTypeMarkdown:
 		text, _ := primitives.ContentDataString(contentData.Data)
@@ -116,6 +158,7 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 			Role:       msg.Role,
 			Content:    text,
 			TokenUsage: tokenUsage,
+			CreatedAt:  msg.CreatedAt,
 		}}
 
 	case protocol.ContentTypeThinking:
@@ -123,6 +166,7 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 		return []*turnagent.Message{{
 			Role:             msg.Role,
 			ReasoningContent: tk,
+			CreatedAt:        msg.CreatedAt,
 		}}
 
 	case protocol.ContentTypeToolCallInput:
@@ -138,6 +182,7 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 				Name:      toolCall.ToolName,
 				Arguments: toolCall.Input,
 			}},
+			CreatedAt: msg.CreatedAt,
 		}}
 
 	case protocol.ContentTypeToolCallOutput:
@@ -151,6 +196,7 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 			Content:    content,
 			ToolName:   toolCall.ToolName,
 			ToolCallID: string(toolCall.Id),
+			CreatedAt:  msg.CreatedAt,
 		}}
 
 	default:
@@ -167,7 +213,7 @@ func intDeref(p *int) int {
 }
 
 // convertSummaryContent expands a summary content block into multiple messages.
-func convertSummaryContent(data any) []*turnagent.Message {
+func convertSummaryContent(data any, createdAt time.Time) []*turnagent.Message {
 	dataBytes, err := primitives.ContentDataBytes(data)
 	if err != nil {
 		return nil
@@ -179,8 +225,9 @@ func convertSummaryContent(data any) []*turnagent.Message {
 	var msgs []*turnagent.Message
 	for _, item := range items {
 		msgs = append(msgs, &turnagent.Message{
-			Role:    item.Role,
-			Content: item.Content,
+			Role:      item.Role,
+			Content:   item.Content,
+			CreatedAt: createdAt,
 		})
 	}
 	return msgs

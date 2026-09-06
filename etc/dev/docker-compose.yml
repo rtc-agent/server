@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     container_name: rtc-agent-postgres
     environment:
       POSTGRES_USER: rtc_agent

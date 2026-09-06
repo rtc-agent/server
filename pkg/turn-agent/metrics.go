@@ -58,6 +58,11 @@ type Metrics interface {
 	// with an instrumented decorator should call RecordCheckpoint from that
 	// decorator. Implementations should treat zero invocations as normal.
 	RecordCheckpoint(ctx context.Context, attrs CheckpointMetricsAttrs)
+
+	// RecordAttachment records metrics for an attachment build and injection.
+	// Attachments are dynamic content injected into LLM context (e.g., TodoList,
+	// SessionMemory, UserMemory).
+	RecordAttachment(ctx context.Context, attrs AttachmentMetricsAttrs)
 }
 
 // TurnMetricsAttrs contains attributes for a turn event.
@@ -129,5 +134,21 @@ type CheckpointMetricsAttrs struct {
 	// DurationMs is the operation duration in milliseconds.
 	DurationMs int64
 	// Error is set if the operation failed (nil for success).
+	Error error
+}
+
+// AttachmentMetricsAttrs contains attributes for an attachment build operation.
+type AttachmentMetricsAttrs struct {
+	// Name is the attachment type: "TodoList", "SessionMemory", "UserMemory".
+	Name string
+	// SessionID is the session this attachment belongs to.
+	SessionID string
+	// Tokens is the number of tokens in the attachment content.
+	Tokens int
+	// DurationMs is the build duration in milliseconds.
+	DurationMs int64
+	// Status is the build outcome: "success", "failed", "truncated".
+	Status string
+	// Error is set if the build failed (nil for success/truncated).
 	Error error
 }

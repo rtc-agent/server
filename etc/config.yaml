@@ -83,10 +83,68 @@ worker:
     - Follow AGENT.md guidelines strictly
     - If a task exceeds your capabilities, tell the user honestly
     - Confirm with user before sensitive operations
+
+    Memory System:
+
+    You have access to a comprehensive memory system that helps you remember important information.
+
+    ### Session Memory
+    - Automatically extracted from the current conversation
+    - Used for context compression and maintaining session state
+    - You can manually save important information using save_session_memory tool
+    - Categories: decision, context, progress, issue, learnings
+    - Session memories are automatically injected into every turn
+
+    ### User Memory
+    - Long-term memories about the user, their preferences, and projects
+    - Persist across sessions and are automatically injected at session start
+    - Proactively save important information using save_user_memory tool
+    - Categories: user, feedback, project, reference
+    - Importance levels: critical, high, medium, low (only critical/high/medium are injected)
+    - For feedback and project memories, content MUST include "**Why:**" and "**How to apply:**" sections
+    - Use search_memory to find relevant information from past conversations
+
+    When you learn something important about the user (their preferences, feedback, project details, etc.),
+    save it to user memory so you can remember it in future conversations.
+
+    ## Todo List
+
+    You have a todo list to track your current tasks and progress.
+
+    ### Usage Guidelines
+    - Use todo_write to update the entire todo list (replaces the existing list)
+    - Keep at least one task in in_progress status at all times
+    - Update proactively: when starting a new task, completing a task, or receiving new tasks
+    - Each todo item requires three fields:
+      * content: Task description (imperative form, e.g., "Implement login feature")
+      * active_form: Present continuous form (e.g., "Implementing login feature")
+      * status: One of pending, in_progress, completed
+
+    ### Status Types
+    - pending: Not yet started
+    - in_progress: Currently working on (should have at least one at all times)
+    - completed: Finished
+
+    The todo list is injected into every turn to help you stay focused and track progress.
   # 上下文压缩提示词（可选）
   # summarize_prompt: "Please summarize..."
   # 触发上下文压缩的 token 阈值（默认 25000）
   context_tokens_limit: 25000
+  # 自动压缩缓冲 token 数（默认 13000）
+  # 用于计算实际触发阈值：context_tokens_limit - auto_compact_buffer_tokens
+  auto_compact_buffer_tokens: 13000
+  # 压缩时最大输出 token 数（默认 20000）
+  max_output_tokens_for_summary: 20000
+
+# Embedding 服务配置（用于 User Memory 向量检索）
+# 取消注释并填入实际配置以启用 User Memory 的向量检索功能
+# embedding:
+#   enabled: true
+#   base_url: "http://localhost:1234/v1"  # LM Studio 或其他 OpenAI 兼容 API
+#   api_key: ""  # LM Studio 本地部署无需 API key，云服务填入对应 key
+#   model: "text-embedding-3-small"  # 或 "all-MiniLM-L6-v2", "WeMM-Embedding-2B" 等
+#   dimension: 1536  # 向量维度：1536 (text-embedding-3-small), 384 (all-MiniLM-L6-v2), 2048 (WeMM-Embedding-2B)
+#   timeout: 30s
 
 # OpenTelemetry 分布式追踪配置
 tracing:

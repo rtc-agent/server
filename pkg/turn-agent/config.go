@@ -381,7 +381,37 @@ type Config struct {
 	// The safe point used is AfterChatModel | AfterToolCalls, matching the
 	// behavior of adk.WithGracefulTimeout.
 	Cancel CancelConfig
+
+	// ----- Reactive compact (optional) -----
+
+	// RecoverFromPromptTooLong is called when the LLM returns a prompt-too-long
+	// error (e.g., Claude's "prompt is too long" or OpenAI's
+	// "context_length_exceeded"). The implementation should compress the
+	// conversation history (e.g., generate a summary, aggressively clear tool
+	// results, or soft-delete old messages) so the next attempt fits within the
+	// LLM's context window.
+	//
+	// After this callback returns nil, Agent.Process creates a new TurnLoop and
+	// retries. If the retry also fails with prompt-too-long, the callback is
+	// called again (up to MaxReactiveCompactAttempts total attempts).
+	//
+	// If nil, prompt-too-long errors fall through to FailTurn (no recovery).
+	RecoverFromPromptTooLong RecoverFromPromptTooLongFunc
+
+	// MaxReactiveCompactAttempts is the maximum number of recovery attempts
+	// before giving up and calling FailTurn. Default: 3.
+	MaxReactiveCompactAttempts int
 }
+
+// RecoverFromPromptTooLongFunc is the callback for reactive compact recovery.
+// Called with the session ID and the current attempt number (1-based).
+// The implementation should use the attempt number to escalate the recovery
+// strategy (e.g., attempt 1: aggressive compact, attempt 2: more aggressive,
+// attempt 3: soft-delete old messages).
+//
+// The caller (Agent.Process) tracks the attempt number across retries within a
+// single Process() invocation. The counter is NOT shared across Process() calls.
+type RecoverFromPromptTooLongFunc func(ctx context.Context, sessionID string, attempt int) error
 
 // CancelConfig controls turn cancellation behavior.
 type CancelConfig struct {

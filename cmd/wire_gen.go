@@ -20,6 +20,7 @@ import (
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/server"
+	"github.com/rtc-agent/server/internal/service/embedding"
 	"github.com/rtc-agent/server/internal/svc"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -44,6 +45,12 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	oAuth2UserRepo := repo.NewOAuth2UserRepo(db)
 	deviceRepo := repo.NewDeviceRepo(db)
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
+	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
+	userMemoryRepo := repo.NewUserMemoryRepo(db)
+	service, err := provideEmbeddingService(cfg)
+	if err != nil {
+		return nil, err
+	}
 	updatePublisher := provideUpdatePublisher(db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo)
 	node, err := provideCentrifugeNode()
 	if err != nil {
@@ -57,7 +64,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, service, updatePublisher, node, dualBroker, jwtSigner)
 	return serviceContext, nil
 }
 
@@ -71,6 +78,12 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	oAuth2UserRepo := repo.NewOAuth2UserRepo(db)
 	deviceRepo := repo.NewDeviceRepo(db)
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
+	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
+	userMemoryRepo := repo.NewUserMemoryRepo(db)
+	service, err := provideEmbeddingService(cfg)
+	if err != nil {
+		return nil, err
+	}
 	updatePublisher := provideUpdatePublisher(db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo)
 	node, err := provideCentrifugeNode()
 	if err != nil {
@@ -84,7 +97,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, service, updatePublisher, node, dualBroker, jwtSigner)
 	cmdChatModelResult, err := provideChatModel(cfg)
 	if err != nil {
 		return nil, err
@@ -111,7 +124,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 // wire.go:
 
 // RepositorySet provides all repository implementations.
-var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo)
+var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo, repo.NewSessionMemoryRepo, repo.NewUserMemoryRepo)
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
 var ServiceSet = wire.NewSet(
@@ -120,6 +133,7 @@ var ServiceSet = wire.NewSet(
 	provideJWTSigner,
 	provideCentrifugeNode,
 	provideDualBroker,
+	provideEmbeddingService,
 )
 
 // UsecaseSet provides usecase layer dependencies.
@@ -220,6 +234,16 @@ func provideDualBroker(
 	return svc.AssembleDualBroker(node, cfg, updatePublisher, jwtSigner)
 }
 
+func provideEmbeddingService(cfg *config.Config) (embedding.Service, error) {
+	return embedding.NewService(embedding.Config{
+		Enabled:   cfg.Embedding.Enabled,
+		BaseURL:   cfg.Embedding.BaseURL,
+		APIKey:    cfg.Embedding.APIKey,
+		Model:     cfg.Embedding.Model,
+		Dimension: cfg.Embedding.Dimension,
+	})
+}
+
 // chatModelResult wraps the optional ChatModel to handle Wire's error semantics.
 type chatModelResult struct {
 	model model.ToolCallingChatModel
@@ -245,17 +269,20 @@ func provideUsecaseDependencies(
 	cfg *config.Config,
 ) *usecase.Dependencies {
 	return &usecase.Dependencies{
-		DB:              svcCtx.DB,
-		Redis:           svcCtx.Redis,
-		SessionRepo:     svcCtx.SessionRepo,
-		MessageRepo:     svcCtx.MessageRepo,
-		TurnRepo:        svcCtx.TurnRepo,
-		RtcRepo:         svcCtx.RtcRepo,
-		UpdatePublisher: svcCtx.UpdatePublisher,
-		ChatModel:       chatModelResult2.model,
-		LLMConfig:       cfg.LLM,
-		SystemPrompt:    cfg.Worker.SystemPrompt,
-		WorkerConfig:    cfg.Worker,
+		DB:                svcCtx.DB,
+		Redis:             svcCtx.Redis,
+		SessionRepo:       svcCtx.SessionRepo,
+		MessageRepo:       svcCtx.MessageRepo,
+		TurnRepo:          svcCtx.TurnRepo,
+		RtcRepo:           svcCtx.RtcRepo,
+		SessionMemoryRepo: svcCtx.SessionMemoryRepo,
+		UserMemoryRepo:    svcCtx.UserMemoryRepo,
+		EmbeddingService:  svcCtx.EmbeddingService,
+		UpdatePublisher:   svcCtx.UpdatePublisher,
+		ChatModel:         chatModelResult2.model,
+		LLMConfig:         cfg.LLM,
+		SystemPrompt:      cfg.Worker.SystemPrompt,
+		WorkerConfig:      cfg.Worker,
 	}
 }
 
@@ -274,14 +301,16 @@ func provideAgent(
 	metrics *turnagent.PrometheusMetrics,
 ) (*turnagent.Agent, error) {
 	return agent.New(agent.Config{
-		Deps:               deps,
-		Redis:              redisClient,
-		ContextTokensLimit: cfg.Worker.ContextTokensLimit,
-		EnableLLMLogging:   logger.DebugMode,
-		CheckpointTTL:      cfg.Worker.CheckpointTTL,
-		StreamChunkTTL:     cfg.Worker.StreamChunkTTL,
-		Logger:             agent.NewLogger(),
-		Metrics:            metrics,
+		Deps:                      deps,
+		Redis:                     redisClient,
+		ContextTokensLimit:        cfg.Worker.ContextTokensLimit,
+		AutoCompactBufferTokens:   cfg.Worker.AutoCompactBufferTokens,
+		MaxOutputTokensForSummary: cfg.Worker.MaxOutputTokensForSummary,
+		EnableLLMLogging:          logger.DebugMode,
+		CheckpointTTL:             cfg.Worker.CheckpointTTL,
+		StreamChunkTTL:            cfg.Worker.StreamChunkTTL,
+		Logger:                    agent.NewLogger(),
+		Metrics:                   metrics,
 	})
 }
 

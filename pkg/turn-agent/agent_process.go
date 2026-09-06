@@ -248,6 +248,92 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		"has_error":   exit.ExitReason != nil,
 	})
 
+	// 6.5. Reactive compact: recover from prompt-too-long errors.
+	//
+	// If the LLM rejected the prompt as too long and a recovery callback is
+	// configured, attempt to compress the context and retry. Each attempt:
+	//   1. Calls RecoverFromPromptTooLong to compress and persist.
+	//   2. Creates a fresh TurnLoop (the previous one has exited).
+	//   3. Runs the loop again — loadMessages will pick up the compressed state.
+	//
+	// Up to MaxReactiveCompactAttempts retries (default 3). If all fail, the
+	// original error falls through to the default case below (FailTurn).
+	if exit.ExitReason != nil && IsPromptTooLongError(exit.ExitReason) && a.cfg.RecoverFromPromptTooLong != nil {
+		maxAttempts := a.cfg.MaxReactiveCompactAttempts
+		if maxAttempts <= 0 {
+			maxAttempts = 3
+		}
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			a.logIfEnabled(turnCtx, LogLevelInfo, "reactive_compact.attempt", map[string]any{
+				"session_id": p.SessionID,
+				"turn_id":    turnID,
+				"attempt":    attempt,
+				"max":        maxAttempts,
+				"error":      exit.ExitReason.Error(),
+			})
+			a.addEventIfEnabled(turnCtx, "reactive_compact.attempt",
+				attribute.String("session.id", p.SessionID),
+				attribute.String("turn.id", turnID),
+				attribute.Int("reactive_compact.attempt", attempt),
+			)
+
+			if err := a.cfg.RecoverFromPromptTooLong(turnCtx, p.SessionID, attempt); err != nil {
+				a.logIfEnabled(turnCtx, LogLevelError, "reactive_compact.recovery_failed", map[string]any{
+					"session_id": p.SessionID,
+					"turn_id":    turnID,
+					"attempt":    attempt,
+					"error":      err.Error(),
+				})
+				break // recovery failed, fall through to FailTurn
+			}
+
+			// Create a fresh TurnLoop and retry. loadMessages will load the
+			// compressed state from DB.
+			einoCfgRetry := a.buildEinoConfig(p.SessionID, turnID, checkpointID)
+			retryLoop := adk.NewTurnLoop[WorkPayload, *schema.Message](einoCfgRetry)
+			pushed, _ := retryLoop.Push(p)
+			if !pushed {
+				a.logIfEnabled(turnCtx, LogLevelError, "reactive_compact.push_failed", map[string]any{
+					"session_id": p.SessionID,
+					"turn_id":    turnID,
+					"attempt":    attempt,
+				})
+				break
+			}
+			retryLoop.Run(turnCtx)
+			exit = retryLoop.Wait()
+
+			a.logIfEnabled(turnCtx, LogLevelInfo, "reactive_compact.retry_exited", map[string]any{
+				"session_id":  p.SessionID,
+				"turn_id":     turnID,
+				"attempt":     attempt,
+				"exit_reason": fmt.Sprintf("%v", exit.ExitReason),
+				"has_error":   exit.ExitReason != nil,
+			})
+
+			if exit.ExitReason == nil {
+				// Success — fall through to the clean exit case below.
+				a.logIfEnabled(turnCtx, LogLevelInfo, "reactive_compact.success", map[string]any{
+					"session_id": p.SessionID,
+					"turn_id":    turnID,
+					"attempts":   attempt,
+				})
+				a.addEventIfEnabled(turnCtx, "reactive_compact.success",
+					attribute.String("session.id", p.SessionID),
+					attribute.String("turn.id", turnID),
+					attribute.Int("reactive_compact.attempts", attempt),
+				)
+				break
+			}
+
+			if !IsPromptTooLongError(exit.ExitReason) {
+				// Different error — stop retrying, fall through to FailTurn.
+				break
+			}
+			// Still prompt-too-long — loop again for the next attempt.
+		}
+	}
+
 	// 7. Turn lifecycle: end.
 	//
 	// Priority order matters: cancelledByQueue takes precedence over

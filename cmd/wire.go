@@ -24,6 +24,7 @@ import (
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/server"
+	"github.com/rtc-agent/server/internal/service/embedding"
 	"github.com/rtc-agent/server/internal/svc"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -45,6 +46,8 @@ var RepositorySet = wire.NewSet(
 	repo.NewOAuth2UserRepo,
 	repo.NewDeviceRepo,
 	repo.NewRefreshTokenRepo,
+	repo.NewSessionMemoryRepo,
+	repo.NewUserMemoryRepo,
 )
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
@@ -54,6 +57,7 @@ var ServiceSet = wire.NewSet(
 	provideJWTSigner,
 	provideCentrifugeNode,
 	provideDualBroker,
+	provideEmbeddingService,
 )
 
 // UsecaseSet provides usecase layer dependencies.
@@ -161,6 +165,16 @@ func provideDualBroker(
 	return svc.AssembleDualBroker(node, cfg, updatePublisher, jwtSigner)
 }
 
+func provideEmbeddingService(cfg *config.Config) (embedding.Service, error) {
+	return embedding.NewService(embedding.Config{
+		Enabled:   cfg.Embedding.Enabled,
+		BaseURL:   cfg.Embedding.BaseURL,
+		APIKey:    cfg.Embedding.APIKey,
+		Model:     cfg.Embedding.Model,
+		Dimension: cfg.Embedding.Dimension,
+	})
+}
+
 // chatModelResult wraps the optional ChatModel to handle Wire's error semantics.
 type chatModelResult struct {
 	model model.ToolCallingChatModel
@@ -187,17 +201,20 @@ func provideUsecaseDependencies(
 	cfg *config.Config,
 ) *usecase.Dependencies {
 	return &usecase.Dependencies{
-		DB:              svcCtx.DB,
-		Redis:           svcCtx.Redis,
-		SessionRepo:     svcCtx.SessionRepo,
-		MessageRepo:     svcCtx.MessageRepo,
-		TurnRepo:        svcCtx.TurnRepo,
-		RtcRepo:         svcCtx.RtcRepo,
-		UpdatePublisher: svcCtx.UpdatePublisher,
-		ChatModel:       chatModelResult.model,
-		LLMConfig:       cfg.LLM,
-		SystemPrompt:    cfg.Worker.SystemPrompt,
-		WorkerConfig:    cfg.Worker,
+		DB:                svcCtx.DB,
+		Redis:             svcCtx.Redis,
+		SessionRepo:       svcCtx.SessionRepo,
+		MessageRepo:       svcCtx.MessageRepo,
+		TurnRepo:          svcCtx.TurnRepo,
+		RtcRepo:           svcCtx.RtcRepo,
+		SessionMemoryRepo: svcCtx.SessionMemoryRepo,
+		UserMemoryRepo:    svcCtx.UserMemoryRepo,
+		EmbeddingService:  svcCtx.EmbeddingService,
+		UpdatePublisher:   svcCtx.UpdatePublisher,
+		ChatModel:         chatModelResult.model,
+		LLMConfig:         cfg.LLM,
+		SystemPrompt:      cfg.Worker.SystemPrompt,
+		WorkerConfig:      cfg.Worker,
 	}
 }
 
@@ -216,14 +233,16 @@ func provideAgent(
 	metrics *turnagent.PrometheusMetrics,
 ) (*turnagent.Agent, error) {
 	return agent.New(agent.Config{
-		Deps:               deps,
-		Redis:              redisClient,
-		ContextTokensLimit: cfg.Worker.ContextTokensLimit,
-		EnableLLMLogging:   logger.DebugMode,
-		CheckpointTTL:      cfg.Worker.CheckpointTTL,
-		StreamChunkTTL:     cfg.Worker.StreamChunkTTL,
-		Logger:             agent.NewLogger(),
-		Metrics:            metrics,
+		Deps:                      deps,
+		Redis:                     redisClient,
+		ContextTokensLimit:        cfg.Worker.ContextTokensLimit,
+		AutoCompactBufferTokens:   cfg.Worker.AutoCompactBufferTokens,
+		MaxOutputTokensForSummary: cfg.Worker.MaxOutputTokensForSummary,
+		EnableLLMLogging:          logger.DebugMode,
+		CheckpointTTL:             cfg.Worker.CheckpointTTL,
+		StreamChunkTTL:            cfg.Worker.StreamChunkTTL,
+		Logger:                    agent.NewLogger(),
+		Metrics:                   metrics,
 	})
 }
 

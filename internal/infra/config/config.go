@@ -19,6 +19,7 @@ type Config struct {
 	LLM       LLMConfig       `mapstructure:"llm"`
 	API       APIConfig       `mapstructure:"api"`
 	Tracing   TracingConfig   `mapstructure:"tracing"`
+	Embedding EmbeddingConfig `mapstructure:"embedding"`
 }
 
 // ServerConfig HTTP/WebSocket 服务器监听地址配置。
@@ -107,6 +108,15 @@ type WorkerConfig struct {
 	// 默认 25000（约为模型上下文窗口的 20%）
 	ContextTokensLimit int `mapstructure:"context_tokens_limit"`
 
+	// AutoCompactBufferTokens 自动压缩缓冲 token 数（可选）
+	// 用于计算实际触发阈值：ContextTokensLimit - AutoCompactBufferTokens
+	// 默认 13000
+	AutoCompactBufferTokens int `mapstructure:"auto_compact_buffer_tokens"`
+
+	// MaxOutputTokensForSummary 压缩时最大输出 token 数（可选）
+	// 默认 20000
+	MaxOutputTokensForSummary int `mapstructure:"max_output_tokens_for_summary"`
+
 	// CheckpointTTL eino checkpoint 在 Redis 中的存活时间
 	// 默认 24h。较长的 TTL 提高崩溃恢复窗口，但增加 Redis 内存压力
 	CheckpointTTL time.Duration `mapstructure:"checkpoint_ttl"`
@@ -177,6 +187,30 @@ type APIConfig struct {
 	QueryMaxLimit int `mapstructure:"query_max_limit"`
 }
 
+// EmbeddingConfig Embedding 服务配置（用于 User Memory 向量检索）
+type EmbeddingConfig struct {
+	// Enabled 是否启用 Embedding 服务
+	Enabled bool `mapstructure:"enabled"`
+
+	// BaseURL Embedding API 端点（LM Studio 兼容 OpenAI API）
+	// 例如: "http://localhost:1234/v1"
+	BaseURL string `mapstructure:"base_url"`
+
+	// APIKey API 密钥（可选，LM Studio 本地部署时可为空）
+	APIKey string `mapstructure:"api_key"`
+
+	// Model 模型名称
+	// 例如: "text-embedding-3-small", "all-MiniLM-L6-v2"
+	Model string `mapstructure:"model"`
+
+	// Dimension 向量维度
+	// 例如: 1536 (text-embedding-3-small), 384 (all-MiniLM-L6-v2)
+	Dimension int `mapstructure:"dimension"`
+
+	// Timeout API 请求超时时间
+	Timeout time.Duration `mapstructure:"timeout"`
+}
+
 // TracingConfig OpenTelemetry 分布式追踪配置
 type TracingConfig struct {
 	// Enabled 是否启用 tracing
@@ -223,6 +257,8 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("worker.max_len_approx", 10000)
 	v.SetDefault("worker.background_concurrency", 5)
 	v.SetDefault("worker.context_tokens_limit", 25000)
+	v.SetDefault("worker.auto_compact_buffer_tokens", 13000)
+	v.SetDefault("worker.max_output_tokens_for_summary", 20000)
 	v.SetDefault("worker.checkpoint_ttl", 24*time.Hour)
 	v.SetDefault("worker.stream_chunk_ttl", 5*time.Minute)
 	v.SetDefault("worker.interrupt_answer_ttl", 10*time.Minute)

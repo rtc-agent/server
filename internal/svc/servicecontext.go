@@ -12,6 +12,7 @@ import (
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/internal/service/embedding"
 	"github.com/rtc-agent/server/internal/updates"
 	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -25,13 +26,18 @@ type ServiceContext struct {
 	Redis  redis.UniversalClient
 
 	// Repos
-	SessionRepo      repo.SessionRepo
-	MessageRepo      repo.MessageRepo
-	TurnRepo         repo.TurnRepo
-	RtcRepo          repo.RtcRepo
-	OAuth2UserRepo   repo.OAuth2UserRepo
-	DeviceRepo       repo.DeviceRepo
-	RefreshTokenRepo repo.RefreshTokenRepo
+	SessionRepo       repo.SessionRepo
+	MessageRepo       repo.MessageRepo
+	TurnRepo          repo.TurnRepo
+	RtcRepo           repo.RtcRepo
+	OAuth2UserRepo    repo.OAuth2UserRepo
+	DeviceRepo        repo.DeviceRepo
+	RefreshTokenRepo  repo.RefreshTokenRepo
+	SessionMemoryRepo repo.SessionMemoryRepo
+	UserMemoryRepo    repo.UserMemoryRepo
+
+	// Services
+	EmbeddingService embedding.Service
 
 	// 基础设施
 	UpdatePublisher *updates.UpdatePublisher
@@ -51,6 +57,20 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
 	deviceRepo := repo.NewDeviceRepo(db)
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
+	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
+	userMemoryRepo := repo.NewUserMemoryRepo(db)
+
+	// 创建 Embedding Service
+	embeddingService, err := embedding.NewService(embedding.Config{
+		Enabled:   cfg.Embedding.Enabled,
+		BaseURL:   cfg.Embedding.BaseURL,
+		APIKey:    cfg.Embedding.APIKey,
+		Model:     cfg.Embedding.Model,
+		Dimension: cfg.Embedding.Dimension,
+	})
+	if err != nil {
+		logger.Fatal(context.Background(), "初始化 Embedding 服务失败", zap.Error(err))
+	}
 
 	// 创建 UpdatePublisher（需要先创建 repos）
 	updatePublisher := updates.NewUpdatePublisher(db, rdb, sessionRepo, messageRepo, turnRepo, rtcRepo)
@@ -80,20 +100,23 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	updatePublisher.SetBroker(dualBroker)
 
 	return &ServiceContext{
-		Config:           cfg,
-		DB:               db,
-		Redis:            rdb,
-		SessionRepo:      sessionRepo,
-		MessageRepo:      messageRepo,
-		TurnRepo:         turnRepo,
-		RtcRepo:          rtcRepo,
-		OAuth2UserRepo:   oauth2UserRepo,
-		DeviceRepo:       deviceRepo,
-		RefreshTokenRepo: refreshTokenRepo,
-		UpdatePublisher:  updatePublisher,
-		CentrifugeNode:   node,
-		Broker:           dualBroker,
-		JWTSigner:        jwtSigner,
+		Config:            cfg,
+		DB:                db,
+		Redis:             rdb,
+		SessionRepo:       sessionRepo,
+		MessageRepo:       messageRepo,
+		TurnRepo:          turnRepo,
+		RtcRepo:           rtcRepo,
+		OAuth2UserRepo:    oauth2UserRepo,
+		DeviceRepo:        deviceRepo,
+		RefreshTokenRepo:  refreshTokenRepo,
+		SessionMemoryRepo: sessionMemoryRepo,
+		UserMemoryRepo:    userMemoryRepo,
+		EmbeddingService:  embeddingService,
+		UpdatePublisher:   updatePublisher,
+		CentrifugeNode:    node,
+		Broker:            dualBroker,
+		JWTSigner:         jwtSigner,
 	}
 }
 
@@ -110,6 +133,9 @@ func NewServiceContextWithDeps(
 	oauth2UserRepo repo.OAuth2UserRepo,
 	deviceRepo repo.DeviceRepo,
 	refreshTokenRepo repo.RefreshTokenRepo,
+	sessionMemoryRepo repo.SessionMemoryRepo,
+	userMemoryRepo repo.UserMemoryRepo,
+	embeddingService embedding.Service,
 	updatePublisher *updates.UpdatePublisher,
 	node *centrifuge.Node,
 	broker *centrifugeplus.DualBroker,
@@ -119,20 +145,23 @@ func NewServiceContextWithDeps(
 	updatePublisher.SetBroker(broker)
 
 	return &ServiceContext{
-		Config:           cfg,
-		DB:               db,
-		Redis:            rdb,
-		SessionRepo:      sessionRepo,
-		MessageRepo:      messageRepo,
-		TurnRepo:         turnRepo,
-		RtcRepo:          rtcRepo,
-		OAuth2UserRepo:   oauth2UserRepo,
-		DeviceRepo:       deviceRepo,
-		RefreshTokenRepo: refreshTokenRepo,
-		UpdatePublisher:  updatePublisher,
-		CentrifugeNode:   node,
-		Broker:           broker,
-		JWTSigner:        jwtSigner,
+		Config:            cfg,
+		DB:                db,
+		Redis:             rdb,
+		SessionRepo:       sessionRepo,
+		MessageRepo:       messageRepo,
+		TurnRepo:          turnRepo,
+		RtcRepo:           rtcRepo,
+		OAuth2UserRepo:    oauth2UserRepo,
+		DeviceRepo:        deviceRepo,
+		RefreshTokenRepo:  refreshTokenRepo,
+		SessionMemoryRepo: sessionMemoryRepo,
+		UserMemoryRepo:    userMemoryRepo,
+		EmbeddingService:  embeddingService,
+		UpdatePublisher:   updatePublisher,
+		CentrifugeNode:    node,
+		Broker:            broker,
+		JWTSigner:         jwtSigner,
 	}
 }
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -335,4 +336,36 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	// 8. Pause the turn — eino will persist the checkpoint and return control
 	// to turn-agent, which calls InterruptTurn.
 	return "", tool.StatefulInterrupt(ctx, info, state)
+}
+
+// parseToolArgs safely parses JSON tool arguments.
+//
+// On failure it returns (false, friendlyMessage) instead of a Go error.
+// This is critical: returning an error from InvokableRun causes Eino's
+// ToolNode to wrap it as a NodeRunError and terminate the entire turn.
+// By returning a message, the LLM sees the parse failure and can retry
+// with correct arguments.
+//
+// The caller should check the bool: if false, return the string directly
+// from InvokableRun (with nil error).
+func parseToolArgs(ctx context.Context, h *helpers, toolName string, argumentsInJSON string, args any) (ok bool, errorMsg string) {
+	if err := json.Unmarshal([]byte(argumentsInJSON), args); err != nil {
+		// Truncate arguments for logging to avoid flooding logs with large payloads.
+		argPreview := argumentsInJSON
+		const maxPreviewLen = 200
+		if len(argPreview) > maxPreviewLen {
+			argPreview = argPreview[:maxPreviewLen] + "...(truncated)"
+		}
+		h.logIfEnabled(ctx, "tool.parse_arguments_failed", map[string]any{
+			"tool_name":  toolName,
+			"error":      err.Error(),
+			"raw_length": len(argumentsInJSON),
+			"raw_preview": argPreview,
+		})
+		return false, fmt.Sprintf(
+			"Error: failed to parse tool arguments (%s). Please provide valid JSON. Received: %s",
+			err.Error(), argPreview,
+		)
+	}
+	return true, ""
 }

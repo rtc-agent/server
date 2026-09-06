@@ -72,6 +72,10 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	if err != nil {
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
+	// 新 session 写入 agent_prompt（快照，后续只读）
+	if isNew && req.AgentPrompt != nil {
+		session.AgentPrompt = *req.AgentPrompt
+	}
 	// 仅对已有 session 做归属校验；新 session 的 owner 由 PrepareSession 按 creator 设置，无需校验
 	if !isNew {
 		if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, session.ID, creator); err != nil {

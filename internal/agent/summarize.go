@@ -22,16 +22,6 @@ import (
 // Config.AgentMiddlewares. It is stateless — the per-turn state (messages
 // to compress, session identity) is captured in the CompressContext and
 // OnCompress closures.
-//
-// Mapping from old code: this replaces the middleware creation in
-// internal/worker/agent.go's createAgent callback. The old code created
-// the middleware inline per session; the new code creates it once and
-// shares it across all turns.
-//
-// The middleware uses the turnagent.SummarizationConfig type (from the
-// pkg/turn-agent package) rather than the turnloop.SummarizationConfig
-// used by the old code. The two are functionally identical; the turnagent
-// version is the canonical one going forward.
 func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, error) {
 	mw, err := turnagent.NewSummarizationMiddleware(&turnagent.SummarizationConfig{
 		Trigger: &turnagent.TriggerCondition{
@@ -55,82 +45,103 @@ func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, 
 // It is called when the trigger condition is met (e.g., token count exceeds
 // the threshold).
 //
-// Strategy: keep the last 10 messages (or 50% of messages, whichever is
-// smaller) as "recent", and summarize older messages using the ChatModel.
-// The summary is returned as a single system message prepended to the recent
-// messages.
+// Strategy:
+//  1. Calculate the retention index using token-based retention config.
+//  2. If retention index == 0 → compress all messages (full compact).
+//  3. If retention index == len(msgs) → skip compression (nothing to compress).
+//  4. Otherwise → compress older messages, keep recent messages (partial compact).
+//  5. Return: [system(summary)] + retained_messages.
 //
-// Mapping from old code: this is identical to compressContext in
-// internal/worker/compress.go.
+// Session Memory Integration:
+//   - Before calling LLM to generate summary, try to use existing session memories.
+//   - If session memories exist, use them as the summary (zero API cost).
+//   - Otherwise, fall back to LLM summarization.
 func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message) ([]*schema.Message, error) {
-	const (
-		minMessagesToCompress = 20 // Only compress if we have at least this many messages
-		recentMessageCount    = 10 // Keep this many recent messages unchanged
-	)
-
-	if len(msgs) < minMessagesToCompress {
+	if !shouldCompressByTokenCount(msgs) {
 		return msgs, nil
 	}
 
-	// Split into old (to compress) and recent (to keep).
-	recentCount := min(recentMessageCount, len(msgs)/2)
-	oldMsgs := msgs[:len(msgs)-recentCount]
-	recentMsgs := msgs[len(msgs)-recentCount:]
+	config := DefaultRetentionConfig()
+	retentionIndex := calculateRetentionIndex(msgs, config)
 
-	// Generate summary of old messages.
-	summary, err := h.summarizeMessages(ctx, oldMsgs)
+	// If all messages fit in retention budget, skip compression.
+	if retentionIndex >= len(msgs) {
+		return msgs, nil
+	}
+
+	var (
+		summary string
+		err     error
+	)
+
+	// Try to use session memory for compression (zero API cost)
+	summaryPtr, err := h.compressContextWithSessionMemory(ctx, msgs, retentionIndex)
 	if err != nil {
-		return nil, fmt.Errorf("summarize old messages: %w", err)
+		return nil, fmt.Errorf("compress with session memory: %w", err)
 	}
 
-	// Prepend summary as a system message.
+	if summaryPtr != nil {
+		// Successfully used session memory
+		summary = *summaryPtr
+	} else {
+		// Fall back to LLM summarization
+		if retentionIndex == 0 {
+			// Full compact: summarize all messages.
+			summary, err = h.summarizeMessages(ctx, msgs, CompactModeFull)
+			if err != nil {
+				return nil, fmt.Errorf("summarize all messages: %w", err)
+			}
+		} else {
+			// Partial compact: summarize older messages, keep recent.
+			oldMsgs := msgs[:retentionIndex]
+			summary, err = h.summarizeMessages(ctx, oldMsgs, CompactModePartial)
+			if err != nil {
+				return nil, fmt.Errorf("summarize old messages: %w", err)
+			}
+		}
+	}
+
+	// Format the summary as a user message using the template.
+	summaryContent := formatCompactUserMessage(formatCompactSummary(summary))
+
+	// Build the compressed message list.
 	summaryMsg := &schema.Message{
-		Role:    schema.System,
-		Content: summary,
+		Role:    schema.User,
+		Content: summaryContent,
 	}
 
-	result := make([]*schema.Message, 0, 1+len(recentMsgs))
+	result := make([]*schema.Message, 0, 1+len(msgs)-retentionIndex)
 	result = append(result, summaryMsg)
-	result = append(result, recentMsgs...)
+	if retentionIndex < len(msgs) {
+		result = append(result, msgs[retentionIndex:]...)
+	}
+
+	// Phase 9: Post-compact file recovery.
+	// Attach recently-read file contents (from the discarded portion) as
+	// system-reminder messages so the LLM can resume work without
+	// re-reading files it was just working with.
+	discarded := msgs[:retentionIndex]
+	result = appendPostCompactAttachments(ctx, h, result, discarded)
 
 	return result, nil
 }
 
-// summarizeMessages uses the ChatModel to generate a concise summary of the
-// given messages. The summary is constrained to approximately 500 words to
-// ensure it fits within the context budget while preserving key information.
+// summarizeMessages uses the ChatModel to generate a structured summary
+// of the given messages using the 9-part prompt template.
 //
-// Mapping from old code: this is the direct equivalent of summarizeMessages
-// in internal/worker/summarize_messages.go. The implementation is identical:
-// build a prompt, concatenate messages with role prefixes, call ChatModel.
+// The prompt instructs the LLM to produce <analysis> and <summary> blocks.
+// The analysis block is stripped in post-processing; only the summary is kept.
 //
-// Note: the default prompt is written in English to optimize LLM
-// comprehension, even though project comments use Chinese. This is intentional
-// and improves summary quality.
-func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message) (string, error) {
-	// Build a prompt for summarization.
-	var sb strings.Builder
-
-	prompt := "Please summarize the following conversation history concisely, " +
-		"preserving key information, user preferences, and important context. " +
-		"Limit the summary to approximately 500 words.\n\n"
-	sb.WriteString(prompt)
-
-	for i, msg := range msgs {
-		role := string(msg.Role)
-		if role == "" {
-			role = "unknown"
-		}
-		fmt.Fprintf(&sb, "[%s] %s\n", role, msg.Content)
-		if i < len(msgs)-1 {
-			sb.WriteString("\n")
-		}
-	}
-
-	sb.WriteString("\n\nSummary:")
+// The mode parameter selects the appropriate prompt template:
+//   - CompactModeFull: For summarizing the entire conversation.
+//   - CompactModePartial: For summarizing older messages only.
+//   - CompactModePartialUpTo: For summarizing up to a point (continuing session).
+func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message, mode CompactMode) (string, error) {
+	// Build the full prompt with conversation history.
+	prompt := buildSummarizePrompt(msgs, mode)
 
 	// Call the LLM to generate the summary.
-	userPrompt := schema.UserMessage(sb.String())
+	userPrompt := schema.UserMessage(prompt)
 	resp, err := h.deps.ChatModel.Generate(ctx, []*schema.Message{userPrompt})
 	if err != nil {
 		return "", fmt.Errorf("chat model generate: %w", err)
@@ -141,14 +152,98 @@ func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message)
 	}
 
 	// Record token usage for the summarization LLM call.
-	// Metrics are recorded by the eino callback handler (OnEnd, registered in
-	// token_callback.go). The callback fires because the turn context carries
-	// the callback handlers via callbacks.InitCallbacks. We only keep a
-	// supplementary structured log here for the extra fields (cached_tokens,
-	// finish_reason) that the callback does not emit.
 	h.logSummarizeTokenUsage(ctx, resp)
 
 	return resp.Content, nil
+}
+
+// buildSummarizePrompt constructs the full prompt for summarization.
+//
+// The prompt consists of:
+//  1. The compression template (varies by mode).
+//  2. Formatted conversation history with tool call details.
+func buildSummarizePrompt(msgs []*schema.Message, mode CompactMode) string {
+	var sb strings.Builder
+
+	// Write the compression prompt template.
+	sb.WriteString(getCompactPrompt(mode))
+	sb.WriteString("\n\n")
+
+	// Write the conversation history.
+	sb.WriteString("# Conversation History\n\n")
+	sb.WriteString(formatMessagesForCompact(msgs))
+
+	return sb.String()
+}
+
+// formatMessagesForCompact formats messages for the summarization prompt.
+//
+// Unlike the simple `[role] content` format, this function:
+//   - Includes tool call details (name, arguments) for assistant messages.
+//   - Includes tool result metadata (tool name, call ID) for tool messages.
+//   - Includes reasoning content for assistant messages.
+//   - Preserves the chronological flow of the conversation.
+func formatMessagesForCompact(msgs []*schema.Message) string {
+	var sb strings.Builder
+
+	for i, msg := range msgs {
+		role := string(msg.Role)
+		if role == "" {
+			role = "unknown"
+		}
+
+		switch msg.Role {
+		case schema.Assistant:
+			// Write assistant message content.
+			if msg.Content != "" {
+				fmt.Fprintf(&sb, "## %s (turn %d)\n\n", role, i+1)
+				sb.WriteString(msg.Content)
+				sb.WriteString("\n\n")
+			}
+
+			// Write reasoning content if present.
+			if msg.ReasoningContent != "" {
+				fmt.Fprintf(&sb, "<thinking>\n%s\n</thinking>\n\n", msg.ReasoningContent)
+			}
+
+			// Write tool calls if present.
+			if len(msg.ToolCalls) > 0 {
+				sb.WriteString("### Tool Calls\n\n")
+				for _, tc := range msg.ToolCalls {
+					fmt.Fprintf(&sb, "- **%s** (id: `%s`)\n", tc.Function.Name, tc.ID)
+					if tc.Function.Arguments != "" {
+						// Format arguments as a code block for readability.
+						fmt.Fprintf(&sb, "  ```json\n  %s\n  ```\n", tc.Function.Arguments)
+					}
+				}
+				sb.WriteString("\n")
+			}
+
+		case schema.Tool:
+			// Write tool result.
+			fmt.Fprintf(&sb, "## %s (result for %s, id: `%s`)\n\n", role, msg.ToolName, msg.ToolCallID)
+			sb.WriteString(msg.Content)
+			sb.WriteString("\n\n")
+
+		case schema.User:
+			// Write user message.
+			if msg.Content != "" {
+				fmt.Fprintf(&sb, "## %s (turn %d)\n\n", role, i+1)
+				sb.WriteString(msg.Content)
+				sb.WriteString("\n\n")
+			}
+
+		case schema.System:
+			// Skip system messages in the summary (they're meta-instructions).
+			continue
+
+		default:
+			// Fallback for unknown roles.
+			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", role, msg.Content)
+		}
+	}
+
+	return sb.String()
 }
 
 // logSummarizeTokenUsage emits a structured log line for a summarization LLM
@@ -175,29 +270,21 @@ func (h *helpers) logSummarizeTokenUsage(ctx context.Context, resp *schema.Messa
 	})
 }
 
-// persistCompressedMessages persists the compressed message history to the
+// persistCompressedMessages persists only the LLM-generated summary to the
 // database after summarization.
 //
 // This is the OnCompress callback for the summarization middleware. After
 // the middleware compresses the messages (via CompressContext), this callback
-// is called so the application can persist the compressed form. This ensures
-// the next loadMessages call sees only the summary + recent messages.
+// is called so the application can persist the compressed form.
 //
-// Strategy: create a summary message in the DB that captures the compressed
-// content. The old messages are NOT deleted — they remain in the DB for
-// audit/recovery purposes. The loadMessages function will find the summary
-// message and truncate the history at that point.
+// Strategy: Only persist the summary text as a single system message.
+// The old messages remain in the DB for audit/frontend access. The
+// loadMessages function will find the summary message and truncate the
+// history at that point.
 //
-// Mapping from old code: this is similar to persistCompressedMessages in
-// internal/worker/compress.go. The old code deleted old messages and created
-// a summary; the new code only creates a summary (old messages remain for
-// audit purposes, but loadMessages truncates at the summary).
-//
-// SessionID threading: the summarization middleware does not pass sessionID
-// through the context natively. To solve this, createAgent wraps the context
-// with sessionID via withSessionID before the agent runs. The middleware's
-// callbacks (CompressContext and OnCompress) inherit this context, so
-// getSessionIDFromContext can extract the sessionID here.
+// The first message in `compressed` is expected to be the summary message
+// (a user message containing the formatted summary). We persist this as
+// a system message with ContentTypeSummary.
 func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*schema.Message) error {
 	if len(compressed) == 0 {
 		return nil
@@ -206,22 +293,22 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 	// Extract sessionID from context (injected by createAgent via withSessionID).
 	sessionID := getSessionIDFromContext(ctx)
 	if sessionID == uuid.Nil {
-		// Cannot persist without a sessionID. Log and skip — this should not
-		// happen in normal operation because createAgent always injects it.
 		h.logIfEnabled(ctx, "persistCompressedMessages.skip_no_session_id", map[string]any{
 			"compressed_count": len(compressed),
 		})
 		return nil
 	}
 
-	// Convert compressed messages to SummaryItems for persistence.
-	contents := make([]primitives.SummaryItem, 0, len(compressed))
-	for _, msg := range compressed {
-		item := primitives.SummaryItem{
-			Role:    string(msg.Role),
-			Content: msg.Content,
-		}
-		contents = append(contents, item)
+	// The first message is the summary (created by compressContext).
+	// Extract its content as the summary text.
+	summaryText := compressed[0].Content
+
+	// Create a single SummaryItem containing the summary.
+	contents := []primitives.SummaryItem{
+		{
+			Role:    "system",
+			Content: summaryText,
+		},
 	}
 
 	// Create the summary message in DB.
@@ -245,8 +332,7 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 	}
 
 	h.logIfEnabled(ctx, "persistCompressedMessages.done", map[string]any{
-		"session_id":       sessionID.String(),
-		"compressed_count": len(compressed),
+		"session_id": sessionID.String(),
 	})
 
 	return nil
@@ -257,7 +343,9 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 // Strategy:
 //   - For messages with ResponseMeta.Usage (from LLM responses), use TotalTokens
 //     as the context size baseline at that point in the conversation.
-//   - For messages without Usage data, estimate via ~4 chars per token.
+//     TotalTokens already includes cache read + cache creation tokens.
+//   - For messages without Usage data, estimate via precise estimation that
+//     considers Content, ReasoningContent, MultiContent, and ToolCalls.
 //   - Walk backwards to find the last message with Usage, use its TotalTokens
 //     as the cumulative baseline, then add estimates for newer messages.
 //   - If no messages have Usage data at all, fall back to estimating every
@@ -269,23 +357,85 @@ func cumulativeTokenCounter(_ context.Context, messages []*schema.Message) (int,
 
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
-		if msg.ResponseMeta != nil && msg.ResponseMeta.Usage != nil && msg.ResponseMeta.Usage.TotalTokens > 0 {
-			baseTokens = msg.ResponseMeta.Usage.TotalTokens
-			incrementStart = i + 1
-			break
+		if msg.ResponseMeta != nil && msg.ResponseMeta.Usage != nil {
+			usage := msg.ResponseMeta.Usage
+			// TotalTokens 已经是准确值（包含 cache read + cache creation）
+			if usage.TotalTokens > 0 {
+				baseTokens = usage.TotalTokens
+				incrementStart = i + 1
+				break
+			}
 		}
 	}
 
-	// 2. 累加基线之后新增消息的估算 token。
+	// 2. 累加基线之后新增消息的估算 token（使用精确估算）。
 	var estimated int
 	for _, msg := range messages[incrementStart:] {
-		estimated += estimateTokens(msg)
+		estimated += estimateMessageTokensPrecise(msg)
 	}
 
 	return baseTokens + estimated, nil
 }
 
+// estimateMessageTokensPrecise estimates token count for a single message
+// with high precision (~4 chars per token).
+//
+// Unlike the simpler estimateTokens, this function considers:
+//   - Content and ReasoningContent
+//   - UserInputMultiContent (user input multimodal content)
+//   - AssistantGenMultiContent (model output multimodal content)
+//   - ToolCalls (function name, arguments, and ID)
+//   - Tool result metadata (ToolCallID, ToolName)
+func estimateMessageTokensPrecise(msg *schema.Message) int {
+	if msg == nil {
+		return 0
+	}
+
+	var charCount int
+
+	// 主内容
+	charCount += len(msg.Content)
+	charCount += len(msg.ReasoningContent)
+
+	// UserInputMultiContent（用户输入多模态内容）
+	for _, part := range msg.UserInputMultiContent {
+		if part.Type == schema.ChatMessagePartTypeText {
+			charCount += len(part.Text)
+		}
+		// 图片等多模态内容按固定 token 估算（约 250 tokens）
+		if part.Type == schema.ChatMessagePartTypeImageURL {
+			charCount += 1000
+		}
+	}
+
+	// AssistantGenMultiContent（模型输出多模态内容）
+	for _, part := range msg.AssistantGenMultiContent {
+		if part.Type == schema.ChatMessagePartTypeText {
+			charCount += len(part.Text)
+		} else if part.Type == schema.ChatMessagePartTypeReasoning && part.Reasoning != nil {
+			charCount += len(part.Reasoning.Text)
+		}
+	}
+
+	// ToolCalls（工具调用）
+	for _, tc := range msg.ToolCalls {
+		charCount += len(tc.Function.Name)
+		charCount += len(tc.Function.Arguments)
+		charCount += len(tc.ID) // tool call ID
+	}
+
+	// Tool 结果消息
+	if msg.Role == schema.Tool {
+		charCount += len(msg.ToolCallID)
+		charCount += len(msg.ToolName)
+	}
+
+	return charCount / 4 // 4 chars per token
+}
+
 // estimateTokens estimates token count for a single message (~4 chars/token).
+// This is the simpler version kept for backward compatibility.
+// For more precise estimation, use estimateMessageTokensPrecise.
 func estimateTokens(msg *schema.Message) int {
 	if msg == nil {
 		return 0
@@ -296,20 +446,6 @@ func estimateTokens(msg *schema.Message) int {
 // =============================================================================
 // Session context helpers
 // =============================================================================
-//
-// The summarization middleware's CompressContext and OnCompress callbacks need
-// access to the sessionID. The turn-agent package does not thread sessionID
-// through the context natively. These helpers provide a mechanism to do so
-// via context.WithValue.
-//
-// createAgent wraps the context with sessionID before passing it to the agent
-// constructor. The middleware's callbacks inherit this context and can extract
-// the sessionID via getSessionIDFromContext.
-//
-// Mapping from old code: the old code had sessionID available directly in the
-// Manager's methods (compressContext, persistCompressedMessages) because the
-// middleware was created per-session with closure-captured state. The new code
-// uses context threading because the middleware is shared across all sessions.
 
 type sessionIDKey struct{}
 

@@ -73,6 +73,15 @@ type Config struct {
 	// If <= 0, defaults to 25000.
 	ContextTokensLimit int
 
+	// AutoCompactBufferTokens is the buffer token count for auto-compaction.
+	// Used to calculate the actual trigger threshold: ContextTokensLimit - AutoCompactBufferTokens.
+	// If <= 0, defaults to 13000.
+	AutoCompactBufferTokens int
+
+	// MaxOutputTokensForSummary is the maximum output tokens for summarization.
+	// If <= 0, defaults to 20000.
+	MaxOutputTokensForSummary int
+
 	// CancelGracePeriod controls graceful vs. immediate cancellation.
 	// If zero (default), cancellation is immediate. If positive, the agent
 	// runs until a safe point with the given grace period as upper bound.
@@ -88,6 +97,19 @@ type Config struct {
 	// StreamChunkTTL controls how long streaming message chunks live in Redis.
 	// If <= 0, defaults to 5m.
 	StreamChunkTTL time.Duration
+
+	// MicrocompactGapMinutes is the idle time threshold (in minutes) for
+	// time-based Microcompact. If <= 0, defaults to 60.
+	MicrocompactGapMinutes int
+
+	// MicrocompactKeepRecent is the number of recent tool results to keep
+	// during Microcompact. If <= 0, defaults to 5.
+	MicrocompactKeepRecent int
+
+	// ToolResultBudgetMaxTokens is the maximum tokens for a single tool result.
+	// If <= 0, defaults to 10000 (≈40KB). This prevents oversized tool outputs
+	// from consuming excessive context space.
+	ToolResultBudgetMaxTokens int
 }
 
 // New constructs a *turnagent.Agent with all callbacks wired to the
@@ -108,19 +130,58 @@ func New(cfg Config) (*turnagent.Agent, error) {
 	// The helpers struct provides methods that match the turnagent callback
 	// signatures, closing over the Config's dependencies.
 	h := &helpers{
-		deps:               cfg.Deps,
-		rdb:                cfg.Redis,
-		logger:             cfg.Logger,
-		tracer:             cfg.Tracer,
-		metrics:            cfg.Metrics,
-		contextTokensLimit: cfg.ContextTokensLimit,
-		enableLLMLogging:   cfg.EnableLLMLogging,
-		streamChunkTTL:     defaultStreamChunkTTL(cfg.StreamChunkTTL),
+		deps:                      cfg.Deps,
+		rdb:                       cfg.Redis,
+		logger:                    cfg.Logger,
+		tracer:                    cfg.Tracer,
+		metrics:                   cfg.Metrics,
+		contextTokensLimit:        cfg.ContextTokensLimit,
+		autoCompactBufferTokens:   cfg.AutoCompactBufferTokens,
+		maxOutputTokensForSummary: cfg.MaxOutputTokensForSummary,
+		enableLLMLogging:          cfg.EnableLLMLogging,
+		streamChunkTTL:            defaultStreamChunkTTL(cfg.StreamChunkTTL),
+		microcompactGapMinutes:    cfg.MicrocompactGapMinutes,
+		microcompactKeepRecent:    cfg.MicrocompactKeepRecent,
+		toolResultBudgetMaxTokens: cfg.ToolResultBudgetMaxTokens,
 	}
 
 	if h.contextTokensLimit <= 0 {
 		h.contextTokensLimit = 25000
 	}
+	if h.autoCompactBufferTokens <= 0 {
+		h.autoCompactBufferTokens = 13000
+	}
+	if h.maxOutputTokensForSummary <= 0 {
+		h.maxOutputTokensForSummary = 20000
+	}
+	if h.microcompactGapMinutes <= 0 {
+		h.microcompactGapMinutes = 60
+	}
+	if h.microcompactKeepRecent <= 0 {
+		h.microcompactKeepRecent = 5
+	}
+	if h.toolResultBudgetMaxTokens <= 0 {
+		h.toolResultBudgetMaxTokens = DefaultToolResultMaxTokens
+	}
+
+	// Build the attachment manager. It coordinates the building and injection
+	// of all dynamic attachments (AgentPrompt, TodoList, SessionMemory, UserMemory).
+	// Attachments are built in order: AgentPrompt first (highest priority),
+	// then TodoList, SessionMemory, UserMemory.
+	h.attachmentManager = NewAttachmentManager(
+		[]Attachment{
+			NewAgentPromptAttachment(h),
+			NewTodoListAttachment(h),
+			NewSessionMemoryAttachment(h),
+			NewUserMemoryAttachment(h),
+		},
+		cfg.Metrics,
+		cfg.Logger,
+		AttachmentManagerConfig{
+			MaxTokensPerAttachment: 5000,
+			TotalBudget:            15000,
+		},
+	)
 
 	// Build the summarization middleware. It is created once and shared
 	// across all turns (it is stateless — the per-turn state lives in the
@@ -185,6 +246,10 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		Cancel: turnagent.CancelConfig{
 			GracePeriod: cfg.CancelGracePeriod,
 		},
+
+		// Reactive compact — recover from LLM prompt-too-long errors.
+		RecoverFromPromptTooLong: h.recoverFromPromptTooLong,
+		MaxReactiveCompactAttempts: 3,
 	}
 
 	return turnagent.New(taCfg)
@@ -198,14 +263,19 @@ func New(cfg Config) (*turnagent.Agent, error) {
 // (createTurn, beginTurn, etc.) are the callback implementations. Methods
 // with other names (publishTurnEvent, loadSession) are internal helpers.
 type helpers struct {
-	deps               *usecase.Dependencies
-	rdb                redis.UniversalClient
-	logger             turnagent.Logger
-	tracer             trace.Tracer
-	metrics            turnagent.Metrics
-	contextTokensLimit int
-	enableLLMLogging   bool
-	streamChunkTTL     time.Duration
+	deps                      *usecase.Dependencies
+	rdb                       redis.UniversalClient
+	logger                    turnagent.Logger
+	tracer                    trace.Tracer
+	metrics                   turnagent.Metrics
+	contextTokensLimit        int
+	autoCompactBufferTokens   int
+	maxOutputTokensForSummary int
+	enableLLMLogging          bool
+	streamChunkTTL            time.Duration
+	microcompactGapMinutes    int
+	microcompactKeepRecent    int
+	toolResultBudgetMaxTokens int
 
 	// summarizeMW is the summarization middleware, created once in New().
 	// Stored on helpers so CreateAgent can close over it without capturing
@@ -220,6 +290,11 @@ type helpers struct {
 	// concurrent-safe map keyed by turnID since multiple turns may execute
 	// concurrently on the same helpers.
 	streamState streamStateMap
+
+	// attachmentManager coordinates the building and injection of all
+	// dynamic attachments (TodoList, SessionMemory, UserMemory).
+	// Created once in New() and shared across all turns.
+	attachmentManager *AttachmentManager
 }
 
 // defaultCheckpointTTL returns the configured checkpoint TTL, defaulting to 24h.
@@ -236,4 +311,21 @@ func defaultStreamChunkTTL(d time.Duration) time.Duration {
 		return 5 * time.Minute
 	}
 	return d
+}
+
+// microcompactConfig returns the MicrocompactConfig derived from the helpers'
+// configuration fields.
+func (h *helpers) microcompactConfig() MicrocompactConfig {
+	return MicrocompactConfig{
+		GapThresholdMinutes: h.microcompactGapMinutes,
+		KeepRecent:          h.microcompactKeepRecent,
+	}
+}
+
+// toolResultBudgetConfig returns the ToolResultBudgetConfig derived from the
+// helpers' configuration fields.
+func (h *helpers) toolResultBudgetConfig() ToolResultBudgetConfig {
+	return ToolResultBudgetConfig{
+		MaxTokens: h.toolResultBudgetMaxTokens,
+	}
 }

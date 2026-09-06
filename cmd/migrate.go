@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 
 	"github.com/spf13/cobra"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 var migrateCmd = &cobra.Command{
@@ -44,6 +46,11 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("connect database: %w", err)
+	}
+
+	// 确保 pgvector 扩展已创建（pgvector/pgvector:pg17 镜像已安装扩展，但需显式启用）
+	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
+		logger.Warn(context.Background(), "Failed to create pgvector extension (vector search may not work)", zap.Error(err))
 	}
 
 	if err := model.AutoMigrate(db); err != nil {

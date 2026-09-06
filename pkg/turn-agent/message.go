@@ -1,6 +1,10 @@
 package turnagent
 
-import "github.com/cloudwego/eino/schema"
+import (
+	"time"
+
+	"github.com/cloudwego/eino/schema"
+)
 
 // Role constants for Message.Role. Mirror the values used by eino's
 // schema.RoleType, but the upper application uses these string constants
@@ -89,6 +93,12 @@ type Message struct {
 	// Like TurnID, this is not mapped through eino conversion — it is a
 	// persistence-layer concern.
 	TurnOffset int
+
+	// CreatedAt is the time this message was created in the database.
+	// Populated by the application layer from model.Message.CreatedAt.
+	// Not mapped to/from eino's schema.Message — used only by application-level
+	// logic such as Microcompact's time-based trigger.
+	CreatedAt time.Time
 }
 
 // ToolCall describes one tool invocation requested by the assistant.
@@ -170,6 +180,13 @@ func toEinoMessages(msgs []*Message) []*schema.Message {
 	return out
 }
 
+// MessagesToEino converts a slice of pkg Messages to eino's schema.Message slice.
+// Exported for use by the application layer (e.g., reactive compact recovery).
+// Preserves order; nil input returns nil output.
+func MessagesToEino(msgs []*Message) []*schema.Message {
+	return toEinoMessages(msgs)
+}
+
 // fromEinoMessage converts an eino schema.Message to a pkg Message. Returns nil
 // for nil input.
 func fromEinoMessage(m *schema.Message) *Message {
@@ -184,6 +201,7 @@ func fromEinoMessage(m *schema.Message) *Message {
 		ToolCallID:       m.ToolCallID,
 		Name:             m.Name,
 		Extra:            m.Extra,
+		CreatedAt:        time.Now(),
 	}
 	if m.ResponseMeta != nil {
 		msg.FinishReason = m.ResponseMeta.FinishReason

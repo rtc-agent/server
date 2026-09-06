@@ -17,6 +17,12 @@ type PrometheusMetrics struct {
 	interruptCount *prometheus.CounterVec
 	checkpointOps  *prometheus.CounterVec
 	checkpointSize *prometheus.HistogramVec
+
+	// Attachment metrics
+	attachmentTokens    *prometheus.CounterVec
+	attachmentDuration  *prometheus.HistogramVec
+	attachmentOps       *prometheus.CounterVec
+	attachmentTruncated *prometheus.CounterVec
 }
 
 // NewPrometheusMetrics 创建并注册所有 Prometheus 指标。
@@ -73,6 +79,36 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Help:      "Checkpoint data size in bytes.",
 			Buckets:   prometheus.ExponentialBuckets(1024, 2, 10), // 1KB ~ 512MB
 		}, []string{"operation"}),
+
+		// Attachment metrics
+		attachmentTokens: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "attachment",
+			Name:      "tokens_total",
+			Help:      "Total attachment tokens injected into LLM context.",
+		}, []string{"name"}), // name: "TodoList", "SessionMemory", "UserMemory"
+
+		attachmentDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rtc",
+			Subsystem: "attachment",
+			Name:      "build_duration_seconds",
+			Help:      "Attachment build duration in seconds.",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 10), // 1ms ~ 512ms
+		}, []string{"name"}),
+
+		attachmentOps: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "attachment",
+			Name:      "operations_total",
+			Help:      "Total attachment build operations.",
+		}, []string{"name", "status"}), // status: "success", "failed", "truncated"
+
+		attachmentTruncated: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "attachment",
+			Name:      "budget_truncated_total",
+			Help:      "Total times attachment was truncated due to budget limit.",
+		}, []string{"name"}),
 	}
 }
 
@@ -117,4 +153,29 @@ func (m *PrometheusMetrics) RecordCheckpoint(ctx context.Context, attrs Checkpoi
 
 	m.checkpointOps.WithLabelValues(attrs.Operation, status).Inc()
 	m.checkpointSize.WithLabelValues(attrs.Operation).Observe(float64(attrs.DataSize))
+}
+
+// RecordAttachment records metrics for an attachment build and injection.
+func (m *PrometheusMetrics) RecordAttachment(ctx context.Context, attrs AttachmentMetricsAttrs) {
+	// Record token consumption
+	if attrs.Tokens > 0 {
+		m.attachmentTokens.WithLabelValues(attrs.Name).Add(float64(attrs.Tokens))
+	}
+
+	// Record build duration
+	if attrs.DurationMs > 0 {
+		m.attachmentDuration.WithLabelValues(attrs.Name).Observe(float64(attrs.DurationMs) / 1000)
+	}
+
+	// Record operation status
+	status := attrs.Status
+	if status == "" {
+		status = "unknown"
+	}
+	m.attachmentOps.WithLabelValues(attrs.Name, status).Inc()
+
+	// Record truncation events
+	if status == "truncated" {
+		m.attachmentTruncated.WithLabelValues(attrs.Name).Inc()
+	}
 }

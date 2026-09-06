@@ -9,6 +9,13 @@ import (
 	"gorm.io/gorm"
 )
 
+// TodoItem 任务项（对齐 Claude Code 的 TodoItem 结构）
+type TodoItem struct {
+	Content    string `json:"content"`      // 任务描述（祈使句）
+	Status     string `json:"status"`       // pending/in_progress/completed
+	ActiveForm string `json:"active_form"`  // 执行中的描述（进行时）
+}
+
 // Session 会话模型
 type Session struct {
 	ID         uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
@@ -18,6 +25,8 @@ type Session struct {
 	DeviceID   string     `gorm:"size:255" json:"device_id,omitempty"` // 仅 user-owned session 使用，待 protocol 迁移后删除
 	Title      string     `gorm:"size:255" json:"title,omitempty"`
 	Status     string     `gorm:"size:20;not null;default:active;index" json:"status"`
+	AgentPrompt string    `gorm:"type:text" json:"agent_prompt,omitempty"`
+	TodoList   JSONB[TodoItem] `gorm:"type:jsonb;not null;default:'[]'" json:"todo_list"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 	ClosedAt   *time.Time `json:"closed_at,omitempty"`
@@ -48,6 +57,19 @@ func ToProtocolSession(m *Session) protocol.Session {
 	if m == nil {
 		return protocol.Session{}
 	}
+	// 转换 TodoList
+	var todoList *[]protocol.TodoItem
+	if len(m.TodoList) > 0 {
+		items := make([]protocol.TodoItem, len(m.TodoList))
+		for i, item := range m.TodoList {
+			items[i] = protocol.TodoItem{
+				Content:    item.Content,
+				Status:     protocol.TodoItemStatus(item.Status),
+				ActiveForm: item.ActiveForm,
+			}
+		}
+		todoList = &items
+	}
 	return protocol.Session{
 		Id:         protocol.UUID(m.ID.String()),
 		ClientId:   strPtr(m.ClientID),
@@ -55,6 +77,8 @@ func ToProtocolSession(m *Session) protocol.Session {
 		OwnerRefId: m.OwnerRefID,
 		Title:      strPtr(m.Title),
 		Status:     protocol.SessionStatus(m.Status),
+		AgentPrompt: strPtr(m.AgentPrompt),
+		TodoList:   todoList,
 		CreatedAt:  m.CreatedAt,
 		UpdatedAt:  m.UpdatedAt,
 		ClosedAt:   m.ClosedAt,

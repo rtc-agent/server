@@ -196,6 +196,27 @@ func (e SessionStatus) Valid() bool {
 	}
 }
 
+// Defines values for TodoItemStatus.
+const (
+	Completed  TodoItemStatus = "completed"
+	InProgress TodoItemStatus = "in_progress"
+	Pending    TodoItemStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the TodoItemStatus enum.
+func (e TodoItemStatus) Valid() bool {
+	switch e {
+	case Completed:
+		return true
+	case InProgress:
+		return true
+	case Pending:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TurnStatus.
 const (
 	TurnStatusCancelled   TurnStatus = "cancelled"
@@ -647,6 +668,9 @@ type RtcStatus string
 
 // SendMessageRequest 发送消息请求，自动创建 session（如不存在）和 turn
 type SendMessageRequest struct {
+	// AgentPrompt AGENT.md 内容快照，创建 session 时写入，后续每轮通过 attachment 注入 LLM 上下文
+	AgentPrompt *string `json:"agent_prompt,omitempty"`
+
 	// ClientId 客户端生成的幂等 ID
 	ClientId string `json:"client_id"`
 
@@ -686,6 +710,9 @@ type SendMessageResult struct {
 
 // Session defines model for Session.
 type Session struct {
+	// AgentPrompt AGENT.md 内容快照（仅创建时写入，后续只读）
+	AgentPrompt *string `json:"agent_prompt,omitempty"`
+
 	// ClientId 客户端生成的幂等 ID
 	ClientId *string `json:"client_id,omitempty"`
 
@@ -707,8 +734,11 @@ type Session struct {
 	Status     SessionStatus `json:"status"`
 
 	// Title 会话标题
-	Title     *string   `json:"title,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Title *string `json:"title,omitempty"`
+
+	// TodoList 会话任务列表（对齐 Claude Code 的 TodoWrite 工具）
+	TodoList  *[]TodoItem `json:"todo_list,omitempty"`
+	UpdatedAt time.Time   `json:"updated_at"`
 }
 
 // SessionStatus defines model for SessionStatus.
@@ -762,6 +792,21 @@ type SubmitRtcResultResponse struct {
 type SubmitRtcResultResult struct {
 	Success bool `json:"success"`
 }
+
+// TodoItem 任务项（对齐 Claude Code 的 TodoItem 结构）
+type TodoItem struct {
+	// ActiveForm 执行中的描述（进行时，如 "Running tests"）
+	ActiveForm string `json:"active_form"`
+
+	// Content 任务描述（祈使句，如 "Run tests"）
+	Content string `json:"content"`
+
+	// Status 任务状态
+	Status TodoItemStatus `json:"status"`
+}
+
+// TodoItemStatus 任务状态
+type TodoItemStatus string
 
 // ToolCall defines model for ToolCall.
 type ToolCall struct {
