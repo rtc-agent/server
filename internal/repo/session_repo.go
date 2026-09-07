@@ -29,6 +29,8 @@ type SessionRepo interface {
 	UpdateFieldsActive(ctx context.Context, id uuid.UUID, fields map[string]any) error
 	// GetByIDs 批量查询会话，返回 map[id]*Session。未找到的 ID 不会出现在 map 中。
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Session, error)
+	// ListByRoot 按 root_server_session_id 查询所有子孙会话，按指定 status 过滤，排除 root 自身。
+	ListByRoot(ctx context.Context, rootServerSessionID uuid.UUID, status string) ([]*model.Session, error)
 }
 
 type sessionRepo struct {
@@ -175,4 +177,15 @@ func (r *sessionRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.U
 		result[s.ID] = s
 	}
 	return result, nil
+}
+
+func (r *sessionRepo) ListByRoot(ctx context.Context, rootServerSessionID uuid.UUID, status string) ([]*model.Session, error) {
+	var sessions []*model.Session
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("root_server_session_id = ? AND id != ? AND status = ?", rootServerSessionID, rootServerSessionID, status).
+		Order("created_at ASC").
+		Find(&sessions).Error; err != nil {
+		return nil, fmt.Errorf("list sessions by root %s: %w", rootServerSessionID, err)
+	}
+	return sessions, nil
 }

@@ -218,6 +218,33 @@ func (u *UpdatePublisher) SetStreamStore(s StreamStoreAccessor) {
 	u.mu.Unlock()
 }
 
+// ResolveMessageContent 返回消息的完整内容（JSON 字符串）。
+// 如果消息是 streaming 状态，从 StreamStore 聚合 chunks 并替换 ContentData.Data。
+// 返回值为 ContentData JSON 字符串，调用方可直接 Unmarshal 为 protocol.ContentData。
+func (u *UpdatePublisher) ResolveMessageContent(msg *model.Message) string {
+	u.mu.RLock()
+	ss := u.streamStore
+	u.mu.RUnlock()
+
+	if ss != nil && protocol.MessageStreamingStatus(msg.StreamingStatus) == protocol.MessageStreamingStreaming {
+		chunks, err := ss.GetAllChunks(msg.ID.String())
+		if err == nil && len(chunks) > 0 {
+			joinedChunks := strings.Join(chunks, "")
+			// Try to preserve ContentData structure (type + data).
+			var contentData protocol.ContentData
+			if jsonErr := json.Unmarshal([]byte(msg.Content), &contentData); jsonErr == nil {
+				contentData.Data = joinedChunks
+				if result, marshalErr := json.Marshal(contentData); marshalErr == nil {
+					return string(result)
+				}
+			}
+			// Fallback: return chunks as plain text.
+			return joinedChunks
+		}
+	}
+	return msg.Content
+}
+
 // UpdatePublishItem 一条更新事件，描述一批实体变化
 type UpdatePublishItem struct {
 	Channel string

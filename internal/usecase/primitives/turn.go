@@ -5,11 +5,16 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // CreateTurn 在事务内创建 turn（thin wrapper）。
@@ -29,4 +34,80 @@ func UpdateTurnStatus(
 		return fmt.Errorf("update turn status: %w", err)
 	}
 	return nil
+}
+
+// StopActiveTurns stops all pending/running/interrupted turns for a session.
+//
+// Steps:
+//  1. Cancel all pending/processing work via rtc-queue CancelSession (clears
+//     the queue and notifies any worker currently processing).
+//  2. Query active turns BEFORE the bulk DB update (so we have turn IDs to
+//     publish events for).
+//  3. Mark remaining active turns as cancelled in the DB (belt-and-suspenders
+//     for races where a turn was created but not yet published to rtc-queue).
+//  4. Publish turn.updated events for each cancelled turn so the frontend
+//     learns that the turns are no longer active.
+func StopActiveTurns(ctx context.Context, deps *usecase.Dependencies, queue *rtcqueue.Queue, sessionID uuid.UUID, reason string) {
+	// 1. Cancel all pending/processing work via rtc-queue.
+	if queue != nil {
+		if err := queue.CancelSession(ctx, sessionID.String(), reason); err != nil {
+			logger.Error(ctx, "[StopActiveTurns] cancel session failed",
+				zap.String("session", sessionID.String()), zap.Error(err))
+		}
+	}
+
+	// 2. Query active turns BEFORE updating (so we can publish events for each).
+	activeTurns, err := deps.TurnRepo.FindActiveBySession(ctx, sessionID)
+	if err != nil {
+		logger.Error(ctx, "[StopActiveTurns] find active turns failed",
+			zap.String("session", sessionID.String()), zap.Error(err))
+		return
+	}
+
+	// 3. Mark remaining active turns as cancelled in DB (belt-and-suspenders).
+	if affected, err := deps.TurnRepo.UpdateStatusBySession(
+		ctx, sessionID,
+		[]string{
+			string(model.TurnStatusPending),
+			string(model.TurnStatusRunning),
+			string(model.TurnStatusInterrupted),
+		},
+		protocol.TurnStatusCancelled,
+	); err != nil {
+		logger.Error(ctx, "[StopActiveTurns] update turns status failed",
+			zap.String("session", sessionID.String()), zap.Error(err))
+	} else if affected > 0 {
+		logger.Info(ctx, "[StopActiveTurns] cancelled turns",
+			zap.Int("affected", int(affected)), zap.String("session", sessionID.String()))
+	}
+
+	// 4. Publish turn.updated events for all cancelled turns in a single batch.
+	if len(activeTurns) == 0 || deps.UpdatePublisher == nil {
+		return
+	}
+
+	session, sessErr := deps.SessionRepo.GetByID(ctx, sessionID)
+	if sessErr != nil {
+		logger.Error(ctx, "[StopActiveTurns] load session failed",
+			zap.String("session", sessionID.String()), zap.Error(sessErr))
+		return
+	}
+
+	var allItems []protocol.UpdateItem
+	for _, turn := range activeTurns {
+		turnUpdates := BuildTurnUpdatedUpdates(session, turn.ID)
+		for _, u := range turnUpdates {
+			allItems = append(allItems, u.Items...)
+		}
+	}
+	if len(allItems) == 0 {
+		return
+	}
+
+	ch := channel.UserTopic(session.OwnerRefID)
+	merged := []updates.UpdatePublishItem{{Channel: ch, Items: allItems}}
+	if _, err := deps.UpdatePublisher.Publish(ctx, merged...); err != nil {
+		logger.Error(ctx, "[StopActiveTurns] batch publish turn updates failed",
+			zap.String("session", sessionID.String()), zap.Int("turn_count", len(activeTurns)), zap.Error(err))
+	}
 }

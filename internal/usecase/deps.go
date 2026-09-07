@@ -8,12 +8,13 @@ import (
 	"context"
 
 	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/service/embedding"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/pkg/protocol"
 
-	"github.com/cloudwego/eino/components/model"
+	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -23,6 +24,7 @@ import (
 type Publisher interface {
 	Publish(ctx context.Context, items ...updates.UpdatePublishItem) ([]*protocol.Update, error)
 	RunAndPublish(ctx context.Context, fn func(txCtx context.Context) ([]updates.UpdatePublishItem, error)) ([]*protocol.Update, error)
+	ResolveMessageContent(msg *model.Message) string
 }
 
 // Dependencies UseCase 层所需的依赖。
@@ -43,7 +45,7 @@ type Dependencies struct {
 
 	// ChatModel is the eino ChatModel for LLM interactions.
 	// Required for agent execution in turn-loop sessions.
-	ChatModel model.ToolCallingChatModel
+	ChatModel einomodel.ToolCallingChatModel
 
 	// LLMConfig provides access to LLM-level configuration (retry, etc.)
 	LLMConfig config.LLMConfig

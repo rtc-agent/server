@@ -118,6 +118,24 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 			helpers: h,
 			turnID:  tid,
 		},
+		// listSubAgentTool lists all running sub agent sessions.
+		&listSubAgentTool{
+			session: session,
+			helpers: h,
+			turnID:  tid,
+		},
+		// getSubAgentMessageTool queries the last message from a specific sub agent.
+		&getSubAgentMessageTool{
+			session: session,
+			helpers: h,
+			turnID:  tid,
+		},
+		// stopSubAgentTool stops a running sub agent and all its descendants.
+		&stopSubAgentTool{
+			session: session,
+			helpers: h,
+			turnID:  tid,
+		},
 	}
 
 	// Add Session Memory tools

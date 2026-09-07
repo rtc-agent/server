@@ -37,6 +37,7 @@ type subAgentTool struct {
 
 // subAgentArgs is the input schema for the sub_agent tool.
 type subAgentArgs struct {
+	Title       string `json:"title"`
 	Instruction string `json:"instruction"`
 }
 
@@ -61,8 +62,21 @@ type subAgentInterruptState struct {
 func (t *subAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "sub_agent",
-		Desc: "Create a sub agent session to handle a specific task. The sub agent runs independently with its own context and tools. Use this for task decomposition when a complex task can be broken into independent subtasks. The sub agent's final response will be returned as the tool result.",
+		Desc: `Create a sub agent session to handle a complex, multi-step task.
+
+The sub agent runs in its own session with a fresh context. The parent session is paused until the sub agent completes, then its final response is returned as the tool result.
+
+Usage notes:
+- Always include a short title (3-5 words) summarizing the task
+- The sub agent starts with a blank context. Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters
+- Explain what you're trying to accomplish and why. Describe what you've already learned or ruled out
+- Never delegate understanding. Don't write vague instructions like "handle this task" — include specific requirements, file paths, and relevant context`,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+			"title": {
+				Type:     schema.String,
+				Desc:     "A short (3-5 word) noun-phrase description of the task. Examples: 'OAuth authentication setup', 'Login button fix', '用户登录功能实现'",
+				Required: true,
+			},
 			"instruction": {
 				Type:     schema.String,
 				Desc:     "The task instruction for the sub agent. Be specific and include all necessary context. The sub agent starts with a blank context, so include relevant details. Example: 'Verify if goal X is completed by checking the TodoList and recent messages'",
@@ -152,17 +166,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		}
 
 		// Extract the text content.
-		resultText := ""
-		if content.Type == protocol.ContentTypeText || content.Type == protocol.ContentTypeMarkdown {
-			// Content.Data is a string for text/markdown types.
-			if text, ok := content.Data.(string); ok {
-				resultText = text
-			}
-		} else {
-			// Fallback: stringify the data.
-			dataBytes, _ := json.Marshal(content.Data)
-			resultText = string(dataBytes)
-		}
+		resultText := extractTextFromContent(content)
 
 		if resultText == "" {
 			resultText = "Sub agent completed with no output."
@@ -182,6 +186,10 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 	var args subAgentArgs
 	if ok, errMsg := parseToolArgs(ctx, t.helpers, "sub_agent", argumentsInJSON, &args); !ok {
 		return errMsg, nil
+	}
+
+	if args.Title == "" {
+		return "Error: title is required", nil
 	}
 
 	if args.Instruction == "" {
@@ -235,7 +243,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 			OwnerKind:             t.session.OwnerKind,
 			OwnerRefID:            t.session.OwnerRefID,
 			DeviceID:              t.session.DeviceID,
-			Title:                 fmt.Sprintf("Sub Agent: %s", truncateString(args.Instruction, 50)),
+			Title:                 args.Title,
 			Status:                string(protocol.SessionStatusActive),
 			ParentClientSessionID: t.session.ClientID,
 			ParentServerSessionID: t.session.ID,

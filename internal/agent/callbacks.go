@@ -726,5 +726,15 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 		"reason":  reason,
 	})
 
+	// Sub Agent support: if this is a sub session, trigger parent resume.
+	session, sessErr := h.deps.SessionRepo.GetByID(ctx, turn.SessionID)
+	if sessErr == nil && session.ParentServerSessionID != uuid.Nil {
+		if session.SubAgentParentMessageID != uuid.Nil {
+			reasonPtr := &reason
+			h.resumeParentAfterSubAgentNewToolCallOutput(ctx, session.SubAgentParentMessageID, "cancelled", reasonPtr, nil)
+		}
+		h.resumeParentAfterSubAgent(ctx, session, nil)
+	}
+
 	return nil
 }
