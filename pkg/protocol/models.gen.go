@@ -276,6 +276,7 @@ func (e UpdateAction) Valid() bool {
 
 // Defines values for UpdateEntity.
 const (
+	EntityFile    UpdateEntity = "file"
 	EntityMessage UpdateEntity = "message"
 	EntityRtc     UpdateEntity = "rtc"
 	EntitySession UpdateEntity = "session"
@@ -285,6 +286,8 @@ const (
 // Valid indicates whether the value is a known member of the UpdateEntity enum.
 func (e UpdateEntity) Valid() bool {
 	switch e {
+	case EntityFile:
+		return true
 	case EntityMessage:
 		return true
 	case EntityRtc:
@@ -753,8 +756,19 @@ type Session struct {
 	OwnerKind string `json:"owner_kind"`
 
 	// OwnerRefId 所有者引用 ID（user → user UUID，system → "system"）
-	OwnerRefId string        `json:"owner_ref_id"`
-	Status     SessionStatus `json:"status"`
+	OwnerRefId            string  `json:"owner_ref_id"`
+	ParentClientSessionId *string `json:"parent_client_session_id,omitempty"`
+
+	// ParentServerSessionId protocol 内 UUID 类型，JSON 线上为字符串
+	ParentServerSessionId *UUID   `json:"parent_server_session_id,omitempty"`
+	RootClientSessionId   *string `json:"root_client_session_id,omitempty"`
+
+	// RootServerSessionId protocol 内 UUID 类型，JSON 线上为字符串
+	RootServerSessionId *UUID         `json:"root_server_session_id,omitempty"`
+	Status              SessionStatus `json:"status"`
+
+	// SubAgentParentMessageId protocol 内 UUID 类型，JSON 线上为字符串
+	SubAgentParentMessageId *UUID `json:"sub_agent_parent_message_id,omitempty"`
 
 	// Title 会话标题
 	Title *string `json:"title,omitempty"`

@@ -27,6 +27,12 @@ type Session struct {
 	Status     string     `gorm:"size:20;not null;default:active;index" json:"status"`
 	AgentPrompt string    `gorm:"type:text" json:"agent_prompt,omitempty"`
 	TodoList   JSONB[TodoItem] `gorm:"type:jsonb;not null;default:'[]'" json:"todo_list"`
+	// Sub Agent 层级关系
+	ParentClientSessionID   string    `gorm:"size:255;index" json:"parent_client_session_id,omitempty"`       // 父 session 的 client ID
+	ParentServerSessionID   uuid.UUID `gorm:"type:uuid;index" json:"parent_server_session_id,omitempty"`      // 父 session 的 server ID
+	RootClientSessionID     string    `gorm:"size:255;index" json:"root_client_session_id,omitempty"`         // 根 session 的 client ID
+	RootServerSessionID     uuid.UUID `gorm:"type:uuid;index" json:"root_server_session_id,omitempty"`        // 根 session 的 server ID
+	SubAgentParentMessageID uuid.UUID `gorm:"type:uuid;index" json:"sub_agent_parent_message_id,omitempty"`   // 父 session 中 sub_agent_invocation 消息的 ID
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 	ClosedAt   *time.Time `json:"closed_at,omitempty"`
@@ -70,18 +76,47 @@ func ToProtocolSession(m *Session) protocol.Session {
 		}
 		todoList = &items
 	}
+	// 转换 Sub Agent 层级关系字段
+	var parentClientSessionID *string
+	if m.ParentClientSessionID != "" {
+		parentClientSessionID = &m.ParentClientSessionID
+	}
+	var parentServerSessionID *protocol.UUID
+	if m.ParentServerSessionID != uuid.Nil {
+		pid := protocol.UUID(m.ParentServerSessionID.String())
+		parentServerSessionID = &pid
+	}
+	var rootClientSessionID *string
+	if m.RootClientSessionID != "" {
+		rootClientSessionID = &m.RootClientSessionID
+	}
+	var rootServerSessionID *protocol.UUID
+	if m.RootServerSessionID != uuid.Nil {
+		rid := protocol.UUID(m.RootServerSessionID.String())
+		rootServerSessionID = &rid
+	}
+	var subAgentParentMessageID *protocol.UUID
+	if m.SubAgentParentMessageID != uuid.Nil {
+		mid := protocol.UUID(m.SubAgentParentMessageID.String())
+		subAgentParentMessageID = &mid
+	}
 	return protocol.Session{
-		Id:         protocol.UUID(m.ID.String()),
-		ClientId:   strPtr(m.ClientID),
-		OwnerKind:  m.OwnerKind,
-		OwnerRefId: m.OwnerRefID,
-		Title:      strPtr(m.Title),
-		Status:     protocol.SessionStatus(m.Status),
-		AgentPrompt: strPtr(m.AgentPrompt),
-		TodoList:   todoList,
-		CreatedAt:  m.CreatedAt,
-		UpdatedAt:  m.UpdatedAt,
-		ClosedAt:   m.ClosedAt,
-		DeletedAt:  m.DeletedAt,
+		Id:                      protocol.UUID(m.ID.String()),
+		ClientId:                strPtr(m.ClientID),
+		OwnerKind:               m.OwnerKind,
+		OwnerRefId:              m.OwnerRefID,
+		Title:                   strPtr(m.Title),
+		Status:                  protocol.SessionStatus(m.Status),
+		AgentPrompt:             strPtr(m.AgentPrompt),
+		TodoList:                todoList,
+		ParentClientSessionId:   parentClientSessionID,
+		ParentServerSessionId:   parentServerSessionID,
+		RootClientSessionId:     rootClientSessionID,
+		RootServerSessionId:     rootServerSessionID,
+		SubAgentParentMessageId: subAgentParentMessageID,
+		CreatedAt:               m.CreatedAt,
+		UpdatedAt:               m.UpdatedAt,
+		ClosedAt:                m.ClosedAt,
+		DeletedAt:               m.DeletedAt,
 	}
 }
