@@ -190,6 +190,61 @@ for {
 
 实际使用中，队列空后你通常会释放锁，让其他 worker 处理后续到达的任务。`Complete` 已经会释放锁，所以简单的"完成即退出"对大多数场景已足够。
 
+### 5. 持锁模式（Hold Lock Mode）
+
+**Worker API 已废弃**，推荐使用原语 API 构建自定义生命周期管理。
+
+对于需要"一个 session 只能被一个 worker 持续处理"的场景（如 turn-loop agent），使用 `ClaimWithCredential` 和 `CompleteWork`：
+
+```go
+// 首次 claim：传入空 credential，返回的 claim 中包含 credential
+claim, err := q.ClaimWithCredential(ctx, sessionID, "worker-1", "")
+if err != nil {
+    log.Printf("claim: %v", err)
+    return
+}
+if claim == nil {
+    return // 抢占失败或队列为空
+}
+credential := claim.Credential // 保存 credential，后续 claim 需要带上
+
+// 处理 work
+processWork(claim.WorkID)
+
+// 完成 work，但不释放锁
+q.CompleteWork(ctx, claim.WorkID)
+
+// 继续 claim 下一个 work，带上 credential
+for {
+    next, err := q.ClaimWithCredential(ctx, sessionID, "worker-1", credential)
+    if err != nil {
+        log.Printf("claim: %v", err)
+        break
+    }
+    if next == nil {
+        break // 队列为空
+    }
+    processWork(next.WorkID)
+    q.CompleteWork(ctx, next.WorkID)
+}
+
+// 队列空了，主动释放锁
+q.ReleaseSession(ctx, sessionID)
+```
+
+**Credential 机制**：
+
+- 首次 `ClaimWithCredential` 时，传入空 credential，系统生成 UUID 作为 credential
+- 后续 `ClaimWithCredential` 时，必须带上正确的 credential
+- 其他 worker 没有 credential，无法 claim 该 session
+- Credential 与锁绑定，锁过期时 credential 也失效
+
+**适用场景**：
+
+- Turn-loop agent：每个 session 一个 long-running TurnLoop
+- 需要保持状态连续性的任务
+- 避免频繁的竞争和锁切换
+
 ## 取消任务
 
 Cancel 是**管理操作**。任何调用方都可以取消任何 work，且会无条件释放 session 锁——即使 worker 正在处理该任务。

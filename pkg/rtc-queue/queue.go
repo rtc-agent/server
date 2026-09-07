@@ -92,6 +92,59 @@ func (q *Queue) Claim(ctx context.Context, sessionID, workerID string) (*ClaimRe
 	return &ClaimResult{SessionID: sessionID, WorkID: workID}, nil
 }
 
+// ClaimWithCredential claims a work item with credential-based lock ownership.
+// This enables "hold lock" mode where a worker can continuously claim work items
+// for a session without releasing the lock between items.
+//
+// First claim: pass an empty credential. The method generates a new credential
+// (UUID) and returns it in ClaimResult. The worker MUST save this credential.
+//
+// Subsequent claims: pass the credential from the first claim. If the credential
+// matches the lock owner, the claim succeeds. Otherwise, returns nil (access denied).
+//
+// This design ensures that only the worker who first claimed the session can
+// continue processing its work items, preventing other workers from interfering.
+func (q *Queue) ClaimWithCredential(ctx context.Context, sessionID, workerID, credential string) (*ClaimResult, error) {
+	if sessionID == "" || workerID == "" {
+		return nil, fmt.Errorf("rtcqueue: session_id and worker_id required")
+	}
+
+	// Generate credential if not provided (first claim)
+	if credential == "" {
+		credential = uuid.New().String()
+	}
+
+	now := time.Now().Unix()
+	res, err := claimWithCredentialScript.Run(ctx, q.rdb, []string{
+		keyLock(sessionID),
+		keyQueue(sessionID),
+		keyActive(sessionID),
+	}, workerID, credential, DefaultLockTTLSeconds, now).Result()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("rtcqueue: claim with credential: %w", err)
+	}
+	arr, ok := res.([]interface{})
+	if !ok || len(arr) < 2 {
+		return nil, nil
+	}
+	workID, ok := arr[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("rtcqueue: claim: unexpected work_id type %T", arr[0])
+	}
+	cred, ok := arr[1].(string)
+	if !ok {
+		return nil, fmt.Errorf("rtcqueue: claim: unexpected credential type %T", arr[1])
+	}
+	return &ClaimResult{
+		SessionID:  sessionID,
+		WorkID:     workID,
+		Credential: cred,
+	}, nil
+}
+
 // LoadWork fetches a Work item by id. Returns nil, nil when the key is
 // absent.
 func (q *Queue) LoadWork(ctx context.Context, workID string) (*Work, error) {
@@ -120,6 +173,36 @@ func (q *Queue) Complete(ctx context.Context, workID string) error {
 	).Int()
 	if err != nil {
 		return fmt.Errorf("rtcqueue: complete: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("rtcqueue: work %s not found", workID)
+	}
+	return nil
+}
+
+// CompleteWork marks a Work item as completed WITHOUT releasing the session lock.
+// Used in "hold lock" mode where the worker continues processing subsequent work
+// items for the same session. The worker should call ReleaseSession when it's
+// done processing all work items and wants to release the lock.
+//
+// This is different from Complete, which releases the lock and allows other
+// workers to claim the next work item.
+func (q *Queue) CompleteWork(ctx context.Context, workID string) error {
+	// First, load the work to get sessionID
+	work, err := q.LoadWork(ctx, workID)
+	if err != nil {
+		return fmt.Errorf("rtcqueue: complete work: load work: %w", err)
+	}
+	if work == nil {
+		return fmt.Errorf("rtcqueue: work %s not found", workID)
+	}
+
+	n, err := completeWorkScript.Run(ctx, q.rdb, []string{
+		keyWork(workID),
+		keyActive(work.SessionID),
+	}, time.Now().Unix()).Int()
+	if err != nil {
+		return fmt.Errorf("rtcqueue: complete work: %w", err)
 	}
 	if n == 0 {
 		return fmt.Errorf("rtcqueue: work %s not found", workID)

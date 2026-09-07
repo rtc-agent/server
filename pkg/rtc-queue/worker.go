@@ -16,6 +16,11 @@ import (
 // renewal, cancel handling, draining remaining work in a session, and
 // graceful shutdown. The caller only provides a callback for the actual
 // work logic.
+//
+// Deprecated: Worker API is deprecated. Use the primitive API (Claim,
+// ClaimWithCredential, CompleteWork, ReleaseSession) instead to build
+// custom lifecycle management. This is required for "hold lock" mode
+// where a worker continuously processes work items for a session.
 type WorkerConfig struct {
 	// WorkerID uniquely identifies this worker. Used for lock ownership.
 	WorkerID string
@@ -45,6 +50,16 @@ type WorkerConfig struct {
 	// Logger provides structured logging for worker lifecycle events.
 	// If nil, falls back to the standard library log package.
 	Logger WorkerLogger
+
+	// HoldLock enables "hold lock" mode where the worker keeps the session
+	// lock after completing a work item and continues to claim more work
+	// from the same session. When the queue is empty, the lock is released.
+	// This is required for turn-loop agents that need to process multiple
+	// work items for the same session without releasing the lock.
+	//
+	// When enabled, the worker uses ClaimWithCredential and CompleteWork
+	// instead of Claim and Complete.
+	HoldLock bool
 }
 
 // WorkerLogger is the logging interface used by Worker.
@@ -202,6 +217,10 @@ func (w *Worker) Stop(ctx context.Context) error {
 // and returns. After Complete releases the lock, all workers compete
 // again for the next notification. This ensures fairer load distribution
 // across the cluster.
+//
+// When HoldLock is enabled, the worker keeps the session lock after
+// completing a work item and continues to claim more work from the
+// same session until the queue is empty.
 func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 	// create a session-scoped context so we can cancel this session
 	// independently (e.g. on Stop)
@@ -229,6 +248,17 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 		"worker_id":  w.cfg.WorkerID,
 	})
 
+	if w.cfg.HoldLock {
+		// Hold lock mode: use ClaimWithCredential
+		w.processSessionHoldLock(ctx, sessionID)
+	} else {
+		// Normal mode: use Claim
+		w.processSessionNormal(ctx, sessionID)
+	}
+}
+
+// processSessionNormal handles the normal mode: claim one work, process it, release lock.
+func (w *Worker) processSessionNormal(ctx context.Context, sessionID string) {
 	claim, err := w.q.Claim(ctx, sessionID, w.cfg.WorkerID)
 	if err != nil {
 		w.logIfEnabled("worker.claim_failed", map[string]any{
@@ -257,13 +287,86 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 	// will trigger a fresh claim, and all workers compete again.
 }
 
+// processSessionHoldLock handles the hold lock mode: claim work with credential,
+// process it, complete without releasing lock, continue until queue is empty.
+func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
+	// First claim: pass empty credential, get credential from result
+	claim, err := w.q.ClaimWithCredential(ctx, sessionID, w.cfg.WorkerID, "")
+	if err != nil {
+		w.logIfEnabled("worker.claim_failed", map[string]any{
+			"session_id": sessionID,
+			"error":      err.Error(),
+		})
+		w.cfg.OnError(fmt.Errorf("claim session %s: %w", sessionID, err))
+		return
+	}
+	if claim == nil {
+		// queue empty or lost the race
+		w.logIfEnabled("worker.claim_empty", map[string]any{
+			"session_id": sessionID,
+		})
+		return
+	}
+
+	w.logIfEnabled("worker.claimed", map[string]any{
+		"session_id": sessionID,
+		"work_id":    claim.WorkID,
+		"credential": claim.Credential,
+	})
+
+	credential := claim.Credential
+
+	// Process work in a loop
+	for {
+		w.processWorkHoldLock(ctx, claim)
+
+		// Try to claim next work with credential
+		nextClaim, err := w.q.ClaimWithCredential(ctx, sessionID, w.cfg.WorkerID, credential)
+		if err != nil {
+			w.logIfEnabled("worker.claim_next_failed", map[string]any{
+				"session_id": sessionID,
+				"error":      err.Error(),
+			})
+			// Release lock on error
+			w.q.ReleaseSession(ctx, sessionID)
+			return
+		}
+		if nextClaim == nil {
+			// Queue is empty, release lock
+			w.logIfEnabled("worker.queue_empty_releasing_lock", map[string]any{
+				"session_id": sessionID,
+			})
+			w.q.ReleaseSession(ctx, sessionID)
+			return
+		}
+
+		w.logIfEnabled("worker.claimed_next", map[string]any{
+			"session_id": sessionID,
+			"work_id":    nextClaim.WorkID,
+		})
+		claim = nextClaim
+	}
+}
+
 // processWork handles a single work item: starts lock renewal, listens
 // for cancel, calls OnWork, and completes if successful. The lock is
 // released by Complete (on success) or left to expire (on error/lock-loss).
 func (w *Worker) processWork(ctx context.Context, claim *ClaimResult) {
+	w.processWorkInternal(ctx, claim, false)
+}
+
+// processWorkHoldLock handles a single work item in hold-lock mode.
+// The lock is NOT released after completion; instead, CompleteWork is called.
+func (w *Worker) processWorkHoldLock(ctx context.Context, claim *ClaimResult) {
+	w.processWorkInternal(ctx, claim, true)
+}
+
+// processWorkInternal is the shared implementation for both normal and hold-lock modes.
+func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, holdLock bool) {
 	w.logIfEnabled("worker.processing_work", map[string]any{
 		"work_id":    claim.WorkID,
 		"session_id": claim.SessionID,
+		"hold_lock":  holdLock,
 	})
 
 	work, err := w.q.LoadWork(ctx, claim.WorkID)
@@ -378,12 +481,21 @@ func (w *Worker) processWork(ctx context.Context, claim *ClaimResult) {
 		return
 	}
 
-	// success — complete the work (also releases the session lock).
+	// success — complete the work.
 	// Use a fresh context so the Complete call succeeds even if the
 	// parent ctx was cancelled (e.g. during graceful shutdown).
 	completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer completeCancel()
-	if err := w.q.Complete(completeCtx, claim.WorkID); err != nil {
-		w.cfg.OnError(fmt.Errorf("complete %s: %w", claim.WorkID, err))
+
+	if holdLock {
+		// Hold-lock mode: complete work without releasing session lock
+		if err := w.q.CompleteWork(completeCtx, claim.WorkID); err != nil {
+			w.cfg.OnError(fmt.Errorf("complete work %s: %w", claim.WorkID, err))
+		}
+	} else {
+		// Normal mode: complete work and release session lock
+		if err := w.q.Complete(completeCtx, claim.WorkID); err != nil {
+			w.cfg.OnError(fmt.Errorf("complete %s: %w", claim.WorkID, err))
+		}
 	}
 }
