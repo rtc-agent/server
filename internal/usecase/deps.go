@@ -38,6 +38,7 @@ type Dependencies struct {
 	MessageRepo     repo.MessageRepo
 	TurnRepo        repo.TurnRepo
 	RtcRepo         repo.RtcRepo
+	GoalRepo        repo.GoalRepo
 	SessionMemoryRepo repo.SessionMemoryRepo
 	UserMemoryRepo  repo.UserMemoryRepo
 	EmbeddingService embedding.Service

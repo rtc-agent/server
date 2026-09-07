@@ -30,6 +30,7 @@ type ServiceContext struct {
 	MessageRepo       repo.MessageRepo
 	TurnRepo          repo.TurnRepo
 	RtcRepo           repo.RtcRepo
+	GoalRepo          repo.GoalRepo
 	OAuth2UserRepo    repo.OAuth2UserRepo
 	DeviceRepo        repo.DeviceRepo
 	RefreshTokenRepo  repo.RefreshTokenRepo
@@ -54,6 +55,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	messageRepo := repo.NewMessageRepo(db)
 	turnRepo := repo.NewTurnRepo(db)
 	rtcRepo := repo.NewRtcRepo(db)
+	goalRepo := repo.NewGoalRepo(db)
 	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
 	deviceRepo := repo.NewDeviceRepo(db)
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
@@ -107,6 +109,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		MessageRepo:       messageRepo,
 		TurnRepo:          turnRepo,
 		RtcRepo:           rtcRepo,
+		GoalRepo:          goalRepo,
 		OAuth2UserRepo:    oauth2UserRepo,
 		DeviceRepo:        deviceRepo,
 		RefreshTokenRepo:  refreshTokenRepo,
@@ -130,6 +133,7 @@ func NewServiceContextWithDeps(
 	messageRepo repo.MessageRepo,
 	turnRepo repo.TurnRepo,
 	rtcRepo repo.RtcRepo,
+	goalRepo repo.GoalRepo,
 	oauth2UserRepo repo.OAuth2UserRepo,
 	deviceRepo repo.DeviceRepo,
 	refreshTokenRepo repo.RefreshTokenRepo,
@@ -152,6 +156,7 @@ func NewServiceContextWithDeps(
 		MessageRepo:       messageRepo,
 		TurnRepo:          turnRepo,
 		RtcRepo:           rtcRepo,
+		GoalRepo:          goalRepo,
 		OAuth2UserRepo:    oauth2UserRepo,
 		DeviceRepo:        deviceRepo,
 		RefreshTokenRepo:  refreshTokenRepo,
