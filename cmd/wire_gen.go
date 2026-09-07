@@ -337,7 +337,8 @@ func provideQueueWorker(
 		OnError: func(err error) {
 			logger.Error(context.Background(), "[rtcqueue.Worker] error", zap.Error(err))
 		},
-		Logger: &workerLogger{},
+		Logger:   &workerLogger{},
+		HoldLock: true,
 	})
 }
 
