@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/callbacks"
@@ -47,7 +48,11 @@ func New(cfg Config) (*Agent, error) {
 // callbacks. sessionID and turnID are captured in closures so GenInput,
 // GenResume, PrepareAgent, and OnAgentEvents can forward them to the data
 // callbacks without carrying them in the eino item type.
-func (a *Agent) buildEinoConfig(sessionID, turnID, checkpointID string) adk.TurnLoopConfig[WorkPayload, *schema.Message] {
+// buildEinoConfig constructs the eino TurnLoopConfig for a single turn.
+// lastMessage is an output parameter: when the turn produces an assistant
+// message, the last one is written to *lastMessage. Used by Sub Agent support
+// to pass the sub session's final response to the parent session.
+func (a *Agent) buildEinoConfig(sessionID, turnID, checkpointID string, lastMessage **Message) adk.TurnLoopConfig[WorkPayload, *schema.Message] {
 	return adk.TurnLoopConfig[WorkPayload, *schema.Message]{
 		GenInput: func(ctx context.Context, loop *adk.TurnLoop[WorkPayload, *schema.Message], items []WorkPayload) (*adk.GenInputResult[WorkPayload, *schema.Message], error) {
 			// Inject sessionID/turnID into ctx BEFORE callbacks, so eino
@@ -129,7 +134,7 @@ func (a *Agent) buildEinoConfig(sessionID, turnID, checkpointID string) adk.Turn
 					tc.Loop.Stop()
 					return nil
 				}
-				if err := a.dispatchEvents(ctx, sessionID, turnID, ev); err != nil {
+				if err := a.dispatchEvents(ctx, sessionID, turnID, ev, lastMessage); err != nil {
 					tc.Loop.Stop()
 					return fmt.Errorf("turnagent: PublishEvent: %w", err)
 				}
@@ -155,7 +160,10 @@ func (a *Agent) buildEinoConfig(sessionID, turnID, checkpointID string) adk.Turn
 // signal, not an application-visible error. The turn's cancellation is already
 // handled by the lifecycle path in Process() (via the cancel channel and the
 // cancelledByQueue flag).
-func (a *Agent) dispatchEvents(ctx context.Context, sessionID, turnID string, ev *adk.AgentEvent) error {
+//
+// lastMessage is an output parameter: when the event contains an assistant
+// message, it is written to *lastMessage. Used by Sub Agent support.
+func (a *Agent) dispatchEvents(ctx context.Context, sessionID, turnID string, ev *adk.AgentEvent, lastMessage **Message) error {
 	// 1. Event-level error.
 	if ev.Err != nil {
 		// Swallow CancelError — it's eino's internal cancellation signal.
@@ -187,13 +195,17 @@ func (a *Agent) dispatchEvents(ctx context.Context, sessionID, turnID string, ev
 
 	// 3. Streaming: consume the stream, emit chunks + end.
 	if mv.IsStreaming {
-		return a.consumeStream(ctx, sessionID, turnID, ev.AgentName, string(mv.Role), mv.ToolName, mv.MessageStream)
+		return a.consumeStream(ctx, sessionID, turnID, ev.AgentName, string(mv.Role), mv.ToolName, mv.MessageStream, lastMessage)
 	}
 
 	// 4. Non-streaming: emit one message event.
 	var tokenUsage *TokenUsage
 	if mv.Message != nil && mv.Message.ResponseMeta != nil && mv.Message.ResponseMeta.Usage != nil {
 		tokenUsage = extractTokenUsage(mv.Message.ResponseMeta.Usage)
+	}
+	// Track the last assistant message for Sub Agent support.
+	if lastMessage != nil && mv.Role == schema.Assistant && mv.Message != nil {
+		*lastMessage = fromEinoMessage(mv.Message)
 	}
 	return a.cfg.PublishEvent(ctx, sessionID, turnID, &Event{
 		Kind:       EventKindMessage,
@@ -212,7 +224,11 @@ func (a *Agent) dispatchEvents(ctx context.Context, sessionID, turnID string, ev
 // The loop uses a goroutine + select pattern so that ctx cancellation unblocks
 // stream.Recv() — closing the stream on the way out so eino's resources are
 // released.
-func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName, role, toolName string, stream *schema.StreamReader[*schema.Message]) error {
+//
+// lastMessage is an output parameter: when the stream contains an assistant
+// message, the aggregated content is written to *lastMessage on EOF. Used by
+// Sub Agent support.
+func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName, role, toolName string, stream *schema.StreamReader[*schema.Message], lastMessage **Message) error {
 	// No `defer stream.Close()` here: we close explicitly on each exit path
 	// below. A deferred close would fire on top of the explicit close on the
 	// ctx.Done / EOF / error paths, causing a double close.
@@ -257,6 +273,10 @@ func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName,
 		msg *schema.Message
 		err error
 	}
+
+	// Aggregate content across all chunks for Sub Agent support.
+	// Only used when role is "assistant" and lastMessage is non-nil.
+	var contentBuilder strings.Builder
 
 	for {
 		// Recv in a goroutine so we can race it against ctx cancellation.
@@ -314,6 +334,13 @@ func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName,
 						"role":       role,
 						"message":    "maxUsage is nil after consuming all chunks",
 					})
+				}
+				// Track the last assistant message for Sub Agent support.
+				if lastMessage != nil && role == string(schema.Assistant) && contentBuilder.Len() > 0 {
+					*lastMessage = &Message{
+						Role:    role,
+						Content: contentBuilder.String(),
+					}
 				}
 				return a.cfg.PublishEvent(ctx, sessionID, turnID, &Event{
 					Kind:       EventKindStreamEnd,
@@ -382,6 +409,10 @@ func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName,
 				"has_content":   res.msg.Content != "",
 				"is_final":      finishReason != "",
 			})
+			// Aggregate content for Sub Agent support.
+			if res.msg.Content != "" {
+				contentBuilder.WriteString(res.msg.Content)
+			}
 			if err := a.cfg.PublishEvent(ctx, sessionID, turnID, &Event{
 				Kind:             EventKindStreamChunk,
 				AgentName:        agentName,

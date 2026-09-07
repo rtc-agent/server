@@ -106,7 +106,11 @@ type BeginTurnFunc func(ctx context.Context, turnID string) error
 //
 // If this callback returns an error, the error is logged and Process() still
 // returns nil — the turn has reached its terminal state.
-type CompleteTurnFunc func(ctx context.Context, turnID string) error
+//
+// lastMessage is the final assistant message produced by the turn (may be nil
+// if the turn produced no assistant message). Used by Sub Agent support to
+// pass the sub session's result to the parent session.
+type CompleteTurnFunc func(ctx context.Context, sessionID string, turnID string, lastMessage *Message) error
 
 // InterruptTurnFunc is called when the turn pauses due to an eino interrupt
 // (typically raised by a tool calling tool.StatefulInterrupt).

@@ -110,4 +110,9 @@ type WorkPayload struct {
 	// CustomInstruction is an optional user-provided instruction that overrides
 	// the default compression prompt. Only used by WorkKindCompact.
 	CustomInstruction *string `json:"custom_instruction,omitempty"`
+
+	// SubAgentResult is the result from a sub agent session. Only used by
+	// WorkKindResume when resuming a parent session after a sub agent completes.
+	// The parent session's interrupted tool receives this as its result.
+	SubAgentResult *string `json:"sub_agent_result,omitempty"`
 }

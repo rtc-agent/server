@@ -153,7 +153,9 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// the application's data callbacks without needing them in the eino
 	// item type.
 	checkpointID := a.cfg.DeriveCheckpointID(p.SessionID)
-	einoCfg := a.buildEinoConfig(p.SessionID, turnID, checkpointID)
+	// Track the last assistant message for Sub Agent support.
+	var lastMessage *Message
+	einoCfg := a.buildEinoConfig(p.SessionID, turnID, checkpointID, &lastMessage)
 	loop := adk.NewTurnLoop[WorkPayload, *schema.Message](einoCfg)
 
 	// 4. Cancel listener.
@@ -300,7 +302,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 
 			// Create a fresh TurnLoop and retry. loadMessages will load the
 			// compressed state from DB.
-			einoCfgRetry := a.buildEinoConfig(p.SessionID, turnID, checkpointID)
+			einoCfgRetry := a.buildEinoConfig(p.SessionID, turnID, checkpointID, &lastMessage)
 			retryLoop := adk.NewTurnLoop[WorkPayload, *schema.Message](einoCfgRetry)
 			pushed, _ := retryLoop.Push(p)
 			if !pushed {
@@ -409,7 +411,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			"message":    "calling CompleteTurn",
 		})
 		recordEnd("success", nil)
-		if err := a.cfg.CompleteTurn(turnCtx, turnID); err != nil {
+		if err := a.cfg.CompleteTurn(turnCtx, p.SessionID, turnID, lastMessage); err != nil {
 			// Terminal callback error: log it, but the turn has reached a
 			// terminal state from eino's perspective. Return nil so rtc-queue
 			// marks the work as complete; the DB inconsistency is for admin
