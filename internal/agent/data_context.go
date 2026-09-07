@@ -124,6 +124,16 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		h.triggerSessionMemoryExtraction(ctx, sid, messages)
 	}
 
+	// Phase 2: Detect /goal prefix and inject goal creation system message.
+	// This checks if the last user message starts with "/goal" and, if so,
+	// appends a system message with the goal creation prompt.
+	messages = injectGoalCreationPromptIfNeeded(messages)
+
+	// Phase 3: Detect active goal and inject goal management prompt.
+	// This checks if there is an active goal for the session and, if so,
+	// appends a user-role message with the goal management prompt.
+	messages = h.injectGoalManagementPromptIfNeeded(ctx, sessionID, messages)
+
 	return messages, nil
 }
 

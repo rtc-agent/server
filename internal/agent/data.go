@@ -136,6 +136,22 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 			helpers: h,
 			turnID:  tid,
 		},
+		// Goal tools: create_goal / complete_goal / cancel_goal.
+		&createGoalTool{
+			session: session,
+			helpers: h,
+			turnID:  tid,
+		},
+		&completeGoalTool{
+			session: session,
+			helpers: h,
+			turnID:  tid,
+		},
+		&cancelGoalTool{
+			session: session,
+			helpers: h,
+			turnID:  tid,
+		},
 	}
 
 	// Add Session Memory tools
