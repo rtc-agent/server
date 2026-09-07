@@ -146,25 +146,33 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		retErr = pErr
 	}()
 
-	// 3. Build eino config and TurnLoop.
+	// 3. Get or create the session's long-running TurnLoop.
 	//
-	// buildEinoConfig captures sessionID and turnID in closures, so
-	// GenInput / GenResume / PrepareAgent / OnAgentEvents can pass them to
-	// the application's data callbacks without needing them in the eino
-	// item type.
+	// Each session has a single long-running TurnLoop that persists across
+	// multiple work items. This enables the "hold lock" mode.
 	checkpointID := a.cfg.DeriveCheckpointID(p.SessionID)
-	// Track the last assistant message for Sub Agent support.
-	var lastMessage *Message
-	einoCfg := a.buildEinoConfig(p.SessionID, turnID, checkpointID, &lastMessage)
-	loop := adk.NewTurnLoop[WorkPayload, *schema.Message](einoCfg)
+
+	// Get or create the session loop.
+	// The callback receives the SessionLoop so the TurnLoop's OnAgentEvents
+	// references the same SessionLoop that PushAndWait waits on.
+	sessionLoop, err := a.registry.GetOrCreate(turnCtx, p.SessionID, func(sl *SessionLoop) (*adk.TurnLoop[TurnWorkItem, *schema.Message], context.CancelFunc) {
+		_, loopCancel := context.WithCancel(context.Background())
+
+		// Build config with the existing SessionLoop reference
+		einoCfg := a.buildEinoConfig(p.SessionID, checkpointID, sl)
+		loop := adk.NewTurnLoop[TurnWorkItem, *schema.Message](einoCfg)
+
+		sl.cancel = loopCancel
+		return loop, loopCancel
+	})
+	if err != nil {
+		return fmt.Errorf("turnagent: get or create session loop: %w", err)
+	}
+
+	// Reset lastMessage at the start of each turn
+	sessionLoop.ResetLastMessage()
 
 	// 4. Cancel listener.
-	//
-	// An inner context is used so we can cancel eino's Run without affecting
-	// the parent ctx (which the rtc-queue Worker owns). cancelledByQueue
-	// disambiguates "explicit admin cancel" from "parent ctx cancelled by
-	// worker shutdown" — only the former should transition the turn to
-	// "cancelled".
 	innerCtx, innerCancel := context.WithCancel(ctx)
 	defer innerCancel()
 
@@ -176,19 +184,10 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			cancelReason = cm.Reason
 			cancelledByQueue.Store(true)
 			innerCancel()
-			// Build stop options based on Cancel config.
-			//
-			// GracePeriod > 0 → graceful: wait up to GracePeriod for the
-			// current model/tool call to finish at a safe point, then stop.
-			// This avoids half-generated responses visible to the frontend.
-			//
-			// GracePeriod == 0 (default) → immediate: abort as soon as
-			// possible. Use this for admin cancels where responsiveness
-			// matters more than output coherence.
 			if a.cfg.Cancel.GracePeriod > 0 {
-				loop.Stop(adk.WithGracefulTimeout(a.cfg.Cancel.GracePeriod))
+				sessionLoop.loop.Stop(adk.WithGracefulTimeout(a.cfg.Cancel.GracePeriod))
 			} else {
-				loop.Stop(adk.WithImmediate())
+				sessionLoop.loop.Stop(adk.WithImmediate())
 			}
 		case <-innerCtx.Done():
 			return
@@ -219,132 +218,48 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		}
 	}
 
-	// 6. Push payload into eino's buffer and run.
-	//
-	// The payload itself carries only {kind, sessionID}; eino uses it only
-	// as a trigger. Actual per-turn data flows through the closures in
-	// buildEinoConfig (which have sessionID/turnID) and the data callbacks
-	// (LoadMessages etc.).
-	//
-	// For Submit: eino calls GenInput (no checkpoint exists).
-	// For Resume: eino finds the checkpoint, calls GenResume instead.
+	// 6. Push payload into the session's long-running loop and wait for completion.
 	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.pushing_to_loop", map[string]any{
 		"session_id": p.SessionID,
 		"turn_id":    turnID,
 		"work_kind":  string(p.Kind),
 	})
-	pushed, pushAck := loop.Push(p)
+
+	workItem := TurnWorkItem{
+		WorkPayload: p,
+		TurnID:      turnID,
+	}
+
+	pushErr := sessionLoop.PushAndWait(turnCtx, workItem)
+
 	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.push_result", map[string]any{
 		"session_id": p.SessionID,
 		"turn_id":    turnID,
 		"work_kind":  string(p.Kind),
-		"pushed":     pushed,
-		"has_ack":    pushAck != nil,
+		"push_error": fmt.Sprintf("%v", pushErr),
 	})
-	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.running_loop", map[string]any{
-		"session_id": p.SessionID,
-		"turn_id":    turnID,
-	})
-	loop.Run(turnCtx)
-	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.waiting_loop", map[string]any{
-		"session_id": p.SessionID,
-		"turn_id":    turnID,
-	})
-	exit := loop.Wait()
 
-	// Debug: log eino exit reason to trace why turn didn't complete
-	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.eino_exited", map[string]any{
+	// Convert to exit state for compatibility
+	var exitReason error
+	if pushErr != nil {
+		exitReason = pushErr
+	}
+
+	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.turn_completed", map[string]any{
 		"session_id":  p.SessionID,
 		"turn_id":     turnID,
 		"work_kind":   string(p.Kind),
-		"exit_reason": fmt.Sprintf("%v", exit.ExitReason),
-		"has_error":   exit.ExitReason != nil,
+		"exit_reason": fmt.Sprintf("%v", exitReason),
+		"has_error":   exitReason != nil,
 	})
 
-	// 6.5. Reactive compact: recover from prompt-too-long errors.
-	//
-	// If the LLM rejected the prompt as too long and a recovery callback is
-	// configured, attempt to compress the context and retry. Each attempt:
-	//   1. Calls RecoverFromPromptTooLong to compress and persist.
-	//   2. Creates a fresh TurnLoop (the previous one has exited).
-	//   3. Runs the loop again — loadMessages will pick up the compressed state.
-	//
-	// Up to MaxReactiveCompactAttempts retries (default 3). If all fail, the
-	// original error falls through to the default case below (FailTurn).
-	if exit.ExitReason != nil && IsPromptTooLongError(exit.ExitReason) && a.cfg.RecoverFromPromptTooLong != nil {
-		maxAttempts := a.cfg.MaxReactiveCompactAttempts
-		if maxAttempts <= 0 {
-			maxAttempts = 3
-		}
-		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			a.logIfEnabled(turnCtx, LogLevelInfo, "reactive_compact.attempt", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-				"attempt":    attempt,
-				"max":        maxAttempts,
-				"error":      exit.ExitReason.Error(),
-			})
-			a.addEventIfEnabled(turnCtx, "reactive_compact.attempt",
-				attribute.String("session.id", p.SessionID),
-				attribute.String("turn.id", turnID),
-				attribute.Int("reactive_compact.attempt", attempt),
-			)
-
-			if err := a.cfg.RecoverFromPromptTooLong(turnCtx, p.SessionID, attempt); err != nil {
-				a.logIfEnabled(turnCtx, LogLevelError, "reactive_compact.recovery_failed", map[string]any{
-					"session_id": p.SessionID,
-					"turn_id":    turnID,
-					"attempt":    attempt,
-					"error":      err.Error(),
-				})
-				break // recovery failed, fall through to FailTurn
-			}
-
-			// Create a fresh TurnLoop and retry. loadMessages will load the
-			// compressed state from DB.
-			einoCfgRetry := a.buildEinoConfig(p.SessionID, turnID, checkpointID, &lastMessage)
-			retryLoop := adk.NewTurnLoop[WorkPayload, *schema.Message](einoCfgRetry)
-			pushed, _ := retryLoop.Push(p)
-			if !pushed {
-				a.logIfEnabled(turnCtx, LogLevelError, "reactive_compact.push_failed", map[string]any{
-					"session_id": p.SessionID,
-					"turn_id":    turnID,
-					"attempt":    attempt,
-				})
-				break
-			}
-			retryLoop.Run(turnCtx)
-			exit = retryLoop.Wait()
-
-			a.logIfEnabled(turnCtx, LogLevelInfo, "reactive_compact.retry_exited", map[string]any{
-				"session_id":  p.SessionID,
-				"turn_id":     turnID,
-				"attempt":     attempt,
-				"exit_reason": fmt.Sprintf("%v", exit.ExitReason),
-				"has_error":   exit.ExitReason != nil,
-			})
-
-			if exit.ExitReason == nil {
-				// Success — fall through to the clean exit case below.
-				a.logIfEnabled(turnCtx, LogLevelInfo, "reactive_compact.success", map[string]any{
-					"session_id": p.SessionID,
-					"turn_id":    turnID,
-					"attempts":   attempt,
-				})
-				a.addEventIfEnabled(turnCtx, "reactive_compact.success",
-					attribute.String("session.id", p.SessionID),
-					attribute.String("turn.id", turnID),
-					attribute.Int("reactive_compact.attempts", attempt),
-				)
-				break
-			}
-
-			if !IsPromptTooLongError(exit.ExitReason) {
-				// Different error — stop retrying, fall through to FailTurn.
-				break
-			}
-			// Still prompt-too-long — loop again for the next attempt.
-		}
+	// 6.5. Reactive compact: TODO - temporarily disabled for long-running loop migration.
+	if exitReason != nil && IsPromptTooLongError(exitReason) && a.cfg.RecoverFromPromptTooLong != nil {
+		a.logIfEnabled(turnCtx, LogLevelWarn, "reactive_compact.disabled", map[string]any{
+			"session_id": p.SessionID,
+			"turn_id":    turnID,
+			"message":    "reactive compact temporarily disabled for long-running loop migration",
+		})
 	}
 
 	// 7. Turn lifecycle: end.
@@ -403,7 +318,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	}
 
 	switch {
-	case exit.ExitReason == nil:
+	case exitReason == nil:
 		// Clean exit. eino has deleted the checkpoint.
 		a.logIfEnabled(turnCtx, LogLevelInfo, "turn.clean_exit", map[string]any{
 			"session_id": p.SessionID,
@@ -411,11 +326,9 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			"message":    "calling CompleteTurn",
 		})
 		recordEnd("success", nil)
+		// Get the last message from sessionLoop for Sub Agent support
+		lastMessage := sessionLoop.GetLastMessage()
 		if err := a.cfg.CompleteTurn(turnCtx, p.SessionID, turnID, lastMessage); err != nil {
-			// Terminal callback error: log it, but the turn has reached a
-			// terminal state from eino's perspective. Return nil so rtc-queue
-			// marks the work as complete; the DB inconsistency is for admin
-			// reconciliation, not a reason to retry the turn.
 			a.logIfEnabled(turnCtx, LogLevelError, "turn.complete_callback_failed", map[string]any{
 				"session_id": p.SessionID,
 				"turn_id":    turnID,
@@ -429,29 +342,22 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		}
 		return nil
 
-	case isInterruptError(exit.ExitReason):
+	case isInterruptError(exitReason):
 		// Interrupt is a legitimate turn pause, not an error.
-		// eino has persisted the checkpoint.
 		var iErr *adk.InterruptError
-		_ = errors.As(exit.ExitReason, &iErr)
+		_ = errors.As(exitReason, &iErr)
 		root := rootInterruptCtx(iErr.InterruptContexts)
 		if root == nil {
-			// Defensive: shouldn't happen for a well-formed InterruptError,
-			// but guard anyway so we don't panic below.
-			recordEnd("fail", exit.ExitReason)
-			if err := a.cfg.FailTurn(turnCtx, turnID, exit.ExitReason); err != nil {
+			recordEnd("fail", exitReason)
+			if err := a.cfg.FailTurn(turnCtx, turnID, exitReason); err != nil {
 				a.logIfEnabled(turnCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{
 					"session_id": p.SessionID,
 					"turn_id":    turnID,
 					"error":      err.Error(),
 				})
 			}
-			// The turn has reached a terminal state from eino's perspective;
-			// return the underlying error so rtc-queue leaves the work in
-			// "processing" for admin recovery.
-			return exit.ExitReason
+			return exitReason
 		}
-		// Observability: interrupt event.
 		a.logIfEnabled(turnCtx, LogLevelInfo, "interrupt", map[string]any{
 			"session_id":   p.SessionID,
 			"turn_id":      turnID,
@@ -474,9 +380,6 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		})
 		recordEnd("interrupt", nil)
 		if err := a.cfg.InterruptTurn(turnCtx, turnID, root.ID, root.Info); err != nil {
-			// Terminal callback error: log it, but the turn has paused.
-			// Return nil so rtc-queue marks the work as complete; the DB
-			// inconsistency is for admin reconciliation.
 			a.logIfEnabled(turnCtx, LogLevelError, "turn.interrupt_callback_failed", map[string]any{
 				"session_id":   p.SessionID,
 				"turn_id":      turnID,
@@ -488,17 +391,14 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 
 	default:
 		// Unexpected error.
-		recordEnd("fail", exit.ExitReason)
-		if err := a.cfg.FailTurn(turnCtx, turnID, exit.ExitReason); err != nil {
+		recordEnd("fail", exitReason)
+		if err := a.cfg.FailTurn(turnCtx, turnID, exitReason); err != nil {
 			a.logIfEnabled(turnCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{
 				"session_id": p.SessionID,
 				"turn_id":    turnID,
 				"error":      err.Error(),
 			})
 		}
-		// The turn has reached a terminal state from eino's perspective;
-		// return the underlying error so rtc-queue leaves the work in
-		// "processing" for admin recovery.
-		return exit.ExitReason
+		return exitReason
 	}
 }

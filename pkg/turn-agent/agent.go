@@ -12,18 +12,14 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-// Agent is a stateless processor that executes one turn per rtc-queue Work
-// item. All persistent state lives in the eino checkpoint store and the
-// application's database.
-//
-// An Agent is safe to share across goroutines and may be used as the OnWork
-// callback of one or more rtcqueue.Worker instances.
+// Agent is a stateful processor that manages long-running TurnLoops per session.
+// Each session has its own TurnLoop that persists across multiple work items.
 type Agent struct {
-	cfg Config
+	cfg      Config
+	registry *SessionLoopRegistry
 }
 
-// New constructs an Agent. Returns an error if required Config fields are
-// missing.
+// New constructs an Agent.
 func New(cfg Config) (*Agent, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("turnagent: %w", err)
@@ -34,6 +30,10 @@ func New(cfg Config) (*Agent, error) {
 		}
 	}
 	a := &Agent{cfg: cfg}
+	// Initialize session loop registry
+	a.registry = NewSessionLoopRegistry(func(sessionID string) {
+		a.registry.Remove(sessionID)
+	})
 	a.logIfEnabled(context.Background(), LogLevelDebug, "agent.new", map[string]any{
 		"has_logger":         cfg.Logger != nil,
 		"has_tracer":         cfg.Tracer != nil,
@@ -44,29 +44,23 @@ func New(cfg Config) (*Agent, error) {
 	return a, nil
 }
 
-// buildEinoConfig constructs the eino TurnLoopConfig from the application's
-// callbacks. sessionID and turnID are captured in closures so GenInput,
-// GenResume, PrepareAgent, and OnAgentEvents can forward them to the data
-// callbacks without carrying them in the eino item type.
-// buildEinoConfig constructs the eino TurnLoopConfig for a single turn.
-// lastMessage is an output parameter: when the turn produces an assistant
-// message, the last one is written to *lastMessage. Used by Sub Agent support
-// to pass the sub session's final response to the parent session.
-func (a *Agent) buildEinoConfig(sessionID, turnID, checkpointID string, lastMessage **Message) adk.TurnLoopConfig[WorkPayload, *schema.Message] {
-	return adk.TurnLoopConfig[WorkPayload, *schema.Message]{
-		GenInput: func(ctx context.Context, loop *adk.TurnLoop[WorkPayload, *schema.Message], items []WorkPayload) (*adk.GenInputResult[WorkPayload, *schema.Message], error) {
-			// Inject sessionID/turnID into ctx BEFORE callbacks, so eino
-			// callback handlers (metrics, logging) can read them via
-			// SessionIDFromContext / TurnIDFromContext on every ChatModel call.
-			// This is what makes the callback handler able to label per-call
-			// records with the session/turn that produced them.
+// buildEinoConfig constructs the eino TurnLoopConfig for a long-running session loop.
+// sessionID and checkpointID are fixed for the session.
+// turnID is passed via TurnWorkItem for each turn, not captured in closures.
+// sessionLoop is the SessionLoop that owns this TurnLoop, used for turn completion notification
+// and for storing the last assistant message (for Sub Agent support).
+func (a *Agent) buildEinoConfig(sessionID, checkpointID string, sessionLoop *SessionLoop) adk.TurnLoopConfig[TurnWorkItem, *schema.Message] {
+	return adk.TurnLoopConfig[TurnWorkItem, *schema.Message]{
+		GenInput: func(ctx context.Context, loop *adk.TurnLoop[TurnWorkItem, *schema.Message], items []TurnWorkItem) (*adk.GenInputResult[TurnWorkItem, *schema.Message], error) {
+			if len(items) == 0 {
+				return nil, fmt.Errorf("turnagent: GenInput called with no items")
+			}
+			// Extract turnID from the first item
+			turnID := items[0].TurnID
+
 			ctx = WithSessionID(ctx, sessionID)
 			ctx = WithTurnID(ctx, turnID)
 
-			// Inject eino callbacks into ctx so downstream model/tool calls
-			// pick up application-level tracing / metrics handlers. The empty
-			// RunInfo mirrors turn-loop's session-level injection — per-component
-			// RunInfo is filled in by eino as it walks the agent tree.
 			if len(a.cfg.Callbacks) > 0 {
 				ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{}, a.cfg.Callbacks...)
 			}
@@ -76,18 +70,12 @@ func (a *Agent) buildEinoConfig(sessionID, turnID, checkpointID string, lastMess
 				return nil, fmt.Errorf("turnagent: LoadMessages: %w", err)
 			}
 			if len(msgs) == 0 {
-				// The implementation is responsible for always returning a
-				// meaningful history (system prompt + user message at minimum).
-				// An empty slice almost always indicates a bug upstream —
-				// log it so the issue surfaces in logs, but still run the
-				// agent with empty input so we don't mask the underlying
-				// state by failing the turn.
 				a.logIfEnabled(ctx, LogLevelWarn, "turn.empty_messages", map[string]any{
 					"session_id": sessionID,
 					"turn_id":    turnID,
 				})
 			}
-			return &adk.GenInputResult[WorkPayload, *schema.Message]{
+			return &adk.GenInputResult[TurnWorkItem, *schema.Message]{
 				RunCtx: ctx,
 				Input: &adk.TypedAgentInput[*schema.Message]{
 					Messages:        toEinoMessages(msgs),
@@ -97,22 +85,34 @@ func (a *Agent) buildEinoConfig(sessionID, turnID, checkpointID string, lastMess
 			}, nil
 		},
 
-		GenResume: func(ctx context.Context, loop *adk.TurnLoop[WorkPayload, *schema.Message], interrupted, unhandled, newItems []WorkPayload) (*adk.GenResumeResult[WorkPayload, *schema.Message], error) {
-			// RTC 模式下：不需要向 ResumeParams 里塞任何数据。工具在重新进入后
-			// 通过 tool.GetInterruptState 拿到 RtcID，自己查 DB 取结果。
-			//
-			// 若未来引入非 RTC 的中断类型（例如简单的确认类问答）且需要把 answer
-			// 透传给工具，可在此处添加一个 LoadResumeData 回调，把结果塞到
-			// ResumeParams.Targets。
-			return &adk.GenResumeResult[WorkPayload, *schema.Message]{
+		GenResume: func(ctx context.Context, loop *adk.TurnLoop[TurnWorkItem, *schema.Message], interrupted, unhandled, newItems []TurnWorkItem) (*adk.GenResumeResult[TurnWorkItem, *schema.Message], error) {
+			var turnID string
+			if len(newItems) > 0 {
+				turnID = newItems[0].TurnID
+			} else if len(interrupted) > 0 {
+				turnID = interrupted[0].TurnID
+			}
+
+			ctx = WithSessionID(ctx, sessionID)
+			if turnID != "" {
+				ctx = WithTurnID(ctx, turnID)
+			}
+
+			if len(a.cfg.Callbacks) > 0 {
+				ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{}, a.cfg.Callbacks...)
+			}
+
+			return &adk.GenResumeResult[TurnWorkItem, *schema.Message]{
 				RunCtx: ctx,
-				// ResumeParams 留空。
 			}, nil
 		},
 
-		PrepareAgent: func(ctx context.Context, loop *adk.TurnLoop[WorkPayload, *schema.Message], consumed []WorkPayload) (adk.Agent, error) {
-			// Pass turnID so the implementation can inject it into tool /
-			// agent contexts (for tracing, DB writes, RTC state lookup, etc.).
+		PrepareAgent: func(ctx context.Context, loop *adk.TurnLoop[TurnWorkItem, *schema.Message], consumed []TurnWorkItem) (adk.Agent, error) {
+			var turnID string
+			if len(consumed) > 0 {
+				turnID = consumed[0].TurnID
+			}
+
 			tools, err := a.cfg.CreateTools(ctx, sessionID, turnID)
 			if err != nil {
 				return nil, fmt.Errorf("turnagent: CreateTools: %w", err)
@@ -124,18 +124,55 @@ func (a *Agent) buildEinoConfig(sessionID, turnID, checkpointID string, lastMess
 			return agent, nil
 		},
 
-		OnAgentEvents: func(ctx context.Context, tc *adk.TurnContext[WorkPayload, *schema.Message], events *adk.AsyncIterator[*adk.AgentEvent]) error {
+		OnAgentEvents: func(ctx context.Context, tc *adk.TurnContext[TurnWorkItem, *schema.Message], events *adk.AsyncIterator[*adk.AgentEvent]) error {
+			// Extract turnID from context
+			turnID := TurnIDFromContext(ctx)
+			a.logIfEnabled(ctx, LogLevelInfo, "on_agent_events.start", map[string]any{
+				"session_id": sessionID,
+				"turn_id":    turnID,
+			})
+
+			var turnErr error
 			for {
 				ev, ok := events.Next()
 				if !ok {
-					// Agent 已完成事件生产，通知 loop 在当前 turn 结束后退出。
-					// Stop() 无参数：让当前 turn 完成，但不开始新 turn。
-					// 这解决了 loop 在成功后永久阻塞等待更多 item 的问题。
-					tc.Loop.Stop()
+					a.logIfEnabled(ctx, LogLevelInfo, "on_agent_events.done", map[string]any{
+						"session_id": sessionID,
+						"turn_id":    turnID,
+						"has_error":  turnErr != nil,
+					})
+					// Agent finished producing events.
+					// DO NOT call tc.Loop.Stop() - let the loop continue for next push.
+					// Notify session loop that this turn is complete.
+					if sessionLoop != nil {
+						a.logIfEnabled(ctx, LogLevelInfo, "on_agent_events.notify_done", map[string]any{
+							"session_id": sessionID,
+							"turn_id":    turnID,
+						})
+						sessionLoop.NotifyTurnDone(turnErr)
+					} else {
+						a.logIfEnabled(ctx, LogLevelWarn, "on_agent_events.no_session_loop", map[string]any{
+							"session_id": sessionID,
+							"turn_id":    turnID,
+						})
+					}
 					return nil
 				}
-				if err := a.dispatchEvents(ctx, sessionID, turnID, ev, lastMessage); err != nil {
-					tc.Loop.Stop()
+				if err := a.dispatchEvents(ctx, sessionID, turnID, ev, sessionLoop); err != nil {
+					turnErr = err
+					a.logIfEnabled(ctx, LogLevelError, "on_agent_events.dispatch_error", map[string]any{
+						"session_id": sessionID,
+						"turn_id":    turnID,
+						"error":      err.Error(),
+					})
+					if sessionLoop != nil {
+						sessionLoop.NotifyTurnDone(turnErr)
+					}
+					// If it's an interrupt error, return it to signal the turn loop
+					var interruptErr *adk.InterruptError
+					if errors.As(err, &interruptErr) {
+						return err
+					}
 					return fmt.Errorf("turnagent: PublishEvent: %w", err)
 				}
 			}
@@ -161,9 +198,8 @@ func (a *Agent) buildEinoConfig(sessionID, turnID, checkpointID string, lastMess
 // handled by the lifecycle path in Process() (via the cancel channel and the
 // cancelledByQueue flag).
 //
-// lastMessage is an output parameter: when the event contains an assistant
-// message, it is written to *lastMessage. Used by Sub Agent support.
-func (a *Agent) dispatchEvents(ctx context.Context, sessionID, turnID string, ev *adk.AgentEvent, lastMessage **Message) error {
+// sessionLoop is used to store the last assistant message for Sub Agent support.
+func (a *Agent) dispatchEvents(ctx context.Context, sessionID, turnID string, ev *adk.AgentEvent, sessionLoop *SessionLoop) error {
 	// 1. Event-level error.
 	if ev.Err != nil {
 		// Swallow CancelError — it's eino's internal cancellation signal.
@@ -187,15 +223,21 @@ func (a *Agent) dispatchEvents(ctx context.Context, sessionID, turnID string, ev
 		})
 	}
 
-	// 2. No output — skip.
-	if ev.Output == nil || ev.Output.MessageOutput == nil {
-		return nil
-	}
-	mv := ev.Output.MessageOutput
+		// 2. No output — skip.
+		if ev.Output == nil || ev.Output.MessageOutput == nil {
+			// Check for interrupt action — return InterruptError to signal turn loop
+			if ev.Action != nil && ev.Action.Interrupted != nil {
+				return &adk.InterruptError{
+					InterruptContexts: ev.Action.Interrupted.InterruptContexts,
+				}
+			}
+			return nil
+		}
+		mv := ev.Output.MessageOutput
 
 	// 3. Streaming: consume the stream, emit chunks + end.
 	if mv.IsStreaming {
-		return a.consumeStream(ctx, sessionID, turnID, ev.AgentName, string(mv.Role), mv.ToolName, mv.MessageStream, lastMessage)
+		return a.consumeStream(ctx, sessionID, turnID, ev.AgentName, string(mv.Role), mv.ToolName, mv.MessageStream, sessionLoop)
 	}
 
 	// 4. Non-streaming: emit one message event.
@@ -204,8 +246,8 @@ func (a *Agent) dispatchEvents(ctx context.Context, sessionID, turnID string, ev
 		tokenUsage = extractTokenUsage(mv.Message.ResponseMeta.Usage)
 	}
 	// Track the last assistant message for Sub Agent support.
-	if lastMessage != nil && mv.Role == schema.Assistant && mv.Message != nil {
-		*lastMessage = fromEinoMessage(mv.Message)
+	if sessionLoop != nil && mv.Role == schema.Assistant && mv.Message != nil {
+		sessionLoop.SetLastMessage(fromEinoMessage(mv.Message))
 	}
 	return a.cfg.PublishEvent(ctx, sessionID, turnID, &Event{
 		Kind:       EventKindMessage,
@@ -225,10 +267,8 @@ func (a *Agent) dispatchEvents(ctx context.Context, sessionID, turnID string, ev
 // stream.Recv() — closing the stream on the way out so eino's resources are
 // released.
 //
-// lastMessage is an output parameter: when the stream contains an assistant
-// message, the aggregated content is written to *lastMessage on EOF. Used by
-// Sub Agent support.
-func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName, role, toolName string, stream *schema.StreamReader[*schema.Message], lastMessage **Message) error {
+// sessionLoop is used to store the last assistant message for Sub Agent support.
+func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName, role, toolName string, stream *schema.StreamReader[*schema.Message], sessionLoop *SessionLoop) error {
 	// No `defer stream.Close()` here: we close explicitly on each exit path
 	// below. A deferred close would fire on top of the explicit close on the
 	// ctx.Done / EOF / error paths, causing a double close.
@@ -336,11 +376,11 @@ func (a *Agent) consumeStream(ctx context.Context, sessionID, turnID, agentName,
 					})
 				}
 				// Track the last assistant message for Sub Agent support.
-				if lastMessage != nil && role == string(schema.Assistant) && contentBuilder.Len() > 0 {
-					*lastMessage = &Message{
+				if sessionLoop != nil && role == string(schema.Assistant) && contentBuilder.Len() > 0 {
+					sessionLoop.SetLastMessage(&Message{
 						Role:    role,
 						Content: contentBuilder.String(),
-					}
+					})
 				}
 				return a.cfg.PublishEvent(ctx, sessionID, turnID, &Event{
 					Kind:       EventKindStreamEnd,
