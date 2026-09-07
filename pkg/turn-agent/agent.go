@@ -160,17 +160,27 @@ func (a *Agent) buildEinoConfig(sessionID, checkpointID string, sessionLoop *Ses
 				}
 				if err := a.dispatchEvents(ctx, sessionID, turnID, ev, sessionLoop); err != nil {
 					turnErr = err
-					a.logIfEnabled(ctx, LogLevelError, "on_agent_events.dispatch_error", map[string]any{
-						"session_id": sessionID,
-						"turn_id":    turnID,
-						"error":      err.Error(),
-					})
+					// InterruptError is a legitimate business pause, not an error.
+					// Log it at INFO level to avoid misleading error logs.
+					var interruptErr *adk.InterruptError
+					if errors.As(err, &interruptErr) {
+						a.logIfEnabled(ctx, LogLevelInfo, "on_agent_events.interrupted", map[string]any{
+							"session_id":     sessionID,
+							"turn_id":        turnID,
+							"num_contexts":   len(interruptErr.InterruptContexts),
+						})
+					} else {
+						a.logIfEnabled(ctx, LogLevelError, "on_agent_events.dispatch_error", map[string]any{
+							"session_id": sessionID,
+							"turn_id":    turnID,
+							"error":      err.Error(),
+						})
+					}
 					if sessionLoop != nil {
 						sessionLoop.NotifyTurnDone(turnErr)
 					}
 					// If it's an interrupt error, return it to signal the turn loop
-					var interruptErr *adk.InterruptError
-					if errors.As(err, &interruptErr) {
+					if interruptErr != nil {
 						return err
 					}
 					return fmt.Errorf("turnagent: PublishEvent: %w", err)
