@@ -15,5 +15,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&UserUpdate{},
 		&SessionMemory{},
 		&UserMemory{},
+		&Goal{},
 	)
 }

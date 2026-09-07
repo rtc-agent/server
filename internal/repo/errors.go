@@ -36,6 +36,9 @@ var (
 	// RefreshToken
 	ErrRefreshTokenNotFound = errors.New("refresh token not found")
 
+	// Goal
+	ErrGoalNotFound = errors.New("goal not found")
+
 	// Permission
 	ErrPermissionDenied = errors.New("permission denied")
 )
@@ -49,5 +52,6 @@ func IsNotFound(err error) bool {
 		errors.Is(err, ErrRtcNotFound) ||
 		errors.Is(err, ErrOAuth2UserNotFound) ||
 		errors.Is(err, ErrDeviceNotFound) ||
-		errors.Is(err, ErrRefreshTokenNotFound)
+		errors.Is(err, ErrRefreshTokenNotFound) ||
+		errors.Is(err, ErrGoalNotFound)
 }
