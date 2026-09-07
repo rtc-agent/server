@@ -233,6 +233,48 @@ func (q *Queue) ReleaseSession(ctx context.Context, sessionID string) error {
 	return q.rdb.Del(ctx, keyLock(sessionID), keyActive(sessionID)).Err()
 }
 
+// HasPendingWorkByKind returns true if the session's queue contains a pending
+// work item whose Data field, when JSON-decoded, has the given WorkKind.
+// It also checks the currently-active work item (if any) for the same session.
+//
+// This is used for dedup: e.g., before publishing a compact work item, the
+// caller checks whether a compact is already pending or processing.
+func (q *Queue) HasPendingWorkByKind(ctx context.Context, sessionID string, kind string) (bool, error) {
+	// 1. Check pending items in the session queue (zset members = work IDs).
+	workIDs, err := q.rdb.ZRange(ctx, keyQueue(sessionID), 0, -1).Result()
+	if err != nil {
+		return false, fmt.Errorf("rtcqueue: zrange queue: %w", err)
+	}
+	for _, wid := range workIDs {
+		data, err := q.rdb.HGet(ctx, keyWork(wid), "data").Result()
+		if err != nil {
+			continue
+		}
+		var p struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal([]byte(data), &p) == nil && p.Kind == kind {
+			return true, nil
+		}
+	}
+
+	// 2. Check the active (processing) work item, if any.
+	activeID, err := q.rdb.Get(ctx, keyActive(sessionID)).Result()
+	if err == nil && activeID != "" {
+		data, err := q.rdb.HGet(ctx, keyWork(activeID), "data").Result()
+		if err == nil {
+			var p struct {
+				Kind string `json:"kind"`
+			}
+			if json.Unmarshal([]byte(data), &p) == nil && p.Kind == kind {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
 // SubscribeNew returns a Pub/Sub subscribed to the session:new channel.
 // Callers are responsible for closing it.
 func (q *Queue) SubscribeNew(ctx context.Context) *redis.PubSub {

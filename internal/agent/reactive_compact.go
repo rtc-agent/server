@@ -244,9 +244,9 @@ func (h *helpers) forceCompressContext(ctx context.Context, msgs []*schema.Messa
 	)
 
 	if retentionIndex == 0 {
-		summary, err = h.summarizeMessages(ctx, msgs, CompactModeFull)
+		summary, err = h.summarizeMessages(ctx, msgs, CompactModeFull, nil)
 	} else {
-		summary, err = h.summarizeMessages(ctx, msgs[:retentionIndex], CompactModePartial)
+		summary, err = h.summarizeMessages(ctx, msgs[:retentionIndex], CompactModePartial, nil)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("force compress: summarize: %w", err)

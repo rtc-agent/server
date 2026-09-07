@@ -50,6 +50,17 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		"p.Kind":      p.Kind,
 	})
 
+	// 1.5. Fast path: compact work bypasses the turn loop entirely.
+	if p.Kind == WorkKindCompact {
+		if a.cfg.CompactContext == nil {
+			a.logIfEnabled(ctx, LogLevelWarn, "agent.compact_no_handler", map[string]any{
+				"p.SessionID": p.SessionID,
+			})
+			return nil
+		}
+		return a.cfg.CompactContext(ctx, p.SessionID, p.CustomInstruction)
+	}
+
 	// 2. Obtain the turnID.
 	//
 	// For submit: CreateTurn allocates a new turn (e.g., UUID + DB row).

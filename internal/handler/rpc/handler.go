@@ -50,11 +50,12 @@ func NewHandler(deps *Dependencies) *Handler {
 func (h *Handler) registerRoutes() {
 	h.routes = map[protocol.RpcMethod]routeHandler{
 		// Session
-		protocol.MethodSessionList:   dispatch(h, h.ListSessions),
-		protocol.MethodSessionGet:    dispatch(h, h.GetSession),
-		protocol.MethodSessionClose:  dispatch(h, h.CloseSession),
-		protocol.MethodSessionUpdate: dispatch(h, h.UpdateSession),
-		protocol.MethodSessionFork:   dispatch(h, h.ForkSession),
+		protocol.MethodSessionList:    dispatch(h, h.ListSessions),
+		protocol.MethodSessionGet:     dispatch(h, h.GetSession),
+		protocol.MethodSessionClose:   dispatch(h, h.CloseSession),
+		protocol.MethodSessionCompact: dispatch(h, h.CompactSession),
+		protocol.MethodSessionUpdate:  dispatch(h, h.UpdateSession),
+		protocol.MethodSessionFork:    dispatch(h, h.ForkSession),
 
 		// Message
 		protocol.MethodMessageSend: dispatch(h, h.SendMessage),

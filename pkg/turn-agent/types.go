@@ -77,6 +77,12 @@ const (
 	// before Submit items for the same session, so a resumed turn always
 	// sees its own checkpoint intact.
 	WorkKindResume WorkKind = "resume"
+
+	// WorkKindCompact triggers an explicit context compression for a session.
+	// Unlike Submit/Resume, compact does NOT create a turn or go through eino's
+	// TurnLoop. It loads the conversation history, compresses it (summarize +
+	// persist), and pushes stats to the Live channel.
+	WorkKindCompact WorkKind = "compact"
 )
 
 // WorkPayload is the JSON-decoded content of an rtc-queue Work item's Data
@@ -92,11 +98,16 @@ const (
 // Large data (RTC results, conversation history, etc.) lives in the
 // application's database or in the eino checkpoint, not in the work payload.
 type WorkPayload struct {
-	// Kind identifies whether this work starts a fresh turn or resumes one.
+	// Kind identifies whether this work starts a fresh turn, resumes one,
+	// or triggers an explicit compact.
 	Kind WorkKind `json:"kind"`
 
 	// SessionID identifies the session this work belongs to. It is used to
 	// derive the eino CheckpointID, to scope data-callback invocations, and
 	// to look up / create the turn via Config callbacks.
 	SessionID string `json:"session_id"`
+
+	// CustomInstruction is an optional user-provided instruction that overrides
+	// the default compression prompt. Only used by WorkKindCompact.
+	CustomInstruction *string `json:"custom_instruction,omitempty"`
 }

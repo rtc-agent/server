@@ -67,10 +67,12 @@ func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, 
 		Trigger: &turnagent.TriggerCondition{
 			ContextTokens: actualTriggerThreshold,
 		},
-		TokenCounter:    cumulativeTokenCounter,
-		CompressContext: h.compressContext,
-		OnCompress:      h.persistCompressedMessages,
-		Log:             h.logger,
+		TokenCounter: cumulativeTokenCounter,
+		CompressContext: func(ctx context.Context, msgs []*schema.Message) ([]*schema.Message, error) {
+			return h.compressContext(ctx, msgs, nil, false) // automatic compression: no custom instruction, not forced
+		},
+		OnCompress: h.persistCompressedMessages,
+		Log:        h.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build summarization middleware: %w", err)
@@ -101,17 +103,44 @@ func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, 
 //   1. Create pending summary message (published to topic channel)
 //   2. During LLM streaming, publish chunks to live channel in real-time
 //   3. On completion, finalize message with metadata and publish to topic channel
-func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message) ([]*schema.Message, error) {
-	if !shouldCompressByTokenCount(msgs) {
-		return msgs, nil
+// compressContext compresses the conversation context by summarizing older messages.
+//
+// If force is true, compression is performed regardless of token thresholds.
+// This is used for manual /compact commands where the user explicitly requests compression.
+//
+// Compression strategy:
+//   - If session memories exist, use them as the summary (zero API cost).
+//   - Otherwise, fall back to LLM summarization.
+//
+// Streaming flow:
+//   1. Create pending summary message (published to topic channel)
+//   2. During LLM streaming, publish chunks to live channel in real-time
+//   3. On completion, finalize message with metadata and publish to topic channel
+func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, customInstruction *string, force bool) ([]*schema.Message, error) {
+	// For automatic compression (force=false), check thresholds
+	if !force {
+		if !shouldCompressByTokenCount(msgs) {
+			return msgs, nil
+		}
 	}
 
 	config := DefaultRetentionConfig()
 	retentionIndex := calculateRetentionIndex(msgs, config)
 
-	// If all messages fit in retention budget, skip compression.
-	if retentionIndex >= len(msgs) {
+	// For automatic compression, skip if all messages fit in retention budget
+	if retentionIndex >= len(msgs) && !force {
 		return msgs, nil
+	}
+
+	// For forced compression with retentionIndex >= len(msgs),
+	// compress as many messages as possible while keeping at least 1 message
+	if retentionIndex >= len(msgs) && force {
+		// Keep at least 1 message (the most recent one)
+		retentionIndex = len(msgs) - 1
+		if retentionIndex < 1 {
+			// If only 1 message or less, nothing to compress
+			return msgs, nil
+		}
 	}
 
 	compressStart := time.Now()
@@ -173,7 +202,7 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message) (
 
 		if retentionIndex == 0 {
 			var llmTokenUsage *turnagent.TokenUsage
-			summary, llmTokenUsage, err = h.summarizeMessagesStreaming(ctx, msgs, CompactModeFull, onChunk)
+			summary, llmTokenUsage, err = h.summarizeMessagesStreaming(ctx, msgs, CompactModeFull, onChunk, customInstruction)
 			if err != nil {
 				if summaryMsgID != uuid.Nil && !summaryFinalized {
 					// Mark as failed using the same finalization path
@@ -188,7 +217,7 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message) (
 		} else {
 			oldMsgs := msgs[:retentionIndex]
 			var llmTokenUsage *turnagent.TokenUsage
-			summary, llmTokenUsage, err = h.summarizeMessagesStreaming(ctx, oldMsgs, CompactModePartial, onChunk)
+			summary, llmTokenUsage, err = h.summarizeMessagesStreaming(ctx, oldMsgs, CompactModePartial, onChunk, customInstruction)
 			if err != nil {
 				if summaryMsgID != uuid.Nil && !summaryFinalized {
 					_ = h.appendStreamChunk(ctx, sessionID, uuid.Nil,
@@ -309,9 +338,12 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message) (
 //   - CompactModeFull: For summarizing the entire conversation.
 //   - CompactModePartial: For summarizing older messages only.
 //   - CompactModePartialUpTo: For summarizing up to a point (continuing session).
-func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message, mode CompactMode) (string, error) {
+//
+// If customInstruction is non-nil and non-empty, it overrides the default
+// compression prompt template.
+func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message, mode CompactMode, customInstruction *string) (string, error) {
 	// Build the full prompt with conversation history.
-	prompt := buildSummarizePrompt(msgs, mode)
+	prompt := buildSummarizePrompt(msgs, mode, customInstruction)
 
 	// Call the LLM to generate the summary using streaming (required for long operations).
 	// Disable thinking to save tokens and reduce latency - compression doesn't need reasoning.
@@ -356,13 +388,17 @@ func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message,
 // summarizeMessagesStreaming generates a summary using streaming LLM calls with real-time callbacks.
 // The onChunk callback is invoked for each content chunk received, enabling live progress updates.
 // Returns the complete summary text and token usage metadata.
+//
+// If customInstruction is non-nil and non-empty, it overrides the default
+// compression prompt template.
 func (h *helpers) summarizeMessagesStreaming(
 	ctx context.Context,
 	msgs []*schema.Message,
 	mode CompactMode,
 	onChunk func(chunk string) error,
+	customInstruction *string,
 ) (summary string, tokenUsage *turnagent.TokenUsage, err error) {
-	prompt := buildSummarizePrompt(msgs, mode)
+	prompt := buildSummarizePrompt(msgs, mode, customInstruction)
 	userPrompt := schema.UserMessage(prompt)
 
 	stream, err := h.deps.ChatModel.Stream(ctx, []*schema.Message{userPrompt}, h.noThinkingOptions()...)
@@ -419,13 +455,21 @@ func (h *helpers) summarizeMessagesStreaming(
 // buildSummarizePrompt constructs the full prompt for summarization.
 //
 // The prompt consists of:
-//  1. The compression template (varies by mode).
+//  1. The compression template (varies by mode), or the customInstruction if provided.
 //  2. Formatted conversation history with tool call details.
-func buildSummarizePrompt(msgs []*schema.Message, mode CompactMode) string {
+//
+// If customInstruction is non-nil and non-empty, it replaces the default
+// compression prompt template (getCompactPrompt). The conversation history
+// is always appended.
+func buildSummarizePrompt(msgs []*schema.Message, mode CompactMode, customInstruction *string) string {
 	var sb strings.Builder
 
-	// Write the compression prompt template.
-	sb.WriteString(getCompactPrompt(mode))
+	// Write the compression prompt template (or custom instruction).
+	if customInstruction != nil && *customInstruction != "" {
+		sb.WriteString(*customInstruction)
+	} else {
+		sb.WriteString(getCompactPrompt(mode))
+	}
 	sb.WriteString("\n\n")
 
 	// Write the conversation history.

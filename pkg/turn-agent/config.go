@@ -401,7 +401,25 @@ type Config struct {
 	// MaxReactiveCompactAttempts is the maximum number of recovery attempts
 	// before giving up and calling FailTurn. Default: 3.
 	MaxReactiveCompactAttempts int
+
+	// ----- Explicit compact (optional) -----
+
+	// CompactContext is called when an explicit compact work item
+	// (WorkKindCompact) is processed. Unlike RecoverFromPromptTooLong (which
+	// is reactive and triggered by prompt-too-long errors), CompactContext
+	// is user-initiated via the /compact command.
+	//
+	// The implementation should load messages, compress them (summarize +
+	// persist), and push stats to the Live channel.
+	//
+	// If nil, compact work items are silently ignored (no-op).
+	CompactContext CompactContextFunc
 }
+
+// CompactContextFunc is the callback for explicit compact work items.
+// customInstruction is an optional user-provided instruction that overrides
+// the default compression prompt (nil means use default).
+type CompactContextFunc func(ctx context.Context, sessionID string, customInstruction *string) error
 
 // RecoverFromPromptTooLongFunc is the callback for reactive compact recovery.
 // Called with the session ID and the current attempt number (1-based).

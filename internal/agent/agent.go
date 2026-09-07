@@ -252,6 +252,9 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		// Reactive compact — recover from LLM prompt-too-long errors.
 		RecoverFromPromptTooLong: h.recoverFromPromptTooLong,
 		MaxReactiveCompactAttempts: 3,
+
+		// Explicit compact — user-initiated /compact command.
+		CompactContext: h.processCompactWorker,
 	}
 
 	return turnagent.New(taCfg)

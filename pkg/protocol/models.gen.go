@@ -95,6 +95,7 @@ const (
 	MethodRtcSubmitResult RpcMethod = "v1.rtc.submit_result"
 	MethodRtcUpdateStatus RpcMethod = "v1.rtc.update_status"
 	MethodSessionClose    RpcMethod = "v1.session.close"
+	MethodSessionCompact  RpcMethod = "v1.session.compact"
 	MethodSessionFork     RpcMethod = "v1.session.fork"
 	MethodSessionGet      RpcMethod = "v1.session.get"
 	MethodSessionList     RpcMethod = "v1.session.list"
@@ -122,6 +123,8 @@ func (e RpcMethod) Valid() bool {
 	case MethodRtcUpdateStatus:
 		return true
 	case MethodSessionClose:
+		return true
+	case MethodSessionCompact:
 		return true
 	case MethodSessionFork:
 		return true
@@ -327,6 +330,26 @@ type CloseSessionResponse struct {
 
 // CloseSessionResult defines model for CloseSessionResult.
 type CloseSessionResult struct {
+	Success bool `json:"success"`
+}
+
+// CompactSessionRequest 手动触发上下文压缩
+type CompactSessionRequest struct {
+	// CustomInstruction 自定义摘要指令，覆盖默认压缩 prompt
+	CustomInstruction *string `json:"custom_instruction,omitempty"`
+
+	// SessionId protocol 内 UUID 类型，JSON 线上为字符串
+	SessionId UUID `json:"session_id"`
+}
+
+// CompactSessionResponse 压缩会话响应
+type CompactSessionResponse struct {
+	Result  CompactSessionResult `json:"result"`
+	Updates *[]Update            `json:"updates,omitempty"`
+}
+
+// CompactSessionResult defines model for CompactSessionResult.
+type CompactSessionResult struct {
 	Success bool `json:"success"`
 }
 
