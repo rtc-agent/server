@@ -352,17 +352,17 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 // for cancel, calls OnWork, and completes if successful. The lock is
 // released by Complete (on success) or left to expire (on error/lock-loss).
 func (w *Worker) processWork(ctx context.Context, claim *ClaimResult) {
-	w.processWorkInternal(ctx, claim, false)
+	w.processWorkInternal(ctx, claim, false, "")
 }
 
 // processWorkHoldLock handles a single work item in hold-lock mode.
 // The lock is NOT released after completion; instead, CompleteWork is called.
 func (w *Worker) processWorkHoldLock(ctx context.Context, claim *ClaimResult) {
-	w.processWorkInternal(ctx, claim, true)
+	w.processWorkInternal(ctx, claim, true, claim.Credential)
 }
 
 // processWorkInternal is the shared implementation for both normal and hold-lock modes.
-func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, holdLock bool) {
+func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, holdLock bool, credential string) {
 	w.logIfEnabled("worker.processing_work", map[string]any{
 		"work_id":    claim.WorkID,
 		"session_id": claim.SessionID,
@@ -440,7 +440,15 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 			case <-workCtx.Done():
 				return
 			case <-t.C:
-				ok, err := w.q.RenewLock(workCtx, claim.SessionID, w.cfg.WorkerID)
+				var ok bool
+				var err error
+				if holdLock && credential != "" {
+					// Hold-lock mode: use hash-based lock renewal
+					ok, err = w.q.RenewLockWithCredential(workCtx, claim.SessionID, w.cfg.WorkerID, credential)
+				} else {
+					// Normal mode: use string-based lock renewal
+					ok, err = w.q.RenewLock(workCtx, claim.SessionID, w.cfg.WorkerID)
+				}
 				if err != nil {
 					w.cfg.OnError(fmt.Errorf("renew lock: %w", err))
 				}

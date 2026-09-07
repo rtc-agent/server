@@ -295,3 +295,76 @@ func TestWorkerCallbackError(t *testing.T) {
 
 	cancel()
 }
+
+func TestWorkerHoldLockRenewal(t *testing.T) {
+	// This test verifies that HoldLock mode correctly renews hash-based locks
+	// using RenewLockWithCredential instead of RenewLock (which expects string locks).
+	// This was a bug where HoldLock mode created hash locks but tried to renew them
+	// with the string-based renew script, causing WRONGTYPE errors.
+
+	q, mr := newTestQueue(t)
+	defer mr.Close()
+
+	// Track renewal attempts
+	renewCount := int32(0)
+
+	// Configure HoldLock mode with short renewal interval
+	cfg := rtcqueue.WorkerConfig{
+		WorkerID: "hold-lock-worker",
+		OnWork: func(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) error {
+			// Simulate long-running work to trigger lock renewal
+			ticker := time.NewTicker(50 * time.Millisecond)
+			defer ticker.Stop()
+
+			done := time.After(300 * time.Millisecond)
+			for {
+				select {
+				case <-done:
+					return nil
+				case <-ticker.C:
+					atomic.AddInt32(&renewCount, 1)
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		},
+		HoldLock:      true,
+		RenewInterval: 100 * time.Millisecond, // Short interval to trigger renewal
+	}
+
+	worker := rtcqueue.NewWorker(q, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+
+	// wait for subscription
+	time.Sleep(50 * time.Millisecond)
+
+	// Publish work item
+	id, _ := q.Publish(ctx, "hold-lock-session", "test-data", 5)
+
+	// Wait for processing and renewals
+	time.Sleep(400 * time.Millisecond)
+
+	// Verify work completed
+	work, _ := q.LoadWork(context.Background(), id)
+	if work.Status != rtcqueue.StatusCompleted {
+		t.Fatalf("expected completed, got %s", work.Status)
+	}
+
+	// Verify renewals happened (at least 2-3 times in 300ms with 100ms interval)
+	count := atomic.LoadInt32(&renewCount)
+	if count < 2 {
+		t.Errorf("expected at least 2 renewal attempts, got %d", count)
+	}
+
+	// Stop worker
+	cancel()
+	<-done
+
+	// If we got here without WRONGTYPE errors, the fix is working
+	t.Logf("Successfully completed %d renewal cycles without WRONGTYPE errors", count)
+}

@@ -261,3 +261,21 @@ if redis.call("GET", KEYS[1]) ~= ARGV[1] then
 end
 return redis.call("EXPIRE", KEYS[1], tonumber(ARGV[2]))
 `)
+
+// renewLockWithCredentialScript atomically refreshes the session lock TTL
+// only if it is still owned by the calling worker with the correct credential.
+// This is the hash-based lock version used in "hold lock" mode.
+//
+// KEYS[1] = session lock (hash: worker_id, credential)
+// ARGV[1] = worker_id (expected owner)
+// ARGV[2] = credential (expected credential)
+// ARGV[3] = lock ttl seconds
+// Returns 1 on success, 0 if the lock is missing or owned by someone else.
+var renewLockWithCredentialScript = redis.NewScript(`
+local stored_worker = redis.call("HGET", KEYS[1], "worker_id")
+local stored_cred = redis.call("HGET", KEYS[1], "credential")
+if stored_worker ~= ARGV[1] or stored_cred ~= ARGV[2] then
+    return 0
+end
+return redis.call("EXPIRE", KEYS[1], tonumber(ARGV[3]))
+`)

@@ -310,6 +310,22 @@ func (q *Queue) RenewLock(ctx context.Context, sessionID, workerID string) (bool
 	return n == 1, nil
 }
 
+// RenewLockWithCredential refreshes the session lock TTL atomically for
+// hash-based locks used in "hold lock" mode. Returns false if the lock
+// is no longer held by this worker with the correct credential.
+func (q *Queue) RenewLockWithCredential(ctx context.Context, sessionID, workerID, credential string) (bool, error) {
+	n, err := renewLockWithCredentialScript.Run(ctx, q.rdb, []string{keyLock(sessionID)},
+		workerID, credential, DefaultLockTTLSeconds,
+	).Int()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("rtcqueue: renew lock with credential: %w", err)
+	}
+	return n == 1, nil
+}
+
 // ReleaseSession drops the session lock and the active-work pointer
 // unconditionally. Used during graceful shutdown.
 func (q *Queue) ReleaseSession(ctx context.Context, sessionID string) error {
