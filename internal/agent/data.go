@@ -22,11 +22,15 @@ func init() {
 	//
 	// rtcInterruptState: StatefulInterrupt's state parameter -> InterruptState.State
 	// rtcInterruptInfo:  StatefulInterrupt's info parameter  -> InterruptCtx.Info
+	// subAgentInterruptState: Sub agent tool's interrupt state
+	// subAgentInterruptInfo:  Sub agent tool's interrupt info
 	//
 	// Mapping from old code: identical to the gob.Register calls in
 	// internal/worker/tools.rtc.go's init().
 	gob.Register(rtcInterruptState{})
 	gob.Register(rtcInterruptInfo{})
+	gob.Register(subAgentInterruptState{})
+	gob.Register(subAgentInterruptInfo{})
 }
 
 // formatToolCallOutput formats a tool call's output for injection into the
@@ -108,6 +112,12 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 			formatResult: formatAskUserResult,
 		}},
 		&todoWriteTool{helper: h, session: session},
+		// subAgentTool enables LLM to create sub agent sessions for task decomposition.
+		&subAgentTool{
+			session: session,
+			helpers: h,
+			turnID:  tid,
+		},
 	}
 
 	// Add Session Memory tools

@@ -39,6 +39,7 @@ import (
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/usecase"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/callbacks"
@@ -57,6 +58,10 @@ type Config struct {
 	// Redis is the Redis client used for checkpoint storage and stream
 	// message chunk buffering. Required.
 	Redis redis.UniversalClient
+
+	// Queue is the rtc-queue for publishing work items (submit/resume/compact).
+	// Required for Sub Agent support (triggering parent session resume).
+	Queue *rtcqueue.Queue
 
 	// Logger provides structured logging for the turn-agent runtime.
 	// Optional — if nil, no logs are emitted.
@@ -133,6 +138,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 	h := &helpers{
 		deps:                      cfg.Deps,
 		rdb:                       cfg.Redis,
+		queue:                     cfg.Queue,
 		logger:                    cfg.Logger,
 		tracer:                    cfg.Tracer,
 		metrics:                   cfg.Metrics,
@@ -270,6 +276,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 type helpers struct {
 	deps                      *usecase.Dependencies
 	rdb                       redis.UniversalClient
+	queue                     *rtcqueue.Queue
 	logger                    turnagent.Logger
 	tracer                    trace.Tracer
 	metrics                   turnagent.Metrics

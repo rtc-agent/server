@@ -407,12 +407,13 @@ func extractJSONFromResponse(response string) string {
 	return response
 }
 
-// truncateString 截断字符串
+// truncateString 截断字符串（按 rune 截断，避免在多字节字符中间截断）
 func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }
 
 // estimateMemoryTokens 估算 token 数（重命名以避免与 summarize.go 中的 estimateTokens 冲突）
