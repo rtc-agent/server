@@ -111,7 +111,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	client := provideOAuth2ProviderClient(cfg)
 	oAuth2Handler := provideOAuth2Handler(serviceContext, jwtSigner, redisStore, client, cfg)
 	interruptHandler := provideInterruptHandler(universalClient, cfg)
-	agent, err := provideAgent(dependencies, universalClient, cfg, prometheusMetrics)
+	agent, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics)
 	if err != nil {
 		return nil, err
 	}
@@ -297,12 +297,14 @@ func provideStreamStore(redisClient redis.UniversalClient, cfg *config.Config) *
 func provideAgent(
 	deps *usecase.Dependencies,
 	redisClient redis.UniversalClient,
+	queue *rtcqueue.Queue,
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
 ) (*turnagent.Agent, error) {
 	return agent.New(agent.Config{
 		Deps:                      deps,
 		Redis:                     redisClient,
+		Queue:                     queue,
 		ContextTokensLimit:        cfg.Worker.ContextTokensLimit,
 		AutoCompactBufferTokens:   cfg.Worker.AutoCompactBufferTokens,
 		MaxOutputTokensForSummary: cfg.Worker.MaxOutputTokensForSummary,

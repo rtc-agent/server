@@ -229,12 +229,14 @@ func provideStreamStore(redisClient redis.UniversalClient, cfg *config.Config) *
 func provideAgent(
 	deps *usecase.Dependencies,
 	redisClient redis.UniversalClient,
+	queue *rtcqueue.Queue,
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
 ) (*turnagent.Agent, error) {
 	return agent.New(agent.Config{
 		Deps:                      deps,
 		Redis:                     redisClient,
+		Queue:                     queue,
 		ContextTokensLimit:        cfg.Worker.ContextTokensLimit,
 		AutoCompactBufferTokens:   cfg.Worker.AutoCompactBufferTokens,
 		MaxOutputTokensForSummary: cfg.Worker.MaxOutputTokensForSummary,
