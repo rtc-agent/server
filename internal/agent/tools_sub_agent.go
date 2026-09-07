@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
@@ -245,10 +246,15 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 			DeviceID:              t.session.DeviceID,
 			Title:                 args.Title,
 			Status:                string(protocol.SessionStatusActive),
+			AgentPrompt:           t.session.AgentPrompt,
 			ParentClientSessionID: t.session.ClientID,
 			ParentServerSessionID: t.session.ID,
 			RootClientSessionID:   rootClientSessionID,
 			RootServerSessionID:   rootServerSessionID,
+			CreatedAt:             time.Now(),
+			UpdatedAt:             time.Now(),
+			ClosedAt:              nil,
+			DeletedAt:             nil,
 		}
 		if err := t.helpers.deps.SessionRepo.Create(txCtx, subSession); err != nil {
 			return nil, fmt.Errorf("create sub session: %w", err)
