@@ -32,7 +32,8 @@ type Session struct {
 	ParentServerSessionID   uuid.UUID `gorm:"type:uuid;index" json:"parent_server_session_id,omitempty"`      // 父 session 的 server ID
 	RootClientSessionID     string    `gorm:"size:255;index" json:"root_client_session_id,omitempty"`         // 根 session 的 client ID
 	RootServerSessionID     uuid.UUID `gorm:"type:uuid;index" json:"root_server_session_id,omitempty"`        // 根 session 的 server ID
-	SubAgentParentMessageID uuid.UUID `gorm:"type:uuid;index" json:"sub_agent_parent_message_id,omitempty"`   // 父 session 中 sub_agent_invocation 消息的 ID
+	SubAgentParentMessageID uuid.UUID `gorm:"type:uuid;index" json:"sub_agent_parent_message_id,omitempty"` // 父 session 中 sub_agent_invocation 消息的 ID
+	SubAgentMode            string    `gorm:"size:20;default:''" json:"sub_agent_mode,omitempty"`            // sub agent 调用模式: "sync"(默认) 或 "async"
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 	ClosedAt   *time.Time `json:"closed_at,omitempty"`

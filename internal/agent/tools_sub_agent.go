@@ -21,15 +21,22 @@ import (
 
 // subAgentTool enables the LLM to create sub agent sessions for task decomposition.
 //
-// The LLM provides an instruction (task description); the tool creates:
+// The LLM provides an instruction (task description) and a mode (async or sync);
+// the tool creates:
 // 1. A sub session with parent/ root session hierarchy
 // 2. A user message in the sub session (the instruction)
 // 3. A sub_agent_invocation message in the parent session (for frontend rendering)
 // 4. Submits a work item to the sub session's rtc-queue
-// 5. Interrupts the parent turn
 //
+// In **sync** mode (legacy default):
+// 5. Interrupts the parent turn
 // When the sub session completes, its final result is returned to the parent
 // via the resume mechanism (WorkPayload.SubAgentResult).
+//
+// In **async** mode (default):
+// 5. Returns immediately with the sub session ID
+// When the sub session completes, a notification message is delivered to the
+// parent session and a new turn is triggered via Submit.
 type subAgentTool struct {
 	session *model.Session
 	helpers *helpers
@@ -40,6 +47,7 @@ type subAgentTool struct {
 type subAgentArgs struct {
 	Title       string `json:"title"`
 	Instruction string `json:"instruction"`
+	Mode        string `json:"mode"` // "async" (default) or "sync"
 }
 
 // subAgentInterruptInfo is passed to StatefulInterrupt as the info parameter.
@@ -65,7 +73,11 @@ func (t *subAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 		Name: "sub_agent",
 		Desc: `Create a sub agent session to handle a complex, multi-step task.
 
-The sub agent runs in its own session with a fresh context. The parent session is paused until the sub agent completes, then its final response is returned as the tool result.
+The sub agent runs in its own session with a fresh context.
+
+Two modes are available:
+- **async** (default): Returns immediately with the sub session ID. The parent session continues running. When the sub agent completes, a notification message will be delivered to the parent session in a new turn. Use this when the parent can continue working without waiting for the result.
+- **sync**: The parent session is paused until the sub agent completes, then its final response is returned as the tool result. Use this when the parent needs the result before continuing.
 
 Usage notes:
 - Always include a short title (3-5 words) summarizing the task
@@ -82,6 +94,11 @@ Usage notes:
 				Type:     schema.String,
 				Desc:     "The task instruction for the sub agent. Be specific and include all necessary context. The sub agent starts with a blank context, so include relevant details. Example: 'Verify if goal X is completed by checking the TodoList and recent messages'",
 				Required: true,
+			},
+			"mode": {
+				Type:     schema.String,
+				Desc:     "Execution mode: \"async\" (default, parent continues immediately, result delivered as notification later) or \"sync\" (parent waits for result). Default is \"async\".",
+				Required: false,
 			},
 		}),
 	}, nil
@@ -197,6 +214,15 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		return "Error: instruction is required", nil
 	}
 
+	// Normalize mode: default to "async".
+	mode := args.Mode
+	if mode == "" {
+		mode = "async"
+	}
+	if mode != "sync" && mode != "async" {
+		return fmt.Sprintf("Error: mode must be \"sync\" or \"async\", got %q", mode), nil
+	}
+
 	// 2. Get tool_call_id (eino injects it into context before calling the tool).
 	callID := compose.GetToolCallID(ctx)
 	if callID == "" {
@@ -207,6 +233,11 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 	turnUUID := t.turnID
 	if turnUUID == uuid.Nil {
 		return "", fmt.Errorf("sub_agent: turn UUID is nil")
+	}
+
+	// 4. Queue is required for submitting work to the sub session.
+	if t.helpers.queue == nil {
+		return "", fmt.Errorf("sub_agent: queue not available")
 	}
 
 	// 4. Generate sub session IDs.
@@ -251,6 +282,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 			ParentServerSessionID: t.session.ID,
 			RootClientSessionID:   rootClientSessionID,
 			RootServerSessionID:   rootServerSessionID,
+			SubAgentMode:          mode,
 			CreatedAt:             time.Now(),
 			UpdatedAt:             time.Now(),
 			ClosedAt:              nil,
@@ -355,10 +387,6 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 	})
 
 	// 6. Submit work item to sub session's rtc-queue.
-	if t.helpers.queue == nil {
-		return "", fmt.Errorf("sub_agent: queue not available")
-	}
-
 	payload, err := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: subSessionID.String(),
@@ -373,9 +401,72 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 
 	t.helpers.logIfEnabled(ctx, "subAgent.work_submitted", map[string]any{
 		"sub_session_id": subSessionID.String(),
+		"mode":           mode,
 	})
 
-	// 7. Build interrupt state and info.
+	// 7. Async mode: create toolcall_output and return immediately.
+	if mode == "async" {
+		asyncResult := fmt.Sprintf(
+			"Sub agent task created successfully.\n- Session ID: %s\n- Title: %s\n\nThe sub agent is working asynchronously in the background. It will notify you when the task is complete. You can continue with other work in the meantime.",
+			subSessionID.String(),
+			args.Title,
+		)
+
+		completedStatus := "completed"
+		outputToolCall := protocol.ToolCall{
+			Id:       protocol.UUID(callID),
+			ToolName: "sub_agent",
+			Input:    argumentsInJSON,
+			Output:   &asyncResult,
+			Status:   &completedStatus,
+		}
+		outputContent := protocol.ContentData{
+			Type: protocol.ContentTypeToolCallOutput,
+			Data: outputToolCall,
+		}
+
+		_, publishErr := t.helpers.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
+			outputMsg, createErr := primitives.CreateMessage(
+				txCtx, t.helpers.deps,
+				t.session.ID, &turnUUID,
+				protocol.MessageRoleTool,
+				usecase.SystemCreator{},
+				outputContent,
+				protocol.MessageStreamingCompleted,
+				"",
+				&parentMessageID,
+			)
+			if createErr != nil {
+				return nil, fmt.Errorf("create async toolcall_output: %w", createErr)
+			}
+
+			ch := channel.UserTopic(t.session.OwnerRefID)
+			return []updates.UpdatePublishItem{
+				{
+					Channel: ch,
+					Items: []protocol.UpdateItem{
+						{
+							Entity:   protocol.EntityMessage,
+							Action:   protocol.ActionCreated,
+							EntityId: protocol.UUID(outputMsg.ID.String()),
+						},
+					},
+				},
+			}, nil
+		})
+		if publishErr != nil {
+			return "", fmt.Errorf("publish async toolcall_output: %w", publishErr)
+		}
+
+		t.helpers.logIfEnabled(ctx, "subAgent.async.returned_immediately", map[string]any{
+			"sub_session_id":    subSessionID.String(),
+			"parent_message_id": parentMessageID.String(),
+		})
+
+		return asyncResult, nil
+	}
+
+	// 8. Sync mode: build interrupt state and pause the turn.
 	state = subAgentInterruptState{
 		SubSessionID:    subSessionID.String(),
 		ToolCallID:      callID,
@@ -389,6 +480,5 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		Instruction:     args.Instruction,
 	}
 
-	// 8. Pause the turn.
 	return "", tool.StatefulInterrupt(ctx, info, state)
 }
