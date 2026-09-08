@@ -332,14 +332,17 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 }
 
 // injectCommandPrompts runs the slash-command framework's DetectAndInject,
-// converting the returned PromptContributions to turnagent Messages and
-// appending them in registration order. If the registry has no commands or
-// none match, this is a no-op.
+// converting the returned PromptContributions to turnagent Messages.
+// If the registry has no commands or none match, this is a no-op.
 //
 // Each contributed prompt is wrapped with an XML tag identifying the
 // contributing command, so the LLM can distinguish sources:
 //
 //	<command name="persona">…</command>
+//
+// Message ordering: System messages are prepended to the message array
+// (Claude API requires system messages at the start). User messages are
+// appended to the end. This ensures valid message sequence for the LLM.
 func (h *helpers) injectCommandPrompts(goCtx context.Context, sessionID uuid.UUID, messages []*turnagent.Message) []*turnagent.Message {
 	if h.deps.CommandRegistry == nil {
 		return messages
@@ -363,11 +366,27 @@ func (h *helpers) injectCommandPrompts(goCtx context.Context, sessionID uuid.UUI
 		return messages
 	}
 
+	// Separate system and user contributions.
+	// System messages must be at the start of the message array per Claude API.
+	var systemMsgs, userMsgs []*turnagent.Message
 	for _, nc := range contributions {
-		messages = append(messages, &turnagent.Message{
+		msg := &turnagent.Message{
 			Role:    nc.Contribution.Role,
 			Content: wrapWithTag(nc.CommandName, nc.Contribution.Content),
-		})
+		}
+		if nc.Contribution.Role == turnagent.RoleSystem {
+			systemMsgs = append(systemMsgs, msg)
+		} else {
+			userMsgs = append(userMsgs, msg)
+		}
+	}
+
+	// Prepend system messages, append user messages.
+	if len(systemMsgs) > 0 {
+		messages = append(systemMsgs, messages...)
+	}
+	if len(userMsgs) > 0 {
+		messages = append(messages, userMsgs...)
 	}
 	return messages
 }
