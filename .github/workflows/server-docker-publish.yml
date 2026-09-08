@@ -38,10 +38,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ github.sha }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
 
       - uses: docker/build-push-action@v6
         with:
