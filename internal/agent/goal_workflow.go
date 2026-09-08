@@ -22,11 +22,11 @@ type GoalWorkflow struct {
 	registry *command.CommandRegistry
 }
 
-func (g *GoalWorkflow) Name() string        { return "goal" }
-func (g *GoalWorkflow) Prefix() string      { return "/goal" }
+func (g *GoalWorkflow) Name() string         { return "goal" }
+func (g *GoalWorkflow) Prefix() string       { return "/goal" }
 func (g *GoalWorkflow) Scope() command.Scope { return command.ScopeSession }
 
-// TriggerPrompt returns the goal creation system prompt. Called on the turn
+// TriggerPrompt returns the goal creation user prompt. Called on the turn
 // the user types "/goal ...".
 func (g *GoalWorkflow) TriggerPrompt(ctx command.Context, args string) (*command.PromptContribution, error) {
 	return &command.PromptContribution{
