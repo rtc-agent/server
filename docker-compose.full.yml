@@ -1,7 +1,7 @@
-# RTC Agent — 满配 Docker 部署（分布式验证）
-# 用途：验证多 Worker 分布式部署、可观测性全链路
-# 端口：PostgreSQL 25432, Redis 26379, Server 8888/8889, Jaeger 26686, Mock OAuth2 20060, Nginx 80
-# 与 dev docker-compose (etc/dev/) 端口不冲突，可同时运行
+# RTC Agent — 满配 Docker 部署（分布式验证 + 完整可观测性）
+# 用途：本地开发主力环境，替代 etc/dev/docker-compose.yml
+# 特性：2 Server + Nginx LB + 全套可观测性（Jaeger/Prometheus/Loki/Grafana/Pyroscope）
+# 端口：全部使用 2xxxx 段，与外部服务不冲突
 
 name: rtc-agent-full
 
@@ -42,6 +42,10 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ===========================================================================
+  # 可观测性栈（复用 etc/dev/ 配置）
+  # ===========================================================================
+
   jaeger:
     image: jaegertracing/all-in-one:1.55
     container_name: rtc-full-jaeger
@@ -49,9 +53,95 @@ services:
       - COLLECTOR_OTLP_ENABLED=true
     ports:
       - "26686:16686"  # Jaeger UI
-      - "14317:4317"   # OTLP gRPC
-      - "14318:4318"   # OTLP HTTP
+      - "24317:4317"   # OTLP gRPC
+      - "24318:4318"   # OTLP HTTP
     restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: rtc-full-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    ports:
+      - "29090:9090"
+    volumes:
+      - ./etc/docker-full/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./etc/dev/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - full-prometheus-data:/prometheus
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.1.0
+    container_name: rtc-full-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "23100:3100"
+    volumes:
+      - full-loki-data:/loki
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.1.0
+    container_name: rtc-full-promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./etc/docker-full/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - full-promtail-positions:/tmp
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  pyroscope:
+    image: grafana/pyroscope:1.9.1
+    container_name: rtc-full-pyroscope
+    command:
+      - "server"
+      - "--storage.path=/var/lib/pyroscope"
+    ports:
+      - "24040:4040"
+    volumes:
+      - full-pyroscope-data:/var/lib/pyroscope
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: rtc-full-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "23001:3000"
+    volumes:
+      - ./etc/dev/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./etc/dev/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./etc/dev/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - full-grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+      - pyroscope
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: rtc-full-alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    ports:
+      - "29093:9093"
+    volumes:
+      - ./etc/dev/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - full-alertmanager-data:/alertmanager
+    restart: unless-stopped
+
+  # ===========================================================================
+  # OAuth2
+  # ===========================================================================
 
   mock-oauth2:
     build:
@@ -131,7 +221,7 @@ services:
     image: nginx:1.27-alpine
     container_name: rtc-full-nginx
     ports:
-      - "18080:80"
+      - "28080:80"
     volumes:
       - ./etc/docker-full/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
@@ -142,3 +232,9 @@ services:
 volumes:
   full-postgres-data:
   full-redis-data:
+  full-prometheus-data:
+  full-loki-data:
+  full-pyroscope-data:
+  full-grafana-data:
+  full-alertmanager-data:
+  full-promtail-positions:

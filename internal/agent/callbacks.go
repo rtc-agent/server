@@ -121,7 +121,9 @@ func (h *helpers) lookupTurn(ctx context.Context, sessionID string, workID strin
 		return "", fmt.Errorf("lookupTurn: find active turns for session %s: %w", sessionID, err)
 	}
 	if len(active) == 0 {
-		return "", fmt.Errorf("lookupTurn: no active turn for session %s", sessionID)
+		// Wrap with ErrNoActiveTurn so Process can detect this specific case
+		// and complete the work gracefully (turn was cancelled/completed).
+		return "", fmt.Errorf("lookupTurn: %w: %s", turnagent.ErrNoActiveTurn, sessionID)
 	}
 
 	// Return the most recent active turn.

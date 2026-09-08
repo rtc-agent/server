@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # RTC Agent Server 集群（Docker 容器内部地址）
+  - job_name: "rtc-agent-server"
+    static_configs:
+      - targets:
+          - "server-1:8888"
+          - "server-2:8888"
+        labels:
+          service: "rtc-agent"

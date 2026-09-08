@@ -1,9 +1,15 @@
 package turnagent
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
+
+// ErrNoActiveTurn is returned by LookupTurn when no active turn is found
+// for the session. This typically means the turn was cancelled, completed,
+// or failed between the resume work item being published and processed.
+var ErrNoActiveTurn = errors.New("no active turn for session")
 
 // errMissing returns a validation error for a missing required Config field.
 func errMissing(field string) error {

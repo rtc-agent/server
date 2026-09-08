@@ -93,7 +93,7 @@ func runMockOAuth2(configPath string) {
 	// 创建 HTTP Server
 	port := v.GetString("server.port")
 	srv := &http.Server{
-		Addr:    ":" + port,
+		Addr:    "0.0.0.0:" + port,
 		Handler: handler,
 	}
 

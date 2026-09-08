@@ -128,6 +128,10 @@ func (a *Agent) buildEinoConfig(sessionID, checkpointID string, sessionLoop *Ses
 			if len(consumed) > 0 {
 				turnID = consumed[0].TurnID
 			}
+			// Fallback: get turnID from context (set by GenInput/GenResume)
+			if turnID == "" {
+				turnID = TurnIDFromContext(ctx)
+			}
 
 			a.logIfEnabled(ctx, LogLevelDebug, "prepare_agent.start", map[string]any{
 				"session_id": sessionID,

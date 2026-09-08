@@ -86,6 +86,17 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		// may ignore it; the signature matches CreateTurn for symmetry.
 		turnID, err = a.cfg.LookupTurn(ctx, p.SessionID, work.ID)
 		if err != nil {
+			// Check if the error is "no active turn" — this means the turn
+			// was cancelled/completed between the resume work item being
+			// published and processed. Complete the work gracefully.
+			if errors.Is(err, ErrNoActiveTurn) {
+				a.logIfEnabled(ctx, LogLevelInfo, "resume.no_active_turn", map[string]any{
+					"session_id": p.SessionID,
+					"work_id":    work.ID,
+					"message":    "turn was cancelled/completed before resume",
+				})
+				return nil // Complete the work gracefully
+			}
 			return fmt.Errorf("turnagent: LookupTurn: %w", err)
 		}
 	default:
