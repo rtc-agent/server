@@ -58,6 +58,12 @@ func (a *Agent) buildEinoConfig(sessionID, checkpointID string, sessionLoop *Ses
 			// Extract turnID from the first item
 			turnID := items[0].TurnID
 
+			a.logIfEnabled(ctx, LogLevelDebug, "gen_input.start", map[string]any{
+				"session_id": sessionID,
+				"turn_id":    turnID,
+				"item_count": len(items),
+			})
+
 			ctx = WithSessionID(ctx, sessionID)
 			ctx = WithTurnID(ctx, turnID)
 
@@ -67,8 +73,18 @@ func (a *Agent) buildEinoConfig(sessionID, checkpointID string, sessionLoop *Ses
 
 			msgs, err := a.cfg.LoadMessages(ctx, sessionID)
 			if err != nil {
+				a.logIfEnabled(ctx, LogLevelError, "gen_input.load_messages_failed", map[string]any{
+					"session_id": sessionID,
+					"turn_id":    turnID,
+					"error":      err.Error(),
+				})
 				return nil, fmt.Errorf("turnagent: LoadMessages: %w", err)
 			}
+			a.logIfEnabled(ctx, LogLevelDebug, "gen_input.messages_loaded", map[string]any{
+				"session_id":    sessionID,
+				"turn_id":       turnID,
+				"message_count": len(msgs),
+			})
 			if len(msgs) == 0 {
 				a.logIfEnabled(ctx, LogLevelWarn, "turn.empty_messages", map[string]any{
 					"session_id": sessionID,
@@ -113,14 +129,39 @@ func (a *Agent) buildEinoConfig(sessionID, checkpointID string, sessionLoop *Ses
 				turnID = consumed[0].TurnID
 			}
 
+			a.logIfEnabled(ctx, LogLevelDebug, "prepare_agent.start", map[string]any{
+				"session_id": sessionID,
+				"turn_id":    turnID,
+			})
+
 			tools, err := a.cfg.CreateTools(ctx, sessionID, turnID)
 			if err != nil {
+				a.logIfEnabled(ctx, LogLevelError, "prepare_agent.create_tools_failed", map[string]any{
+					"session_id": sessionID,
+					"turn_id":    turnID,
+					"error":      err.Error(),
+				})
 				return nil, fmt.Errorf("turnagent: CreateTools: %w", err)
 			}
+			a.logIfEnabled(ctx, LogLevelDebug, "prepare_agent.tools_created", map[string]any{
+				"session_id": sessionID,
+				"turn_id":    turnID,
+				"tool_count": len(tools),
+			})
+
 			agent, err := a.cfg.CreateAgent(ctx, sessionID, turnID, tools)
 			if err != nil {
+				a.logIfEnabled(ctx, LogLevelError, "prepare_agent.create_agent_failed", map[string]any{
+					"session_id": sessionID,
+					"turn_id":    turnID,
+					"error":      err.Error(),
+				})
 				return nil, fmt.Errorf("turnagent: CreateAgent: %w", err)
 			}
+			a.logIfEnabled(ctx, LogLevelDebug, "prepare_agent.done", map[string]any{
+				"session_id": sessionID,
+				"turn_id":    turnID,
+			})
 			return agent, nil
 		},
 
@@ -133,13 +174,23 @@ func (a *Agent) buildEinoConfig(sessionID, checkpointID string, sessionLoop *Ses
 			})
 
 			var turnErr error
+			var eventCount int
 			for {
+				// Check context status before waiting
+				ctxErr := ctx.Err()
+				a.logIfEnabled(ctx, LogLevelDebug, "on_agent_events.waiting_next", map[string]any{
+					"session_id":   sessionID,
+					"turn_id":      turnID,
+					"event_count":  eventCount,
+					"context_err":  ctxErr,
+				})
 				ev, ok := events.Next()
 				if !ok {
 					a.logIfEnabled(ctx, LogLevelInfo, "on_agent_events.done", map[string]any{
-						"session_id": sessionID,
-						"turn_id":    turnID,
-						"has_error":  turnErr != nil,
+						"session_id":  sessionID,
+						"turn_id":     turnID,
+						"has_error":   turnErr != nil,
+						"event_count": eventCount,
 					})
 					// Agent finished producing events.
 					// DO NOT call tc.Loop.Stop() - let the loop continue for next push.
@@ -158,6 +209,7 @@ func (a *Agent) buildEinoConfig(sessionID, checkpointID string, sessionLoop *Ses
 					}
 					return nil
 				}
+				eventCount++
 				if err := a.dispatchEvents(ctx, sessionID, turnID, ev, sessionLoop); err != nil {
 					turnErr = err
 					// InterruptError is a legitimate business pause, not an error.
