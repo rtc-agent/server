@@ -1,0 +1,72 @@
+# RTC Agent — 最小化 Docker 部署
+# 用途：验证 Docker 镜像基本可用性
+# 端口：PostgreSQL 15432, Redis 16379, Server 8888
+# 与 dev docker-compose (etc/dev/) 共享端口，不可同时运行
+
+name: rtc-agent-docker
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: rtc-docker-postgres
+    environment:
+      POSTGRES_USER: rtc_agent
+      POSTGRES_PASSWORD: rtc_agent
+      POSTGRES_DB: rtc_agent
+    ports:
+      - "15432:5432"
+    volumes:
+      - docker-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rtc_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: rtc-docker-redis
+    ports:
+      - "16379:6379"
+    volumes:
+      - docker-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rtc-docker-migrate
+    entrypoint: ["./rtc-agent", "migrate"]
+    volumes:
+      - ./etc/config.docker.yaml:/app/etc/config.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rtc-docker-server
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./etc/config.docker.yaml:/app/etc/config.yaml:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  docker-postgres-data:
+  docker-redis-data:

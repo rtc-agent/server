@@ -1,0 +1,45 @@
+# RTC Agent Docker 部署配置（最小化版）
+# 用于 docker-compose.yml，挂载到 /app/etc/config.yaml
+
+server:
+  host: "0.0.0.0"
+  port: 8888
+  env: "development"
+
+database:
+  dsn: "postgres://rtc_agent:rtc_agent@postgres:5432/rtc_agent?sslmode=disable"
+  auto_migrate: true
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+
+log:
+  level: "info"
+  llm_payload: false
+
+auth:
+  jwt_secret: "rtc-agent-docker-jwt-secret-change-me-in-production"
+  access_token_ttl_seconds: 3600
+
+providers:
+  mock:
+    enabled: false
+
+cors:
+  allow_origins: ["*"]
+
+# LLM 配置（需取消注释并填入实际配置）
+llm:
+  provider: "openai"
+  api_key: "your-api-key-here"
+  model: "gpt-4o"
+  max_tokens: 131072
+
+worker:
+  system_prompt: |
+    You are an intelligent assistant. Detect the user's language and respond in that language.
+
+tracing:
+  enabled: false

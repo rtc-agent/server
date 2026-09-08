@@ -1,0 +1,32 @@
+# 本地开发配置（含个人密钥等敏感信息）
+etc/config.local.yaml
+
+# Docker 专用配置（不烘焙进镜像，通过 volume 挂载）
+etc/config.docker.yaml
+etc/config.docker-full.yaml
+etc/docker-full/
+
+# Git
+.git
+.gitignore
+
+# 文档
+*.md
+docs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# 构建产物
+bin/
+*.test
+*.out
+
+# 日志
+logs/
+*.log

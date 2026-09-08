@@ -1,0 +1,144 @@
+# RTC Agent — 满配 Docker 部署（分布式验证）
+# 用途：验证多 Worker 分布式部署、可观测性全链路
+# 端口：PostgreSQL 25432, Redis 26379, Server 8888/8889, Jaeger 26686, Mock OAuth2 20060, Nginx 80
+# 与 dev docker-compose (etc/dev/) 端口不冲突，可同时运行
+
+name: rtc-agent-full
+
+services:
+  # ===========================================================================
+  # 基础设施
+  # ===========================================================================
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: rtc-full-postgres
+    environment:
+      POSTGRES_USER: rtc_agent
+      POSTGRES_PASSWORD: rtc_agent
+      POSTGRES_DB: rtc_agent
+    ports:
+      - "25432:5432"
+    volumes:
+      - full-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rtc_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: rtc-full-redis
+    ports:
+      - "26379:6379"
+    volumes:
+      - full-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: rtc-full-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "26686:16686"  # Jaeger UI
+      - "14317:4317"   # OTLP gRPC
+      - "14318:4318"   # OTLP HTTP
+    restart: unless-stopped
+
+  mock-oauth2:
+    build:
+      context: .
+      dockerfile: Dockerfile.mock-oauth2
+    container_name: rtc-full-mock-oauth2
+    ports:
+      - "20060:10060"
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 数据库迁移（一次性容器，server 启动前执行）
+  # ===========================================================================
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rtc-full-migrate
+    entrypoint: ["./rtc-agent", "migrate"]
+    volumes:
+      - ./etc/config.docker-full.yaml:/app/etc/config.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ===========================================================================
+  # Server 集群（2 实例，验证分布式部署）
+  # ===========================================================================
+
+  server-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rtc-full-server-1
+    expose:
+      - "8888"
+    volumes:
+      - ./etc/config.docker-full.yaml:/app/etc/config.yaml:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+      mock-oauth2:
+        condition: service_started
+    restart: unless-stopped
+
+  server-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rtc-full-server-2
+    expose:
+      - "8888"
+    volumes:
+      - ./etc/config.docker-full.yaml:/app/etc/config.yaml:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+      mock-oauth2:
+        condition: service_started
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 负载均衡
+  # ===========================================================================
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: rtc-full-nginx
+    ports:
+      - "18080:80"
+    volumes:
+      - ./etc/docker-full/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - server-1
+      - server-2
+    restart: unless-stopped
+
+volumes:
+  full-postgres-data:
+  full-redis-data:

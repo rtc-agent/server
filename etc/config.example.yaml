@@ -1,0 +1,172 @@
+# RTC Agent Server — 完整配置参考
+# 复制此文件为 etc/config.local.yaml 并修改所需字段
+# config.local.yaml 已在 .gitignore 中，不会被提交
+#
+# 配置合并规则：
+#   config.yaml (基线) + config.local.yaml (覆盖) → 最终配置
+#   使用 --config 指定文件时，不做合并，仅加载指定文件
+#
+# 环境变量覆盖：
+#   支持 DATABASE__DSN、REDIS__ADDR 等形式（双下划线分隔层级）
+#   例如：DATABASE__DSN=postgres://... 等价于 database.dsn
+
+# =============================================================================
+# 服务器
+# =============================================================================
+server:
+  host: "0.0.0.0"
+  port: 8888
+  # 运行环境：development / production
+  # development 允许宽松回退（如 WebSocket 允许任意 Origin）
+  env: "production"
+  # 优雅停机超时（等待 in-flight 请求完成）
+  shutdown_timeout: 10s
+  # RPC 处理器上下文超时
+  rpc_timeout: 10s
+
+# =============================================================================
+# 数据库（PostgreSQL + pgvector）
+# =============================================================================
+database:
+  # PostgreSQL 连接字符串
+  # 格式：postgres://user:password@host:port/dbname?sslmode=disable
+  dsn: "postgres://rtc_agent:rtc_agent@localhost:5432/rtc_agent?sslmode=disable"
+  # 启动时自动运行数据库迁移（仅建议开发环境开启）
+  auto_migrate: false
+
+# =============================================================================
+# Redis
+# =============================================================================
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+
+# =============================================================================
+# 日志
+# =============================================================================
+log:
+  # 日志级别：debug / info / warn / error
+  level: "info"
+  # 将完整 LLM 请求/响应写入 logs/llm-payload.log（JSON Lines 格式）
+  # ⚠️ 仅开发/调试环境使用，生产环境请勿开启（含敏感数据）
+  llm_payload: false
+
+# =============================================================================
+# 认证
+# =============================================================================
+auth:
+  # JWT 签名密钥 — 生产环境必须使用强随机字符串
+  # 生成方式：openssl rand -hex 32
+  jwt_secret: "change-me-in-production"
+  # Access Token 有效期（秒），默认 3600（1 小时）
+  access_token_ttl_seconds: 3600
+  # Refresh Token 有效期，默认 720h（30 天）
+  # refresh_token_ttl: 720h
+  # OAuth2 state 参数有效期，默认 10m
+  # oauth2_state_ttl: 10m
+
+# =============================================================================
+# OAuth2 Provider
+# =============================================================================
+providers:
+  mock:
+    # 开发环境使用内置 Mock OAuth2 服务器
+    enabled: false
+    url: "http://localhost:10060"
+    client_id: "test-client"
+    client_secret: "test-client-secret"
+  # OAuth2 HTTP 客户端超时，默认 10s
+  # http_timeout: 10s
+
+# =============================================================================
+# 跨域（CORS）
+# =============================================================================
+cors:
+  # 允许的 origin 列表
+  # 为空时回退到 "*"（仅限 development 环境）
+  # 生产环境必须显式配置，如：["https://app.example.com"]
+  allow_origins: []
+
+# =============================================================================
+# LLM 模型
+# =============================================================================
+llm:
+  # 模型提供商：claude / openai
+  provider: "claude"
+  # API 密钥
+  api_key: "your-api-key-here"
+  # 自定义 API 端点（可选，用于代理或企业部署）
+  # base_url: "https://api.openai.com/v1"
+  # 模型名称
+  model: "claude-sonnet-4-20250514"
+  # 最大输出 token 数（Claude 必填）
+  max_tokens: 16384
+  # 采样温度（OpenAI 可选，0.0-2.0）
+  # temperature: 0.7
+  # API 请求超时
+  # timeout: 60s
+  # Claude thinking 模式 token 预算（默认 50000）
+  # thinking_budget_tokens: 50000
+  # OpenAI reasoning 模型推理力度：low / medium / high
+  # reasoning_effort: "medium"
+  # 失败重试次数（建议生产环境设为 3）
+  retry_max_attempts: 3
+  # 重试基础退避时间（指数退避：delay * 2^(attempt-1)）
+  retry_base_delay: 1s
+
+# =============================================================================
+# Worker / Agent
+# =============================================================================
+worker:
+  # Agent 系统提示词
+  system_prompt: |
+    You are an intelligent assistant. Detect the user's language and respond in that language.
+
+  # 触发上下文压缩的 token 阈值（默认 25000）
+  # 实际触发阈值 = context_tokens_limit - auto_compact_buffer_tokens
+  context_tokens_limit: 25000
+  # 自动压缩缓冲 token 数（默认 13000）
+  auto_compact_buffer_tokens: 13000
+  # 压缩时最大输出 token 数（默认 20000）
+  max_output_tokens_for_summary: 20000
+  # Checkpoint TTL（Redis 中的 Agent 检查点存活时间，默认 24h）
+  # checkpoint_ttl: 24h
+  # 流式 chunk TTL（默认 5m）
+  # stream_chunk_ttl: 5m
+  # Worker 心跳间隔（秒，默认 10）
+  # heartbeat_sec: 10
+  # Worker TTL（秒，默认 60）
+  # ttl_sec: 60
+  # 空闲超时（默认 5m）
+  # idle_timeout: 5m
+  # 后台任务并发数（默认 5）
+  # background_concurrency: 5
+
+# =============================================================================
+# Embedding 服务（用于 User Memory 向量检索）
+# =============================================================================
+# embedding:
+#   enabled: true
+#   base_url: "http://localhost:1234/v1"
+#   api_key: ""
+#   model: "text-embedding-3-small"
+#   dimension: 1536
+#   timeout: 30s
+
+# =============================================================================
+# OpenTelemetry 分布式追踪
+# =============================================================================
+tracing:
+  enabled: false
+  # OTLP gRPC endpoint（如 Jaeger: localhost:4317）
+  endpoint: "localhost:4317"
+  # 采样率 0.0-1.0（1.0 = 全量采样）
+  sample_rate: 1.0
+
+# =============================================================================
+# API 分页
+# =============================================================================
+# api:
+#   query_default_limit: 50
+#   query_max_limit: 100

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -226,6 +227,13 @@ type TracingConfig struct {
 }
 
 // Load 加载配置。使用局部 viper 实例，不污染全局状态，可安全并行测试。
+//
+// 配置合并策略（无 --config 时）：
+//  1. 加载 etc/config.yaml 作为基线
+//  2. 若 etc/config.local.yaml 存在，合并覆盖基线（仅写差异项）
+//  3. config.local.yaml 应加入 .gitignore，用于本地个人配置
+//
+// 使用 --config 时，仅加载指定文件，不做合并。
 func Load(cfgFile string) (*Config, error) {
 	v := viper.New()
 
@@ -238,6 +246,8 @@ func Load(cfgFile string) (*Config, error) {
 	}
 
 	v.AutomaticEnv()
+	// 环境变量映射：DATABASE__DSN → database.dsn, REDIS__ADDR → redis.addr
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
 
 	// 默认值（必须在 ReadInConfig 之前设置）
 	v.SetDefault("server.env", "production")
@@ -279,6 +289,19 @@ func Load(cfgFile string) (*Config, error) {
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, err
+	}
+
+	// 无 --config 时，自动合并 etc/config.local.yaml（若存在）
+	if cfgFile == "" {
+		localV := viper.New()
+		localV.AddConfigPath("etc")
+		localV.SetConfigName("config.local")
+		localV.SetConfigType("yaml")
+		if err := localV.ReadInConfig(); err == nil {
+			for _, key := range localV.AllKeys() {
+				v.Set(key, localV.Get(key))
+			}
+		}
 	}
 
 	var cfg Config

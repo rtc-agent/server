@@ -1,0 +1,52 @@
+name: Server CI
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/server-ci.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build -o /dev/null ./...
+
+      - name: Test
+        run: go test ./... -race -count=1
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest

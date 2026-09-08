@@ -1,0 +1,69 @@
+# RTC Agent Docker 部署配置（满配版）
+# 用于 docker-compose.full.yml，挂载到 /app/etc/config.yaml
+# 所有连接地址使用 Docker 内部服务名
+
+server:
+  host: "0.0.0.0"
+  port: 8888
+  env: "development"
+
+database:
+  dsn: "postgres://rtc_agent:rtc_agent@postgres:5432/rtc_agent?sslmode=disable"
+  auto_migrate: true
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+
+log:
+  level: "info"
+  llm_payload: false
+
+auth:
+  jwt_secret: "rtc-agent-docker-jwt-secret-change-me-in-production"
+  access_token_ttl_seconds: 3600
+
+providers:
+  mock:
+    enabled: true
+    url: "http://mock-oauth2:10060"
+    client_id: "test-client"
+    client_secret: "test-client-secret"
+
+cors:
+  allow_origins: ["*"]
+
+# LLM 配置（Docker 部署需取消注释并填入实际配置）
+llm:
+  provider: "openai"
+  api_key: "your-api-key-here"
+  model: "gpt-4o"
+  base_url: "https://api.openai.com/v1"
+  max_tokens: 131072
+  retry_max_attempts: 3
+  retry_base_delay: 1s
+
+worker:
+  system_prompt: |
+    You are an intelligent assistant with access to tools: ls, read, write, grep, find, and script.
+
+    When you receive a message, first read AGENT.md to understand your role and constraints.
+
+    Principles:
+    - ALWAYS use tools to complete tasks; do not just describe what you would do
+    - Read documentation before acting
+    - Follow AGENT.md guidelines strictly
+    - If a task exceeds your capabilities, tell the user honestly
+    - Confirm with user before sensitive operations
+    - Detect the language used by the user and always respond in that language
+
+  context_tokens_limit: 25000
+  auto_compact_buffer_tokens: 13000
+  max_output_tokens_for_summary: 20000
+
+# OpenTelemetry 分布式追踪
+tracing:
+  enabled: true
+  endpoint: "jaeger:4317"
+  sample_rate: 1.0
