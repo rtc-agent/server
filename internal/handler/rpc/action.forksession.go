@@ -106,11 +106,11 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		Title:       oldSession.Title, // 继承旧 session 标题
 		Status:      string(protocol.SessionStatusActive),
 		AgentPrompt: oldSession.AgentPrompt,
-		TodoList:    oldSession.TodoList,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-		ClosedAt:    nil,
-		DeletedAt:   nil,
+		//TodoList:    oldSession.TodoList,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		ClosedAt:  nil,
+		DeletedAt: nil,
 	}
 
 	// Generate a workID for debug tracing. Do NOT pre-create the turn — it
