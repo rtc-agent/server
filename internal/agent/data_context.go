@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -124,15 +125,11 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		h.triggerSessionMemoryExtraction(ctx, sid, messages)
 	}
 
-	// Phase 2: Detect /goal prefix and inject goal creation system message.
-	// This checks if the last user message starts with "/goal" and, if so,
-	// appends a system message with the goal creation prompt.
-	messages = injectGoalCreationPromptIfNeeded(messages)
-
-	// Phase 3: Detect active goal and inject goal management prompt.
-	// This checks if there is an active goal for the session and, if so,
-	// appends a user-role message with the goal management prompt.
-	messages = h.injectGoalManagementPromptIfNeeded(ctx, sessionID, messages)
+	// Slash-command framework. Detect any command prefix on the last user
+	// message, update per-session activation state, and append the
+	// commands' prompt contributions. The /goal command is now handled by
+	// GoalWorkflow registered in the registry (see goal_workflow.go).
+	messages = h.injectCommandPrompts(ctx, sid, messages)
 
 	return messages, nil
 }
@@ -332,4 +329,49 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 		i++
 	}
 	return result
+}
+
+// injectCommandPrompts runs the slash-command framework's DetectAndInject,
+// converting the returned PromptContributions to turnagent Messages and
+// appending them in registration order. If the registry has no commands or
+// none match, this is a no-op.
+//
+// Each contributed prompt is wrapped with an XML tag identifying the
+// contributing command, so the LLM can distinguish sources:
+//
+//	<command name="persona">…</command>
+func (h *helpers) injectCommandPrompts(goCtx context.Context, sessionID uuid.UUID, messages []*turnagent.Message) []*turnagent.Message {
+	if h.deps.CommandRegistry == nil {
+		return messages
+	}
+
+	// Extract last user message content.
+	var lastUserContent string
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == turnagent.RoleUser {
+			lastUserContent = messages[i].Content
+			break
+		}
+	}
+
+	cmdCtx := command.Context{
+		Context:   goCtx,
+		SessionID: sessionID,
+	}
+	contributions, err := h.deps.CommandRegistry.DetectAndInject(cmdCtx, lastUserContent)
+	if err != nil || len(contributions) == 0 {
+		return messages
+	}
+
+	for _, nc := range contributions {
+		messages = append(messages, &turnagent.Message{
+			Role:    nc.Contribution.Role,
+			Content: wrapWithTag(nc.CommandName, nc.Contribution.Content),
+		})
+	}
+	return messages
+}
+
+func wrapWithTag(name, content string) string {
+	return "<command name=\"" + name + "\">\n" + content + "\n</command>"
 }

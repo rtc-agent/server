@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
@@ -14,7 +15,6 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // =============================================================================
@@ -268,131 +268,27 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 		h.resumeParentAfterSubAgent(ctx, session, lastMessage)
 	}
 
-	// Phase 3: Goal execution loop — check active goal and trigger next turn if needed.
-	h.handleGoalOnTurnComplete(ctx, sessionID, turnID)
+	// Slash-command framework: notify active commands of turn completion.
+	// The /goal execution loop is now handled by GoalWorkflow.OnTurnComplete
+	// (see goal_workflow.go) via the registry.
+	if h.deps.CommandRegistry != nil {
+		cmdCtx := command.Context{
+			Context:   ctx,
+			SessionID: sid,
+			TurnID:    tid,
+		}
+		if errs := h.deps.CommandRegistry.OnTurnComplete(cmdCtx); len(errs) > 0 {
+			for _, e := range errs {
+				h.logIfEnabled(ctx, "completeTurn.command_hook_failed", map[string]any{
+					"session_id": sessionID,
+					"turn_id":    turnID,
+					"error":      e.Error(),
+				})
+			}
+		}
+	}
 
 	return nil
-}
-
-// handleGoalOnTurnComplete implements the goal execution loop logic in completeTurn callback.
-//
-// After a turn completes, this function:
-// 1. Checks if there is an active goal for the session
-// 2. Increments completed_turns and checks if max_turns is exceeded
-// 3. If exceeded, marks goal as exhausted (no re-queue)
-// 4. If not exceeded, publishes a submit work item to trigger the next turn
-//
-// The next turn's loadMessages will inject the goal management prompt (runtime injection),
-// allowing the Agent to review progress and decide whether to call complete_goal or continue working.
-//
-// Database updates are wrapped in a transaction to ensure consistency.
-// Queue publishing happens outside the transaction (fire-and-forget).
-func (h *helpers) handleGoalOnTurnComplete(ctx context.Context, sessionID string, turnID string) {
-	// Check if GoalRepo is available
-	if h.deps.GoalRepo == nil {
-		return
-	}
-
-	sid, err := uuid.Parse(sessionID)
-	if err != nil {
-		h.logIfEnabled(ctx, "handleGoalOnTurnComplete.invalid_session_id", map[string]any{
-			"session_id": sessionID,
-			"error":      err.Error(),
-		})
-		return
-	}
-
-	// 1. Query active goal
-	goal, err := h.deps.GoalRepo.FindActive(ctx, sid)
-	if err != nil {
-		h.logIfEnabled(ctx, "handleGoalOnTurnComplete.find_active_goal_failed", map[string]any{
-			"session_id": sessionID,
-			"error":      err.Error(),
-		})
-		return
-	}
-	if goal == nil {
-		return // No active goal, nothing to do
-	}
-
-	// 2. Increment turn count
-	newTurns := goal.CompletedTurns + 1
-
-	// 3. Check if max_turns is exceeded
-	if newTurns > goal.MaxTurns {
-		// Mark as exhausted in a transaction
-		err = h.deps.DB.Transaction(func(tx *gorm.DB) error {
-			txGoalRepo := h.deps.GoalRepo
-			return txGoalRepo.Update(ctx, goal.ID, map[string]any{
-				"status":            string(model.GoalStatusExhausted),
-				"completed_turns":   newTurns,
-			})
-		})
-		if err != nil {
-			h.logIfEnabled(ctx, "handleGoalOnTurnComplete.update_exhausted_failed", map[string]any{
-				"goal_id": goal.ID.String(),
-				"error":   err.Error(),
-			})
-			return
-		}
-
-		h.logIfEnabled(ctx, "handleGoalOnTurnComplete.goal_exhausted", map[string]any{
-			"goal_id":         goal.ID.String(),
-			"session_id":      sessionID,
-			"completed_turns": newTurns,
-			"max_turns":       goal.MaxTurns,
-		})
-		// No re-queue — goal has ended
-		return
-	}
-
-	// 4. Update goal count in a transaction
-	err = h.deps.DB.Transaction(func(tx *gorm.DB) error {
-		txGoalRepo := h.deps.GoalRepo
-		return txGoalRepo.Update(ctx, goal.ID, map[string]any{
-			"completed_turns": newTurns,
-		})
-	})
-	if err != nil {
-		h.logIfEnabled(ctx, "handleGoalOnTurnComplete.update_goal_failed", map[string]any{
-			"goal_id": goal.ID.String(),
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	// 5. Publish submit work item to trigger next turn (outside transaction, fire-and-forget)
-	if h.queue != nil {
-		payload, marshalErr := json.Marshal(turnagent.WorkPayload{
-			Kind:      turnagent.WorkKindSubmit,
-			SessionID: sessionID,
-		})
-		if marshalErr != nil {
-			h.logIfEnabled(ctx, "handleGoalOnTurnComplete.marshal_failed", map[string]any{
-				"goal_id": goal.ID.String(),
-				"error":   marshalErr.Error(),
-			})
-			return
-		}
-
-		// Use default priority (same as user messages)
-		const submitPriority int64 = 0
-		if _, err := h.queue.Publish(ctx, sessionID, string(payload), submitPriority); err != nil {
-			h.logIfEnabled(ctx, "handleGoalOnTurnComplete.publish_failed", map[string]any{
-				"goal_id":    goal.ID.String(),
-				"session_id": sessionID,
-				"error":      err.Error(),
-			})
-			return
-		}
-	}
-
-	h.logIfEnabled(ctx, "handleGoalOnTurnComplete.goal_extended", map[string]any{
-		"goal_id":         goal.ID.String(),
-		"session_id":      sessionID,
-		"completed_turns": newTurns,
-		"max_turns":       goal.MaxTurns,
-	})
 }
 
 // resumeParentAfterSubAgentNewToolCallOutput creates a toolcall_output message for the sub agent result.

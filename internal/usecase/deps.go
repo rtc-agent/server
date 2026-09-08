@@ -7,6 +7,7 @@ package usecase
 import (
 	"context"
 
+	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -57,4 +58,9 @@ type Dependencies struct {
 
 	// WorkerConfig provides access to worker-level configuration (TTLs, etc.)
 	WorkerConfig config.WorkerConfig
+
+	// CommandRegistry is the slash-command framework. It owns prompt
+	// injection, tool collection, and turn hooks for all registered
+	// commands (e.g., /goal, /persona).
+	CommandRegistry *command.CommandRegistry
 }

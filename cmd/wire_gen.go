@@ -13,6 +13,7 @@ import (
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/internal/agent"
+	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/handler/http"
 	"github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/auth"
@@ -286,6 +287,7 @@ func provideUsecaseDependencies(
 		LLMConfig:         cfg.LLM,
 		SystemPrompt:      cfg.Worker.SystemPrompt,
 		WorkerConfig:      cfg.Worker,
+		CommandRegistry:   command.NewCommandRegistry(),
 	}
 }
 

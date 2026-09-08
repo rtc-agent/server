@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/compose"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
@@ -136,22 +137,6 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 			helpers: h,
 			turnID:  tid,
 		},
-		// Goal tools: create_goal / complete_goal / cancel_goal.
-		&createGoalTool{
-			session: session,
-			helpers: h,
-			turnID:  tid,
-		},
-		&completeGoalTool{
-			session: session,
-			helpers: h,
-			turnID:  tid,
-		},
-		&cancelGoalTool{
-			session: session,
-			helpers: h,
-			turnID:  tid,
-		},
 	}
 
 	// Add Session Memory tools
@@ -179,6 +164,17 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 		tools = append(tools, listUserMemoryTool)
 	}
 
+	// Slash-command framework: collect tools from all active commands.
+	// In PR1 the registry has no commands registered, so this is a no-op.
+	if h.deps.CommandRegistry != nil {
+		cmdCtx := command.Context{
+			Context:   ctx,
+			SessionID: sid,
+			TurnID:    tid,
+		}
+		tools = append(tools, h.deps.CommandRegistry.CollectTools(cmdCtx)...)
+	}
+
 	// Wrap all tools with error handler: convert tool errors to string results
 	// so the LLM can see error messages and self-correct, instead of terminating
 	// the entire turn with NodeRunError. Interrupt errors are preserved (not wrapped).
@@ -189,6 +185,12 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	for i, t := range tools {
 		wrappedTools[i] = utils.WrapToolWithErrorHandler(t, errorHandler)
 	}
+
+	h.logIfEnabled(ctx, "createTools.done", map[string]any{
+		"session_id": sessionID,
+		"turn_id":    turnID,
+		"tool_count": len(wrappedTools),
+	})
 
 	return wrappedTools, nil
 }
@@ -205,6 +207,11 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 // This is necessary because the middleware does not receive sessionID
 // natively — it only sees the context passed through the agent execution.
 func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID string, tools []tool.BaseTool) (adk.Agent, error) {
+	h.logIfEnabled(ctx, "createAgent.start", map[string]any{
+		"session_id": sessionID,
+		"turn_id":    turnID,
+		"tool_count": len(tools),
+	})
 	// Validate required dependencies
 	if h.deps.ChatModel == nil {
 		return nil, fmt.Errorf("createAgent: ChatModel is nil (LLM not configured)")
@@ -263,9 +270,18 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		},
 	})
 	if err != nil {
+		h.logIfEnabled(ctx, "createAgent.failed", map[string]any{
+			"session_id": sessionID,
+			"turn_id":    turnID,
+			"error":      err.Error(),
+		})
 		return nil, fmt.Errorf("createAgent: create chat model agent: %w", err)
 	}
 
+	h.logIfEnabled(ctx, "createAgent.done", map[string]any{
+		"session_id": sessionID,
+		"turn_id":    turnID,
+	})
 	return agent, nil
 }
 

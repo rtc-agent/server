@@ -974,6 +974,9 @@ type UpdateRtcStatusResult struct {
 
 // UpdateSessionRequest 更新会话请求（目前仅支持标题）
 type UpdateSessionRequest struct {
+	// DeletedAt 软删除时间
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+
 	// SessionId protocol 内 UUID 类型，JSON 线上为字符串
 	SessionId UUID `json:"session_id"`
 

@@ -1,19 +1,15 @@
 package agent
 
 import (
-	"context"
 	"fmt"
-	"strings"
 
-	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
-	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // goalCreationPrompt is injected as a system message when a /goal command is detected.
 // This prompt instructs the Agent on how to handle goal creation workflow.
 //
-// Phase 2 of /goal command implementation.
+// Consumed by GoalWorkflow.TriggerPrompt (see goal_workflow.go).
 const goalCreationPrompt = `# Goal Creation
 
 The user wants to set a goal. Their original input is in the conversation history.
@@ -61,83 +57,8 @@ Your response:
 3. After user agrees, call ` + "`create_goal(condition: \"All 42 tests pass\")`" + `
 `
 
-// injectGoalCreationPromptIfNeeded checks if the last user message starts with "/goal"
-// and, if so, appends a system message with the goal creation prompt.
-// This is the Phase 2 implementation of the /goal command.
-//
-// The injected system message is NOT persisted to the database — it only exists
-// in the message list sent to the LLM for this turn. On subsequent turns, the
-// detection runs again on the fresh message history.
-//
-// Prefix matching rules:
-//   - "/goal" alone: matches
-//   - "/goal <content>": matches (space required after /goal)
-//   - "/goalify" or other prefixes: does NOT match
-func injectGoalCreationPromptIfNeeded(messages []*turnagent.Message) []*turnagent.Message {
-	if len(messages) == 0 {
-		return messages
-	}
-
-	// Find the last user message by iterating backwards.
-	var lastUserContent string
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == turnagent.RoleUser {
-			lastUserContent = messages[i].Content
-			break
-		}
-	}
-
-	// Check if the last user message starts with "/goal".
-	// Must be exactly "/goal" or "/goal " (with space after).
-	if !strings.HasPrefix(lastUserContent, "/goal") {
-		return messages
-	}
-	// If there's more content after "/goal", it must be followed by a space.
-	if len(lastUserContent) > len("/goal") && lastUserContent[len("/goal")] != ' ' {
-		return messages
-	}
-
-	// Append the goal creation system message.
-	goalMsg := &turnagent.Message{
-		Role:    turnagent.RoleSystem,
-		Content: goalCreationPrompt,
-	}
-	return append(messages, goalMsg)
-}
-
-// injectGoalManagementPromptIfNeeded checks if there is an active goal for the session
-// and, if so, appends a user-role message with the goal management prompt.
-// This is the Phase 3 implementation of the goal execution loop.
-//
-// The injected message is NOT persisted to the database — it only exists
-// in the message list sent to the LLM for this turn.
-func (h *helpers) injectGoalManagementPromptIfNeeded(ctx context.Context, sessionID string, messages []*turnagent.Message) []*turnagent.Message {
-	sid, err := uuid.Parse(sessionID)
-	if err != nil {
-		return messages
-	}
-
-	// Check if GoalRepo is available
-	if h.deps.GoalRepo == nil {
-		return messages
-	}
-
-	// Query active goal
-	goal, err := h.deps.GoalRepo.FindActive(ctx, sid)
-	if err != nil || goal == nil {
-		return messages
-	}
-
-	// Build and append the goal management prompt as role=user
-	prompt := buildGoalManagementPrompt(goal)
-	goalMsg := &turnagent.Message{
-		Role:    turnagent.RoleUser,
-		Content: prompt,
-	}
-	return append(messages, goalMsg)
-}
-
 // buildGoalManagementPrompt builds the goal management prompt for runtime injection.
+// Consumed by GoalWorkflow.SustainPrompt (see goal_workflow.go).
 func buildGoalManagementPrompt(goal *model.Goal) string {
 	return fmt.Sprintf(`# Goal Management
 

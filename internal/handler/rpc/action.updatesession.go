@@ -39,6 +39,9 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 	if req.Title != nil {
 		fields["title"] = *req.Title
 	}
+	if req.DeletedAt != nil {
+		fields["deleted_at"] = *req.DeletedAt
+	}
 	if len(fields) == 0 {
 		return &protocol.UpdateSessionResponse{
 			Result: protocol.UpdateSessionResult{SessionId: req.SessionId},

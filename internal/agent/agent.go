@@ -171,6 +171,15 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		h.toolResultBudgetMaxTokens = DefaultToolResultMaxTokens
 	}
 
+	// Register built-in slash commands into the command registry.
+	// GoalWorkflow closes over helpers (for DB/queue access and tool construction).
+	registerGoalCommand(cfg.Deps.CommandRegistry, h)
+	if cfg.Deps.CommandRegistry != nil {
+		for _, cmd := range builtinCommands() {
+			cfg.Deps.CommandRegistry.Register(cmd)
+		}
+	}
+
 	// Build the attachment manager. It coordinates the building and injection
 	// of all dynamic attachments (AgentPrompt, TodoList, SessionMemory, UserMemory).
 	// Attachments are built in order: AgentPrompt first (highest priority),
