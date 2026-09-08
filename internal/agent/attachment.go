@@ -147,11 +147,11 @@ func (m *AttachmentManager) BuildAttachments(
 			status = "truncated"
 
 			m.logWarn(ctx, "attachment.budget_truncated", map[string]any{
-				"name":              att.Name(),
-				"original_tokens":   estimateStringTokens(content),
-				"truncated_tokens":  tokens,
-				"max_tokens":        m.maxTokensPerAttachment,
-				"session_id":        sessionID.String(),
+				"name":             att.Name(),
+				"original_tokens":  estimateStringTokens(content),
+				"truncated_tokens": tokens,
+				"max_tokens":       m.maxTokensPerAttachment,
+				"session_id":       sessionID.String(),
 			})
 		}
 
@@ -169,10 +169,9 @@ func (m *AttachmentManager) BuildAttachments(
 		}
 
 		// Add the attachment as a system message
-		messages = append(messages, &turnagent.Message{
-			Role:    turnagent.RoleSystem,
-			Content: content,
-		})
+		messages = append([]*turnagent.Message{
+			{Role: turnagent.RoleSystem, Content: content},
+		}, messages...)
 		totalTokens += tokens
 
 		// Record metrics and logs
