@@ -178,6 +178,9 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: rtc-full-server-1
+    environment:
+      DEBUG: true
+      LLM_API_KEY: "${LLM_API_KEY}"
     expose:
       - "8888"
     volumes:
@@ -198,6 +201,9 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: rtc-full-server-2
+    environment:
+      DEBUG: true
+      LLM_API_KEY: "${LLM_API_KEY}"
     expose:
       - "8888"
     volumes:

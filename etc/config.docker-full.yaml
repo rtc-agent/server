@@ -37,7 +37,7 @@ cors:
 # LLM 配置（从 config.local.yaml 同步，localhost → host.docker.internal）
 llm:
   provider: "claude"
-  api_key: "your-api-key-here"
+  api_key: "${LLM_API_KEY}"
   model: "qwen3.7-plus"
   base_url: "http://host.docker.internal:23000"
   max_tokens: 131072

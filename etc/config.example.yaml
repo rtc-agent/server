@@ -94,8 +94,11 @@ cors:
 llm:
   # 模型提供商：claude / openai
   provider: "claude"
-  # API 密钥
-  api_key: "your-api-key-here"
+  # API 密钥 — 支持 ${ENV_VAR} 形式引用环境变量（推荐）
+  # 直接填写明文 API Key 不安全，建议使用环境变量：
+  #   export LLM_API_KEY="your-actual-api-key"
+  #   api_key: "${LLM_API_KEY}"
+  api_key: "${LLM_API_KEY}"
   # 自定义 API 端点（可选，用于代理或企业部署）
   # base_url: "https://api.openai.com/v1"
   # 模型名称

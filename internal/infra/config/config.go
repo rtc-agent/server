@@ -1,6 +1,9 @@
 package config
 
 import (
+	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -309,5 +312,38 @@ func Load(cfgFile string) (*Config, error) {
 		return nil, err
 	}
 
+	// 展开 llm.api_key 中的环境变量引用（${VAR_NAME} 形式）。
+	// 仅对 APIKey 生效，避免其他配置项误用环境变量引入安全隐患。
+	cfg.LLM.APIKey = expandEnvRef(cfg.LLM.APIKey)
+
 	return &cfg, nil
+}
+
+// envRefPattern 匹配 ${VAR_NAME} 形式的环境变量引用。
+var envRefPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// expandEnvRef 将字符串中的 ${VAR} 替换为对应环境变量值。
+// 若环境变量未设置则替换为空字符串。不含 ${...} 的字符串原样返回。
+func expandEnvRef(s string) string {
+	return envRefPattern.ReplaceAllStringFunc(s, func(match string) string {
+		key := envRefPattern.FindStringSubmatch(match)[1]
+		val, ok := os.LookupEnv(key)
+		if !ok {
+			return ""
+		}
+		return val
+	})
+}
+
+// ExpandEnvRef 导出供测试使用。
+func ExpandEnvRef(s string) string {
+	return expandEnvRef(s)
+}
+
+// Validate 校验必填配置项，返回第一个发现的错误。
+func (c *Config) Validate() error {
+	if c.LLM.APIKey == "" {
+		return fmt.Errorf("llm.api_key is required: set it directly or via ${LLM_API_KEY} environment variable")
+	}
+	return nil
 }

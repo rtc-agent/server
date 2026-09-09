@@ -58,6 +58,8 @@ services:
     container_name: rtc-docker-server
     ports:
       - "8888:8888"
+    environment:
+      LLM_API_KEY: "${LLM_API_KEY}"
     volumes:
       - ./etc/config.docker.yaml:/app/etc/config.yaml:ro
     depends_on:
