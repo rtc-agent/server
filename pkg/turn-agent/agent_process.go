@@ -5,39 +5,44 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/schema"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	"go.opentelemetry.io/otel/attribute"
 )
+
+// isInterruptError checks if the error is an eino InterruptError.
+func isInterruptError(err error) bool {
+	var iErr *adk.InterruptError
+	return errors.As(err, &iErr)
+}
+
+// rootInterruptCtx returns the root interrupt context — the deepest tool that
+// actually raised the interrupt. Falls back to the first context if no root
+// cause is marked. Returns nil if the slice is empty.
+func rootInterruptCtx(ctxs []*adk.InterruptCtx) *adk.InterruptCtx {
+	if len(ctxs) == 0 {
+		return nil
+	}
+	for _, c := range ctxs {
+		if c.IsRootCause {
+			return c
+		}
+	}
+	return ctxs[0]
+}
 
 // Process executes one turn for the given rtc-queue Work item. Its signature
 // matches rtcqueue.WorkerConfig.OnWork, so it plugs directly into rtc-queue's
 // Worker.
 //
-// Process owns the turn's lifecycle. It creates / looks up the turn via
-// Config callbacks, creates a per-turn TurnAgent that manages the eino TurnLoop,
-// and calls the lifecycle callbacks (Begin/Resume/Complete/Interrupt/Fail/Cancel Turn)
-// at the well-defined moments. Application code must NOT mutate turn state from
-// other code paths.
-//
-// Process returns nil when the turn has reached a terminal state through the
-// appropriate callback (Complete / Interrupt / Cancel). It returns a non-nil
-// error when:
-//   - The work payload could not be decoded
-//   - CreateTurn / LookupTurn failed — the work is left in "processing"
-//     status for admin recovery
-//   - A start callback (BeginTurn / ResumeTurn) failed — same outcome
-//   - The turn ended due to an unexpected error — FailTurn has been called,
-//     and the error is propagated so rtc-queue keeps the work in "processing"
-//   - The parent ctx was cancelled (graceful worker shutdown) — no lifecycle
-//     callback is invoked, so the turn stays in its previous state and can be
-//     picked up by another worker once the session lock expires
+// V3 architecture: Process decodes the payload, creates/looks up the turn,
+// then delegates to the SessionManagerRegistry. It pushes the work item to
+// the session's TurnLoop and blocks until the work is completed by
+// OnAgentEvents.
 func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) (retErr error) {
-	// 1. Decode payload — just {kind, sessionID}.
+	// 1. Decode payload.
 	var p WorkPayload
 	if err := json.Unmarshal([]byte(work.Data), &p); err != nil {
 		return fmt.Errorf("turnagent: decode work payload: %w", err)
@@ -48,6 +53,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	a.logIfEnabled(ctx, LogLevelInfo, "agent.process", map[string]any{
 		"p.SessionID": p.SessionID,
 		"p.Kind":      p.Kind,
+		"work_id":     work.ID,
 	})
 
 	// 1.5. Fast path: compact work bypasses the turn loop entirely.
@@ -62,40 +68,26 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	}
 
 	// 2. Obtain the turnID.
-	//
-	// For submit: CreateTurn allocates a new turn (e.g., UUID + DB row).
-	// For resume: LookupTurn finds the existing active turn for this session.
-	//
-	// turnID is then threaded through every subsequent callback for the
-	// duration of this work — including across the eino Run(), so closures
-	// in buildEinoConfig capture it.
 	var (
 		turnID string
 		err    error
 	)
 	switch p.Kind {
 	case WorkKindSubmit:
-		// Pass work.ID as an idempotency key so CreateTurn can upsert on
-		// (sessionID, workID) and tolerate rtc-queue retries.
 		turnID, err = a.cfg.CreateTurn(ctx, p.SessionID, work.ID)
 		if err != nil {
 			return fmt.Errorf("turnagent: CreateTurn: %w", err)
 		}
 	case WorkKindResume:
-		// workID is reserved for future idempotent resume. Implementations
-		// may ignore it; the signature matches CreateTurn for symmetry.
 		turnID, err = a.cfg.LookupTurn(ctx, p.SessionID, work.ID)
 		if err != nil {
-			// Check if the error is "no active turn" — this means the turn
-			// was cancelled/completed between the resume work item being
-			// published and processed. Complete the work gracefully.
 			if errors.Is(err, ErrNoActiveTurn) {
 				a.logIfEnabled(ctx, LogLevelInfo, "resume.no_active_turn", map[string]any{
 					"session_id": p.SessionID,
 					"work_id":    work.ID,
 					"message":    "turn was cancelled/completed before resume",
 				})
-				return nil // Complete the work gracefully
+				return nil
 			}
 			return fmt.Errorf("turnagent: LookupTurn: %w", err)
 		}
@@ -103,8 +95,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		return fmt.Errorf("turnagent: unknown work kind: %q", p.Kind)
 	}
 
-	// 2.5. Observability: start a turn span covering the entire Process
-	// invocation from this point forward.
+	// 2.5. Observability: start a turn span.
 	turnCtx, turnSpan := a.startSpanIfEnabled(ctx, "turn")
 	defer turnSpan.End()
 	turnSpan.SetAttributes(
@@ -117,18 +108,10 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		"session_id": p.SessionID,
 		"turn_id":    turnID,
 		"work_kind":  string(p.Kind),
+		"work_id":    work.ID,
 	})
 
-	// 2.6. Panic recovery. rtc-queue's Worker does not recover panics from
-	// OnWork, so the pkg must guard Process itself. Any panic in a user
-	// callback is converted into a FailTurn transition so the turn reaches
-	// a terminal state, and Process returns the recovered error so rtc-queue
-	// marks the work in "processing" for admin recovery.
-	//
-	// The recovery is placed AFTER turnID is known so FailTurn can be called
-	// with a valid ID. If the panic occurs during CreateTurn/LookupTurn
-	// itself (before turnID exists), there is no turn to transition — the
-	// recovered panic is returned as a raw error.
+	// 2.6. Panic recovery.
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -146,8 +129,6 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			"turn_id":    turnID,
 			"error":      pErr.Error(),
 		})
-		// Best-effort transition to failed. Guard with an inner recover so a
-		// misbehaving FailTurn does not swallow the original panic.
 		if turnID != "" {
 			func() {
 				defer func() { _ = recover() }()
@@ -157,61 +138,105 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		retErr = pErr
 	}()
 
-	// 3. Create per-turn TurnAgent.
-	//
-	// Each turn gets its own TurnAgent that claims the session lock, manages
-	// the eino TurnLoop lifecycle, and releases resources when the turn ends.
+	// 3. Checkpoint ID.
 	checkpointID := a.cfg.DeriveCheckpointID(p.SessionID)
 
-	// Create a local variable to track the last assistant message for Sub Agent support.
-	// This is passed to buildEinoConfig via a pointer, so event dispatch can update it.
-	var lastMessage *Message
-
-	// Create the TurnAgent first so we can reference it in the onTurnComplete callback.
-	// Build a temporary loop, then create TurnAgent, then build eino config with the callback.
-	tempLoop := adk.NewTurnLoop[TurnWorkItem, *schema.Message](adk.TurnLoopConfig[TurnWorkItem, *schema.Message]{})
-	turnAgent, err := NewTurnAgent(turnCtx, a.queue, p.SessionID, a.workerID, work.Credential, turnID, tempLoop,
-		func(ctx context.Context, level LogLevel, msg string, fields map[string]any) {
-			a.logIfEnabled(ctx, level, msg, fields)
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("turnagent: create turn agent: %w", err)
+	// 4. Get or create a SessionTurnManager.
+	logFn := func(ctx context.Context, level LogLevel, msg string, fields map[string]any) {
+		a.logIfEnabled(ctx, level, msg, fields)
 	}
 
-	// Build the eino config with the lastMessage pointer and turn complete callback.
-	einoCfg := a.buildEinoConfig(p.SessionID, checkpointID, &lastMessage, turnAgent.SignalTurnComplete)
-	loop := adk.NewTurnLoop[TurnWorkItem, *schema.Message](einoCfg)
+	mgr, isNew, err := a.registry.GetOrCreate(
+		turnCtx, a.queue, p.SessionID, a.workerID, turnID, checkpointID,
+		work.Credential, a.cfg, logFn,
+	)
+	if err != nil {
+		// Claim failed. This could mean the session is locked by another worker
+		// or the queue is empty. Return the error so rtc-queue can handle it.
+		a.logIfEnabled(turnCtx, LogLevelWarn, "turn.get_or_create_failed", map[string]any{
+			"session_id": p.SessionID,
+			"turn_id":    turnID,
+			"error":      err.Error(),
+		})
+		return fmt.Errorf("turnagent: GetOrCreate: %w", err)
+	}
 
-	// Update the TurnAgent's loop reference to the actual loop.
-	turnAgent.loop = loop
+	// 5. Build work item and push to the loop.
+	workItem := TurnWorkItem{
+		WorkPayload: p,
+		TurnID:      turnID,
+		WorkID:      work.ID,
+	}
 
-	// 4. Cancel listener.
+	pushed, _ := mgr.Loop().Push(workItem)
+	if !pushed {
+		// Loop stopped. Try to replace the manager.
+		a.logIfEnabled(turnCtx, LogLevelInfo, "turn.push_failed_replacing", map[string]any{
+			"session_id": p.SessionID,
+			"turn_id":    turnID,
+		})
+
+		var replacedIsNew bool
+		mgr, replacedIsNew, err = a.registry.Replace(
+			turnCtx, a.queue, p.SessionID, a.workerID, turnID, checkpointID,
+			mgr, work.Credential, a.cfg, logFn,
+		)
+		if err != nil {
+			return fmt.Errorf("turnagent: Replace: %w", err)
+		}
+
+		// The caller is now the owner of the session's turn lifecycle
+		// (analogous to isNew=true from GetOrCreate).
+		if replacedIsNew {
+			isNew = true
+		}
+
+		pushed, _ = mgr.Loop().Push(workItem)
+		if !pushed {
+			return fmt.Errorf("turnagent: failed to push work item after replacement")
+		}
+	}
+
+	// If this is a new manager, begin the turn.
+	if isNew {
+		switch p.Kind {
+		case WorkKindSubmit:
+			if err := a.cfg.BeginTurn(turnCtx, turnID); err != nil {
+				turnSpan.SetAttributes(attribute.String("turn.status", "error"))
+				a.logIfEnabled(turnCtx, LogLevelError, "turn.begin_failed", map[string]any{
+					"session_id": p.SessionID,
+					"turn_id":    turnID,
+					"error":      err.Error(),
+				})
+				return fmt.Errorf("turnagent: BeginTurn: %w", err)
+			}
+		case WorkKindResume:
+			if err := a.cfg.ResumeTurn(turnCtx, turnID); err != nil {
+				turnSpan.SetAttributes(attribute.String("turn.status", "error"))
+				a.logIfEnabled(turnCtx, LogLevelError, "turn.resume_failed", map[string]any{
+					"session_id": p.SessionID,
+					"turn_id":    turnID,
+					"error":      err.Error(),
+				})
+				return fmt.Errorf("turnagent: ResumeTurn: %w", err)
+			}
+		}
+	}
+
+	// 6. Cancel listener.
 	innerCtx, innerCancel := context.WithCancel(turnCtx)
 	defer innerCancel()
 
-	var cancelledByQueue atomic.Bool
-	var cancelReason string
-	// done bounds the cancel listener's lifetime to this function invocation.
-	// Without it the goroutine would block on <-cancel until innerCancel() runs
-	// (at function return), which is unnecessary once the turn has completed.
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
 		select {
 		case cm := <-cancel:
-			cancelReason = cm.Reason
-			cancelledByQueue.Store(true)
-			// Stop the loop according to Cancel.GracePeriod:
-			//   > 0 : graceful stop — wait for a safe point (AfterChatModel |
-			//         AfterToolCalls), escalate to immediate after the timeout.
-			//   = 0 : immediate abort.
-			// turnAgent.loop is set at construction time (P0-1), so it is safe
-			// to access here — the cancel can only arrive after Run() starts.
+			mgr.SetCancelledByQueue(cm.Reason)
 			if a.cfg.Cancel.GracePeriod > 0 {
-				turnAgent.loop.Stop(adk.WithGracefulTimeout(a.cfg.Cancel.GracePeriod))
+				mgr.Loop().Stop(adk.WithGracefulTimeout(a.cfg.Cancel.GracePeriod))
 			} else {
-				turnAgent.loop.Stop(adk.WithImmediate())
+				mgr.Loop().Stop(adk.WithImmediate())
 			}
 			innerCancel()
 		case <-done:
@@ -219,136 +244,135 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		}
 	}()
 
-	// 5. Turn lifecycle: start.
-	switch p.Kind {
-	case WorkKindSubmit:
-		if err := a.cfg.BeginTurn(turnCtx, turnID); err != nil {
-			turnSpan.SetAttributes(attribute.String("turn.status", "error"))
-			a.logIfEnabled(turnCtx, LogLevelError, "turn.begin_failed", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-				"error":      err.Error(),
-			})
-			return fmt.Errorf("turnagent: BeginTurn: %w", err)
-		}
-	case WorkKindResume:
-		if err := a.cfg.ResumeTurn(turnCtx, turnID); err != nil {
-			turnSpan.SetAttributes(attribute.String("turn.status", "error"))
-			a.logIfEnabled(turnCtx, LogLevelError, "turn.resume_failed", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-				"error":      err.Error(),
-			})
-			return fmt.Errorf("turnagent: ResumeTurn: %w", err)
-		}
-	}
+	// 7. Register work with tracker and wait for completion.
+	completionCh := mgr.Tracker().Register(work.ID)
 
-	// 6. Push initial work item and run TurnAgent.
-	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.starting_turn_agent", map[string]any{
+	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.waiting_completion", map[string]any{
 		"session_id": p.SessionID,
 		"turn_id":    turnID,
-		"work_kind":  string(p.Kind),
+		"work_id":    work.ID,
 	})
 
-	workItem := TurnWorkItem{
-		WorkPayload: p,
-		TurnID:      turnID,
-	}
-
-	// Push the initial work item to the loop before starting the TurnAgent.
-	// This ensures the loop has work to process when it starts.
-	pushed, _ := loop.Push(workItem)
-	if !pushed {
-		return fmt.Errorf("turnagent: failed to push initial work item to loop")
-	}
-
-	// Run TurnAgent in background. It will start the pump loop to handle
-	// additional work items (e.g., resume) and manage the lock.
-	go turnAgent.Run(innerCtx)
-
-	// Main loop: process turns until queue is empty.
-	// After each turn completes, atomically check for next work.
-	// If next work exists, push to buffer and continue; otherwise stop the loop.
-	var currentWorkID = work.ID
-	for turnAgent.WaitForTurnComplete(innerCtx) {
-		// Turn completed. Atomically complete current work and claim next.
-		claim, err := a.queue.CompleteWorkAndClaimNext(innerCtx, currentWorkID, a.workerID, turnAgent.Credential())
-		if err != nil {
-			a.logIfEnabled(turnCtx, LogLevelError, "turn.complete_and_claim_next_error", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-				"work_id":    currentWorkID,
-				"error":      err.Error(),
-			})
-			break
-		}
-
-		if claim == nil {
-			// No more work in queue. Stop the TurnAgent (releases lock, stops pump loop).
-			a.logIfEnabled(turnCtx, LogLevelInfo, "turn.no_more_work", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-			})
-			turnAgent.Stop()
-			break
-		}
-
-		// Next work exists. Load and push to buffer.
-		nextWork, err := a.queue.LoadWork(innerCtx, claim.WorkID)
-		if err != nil || nextWork == nil {
-			a.logIfEnabled(turnCtx, LogLevelWarn, "turn.load_next_work_failed", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-				"work_id":    claim.WorkID,
-				"error":      fmt.Sprintf("%v", err),
-			})
-			break
-		}
-
-		var nextPayload WorkPayload
-		if err := json.Unmarshal([]byte(nextWork.Data), &nextPayload); err != nil {
-			a.logIfEnabled(turnCtx, LogLevelWarn, "turn.decode_next_payload_failed", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-				"work_id":    claim.WorkID,
-				"error":      err.Error(),
-			})
-			break
-		}
-
-		// Update credential if rotated.
-		if claim.Credential != "" {
-			turnAgent.UpdateCredential(claim.Credential)
-		}
-
-		nextItem := TurnWorkItem{
-			WorkPayload: nextPayload,
-			TurnID:      turnID,
-		}
-		pushed, _ := loop.Push(nextItem)
-		if !pushed {
-			a.logIfEnabled(turnCtx, LogLevelWarn, "turn.push_next_failed", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-				"work_id":    claim.WorkID,
-			})
-			break
-		}
-
-		a.logIfEnabled(turnCtx, LogLevelInfo, "turn.pushed_next_work", map[string]any{
+	// Wait for either:
+	// - The work item to be completed (OnAgentEvents calls tracker.Complete)
+	// - The context to be cancelled (worker shutdown)
+	select {
+	case <-completionCh:
+		a.logIfEnabled(turnCtx, LogLevelInfo, "turn.work_completed", map[string]any{
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
-			"work_id":    claim.WorkID,
+			"work_id":    work.ID,
 		})
-
-		currentWorkID = claim.WorkID
-		// Continue loop to wait for next turn completion.
+	case <-innerCtx.Done():
+		a.logIfEnabled(turnCtx, LogLevelInfo, "turn.ctx_done_waiting", map[string]any{
+			"session_id": p.SessionID,
+			"turn_id":    turnID,
+			"work_id":    work.ID,
+		})
 	}
 
-	// Wait for TurnAgent to fully stop.
-	exitState := turnAgent.Wait()
+	// 8. Wait for the loop to exit and perform lifecycle transitions.
+	// Only the first Process() for a session (isNew=true) handles the full
+	// lifecycle. Subsequent Process() calls for the same session just wait
+	// for their work item completion and return.
+	if !isNew {
+		// Not the owner of this session's lifecycle.
+		if mgr.IsCancelledByQueue() {
+			return nil // CancelTurn is handled by the owning Process.
+		}
 
-	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.turn_completed", map[string]any{
+		// Check if the work was actually completed. The select above may have
+		// picked innerCtx.Done() even when completionCh was also ready (Go's
+		// select is non-deterministic). Check completionCh non-blocking first
+		// to avoid falsely reporting the work as abandoned.
+		select {
+		case <-completionCh:
+			// Work was actually completed — the innerCtx.Done() path was a
+			// false alarm (e.g., CompleteAll closed the channel at the same
+			// time the cancel listener called innerCancel).
+			a.logIfEnabled(turnCtx, LogLevelInfo, "turn.work_completed_deferred", map[string]any{
+				"session_id": p.SessionID,
+				"turn_id":    turnID,
+				"work_id":    work.ID,
+			})
+			return nil
+		default:
+		}
+
+		// Wait for the manager's cleanup to complete before checking IsAbandoned.
+		// CompleteAll() runs during doCleanup (before done is closed) and sets the
+		// allDone flag that IsAbandoned relies on. Without this wait, there is a
+		// race: the non-owner could check IsAbandoned before CompleteAll runs, get
+		// false (entry still in pending map), and return nil — leaving the work
+		// stuck in "processing" status in Redis (ghost work).
+		//
+		// mgr.Done() closes after doCleanup completes, which includes CompleteAll.
+		// After Done() closes, IsAbandoned gives a definitive answer.
+		select {
+		case <-completionCh:
+			// Work completed during the wait — not abandoned.
+			a.logIfEnabled(turnCtx, LogLevelInfo, "turn.work_completed_during_wait", map[string]any{
+				"session_id": p.SessionID,
+				"turn_id":    turnID,
+				"work_id":    work.ID,
+			})
+			return nil
+		case <-mgr.Done():
+			// Manager cleanup complete — CompleteAll has run, IsAbandoned is definitive.
+		}
+
+		// Check if the work was actually completed (Complete was called by
+		// OnAgentEvents) vs. abandoned (CompleteAll was called during manager
+		// shutdown). When abandoned, the work is still in "processing" status
+		// in Redis — requeue it so another worker can pick it up.
+		if mgr.Tracker().IsAbandoned(work.ID) {
+			a.logIfEnabled(turnCtx, LogLevelWarn, "turn.work_abandoned", map[string]any{
+				"session_id": p.SessionID,
+				"turn_id":    turnID,
+				"work_id":    work.ID,
+				"message":    "manager shut down before work was processed, requeuing",
+			})
+			// Use context.Background() to ensure requeue succeeds even if
+			// the worker context is being cancelled.
+			if reErr := a.queue.RequeueWork(context.Background(), work.ID); reErr != nil {
+				a.logIfEnabled(turnCtx, LogLevelWarn, "turn.requeue_abandoned_failed", map[string]any{
+					"work_id": work.ID,
+					"error":   reErr.Error(),
+				})
+			}
+			return fmt.Errorf("turnagent: work %s abandoned: manager shut down before processing", work.ID)
+		}
+
+		return nil
+	}
+
+	// Wait for loop to exit.
+	exitState := mgr.Wait()
+
+	// Perform cleanup (claim remaining work, release lock, remove from registry).
+	mgr.Cleanup(turnCtx)
+
+	// Check if the owner's own work was abandoned (pushed to the loop but never
+	// processed by OnAgentEvents). This can happen when the loop exits due to lock
+	// loss, context cancellation, or other errors before the work item is consumed.
+	// The work is still in "processing" state in Redis — requeue it so another
+	// worker can pick it up.
+	if mgr.Tracker().IsAbandoned(work.ID) {
+		a.logIfEnabled(turnCtx, LogLevelWarn, "turn.owner_work_abandoned", map[string]any{
+			"session_id": p.SessionID,
+			"turn_id":    turnID,
+			"work_id":    work.ID,
+			"message":    "owner's work was not processed before loop exited, requeuing",
+		})
+		if reErr := a.queue.RequeueWork(context.Background(), work.ID); reErr != nil {
+			a.logIfEnabled(turnCtx, LogLevelWarn, "turn.requeue_owner_failed", map[string]any{
+				"work_id": work.ID,
+				"error":   reErr.Error(),
+			})
+		}
+	}
+
+	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.loop_exited", map[string]any{
 		"session_id":  p.SessionID,
 		"turn_id":     turnID,
 		"work_kind":   string(p.Kind),
@@ -356,31 +380,12 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		"has_error":   exitState.ExitReason != nil,
 	})
 
-	// Convert to exit reason for compatibility
 	exitReason := exitState.ExitReason
 
-	// 6.5. Reactive compact: TODO - temporarily disabled for TurnAgent migration.
-	if exitReason != nil && IsPromptTooLongError(exitReason) && a.cfg.RecoverFromPromptTooLong != nil {
-		a.logIfEnabled(turnCtx, LogLevelWarn, "reactive_compact.disabled", map[string]any{
-			"session_id": p.SessionID,
-			"turn_id":    turnID,
-			"message":    "reactive compact temporarily disabled for TurnAgent migration",
-		})
-	}
-
-	// 7. Turn lifecycle: end.
-	//
-	// Priority order matters: cancelledByQueue takes precedence over
-	// exit.ExitReason, because an admin cancel may surface as a generic
-	// context.Canceled or an eino CancelError.
-	//
-	// Observability: compute duration and status once, then emit to
-	// Logger / Tracer / Metrics before invoking the terminal callback.
+	// 9. Turn lifecycle: end.
 	turnDuration := time.Since(turnStart)
 
 	recordEnd := func(status string, err error) {
-		// Guard against panics from Logger / Tracer / Metrics implementations.
-		// Observability must never break the turn's terminal transition.
 		defer func() { _ = recover() }()
 		turnSpan.SetAttributes(
 			attribute.String("turn.status", status),
@@ -409,46 +414,34 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		})
 	}
 
-	if cancelledByQueue.Load() {
+	if mgr.IsCancelledByQueue() {
 		recordEnd("cancel", nil)
-		_ = a.cfg.CancelTurn(turnCtx, turnID, cancelReason)
+		_ = a.cfg.CancelTurn(turnCtx, turnID, mgr.CancelReason())
 		return nil
 	}
 
 	if errors.Is(innerCtx.Err(), context.Canceled) && turnCtx.Err() != nil {
-		// Parent ctx cancelled (worker shutting down). Don't transition the
-		// turn — leave it in its previous state so another worker can pick
-		// up the work when the session lock expires. No terminal observability
-		// emission: the turn didn't reach a terminal state.
 		return turnCtx.Err()
 	}
 
 	switch {
 	case exitReason == nil:
-		// Clean exit. eino has deleted the checkpoint.
 		a.logIfEnabled(turnCtx, LogLevelInfo, "turn.clean_exit", map[string]any{
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
 			"message":    "calling CompleteTurn",
 		})
 		recordEnd("success", nil)
-		// Pass the last message to CompleteTurn for Sub Agent support.
-		if err := a.cfg.CompleteTurn(turnCtx, p.SessionID, turnID, lastMessage); err != nil {
+		if err := a.cfg.CompleteTurn(turnCtx, p.SessionID, turnID, mgr.LastMessage()); err != nil {
 			a.logIfEnabled(turnCtx, LogLevelError, "turn.complete_callback_failed", map[string]any{
 				"session_id": p.SessionID,
 				"turn_id":    turnID,
 				"error":      err.Error(),
 			})
-		} else {
-			a.logIfEnabled(turnCtx, LogLevelInfo, "turn.completed", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-			})
 		}
 		return nil
 
 	case isInterruptError(exitReason):
-		// Interrupt is a legitimate turn pause, not an error.
 		var iErr *adk.InterruptError
 		_ = errors.As(exitReason, &iErr)
 		root := rootInterruptCtx(iErr.InterruptContexts)
@@ -495,7 +488,6 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		return nil
 
 	default:
-		// Unexpected error.
 		recordEnd("fail", exitReason)
 		if err := a.cfg.FailTurn(turnCtx, turnID, exitReason); err != nil {
 			a.logIfEnabled(turnCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{

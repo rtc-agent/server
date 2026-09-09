@@ -2,11 +2,18 @@ package turnagent
 
 import "context"
 
-// TurnWorkItem wraps WorkPayload with turnID for turn processing.
-// This allows the loop to know which turn is being processed.
+// TurnWorkItem wraps WorkPayload with turnID and workID for turn processing.
+// This allows the loop to know which turn is being processed and which work
+// item to complete when the turn finishes.
 type TurnWorkItem struct {
 	WorkPayload
+
+	// TurnID is the turn this work item belongs to.
 	TurnID string
+
+	// WorkID is the rtc-queue Work.ID. Used by OnAgentEvents to call
+	// CompleteWork and tracker.Complete when the turn finishes.
+	WorkID string
 }
 
 // TokenUsage is the pkg-level token usage type, independent of eino's

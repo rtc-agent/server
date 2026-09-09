@@ -396,3 +396,39 @@ redis.call("EXPIRE", lock_key, ttl)
 
 return {next_work_id, credential}
 `)
+
+// requeueWorkScript atomically moves a work item from "processing" back to
+// "pending" and re-adds it to the session's priority queue. This prevents
+// "ghost work" — items claimed from Redis but never processed because the
+// target TurnLoop had already stopped (e.g., Push failed after ClaimWithCredential
+// succeeded).
+//
+// KEYS[1] = work hash key ("work:<work_id>")
+// KEYS[2] = session queue (zset) "queue:session:<sessionID>"
+// ARGV[1] = now (unix seconds)
+// Returns 1 on success, 0 if work not found or not in "processing" state.
+var requeueWorkScript = redis.NewScript(`
+local status = redis.call("HGET", KEYS[1], "status")
+if not status then
+    return 0
+end
+if status ~= "processing" then
+    return 0
+end
+local sid = redis.call("HGET", KEYS[1], "session_id")
+if not sid then
+    return 0
+end
+local priority = tonumber(redis.call("HGET", KEYS[1], "priority"))
+if not priority then
+    priority = 0
+end
+local work_id = KEYS[1]:sub(6)
+redis.call("HSET", KEYS[1],
+    "status", "pending",
+    "worker_id", "",
+    "claimed_at", "0",
+    "updated_at", ARGV[1])
+redis.call("ZADD", KEYS[2], 0 - priority, work_id)
+return 1
+`)

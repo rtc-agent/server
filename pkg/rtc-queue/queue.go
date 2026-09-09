@@ -428,6 +428,36 @@ func (q *Queue) ReleaseSession(ctx context.Context, sessionID string) error {
 	return q.rdb.Del(ctx, keyLock(sessionID), keyActive(sessionID)).Err()
 }
 
+// RequeueWork atomically moves a work item from "processing" back to "pending"
+// and re-adds it to the session's priority queue. This prevents "ghost work" —
+// items claimed from Redis but never processed because the target TurnLoop had
+// already stopped (e.g., Push failed after ClaimWithCredential succeeded).
+//
+// Returns nil on success. Returns an error if the work is not found or not in
+// "processing" state.
+func (q *Queue) RequeueWork(ctx context.Context, workID string) error {
+	work, err := q.LoadWork(ctx, workID)
+	if err != nil {
+		return fmt.Errorf("rtcqueue: requeue work: load work: %w", err)
+	}
+	if work == nil {
+		return fmt.Errorf("rtcqueue: work %s not found", workID)
+	}
+
+	now := time.Now().Unix()
+	n, err := requeueWorkScript.Run(ctx, q.rdb, []string{
+		keyWork(workID),
+		keyQueue(work.SessionID),
+	}, now).Int()
+	if err != nil {
+		return fmt.Errorf("rtcqueue: requeue work: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("rtcqueue: work %s not in processing state", workID)
+	}
+	return nil
+}
+
 // HasPendingWorkByKind returns true if the session's queue contains a pending
 // work item whose Data field, when JSON-decoded, has the given WorkKind.
 // It also checks the currently-active work item (if any) for the same session.
