@@ -326,6 +326,102 @@ func (q *Queue) RenewLockWithCredential(ctx context.Context, sessionID, workerID
 	return n == 1, nil
 }
 
+// CompleteAndClaimNext atomically completes the current work item and claims
+// the next work item from the session queue if available. This enables "hold
+// lock" mode where a worker can process multiple work items without releasing
+// and re-acquiring the session lock.
+//
+// Returns (nil, nil) if there is no next work item in the queue.
+// Returns (*ClaimResult, nil) if the next work was successfully claimed.
+// Returns (nil, error) on Redis errors.
+func (q *Queue) CompleteAndClaimNext(ctx context.Context, workID, sessionID, workerID string, credential string) (*ClaimResult, error) {
+	now := time.Now().Unix()
+	result, err := completeAndClaimNextScript.Run(ctx, q.rdb, []string{
+		keyWork(workID),
+		keyQueue(sessionID),
+		keyActive(sessionID),
+		keyLock(sessionID),
+	}, now, workerID, DefaultLockTTLSeconds).Result()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("rtcqueue: complete and claim next: %w", err)
+	}
+	arr, ok := result.([]interface{})
+	if !ok || len(arr) < 2 {
+		return nil, nil
+	}
+	nextWorkID, _ := arr[0].(string)
+	newCred, _ := arr[1].(string)
+	if nextWorkID == "" {
+		return nil, nil
+	}
+	return &ClaimResult{
+		SessionID:  sessionID,
+		WorkID:     nextWorkID,
+		Credential: newCred,
+	}, nil
+}
+
+// CompleteWorkAndClaimNext atomically completes the current work item and
+// attempts to claim the next pending work item for the same session.
+// It verifies credential ownership via the hash-based session lock before
+// performing the operation, ensuring only the legitimate worker can complete
+// and claim in "hold lock" mode.
+//
+// The sessionID is derived from the current work item's stored data, so the
+// caller does not need to pass it explicitly.
+//
+// Returns (nil, nil) when there is no more work in the queue — the active
+// pointer is cleared in this case.
+// Returns (*ClaimResult, nil) when the next work item was successfully claimed.
+// Returns (nil, error) on Redis or data errors.
+func (q *Queue) CompleteWorkAndClaimNext(ctx context.Context, currentWorkID, workerID, credential string) (*ClaimResult, error) {
+	// Load current work to get sessionID
+	currentWork, err := q.LoadWork(ctx, currentWorkID)
+	if err != nil {
+		return nil, fmt.Errorf("rtcqueue: complete and claim: load work: %w", err)
+	}
+	if currentWork == nil {
+		return nil, fmt.Errorf("rtcqueue: work %s not found", currentWorkID)
+	}
+
+	now := time.Now().Unix()
+	res, err := completeWorkAndClaimNextScript.Run(ctx, q.rdb, []string{
+		keyWork(currentWorkID),
+		keyLock(currentWork.SessionID),
+		keyQueue(currentWork.SessionID),
+		keyActive(currentWork.SessionID),
+	}, currentWorkID, workerID, credential, now, DefaultLockTTLSeconds).Result()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("rtcqueue: complete and claim next: %w", err)
+	}
+	arr, ok := res.([]interface{})
+	if !ok || len(arr) < 2 {
+		return nil, nil
+	}
+	nextWorkID, ok := arr[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("rtcqueue: complete and claim: unexpected work_id type %T", arr[0])
+	}
+	cred, ok := arr[1].(string)
+	if !ok {
+		return nil, fmt.Errorf("rtcqueue: complete and claim: unexpected credential type %T", arr[1])
+	}
+	if nextWorkID == "" {
+		return nil, nil
+	}
+	return &ClaimResult{
+		SessionID:  currentWork.SessionID,
+		WorkID:     nextWorkID,
+		Credential: cred,
+	}, nil
+}
+
 // ReleaseSession drops the session lock and the active-work pointer
 // unconditionally. Used during graceful shutdown.
 func (q *Queue) ReleaseSession(ctx context.Context, sessionID string) error {

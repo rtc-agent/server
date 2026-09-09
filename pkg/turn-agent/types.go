@@ -2,6 +2,13 @@ package turnagent
 
 import "context"
 
+// TurnWorkItem wraps WorkPayload with turnID for turn processing.
+// This allows the loop to know which turn is being processed.
+type TurnWorkItem struct {
+	WorkPayload
+	TurnID string
+}
+
 // TokenUsage is the pkg-level token usage type, independent of eino's
 // schema.TokenUsage or model.TokenUsage. The upper application uses this
 // type for persistence and metrics without importing eino.

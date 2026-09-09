@@ -36,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/usecase"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -62,6 +63,10 @@ type Config struct {
 	// Queue is the rtc-queue for publishing work items (submit/resume/compact).
 	// Required for Sub Agent support (triggering parent session resume).
 	Queue *rtcqueue.Queue
+
+	// WorkerID identifies this worker instance. Used for session lock claims.
+	// Required.
+	WorkerID string
 
 	// Logger provides structured logging for the turn-agent runtime.
 	// Optional — if nil, no logs are emitted.
@@ -130,6 +135,13 @@ func New(cfg Config) (*turnagent.Agent, error) {
 	}
 	if cfg.Redis == nil {
 		return nil, fmt.Errorf("agent: Config.Redis is required")
+	}
+	if cfg.Queue == nil {
+		return nil, fmt.Errorf("agent: Config.Queue is required")
+	}
+	if cfg.WorkerID == "" {
+		// Auto-generate WorkerID if not provided
+		cfg.WorkerID = fmt.Sprintf("worker-%s", uuid.New().String()[:8])
 	}
 
 	// Build a helpers struct that holds all shared state for the callbacks.
@@ -272,7 +284,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		CompactContext: h.processCompactWorker,
 	}
 
-	return turnagent.New(taCfg)
+	return turnagent.New(taCfg, cfg.Queue, cfg.WorkerID)
 }
 
 // helpers holds the shared dependencies and state for all callbacks.

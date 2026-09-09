@@ -14,15 +14,16 @@ const (
 
 // Work is a single unit of enqueued labor, scoped to a Session.
 type Work struct {
-	ID        string     `json:"id" redis:"id"`
-	SessionID string     `json:"session_id" redis:"session_id"`
-	Data      string     `json:"data" redis:"data"`
-	Priority  int64      `json:"priority" redis:"priority"`
-	Status    WorkStatus `json:"status" redis:"status"`
-	WorkerID  string     `json:"worker_id,omitempty" redis:"worker_id"`
-	CreatedAt time.Time  `json:"created_at" redis:"created_at"`
-	ClaimedAt time.Time  `json:"claimed_at,omitempty" redis:"claimed_at"`
-	UpdatedAt time.Time  `json:"updated_at" redis:"updated_at"`
+	ID         string     `json:"id" redis:"id"`
+	SessionID  string     `json:"session_id" redis:"session_id"`
+	Data       string     `json:"data" redis:"data"`
+	Priority   int64      `json:"priority" redis:"priority"`
+	Status     WorkStatus `json:"status" redis:"status"`
+	WorkerID   string     `json:"worker_id,omitempty" redis:"worker_id"`
+	CreatedAt  time.Time  `json:"created_at" redis:"created_at"`
+	ClaimedAt  time.Time  `json:"claimed_at,omitempty" redis:"claimed_at"`
+	UpdatedAt  time.Time  `json:"updated_at" redis:"updated_at"`
+	Credential string     `json:"-" redis:"-"` // set by Worker after claim; not persisted
 }
 
 // ClaimResult is the return payload of Queue.Claim.

@@ -279,3 +279,120 @@ if stored_worker ~= ARGV[1] or stored_cred ~= ARGV[2] then
 end
 return redis.call("EXPIRE", KEYS[1], tonumber(ARGV[3]))
 `)
+
+// completeAndClaimNextScript atomically completes the current work item and
+// claims the next work item from the session queue if available. This enables
+// "hold lock" mode where a worker can process multiple work items without
+// releasing and re-acquiring the session lock.
+//
+// KEYS[1] = current work hash key ("work:<work_id>")
+// KEYS[2] = session queue (zset) "queue:session:<sessionID>"
+// KEYS[3] = session active work pointer ("session:active:<sessionID>")
+// KEYS[4] = session lock hash ("session:lock:<sessionID>")
+// ARGV[1] = now (unix seconds)
+// ARGV[2] = worker_id
+// ARGV[3] = lock ttl seconds
+// Returns: {next_work_id, credential} if next work exists, nil otherwise.
+var completeAndClaimNextScript = redis.NewScript(`
+-- Complete current work
+local sid = redis.call("HGET", KEYS[1], "session_id")
+if not sid then
+    return nil
+end
+redis.call("HSET", KEYS[1], "status", "completed", "updated_at", ARGV[1])
+redis.call("DEL", KEYS[3])
+
+-- Verify lock is still held
+local stored_worker = redis.call("HGET", KEYS[4], "worker_id")
+if stored_worker ~= ARGV[2] then
+    return nil
+end
+
+-- Check if there's next work in queue
+if redis.call("ZCARD", KEYS[2]) == 0 then
+    return nil
+end
+
+-- Pop next work from queue
+local popped = redis.call("ZPOPMIN", KEYS[2], 1)
+if #popped == 0 then
+    return nil
+end
+local next_work_id = popped[1]
+redis.call("HSET", "work:" .. next_work_id,
+    "status", "processing",
+    "worker_id", ARGV[2],
+    "claimed_at", ARGV[1],
+    "updated_at", ARGV[1])
+redis.call("SET", KEYS[3], next_work_id)
+
+-- Renew lock TTL
+redis.call("EXPIRE", KEYS[4], tonumber(ARGV[3]))
+
+-- Get credential
+local cred = redis.call("HGET", KEYS[4], "credential")
+return {next_work_id, cred}
+`)
+
+// completeWorkAndClaimNextScript atomically completes the current work item and
+// attempts to claim the next pending work item for the same session. Unlike
+// completeAndClaimNextScript, this script verifies credential ownership via the
+// hash-based session lock, ensuring only the legitimate worker can complete and
+// claim in "hold lock" mode.
+//
+// KEYS[1] = work hash key (current work, "work:<work_id>")
+// KEYS[2] = session lock (hash: worker_id, credential, "session:lock:<sessionID>")
+// KEYS[3] = session queue (zset, "queue:session:<sessionID>")
+// KEYS[4] = session active work pointer ("session:active:<sessionID>")
+// ARGV[1] = current work ID
+// ARGV[2] = worker ID
+// ARGV[3] = credential
+// ARGV[4] = current time (unix seconds)
+// ARGV[5] = lock TTL seconds
+// Returns: {next_work_id, credential} or empty
+var completeWorkAndClaimNextScript = redis.NewScript(`
+local work_key = KEYS[1]
+local lock_key = KEYS[2]
+local queue_key = KEYS[3]
+local active_key = KEYS[4]
+local current_work_id = ARGV[1]
+local worker_id = ARGV[2]
+local credential = ARGV[3]
+local now = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+
+-- Verify lock is held by this worker with correct credential
+local stored_worker = redis.call("HGET", lock_key, "worker_id")
+local stored_cred = redis.call("HGET", lock_key, "credential")
+if stored_worker ~= worker_id or stored_cred ~= credential then
+    return {}
+end
+
+-- Mark current work as completed
+redis.call("HSET", work_key, "status", "completed", "updated_at", now)
+
+-- Check if there's next work in queue
+local next_work = redis.call("ZPOPMIN", queue_key, 1)
+if #next_work == 0 then
+    -- No more work, clear active pointer
+    redis.call("DEL", active_key)
+    return {}
+end
+
+local next_work_id = next_work[1]
+
+-- Update the next work item status to processing
+redis.call("HSET", "work:" .. next_work_id,
+    "status", "processing",
+    "worker_id", worker_id,
+    "claimed_at", now,
+    "updated_at", now)
+
+-- Update active pointer
+redis.call("SET", active_key, next_work_id)
+
+-- Renew lock TTL
+redis.call("EXPIRE", lock_key, ttl)
+
+return {next_work_id, credential}
+`)

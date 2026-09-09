@@ -379,6 +379,10 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 		return
 	}
 
+	// Attach the credential from the claim so downstream consumers
+	// (e.g. turn-agent) can use it without re-claiming the lock.
+	work.Credential = credential
+
 	w.logIfEnabled("worker.loaded_work", map[string]any{
 		"work_id":    claim.WorkID,
 		"session_id": work.SessionID,
