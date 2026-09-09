@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#
+# Pre-push hook for rtc-agent/server
+# Runs unit tests before allowing push
+# Soft link to .git/hooks/pre-push
+
+set -euo pipefail
+
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+echo "🧪 Running unit tests before push..."
+
+# Get the list of changed files
+REMOTE="$1"
+URL="$2"
+
+# Check if there are any Go files in the commit range
+# We'll check from the current branch against the remote branch
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+REMOTE_BRANCH="origin/${BRANCH}"
+
+# Try to get the merge base
+if git rev-parse --verify "$REMOTE_BRANCH" >/dev/null 2>&1; then
+    MERGE_BASE=$(git merge-base "$REMOTE_BRANCH" HEAD)
+    CHANGED_GO_FILES=$(git diff --name-only --diff-filter=d "$MERGE_BASE" HEAD | grep -E '\.go$' || true)
+else
+    # If remote branch doesn't exist, check all Go files
+    CHANGED_GO_FILES=$(find . -name "*.go" -type f | grep -v vendor || true)
+fi
+
+if [ -z "$CHANGED_GO_FILES" ]; then
+    echo -e "${GREEN}✓ No .go files changed, skipping tests${NC}"
+    exit 0
+fi
+
+echo "Found changed Go files, running tests..."
+
+# Run unit tests
+# Using -short to skip long-running tests if any
+# Using -count=1 to disable test caching
+if go test -short -count=1 ./...; then
+    echo -e "${GREEN}✅ Unit tests passed.${NC}"
+    exit 0
+else
+    echo -e "${RED}❌ Unit tests failed! Push aborted.${NC}"
+    exit 1
+fi

@@ -3,7 +3,15 @@ name: Server Docker Publish
 on:
   push:
     branches: [main, dev]
-    tags: ["v*"]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/server-docker-publish.yml"
+  release:
+    types: [published]
   workflow_dispatch:
 
 env:
@@ -38,9 +46,19 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=sha,prefix=,format=short
+            # For releases: use release tag (e.g., v1.0.0)
+            type=ref,event=tag
+            # For releases: use commit short SHA
+            type=sha,prefix=,format=short,enable=${{ github.event_name == 'release' }}
+            # For releases: use latest only if not RC
+            type=raw,value=latest,enable=${{ github.event_name == 'release' && !contains(github.event.release.tag_name, '-rc') }}
+            # For main branch: use commit short SHA
+            type=sha,prefix=,format=short,enable=${{ github.ref == 'refs/heads/main' }}
+            # For main branch: use latest
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=${{ github.sha }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            # For dev branch: use commit SHA with -dev suffix
+            type=sha,prefix=,format=short,suffix=-dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            # For dev branch: use dev tag
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
 
       - uses: docker/build-push-action@v6
