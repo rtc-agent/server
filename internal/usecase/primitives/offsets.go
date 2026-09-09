@@ -54,3 +54,28 @@ func AllocateOffsets(
 	startTurn := uint32(turnOff) - uint32(count) + 1
 	return startGlobal, &startTurn, nil
 }
+
+// AllocateRtcOffset 为 RTC 记录分配独立的 offset。
+// 使用单独的 Redis 计数器（session:rtc_offset:{sessionID}），
+// 与消息 global_offset 计数器分离，避免 RTC 创建时消耗消息 offset 导致跳空。
+func AllocateRtcOffset(
+	ctx context.Context,
+	deps *usecase.Dependencies,
+	sessionID uuid.UUID,
+) (uint32, error) {
+	keys := []string{cache.SessionRtcOffset(sessionID.String())}
+	argv := []any{1}
+	result, err := cache.BatchIncrOffset.Run(ctx, deps.Redis, keys, argv...).Result()
+	if err != nil {
+		return 0, fmt.Errorf("incr rtc offset: %w", err)
+	}
+	arr, ok := result.([]any)
+	if !ok || len(arr) != 1 {
+		return 0, fmt.Errorf("invalid rtc offset result: %#v", result)
+	}
+	off, ok := arr[0].(int64)
+	if !ok {
+		return 0, fmt.Errorf("invalid rtc offset type: %T", arr[0])
+	}
+	return uint32(off), nil
+}

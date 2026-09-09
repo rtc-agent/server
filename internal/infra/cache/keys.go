@@ -44,6 +44,12 @@ const (
 	// value: 当前最大 turn_offset（uint64）；无 TTL（持久化）
 	PrefixTurnMsgOffset = "session:turn_offset:"
 
+	// PrefixSessionRtcOffset session 内 RTC 记录 offset 计数器前缀
+	// 完整 key: session:rtc_offset:{sessionID}
+	// value: 当前最大 rtc_offset（uint64）；无 TTL（持久化）
+	// 与消息 global_offset 计数器分离，避免 RTC 创建时消耗消息 offset 导致跳空
+	PrefixSessionRtcOffset = "session:rtc_offset:"
+
 	// ========== Worker 管理相关前缀 ==========
 
 	// PrefixWorkerInfo Worker 信息 Hash 前缀
@@ -166,6 +172,11 @@ func SessionMsgOffset(sessionID string) string {
 // TurnMsgOffset 返回 turn 内消息 offset 计数器的 Redis key
 func TurnMsgOffset(turnID string) string {
 	return PrefixTurnMsgOffset + turnID
+}
+
+// SessionRtcOffset 返回 session 内 RTC 记录 offset 计数器的 Redis key
+func SessionRtcOffset(sessionID string) string {
+	return PrefixSessionRtcOffset + sessionID
 }
 
 // ========== Worker 管理构造函数 ==========

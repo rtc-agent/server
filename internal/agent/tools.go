@@ -259,8 +259,8 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	// 5. Transactionally create Message + RTC record + publish updates.
 	var msgID uuid.UUID
 	_, err := r.helpers.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
-		// Allocate RTC offset (reuses the session:msg_offset counter).
-		rtcOffset, _, offsetErr := primitives.AllocateOffsets(txCtx, r.helpers.deps, r.session.ID, &turnUUID, 1)
+		// Allocate RTC offset from a separate counter (does not consume message global_offset).
+		rtcOffset, offsetErr := primitives.AllocateRtcOffset(txCtx, r.helpers.deps, r.session.ID)
 		if offsetErr != nil {
 			return nil, fmt.Errorf("allocate rtc offset: %w", offsetErr)
 		}

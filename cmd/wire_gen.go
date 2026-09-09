@@ -10,6 +10,7 @@ import (
 	"context"
 	"github.com/centrifugal/centrifuge"
 	"github.com/cloudwego/eino/components/model"
+	"github.com/google/uuid"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/internal/agent"
@@ -332,7 +333,7 @@ func provideQueueWorker(
 ) *rtcqueue.Worker {
 	workerID := cfg.Worker.WorkerID
 	if workerID == "" {
-		workerID = "worker-" + cfg.Server.Host
+		workerID = "worker-" + uuid.New().String()
 	}
 
 	return rtcqueue.NewWorker(queue, rtcqueue.WorkerConfig{

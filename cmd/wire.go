@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/uuid"
 	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 
 	"github.com/centrifugal/centrifuge"
@@ -264,7 +265,7 @@ func provideQueueWorker(
 ) *rtcqueue.Worker {
 	workerID := cfg.Worker.WorkerID
 	if workerID == "" {
-		workerID = "worker-" + cfg.Server.Host
+		workerID = "worker-" + uuid.New().String()
 	}
 
 	return rtcqueue.NewWorker(queue, rtcqueue.WorkerConfig{
