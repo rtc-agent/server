@@ -398,7 +398,39 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	workCtx, workCancel := context.WithCancel(ctx)
 	defer workCancel()
 
+	// Safety-net: check if the work was already cancelled (e.g. by CancelSession)
+	// before we subscribed to cancel notifications. The cancel Pub/Sub message
+	// may have been lost if CancelSession published before our SubscribeCancel.
+	// The cancelSessionActiveScript persists the cancelled status to the work hash,
+	// so we can detect it here. If cancelled, trigger the cancel immediately.
+	//
+	// NOTE: We do NOT call workCancel() here because workCtx hasn't been created
+	// yet at this point in the original flow. Instead, we create it above (before
+	// the check) and only send to cancelCh + set adminCancelled. The workCancel()
+	// will happen via defer when processWorkInternal returns.
+	if work.Status == StatusCancelled {
+		w.logIfEnabled("worker.cancelled_before_subscribe", map[string]any{
+			"work_id":    claim.WorkID,
+			"session_id": work.SessionID,
+			"message":    "work was cancelled before cancel subscription was set up; triggering cancel now",
+		})
+		cancelCh <- CancelMessage{
+			WorkID:    claim.WorkID,
+			Reason:    "cancelled_before_subscribe",
+			Timestamp: time.Now().Unix(),
+		}
+		adminCancelled.Store(true)
+		workCancel()
+	}
+
 	// subscribe to cancel notifications
+	//
+	// IMPORTANT: If the safety-net check above already triggered the cancel
+	// (work.Status == StatusCancelled), workCtx is already cancelled. The
+	// SubscribeCancel call may return a subscription that's already closed
+	// or won't deliver messages. This is fine — the cancel message is already
+	// in cancelCh and adminCancelled is already set. The cancel listener
+	// goroutine will simply exit quickly because workCtx is done.
 	cancelSub := w.q.SubscribeCancel(workCtx, claim.SessionID)
 	defer cancelSub.Close()
 	go func() {
@@ -424,6 +456,31 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 			}
 		}
 	}()
+
+	// Second safety-net: re-check work status after subscribing.
+	// This covers the race window where CancelSession runs AFTER our first
+	// LoadWork (which returned "processing") but BEFORE our SubscribeCancel.
+	// In that case, the Pub/Sub message was silently lost because we had no
+	// subscriber yet. By re-reading the work hash, we detect the cancelled
+	// status that cancelSessionActiveScript persisted and trigger the cancel
+	// ourselves — closing the gap that Pub/Sub alone cannot cover.
+	if !adminCancelled.Load() {
+		recheck, recheckErr := w.q.LoadWork(workCtx, claim.WorkID)
+		if recheckErr == nil && recheck != nil && recheck.Status == StatusCancelled {
+			w.logIfEnabled("worker.cancelled_after_subscribe", map[string]any{
+				"work_id":    claim.WorkID,
+				"session_id": claim.SessionID,
+				"message":    "work was cancelled between LoadWork and SubscribeCancel; Pub/Sub message was lost; triggering cancel now",
+			})
+			cancelCh <- CancelMessage{
+				WorkID:    claim.WorkID,
+				Reason:    "cancelled_race_detected",
+				Timestamp: time.Now().Unix(),
+			}
+			adminCancelled.Store(true)
+			workCancel()
+		}
+	}
 
 	// lock renewal ticker — tracks whether we still own the lock
 	var lockLost atomic.Bool

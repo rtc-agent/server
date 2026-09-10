@@ -216,10 +216,12 @@ return ids
 `)
 
 // cancelSessionActiveScript cancels the work item currently being processed
-// for a session (if any). It reads the session:active pointer, publishes a
-// cancel notification, and releases both the session lock and the active
-// pointer. Publish happens BEFORE releasing the lock to prevent a race where
-// a competing worker acquires the lock between DEL and PUBLISH.
+// for a session (if any). It reads the session:active pointer, marks the work
+// as cancelled in the work hash (so workers can detect cancellation even if
+// the Pub/Sub message is lost), publishes a cancel notification, and releases
+// both the session lock and the active pointer. Publish happens BEFORE
+// releasing the lock to prevent a race where a competing worker acquires the
+// lock between DEL and PUBLISH.
 //
 // KEYS[1] = session lock ("session:lock:<sessionID>")
 // KEYS[2] = session active pointer ("session:active:<sessionID>")
@@ -233,6 +235,12 @@ if not work_id then
     return nil
 end
 redis.call("DEL", KEYS[2])
+-- Persist the cancelled status to the work hash. This is critical for
+-- reliability: if the PUBLISH below is lost (e.g. the worker hasn't
+-- subscribed yet), the worker can still detect the cancellation by
+-- checking the work status after LoadWork. Without this, a lost Pub/Sub
+-- message means the worker never learns the work was cancelled.
+redis.call("HSET", "work:" .. work_id, "status", "cancelled", "updated_at", ARGV[2])
 local msg = cjson.encode({
     work_id = work_id,
     reason = ARGV[1],

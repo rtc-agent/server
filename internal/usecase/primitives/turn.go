@@ -39,8 +39,12 @@ func UpdateTurnStatus(
 // StopActiveTurns stops all pending/running/interrupted turns for a session.
 //
 // Steps:
-//  1. Cancel all pending/processing work via rtc-queue CancelSession (clears
-//     the queue and notifies any worker currently processing).
+//  1. Cancel all pending/processing work via rtc-queue CancelSession FIRST.
+//     This must happen before the DB update so the cancel signal reaches the
+//     worker while the turn is still "active" in the DB. If we updated the DB
+//     first, the frontend would see "cancelled" while the LLM is still running
+//     (because the cancel Pub/Sub message may arrive late or be lost entirely
+//     due to a race between PUBLISH and the worker's SUBSCRIBE).
 //  2. Query active turns BEFORE the bulk DB update (so we have turn IDs to
 //     publish events for).
 //  3. Mark remaining active turns as cancelled in the DB (belt-and-suspenders
@@ -48,7 +52,10 @@ func UpdateTurnStatus(
 //  4. Publish turn.updated events for each cancelled turn so the frontend
 //     learns that the turns are no longer active.
 func StopActiveTurns(ctx context.Context, deps *usecase.Dependencies, queue *rtcqueue.Queue, sessionID uuid.UUID, reason string) {
-	// 1. Cancel all pending/processing work via rtc-queue.
+	// 1. Cancel all pending/processing work via rtc-queue FIRST.
+	// This sends the cancel signal to the worker before we mark the turns as
+	// cancelled in the DB. The DB update below is a safety net for turns that
+	// were created but not yet claimed by a worker.
 	if queue != nil {
 		if err := queue.CancelSession(ctx, sessionID.String(), reason); err != nil {
 			logger.Error(ctx, "[StopActiveTurns] cancel session failed",
@@ -64,7 +71,11 @@ func StopActiveTurns(ctx context.Context, deps *usecase.Dependencies, queue *rtc
 		return
 	}
 
-	// 3. Mark remaining active turns as cancelled in DB (belt-and-suspenders).
+	// 3. Mark remaining active turns as cancelled in DB.
+	// After step 1, the worker has already received the cancel signal (if the
+	// Pub/Sub message was delivered). This DB update is a safety net for turns
+	// that were created but not yet claimed by a worker, or for cases where
+	// the cancel Pub/Sub message was lost.
 	if affected, err := deps.TurnRepo.UpdateStatusBySession(
 		ctx, sessionID,
 		[]string{
