@@ -103,13 +103,18 @@ func NewAttachmentManager(
 // 5. Skips remaining attachments if total budget is exceeded
 // 6. Records metrics and logs for each attachment
 //
-// Returns a slice of system messages ready to be appended to the conversation.
+// Returns a slice of system messages ready to be prepended to the conversation.
+// Attachment order is preserved: the first attachment in the list appears first
+// in the returned slice (highest priority position).
 func (m *AttachmentManager) BuildAttachments(
 	ctx context.Context,
 	sessionID uuid.UUID,
 	userID uuid.UUID,
 ) ([]*turnagent.Message, error) {
-	var messages []*turnagent.Message
+	// Collect attachment messages in order; prepend once at the end to
+	// preserve the configured priority order (first attachment = highest
+	// priority = first in output).
+	var collected []*turnagent.Message
 	var totalTokens int
 
 	for _, att := range m.attachments {
@@ -141,6 +146,8 @@ func (m *AttachmentManager) BuildAttachments(
 		// Check per-attachment budget
 		status := "success"
 		if tokens > m.maxTokensPerAttachment {
+			// Capture original token count before truncation for accurate logging
+			originalTokens := tokens
 			// Truncate to budget
 			content = truncateToTokens(content, m.maxTokensPerAttachment)
 			tokens = m.maxTokensPerAttachment
@@ -148,7 +155,7 @@ func (m *AttachmentManager) BuildAttachments(
 
 			m.logWarn(ctx, "attachment.budget_truncated", map[string]any{
 				"name":             att.Name(),
-				"original_tokens":  estimateStringTokens(content),
+				"original_tokens":  originalTokens,
 				"truncated_tokens": tokens,
 				"max_tokens":       m.maxTokensPerAttachment,
 				"session_id":       sessionID.String(),
@@ -169,9 +176,9 @@ func (m *AttachmentManager) BuildAttachments(
 		}
 
 		// Add the attachment as a system message
-		messages = append([]*turnagent.Message{
-			{Role: turnagent.RoleSystem, Content: content},
-		}, messages...)
+		collected = append(collected, &turnagent.Message{
+			Role: turnagent.RoleSystem, Content: content,
+		})
 		totalTokens += tokens
 
 		// Record metrics and logs
@@ -185,7 +192,7 @@ func (m *AttachmentManager) BuildAttachments(
 		})
 	}
 
-	return messages, nil
+	return collected, nil
 }
 
 // recordMetrics records metrics for an attachment build operation.

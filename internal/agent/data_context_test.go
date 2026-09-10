@@ -3,6 +3,7 @@ package agent
 import (
 	"testing"
 
+	"github.com/rtc-agent/server/internal/model"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -54,9 +55,9 @@ func TestMergeAssistantMessages(t *testing.T) {
 			},
 			expected: []*turnagent.Message{
 				{
-					Role:               turnagent.RoleAssistant,
-					Content:            "",
-					ReasoningContent:   "I should use a tool",
+					Role:             turnagent.RoleAssistant,
+					Content:          "",
+					ReasoningContent: "I should use a tool",
 					ToolCalls: []turnagent.ToolCall{
 						{ID: "call_1", Name: "search", Arguments: `{"query":"test"}`},
 					},
@@ -73,9 +74,9 @@ func TestMergeAssistantMessages(t *testing.T) {
 			},
 			expected: []*turnagent.Message{
 				{
-					Role:               turnagent.RoleAssistant,
-					Content:            "final answer",
-					ReasoningContent:   "first thought\nsecond thought\nthird thought",
+					Role:             turnagent.RoleAssistant,
+					Content:          "final answer",
+					ReasoningContent: "first thought\nsecond thought\nthird thought",
 				},
 			},
 		},
@@ -104,27 +105,25 @@ func TestMergeAssistantMessages(t *testing.T) {
 			},
 		},
 		{
-			name: "user message between thinking and text - no merge",
+			name: "user message between thinking and text - thinking dropped",
 			input: []*turnagent.Message{
 				{Role: turnagent.RoleAssistant, ReasoningContent: "thinking", Content: ""},
 				{Role: turnagent.RoleUser, Content: "user interruption"},
 				{Role: turnagent.RoleAssistant, Content: "answer"},
 			},
 			expected: []*turnagent.Message{
-				{Role: turnagent.RoleAssistant, Content: "thinking", ReasoningContent: ""},
 				{Role: turnagent.RoleUser, Content: "user interruption"},
 				{Role: turnagent.RoleAssistant, Content: "answer"},
 			},
 		},
 		{
-			name: "tool message between thinking and text - no merge",
+			name: "tool message between thinking and text - thinking dropped",
 			input: []*turnagent.Message{
 				{Role: turnagent.RoleAssistant, ReasoningContent: "thinking", Content: ""},
 				{Role: turnagent.RoleTool, Content: "tool result", ToolCallID: "call_1"},
 				{Role: turnagent.RoleAssistant, Content: "answer"},
 			},
 			expected: []*turnagent.Message{
-				{Role: turnagent.RoleAssistant, Content: "thinking", ReasoningContent: ""},
 				{Role: turnagent.RoleTool, Content: "tool result", ToolCallID: "call_1"},
 				{Role: turnagent.RoleAssistant, Content: "answer"},
 			},
@@ -146,7 +145,6 @@ func TestMergeAssistantMessages(t *testing.T) {
 				{Role: turnagent.RoleUser, Content: "question 1"},
 				{Role: turnagent.RoleAssistant, Content: "answer 1", ReasoningContent: "thinking 1"},
 				{Role: turnagent.RoleAssistant, Content: "answer 2", ReasoningContent: "thinking 2\nthinking 3"},
-				{Role: turnagent.RoleAssistant, Content: "orphan thinking", ReasoningContent: ""},
 				{Role: turnagent.RoleUser, Content: "question 2"},
 				{Role: turnagent.RoleAssistant, Content: "normal answer"},
 			},
@@ -194,5 +192,53 @@ func TestMergeAssistantMessages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMergeAssistantMessages_NilInput(t *testing.T) {
+	// mergeAssistantMessages must tolerate nil entries in the input slice
+	// (which can occur when convertDBMessage returns nil for unparseable
+	// content). Nil entries should be skipped without panic.
+	input := []*turnagent.Message{
+		{Role: turnagent.RoleUser, Content: "hello"},
+		nil,
+		{Role: turnagent.RoleAssistant, Content: "hi"},
+	}
+	result := mergeAssistantMessages(input)
+	if len(result) != 2 {
+		t.Errorf("expected 2 messages (nil skipped), got %d", len(result))
+	}
+	if len(result) >= 2 {
+		if result[0].Content != "hello" {
+			t.Errorf("result[0].Content = %q, want %q", result[0].Content, "hello")
+		}
+		if result[1].Content != "hi" {
+			t.Errorf("result[1].Content = %q, want %q", result[1].Content, "hi")
+		}
+	}
+}
+
+func TestConvertDBMessage_EmptyContent(t *testing.T) {
+	// convertDBMessage must handle empty or unparseable content gracefully.
+	// It should return nil (not panic) for edge cases.
+	msg := &model.Message{
+		Content: "",
+		Role:    "assistant",
+	}
+	result := convertDBMessage(msg)
+	if result != nil {
+		t.Errorf("expected nil for empty content, got %v", result)
+	}
+}
+
+func TestConvertDBMessage_UnknownType(t *testing.T) {
+	// Unknown content type should return nil.
+	msg := &model.Message{
+		Content: `{"type":"unknown_type","data":"something"}`,
+		Role:    "assistant",
+	}
+	result := convertDBMessage(msg)
+	if result != nil {
+		t.Errorf("expected nil for unknown type, got %v", result)
 	}
 }

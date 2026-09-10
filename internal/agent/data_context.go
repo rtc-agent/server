@@ -41,18 +41,16 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		return nil, fmt.Errorf("loadMessages: invalid session ID %q: %w", sessionID, err)
 	}
 
+	// Load recent messages from DB
 	const historyLimit = 200
 	dbMsgs, err := h.deps.MessageRepo.ListRecentBySession(ctx, sid, historyLimit)
 	if err != nil {
 		return nil, fmt.Errorf("loadMessages: list messages for session %s: %w", sessionID, err)
 	}
 
-	// Find the most recent summary message (if any) and truncate the history
-	// to start from it. Messages before the summary are already compressed
-	// into it and should not be sent to the agent.
-	//
-	// ListRecentBySession returns messages in ASC order (oldest first within
-	// the returned set), so we iterate backwards to find the first summary.
+	// Summary truncation: find the most recent summary message and truncate
+	// history to start from it. Messages before the summary are already
+	// compressed into it and would not be sent to the agent.
 	tmpMsgs := make([]*model.Message, 0, len(dbMsgs))
 	for i := len(dbMsgs) - 1; i >= 0; i-- {
 		msg := dbMsgs[i]
@@ -62,7 +60,6 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 			break
 		}
 	}
-	// Reverse to get chronological order (oldest first).
 	sort.Slice(tmpMsgs, func(i, j int) bool {
 		return tmpMsgs[i].GlobalOffset < tmpMsgs[j].GlobalOffset
 	})
@@ -71,10 +68,18 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// Convert DB messages to turn-agent Messages.
 	// The conversion logic mirrors the old SchemaMessages method in context.go,
 	// but produces turnagent.Message instead of schema.Message.
+	//
+	// convertDBMessage may return nil for unparseable or unrecognized content
+	// types; skip those to prevent nil entries from reaching the LLM adapter
+	// (which would produce nil schema.Message entries and risk a panic).
 	var messages []*turnagent.Message
 	for _, msg := range dbMsgs {
 		converted := convertDBMessage(msg)
-		messages = append(messages, converted...)
+		for _, cm := range converted {
+			if cm != nil {
+				messages = append(messages, cm)
+			}
+		}
 	}
 
 	// Merge consecutive thinking + text messages from the same assistant turn.
@@ -84,14 +89,8 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// This merge eliminates those empty-content messages before they reach the LLM.
 	messages = mergeAssistantMessages(messages)
 
-	// Apply tool result budget (in-memory, not persisted).
-	// This truncates oversized tool results to free context space before
-	// sending to the LLM. Must run before Microcompact for efficiency.
+	// Apply context management: tool result budget and microcompact
 	messages = applyToolResultBudget(messages, h.toolResultBudgetConfig())
-
-	// Apply time-based Microcompact (in-memory only, not persisted).
-	// This clears old tool results when the user has been idle for a while,
-	// freeing context space before the messages are sent to the LLM.
 	messages = microcompactMessages(messages, h.microcompactConfig())
 
 	// Build and inject all attachments (TodoList, SessionMemory, UserMemory).
@@ -274,11 +273,16 @@ func buildMessagesFromSummaryItems(items []primitives.SummaryItem, createdAt tim
 // in the LLM-API log.
 //
 // This function fixes that by:
-//  1. Merging thinking → text pairs: the thinking's ReasoningContent is moved
+//  1. Merging thinking -> text pairs: the thinking's ReasoningContent is moved
 //     into the next assistant text message's ReasoningContent, and the
 //     thinking-only message is dropped.
-//  2. Converting standalone thinking messages (no following text) to text
-//     messages so they still carry useful context instead of becoming empty.
+//  2. Dropping standalone thinking messages followed by a non-assistant message
+//     (typically a tool result). Converting these to text would create an
+//     orphan assistant{text} before the tool{result}, breaking the tool-call
+//     pairing contract required by the Claude API. The reasoning is implicitly
+//     preserved in the tool call's arguments.
+//  3. Converting trailing thinking messages (last in the conversation, no
+//     following message at all) to text so the content is preserved.
 //
 // This is an in-memory-only transformation; the DB is not modified.
 func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message {
@@ -290,6 +294,12 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 	i := 0
 	for i < len(messages) {
 		msg := messages[i]
+
+		// Skip nil entries (can occur when convertDBMessage returns nil).
+		if msg == nil {
+			i++
+			continue
+		}
 
 		// Check for thinking-only assistant message: has ReasoningContent
 		// but no Content, no ToolCalls.
@@ -319,8 +329,20 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 				continue
 			}
 
-			// No following assistant message — convert thinking to text
-			// so the content is preserved as a text block (not lost).
+			if next < len(messages) {
+				// Followed by a non-assistant message (typically tool result).
+				// Drop the thinking to avoid:
+				//   1. Empty content block (adapter fallback: {text: ""})
+				//   2. Orphan assistant{text} before tool{result} which
+				//      breaks tool call pairing in the Claude API.
+				// The reasoning is implicitly preserved in the tool call's
+				// arguments (e.g., the file path the model decided to read).
+				i++
+				continue
+			}
+
+			// Trailing thinking (last message in conversation): convert to
+			// text so the content is preserved as a text block.
 			msg.Content = msg.ReasoningContent
 			msg.ReasoningContent = ""
 		}
