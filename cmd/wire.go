@@ -356,6 +356,7 @@ func provideServer(
 	oauth2Handler *httphandler.OAuth2Handler,
 	interruptHandler *httphandler.InterruptHandler,
 	queueWorker *rtcqueue.Worker,
+	queue *rtcqueue.Queue,
 	streamStore *agent.StreamStore,
 ) *server.Server {
 	// Inject stream store into UpdatePublisher
@@ -369,6 +370,7 @@ func provideServer(
 		oauth2Handler,
 		interruptHandler,
 		queueWorker,
+		queue,
 	)
 }
 

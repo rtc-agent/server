@@ -39,8 +39,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/usecase"
-	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/callbacks"
@@ -198,7 +198,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 	// then TodoList, SessionMemory, UserMemory.
 	h.attachmentManager = NewAttachmentManager(
 		[]Attachment{
-			NewAgentPromptAttachment(h),
+			//NewAgentPromptAttachment(h), // 已经注入到了Agent.Instruction
 			NewTodoListAttachment(h),
 			NewSessionMemoryAttachment(h),
 			NewUserMemoryAttachment(h),
@@ -211,14 +211,12 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		},
 	)
 
-	// Build the summarization middleware. It is created once and shared
-	// across all turns (it is stateless — the per-turn state lives in the
-	// CompressContext / OnCompress closures).
-	var err error
-	h.summarizeMW, err = h.buildSummarizationMiddleware()
+	// Build summarization middleware
+	summarizeMW, err := h.buildSummarizationMiddleware()
 	if err != nil {
 		return nil, fmt.Errorf("agent: build summarization middleware: %w", err)
 	}
+	h.summarizeMW = summarizeMW
 
 	// Build the turnagent.Config with all callbacks.
 	taCfg := turnagent.Config{
@@ -255,8 +253,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 			return cache.Checkpoint("session:" + sessionID)
 		},
 
-		// Middleware — the summarization middleware is injected into the
-		// agent by CreateAgent via this field.
+		// Middleware — summarization middleware for context compression
 		AgentMiddlewares: []adk.ChatModelAgentMiddleware{h.summarizeMW},
 
 		// eino Callbacks — the token usage handler records metrics and logs
@@ -276,11 +273,11 @@ func New(cfg Config) (*turnagent.Agent, error) {
 			GracePeriod: cfg.CancelGracePeriod,
 		},
 
-		// Reactive compact — recover from LLM prompt-too-long errors.
+		// Reactive compact — recover from prompt too long errors
 		RecoverFromPromptTooLong: h.recoverFromPromptTooLong,
 		MaxReactiveCompactAttempts: 3,
 
-		// Explicit compact — user-initiated /compact command.
+		// Explicit compact — process compact work items
 		CompactContext: h.processCompactWorker,
 	}
 

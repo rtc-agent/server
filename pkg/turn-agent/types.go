@@ -129,4 +129,15 @@ type WorkPayload struct {
 	// WorkKindResume when resuming a parent session after a sub agent completes.
 	// The parent session's interrupted tool receives this as its result.
 	SubAgentResult *string `json:"sub_agent_result,omitempty"`
+
+	// InterruptID is the eino-assigned ID of the interrupt being resolved.
+	// Used by WorkKindResume to build eino's ResumeParams so the TurnLoop
+	// can resume from the exact interrupt point. Follows the pattern in
+	// eino's official example (turnloop-server.example.go).
+	InterruptID string `json:"interrupt_id,omitempty"`
+
+	// InterruptResult is the resolution value for the interrupt (e.g., RTC
+	// output, approval decision). Paired with InterruptID, it becomes the
+	// ResumeParams.Targets entry that eino uses to resume the interrupted tool.
+	InterruptResult *string `json:"interrupt_result,omitempty"`
 }

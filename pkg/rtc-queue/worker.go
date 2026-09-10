@@ -80,6 +80,7 @@ type Worker struct {
 	mu       sync.Mutex
 	running  bool
 	sessions map[string]context.CancelFunc // active session processors
+	sessionClaims sync.Mutex               // prevents concurrent processSession for the same session
 	wg       sync.WaitGroup
 	sem      chan struct{} // concurrency semaphore
 }
@@ -98,10 +99,10 @@ func NewWorker(q *Queue, cfg WorkerConfig) *Worker {
 		}
 	}
 	return &Worker{
-		q:        q,
-		cfg:      cfg,
-		sessions: make(map[string]context.CancelFunc),
-		sem:      make(chan struct{}, cfg.Concurrency),
+		q:             q,
+		cfg:           cfg,
+		sessions:      make(map[string]context.CancelFunc),
+		sem:           make(chan struct{}, cfg.Concurrency),
 	}
 }
 
@@ -222,16 +223,36 @@ func (w *Worker) Stop(ctx context.Context) error {
 // completing a work item and continues to claim more work from the
 // same session until the queue is empty.
 func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
+	// Prevent concurrent processSession for the same session.
+	// If another goroutine is already processing this session, skip.
+	// This prevents a race where two goroutines both call ClaimWithCredential
+	// with empty credentials, each creating a lock with different credentials,
+	// leading to lock-loss detection and unexpected turn cancellation.
+	w.sessionClaims.Lock()
+	if _, active := w.sessions[sessionID]; active {
+		w.sessionClaims.Unlock()
+		w.logIfEnabled("worker.session_already_active", map[string]any{
+			"session_id": sessionID,
+			"message":    "skipping concurrent processSession",
+		})
+		return
+	}
+	// Mark session as active (will be cleared in the deferred cleanup)
+	w.sessions[sessionID] = nil
+	w.sessionClaims.Unlock()
+
 	// create a session-scoped context so we can cancel this session
 	// independently (e.g. on Stop)
 	ctx, cancel := context.WithCancel(globalCtx)
 	defer cancel()
 
+	// Update the sessions map with the actual cancel function
 	w.mu.Lock()
 	w.sessions[sessionID] = cancel
 	w.mu.Unlock()
 
 	defer func() {
+		// Clear from both maps
 		w.mu.Lock()
 		delete(w.sessions, sessionID)
 		w.mu.Unlock()

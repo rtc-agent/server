@@ -96,7 +96,11 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	}
 
 	// 2.5. Observability: start a turn span.
-	turnCtx, turnSpan := a.startSpanIfEnabled(ctx, "turn")
+	// Create turnCtx with its own cancel so we can cancel the entire turn
+	// (including the LLM call running in mgr.Run) when StopTurn is called.
+	turnCtx, turnCancel := context.WithCancel(ctx)
+	turnCtx, turnSpan := a.startSpanIfEnabled(turnCtx, "turn")
+	defer turnCancel()
 	defer turnSpan.End()
 	turnSpan.SetAttributes(
 		attribute.String("session.id", p.SessionID),
@@ -239,6 +243,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 				mgr.Loop().Stop(adk.WithImmediate())
 			}
 			innerCancel()
+			turnCancel() // Also cancel turnCtx to stop the LLM call in mgr.Run
 		case <-done:
 			return
 		}

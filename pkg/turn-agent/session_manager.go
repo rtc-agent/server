@@ -384,10 +384,33 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 			}
 			turnID := items[0].TurnID
 
-			mgr.log(ctx, LogLevelDebug, "gen_input.start", map[string]any{
-				"session_id": mgr.sessionID,
-				"turn_id":    turnID,
-				"item_count": len(items),
+			// Diagnostic: check if this is a resume work item that ended up in GenInput
+			// (which means checkpoint was NOT found, so TurnLoop fell back to GenInput)
+			var isResumeWork bool
+			var resumeInterruptID string
+			for _, item := range items {
+				if item.Kind == WorkKindResume {
+					isResumeWork = true
+					resumeInterruptID = item.InterruptID
+					break
+				}
+			}
+			if isResumeWork {
+				mgr.log(ctx, LogLevelWarn, "gen_input.resume_work_fallback", map[string]any{
+					"session_id":        mgr.sessionID,
+					"turn_id":           turnID,
+					"interrupt_id":      resumeInterruptID,
+					"message":           "Resume work item in GenInput - checkpoint was NOT found, starting fresh turn",
+					"checkpoint_id":     mgr.checkpointID,
+				})
+			}
+
+			mgr.log(ctx, LogLevelInfo, "gen_input.start", map[string]any{
+				"session_id":    mgr.sessionID,
+				"turn_id":       turnID,
+				"item_count":    len(items),
+				"is_resume":     isResumeWork,
+				"checkpoint_id": mgr.checkpointID,
 			})
 
 			ctx = WithSessionID(ctx, mgr.sessionID)
@@ -427,6 +450,29 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 				turnID = unhandled[0].TurnID
 			}
 
+			// Diagnostic: log all items received by GenResume
+			mgr.log(ctx, LogLevelInfo, "gen_resume.called", map[string]any{
+				"session_id":           mgr.sessionID,
+				"turn_id":              turnID,
+				"checkpoint_id":        mgr.checkpointID,
+				"interrupted_count":    len(interrupted),
+				"unhandled_count":      len(unhandled),
+				"newItems_count":       len(newItems),
+			})
+
+			// Log details of newItems (these should contain the resume work item)
+			for i, item := range newItems {
+				mgr.log(ctx, LogLevelDebug, "gen_resume.newItem", map[string]any{
+					"index":          i,
+					"kind":           item.Kind,
+					"turn_id":        item.TurnID,
+					"work_id":        item.WorkID,
+					"interrupt_id":   item.InterruptID,
+					"has_result":     item.InterruptResult != nil,
+					"sub_agent_result": item.SubAgentResult != nil,
+				})
+			}
+
 			ctx = WithSessionID(ctx, mgr.sessionID)
 			if turnID != "" {
 				ctx = WithTurnID(ctx, turnID)
@@ -441,9 +487,61 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 			allItems = append(allItems, unhandled...)
 			allItems = append(allItems, newItems...)
 
+			// Build ResumeParams from the resume item's interrupt fields.
+			// This follows the pattern in eino's official example:
+			// the application persists the interrupt ID, includes it in the
+			// resume work payload along with the result, and GenResume builds
+			// ResumeParams.Targets so eino can resume the interrupted tool.
+			var resumeParams *adk.ResumeParams
+			for _, item := range newItems {
+				if item.InterruptID != "" {
+					resumeParams = &adk.ResumeParams{
+						Targets: map[string]any{},
+					}
+					// Use InterruptResult if set, otherwise fall back to SubAgentResult.
+					var result any
+					if item.InterruptResult != nil {
+						result = *item.InterruptResult
+					} else if item.SubAgentResult != nil {
+						result = *item.SubAgentResult
+					}
+					resumeParams.Targets[item.InterruptID] = result
+
+					mgr.log(ctx, LogLevelInfo, "gen_resume.resume_params", map[string]any{
+						"session_id":   mgr.sessionID,
+						"turn_id":      turnID,
+						"interrupt_id": item.InterruptID,
+						"has_result":   result != nil,
+					})
+					break
+				}
+			}
+
+			// Diagnostic: log if ResumeParams was NOT built
+			if resumeParams == nil {
+				mgr.log(ctx, LogLevelWarn, "gen_resume.no_resume_params", map[string]any{
+					"session_id":   mgr.sessionID,
+					"turn_id":      turnID,
+					"message":      "No InterruptID found in newItems - ResumeParams will be nil",
+					"newItems_count": len(newItems),
+				})
+			}
+
+			// Debug logging: record GenResume result for troubleshooting.
+			mgr.log(ctx, LogLevelInfo, "gen_resume.result", map[string]any{
+				"session_id":        mgr.sessionID,
+				"turn_id":           turnID,
+				"consumed_count":    len(allItems),
+				"has_resume_params": resumeParams != nil,
+				"interrupted_count": len(interrupted),
+				"unhandled_count":   len(unhandled),
+				"newItems_count":    len(newItems),
+			})
+
 			return &adk.GenResumeResult[TurnWorkItem, *schema.Message]{
-				RunCtx:   ctx,
-				Consumed: allItems,
+				RunCtx:       ctx,
+				Consumed:     allItems,
+				ResumeParams: resumeParams,
 			}, nil
 		},
 
@@ -480,6 +578,32 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 				"turn_id":    turnID,
 			})
 
+			// Ensure CompleteWork is called even if we return early due to interrupt/error.
+			// This prevents work items from being stuck in "processing" state.
+			completeWorkCalled := false
+			completeWork := func() {
+				if completeWorkCalled {
+					return
+				}
+				completeWorkCalled = true
+				bgCtx := context.Background()
+				for _, item := range tc.Consumed {
+					if item.WorkID == "" {
+						continue
+					}
+					if err := mgr.queue.CompleteWork(bgCtx, item.WorkID); err != nil {
+						mgr.log(ctx, LogLevelError, "on_agent_events.complete_work_failed", map[string]any{
+							"session_id": mgr.sessionID,
+							"turn_id":    turnID,
+							"work_id":    item.WorkID,
+							"error":      err.Error(),
+						})
+					}
+					mgr.tracker.Complete(item.WorkID)
+				}
+			}
+			defer completeWork()
+
 			for {
 				ctxErr := ctx.Err()
 				mgr.log(ctx, LogLevelDebug, "on_agent_events.waiting_next", map[string]any{
@@ -493,30 +617,7 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 						"session_id": mgr.sessionID,
 						"turn_id":    turnID,
 					})
-
-					// V3 Fix 1: OnAgentEvents only does CompleteWork + tracker.Complete.
-					// Claim logic is moved to cleanup phase.
-					//
-					// Use context.Background() for CompleteWork so that agent context
-					// cancellation (e.g., worker shutdown) does not prevent work completion.
-					// If CompleteWork fails due to ctx cancellation, the work would be left
-					// stuck in "processing" status in Redis — becoming ghost work.
-					bgCtx := context.Background()
-					for _, item := range tc.Consumed {
-						if item.WorkID == "" {
-							continue
-						}
-						if err := mgr.queue.CompleteWork(bgCtx, item.WorkID); err != nil {
-							mgr.log(ctx, LogLevelError, "on_agent_events.complete_work_failed", map[string]any{
-								"session_id": mgr.sessionID,
-								"turn_id":    turnID,
-								"work_id":    item.WorkID,
-								"error":      err.Error(),
-							})
-						}
-						mgr.tracker.Complete(item.WorkID)
-					}
-
+					// CompleteWork will be called by defer
 					return nil
 				}
 				if err := mgr.dispatchEvents(ctx, turnID, ev); err != nil {
@@ -527,6 +628,7 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 							"turn_id":      turnID,
 							"num_contexts": len(interruptErr.InterruptContexts),
 						})
+						// CompleteWork will be called by defer
 						return err
 					}
 					mgr.log(ctx, LogLevelError, "on_agent_events.dispatch_error", map[string]any{
@@ -534,6 +636,7 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 						"turn_id":    turnID,
 						"error":      err.Error(),
 					})
+					// CompleteWork will be called by defer
 					return fmt.Errorf("turnagent: PublishEvent: %w", err)
 				}
 			}

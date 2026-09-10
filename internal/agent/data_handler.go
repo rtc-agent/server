@@ -32,6 +32,21 @@ import (
 func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, turnID uuid.UUID, event *turnagent.Event) error {
 	state := h.streamState.getOrCreate(turnID.String())
 
+	// Debug logging: record stream chunk content for troubleshooting.
+	h.logIfEnabled(ctx, "handleStreamChunk.debug", map[string]any{
+		"session_id":           sessionID.String(),
+		"turn_id":              turnID.String(),
+		"content_len":          len(event.Content),
+		"content_preview":      truncateForLog(event.Content, 100),
+		"reasoning_len":        len(event.ReasoningContent),
+		"reasoning_preview":    truncateForLog(event.ReasoningContent, 100),
+		"finish_reason":        event.FinishReason,
+		"thinking_msg_id":      state.thinkingMsgID.String(),
+		"thinking_finalized":   state.thinkingFinalized,
+		"markdown_msg_id":      state.markdownMsgID.String(),
+		"markdown_finalized":   state.markdownFinalized,
+	})
+
 	// Handle markdown content.
 	// Token usage is passed only to the markdown path (not thinking) to avoid
 	// double-counting: both messages originate from the same LLM call, and
@@ -312,3 +327,15 @@ func eventToTokenUsageUpdate(tu *turnagent.TokenUsage) *model.TokenUsageUpdate {
 		ReasoningTokens: tu.ReasoningTokens,
 	}
 }
+
+// truncateForLog truncates a string to maxLen for logging purposes.
+// If the string is longer than maxLen, it returns the first maxLen characters
+// followed by "...". This is useful for logging stream content without
+// overwhelming the log output.
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+

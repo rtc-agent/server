@@ -233,6 +233,11 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		handlers = append(handlers, h.summarizeMW)
 	}
 
+	session, err := h.deps.SessionRepo.GetByID(ctx, sid)
+	if err != nil {
+		return nil, fmt.Errorf("createAgent: unable to get session ID %q: %w", sessionID, err)
+	}
+
 	// Build retry config if configured
 	var retryConfig *adk.ModelRetryConfig
 	if h.deps.LLMConfig.RetryMaxAttempts > 0 {
@@ -253,7 +258,7 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:             fmt.Sprintf("session-%s", sessionID),
 		Description:      "RTC Agent session handler",
-		Instruction:      h.deps.SystemPrompt,
+		Instruction:      h.deps.SystemPrompt + "\n" + session.AgentPrompt,
 		Model:            h.deps.ChatModel,
 		Handlers:         handlers,
 		ModelRetryConfig: retryConfig,

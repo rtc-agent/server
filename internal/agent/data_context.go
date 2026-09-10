@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
@@ -82,6 +84,10 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		}
 	}
 
+	// Filter out meaningless thinking messages that may appear after interrupt/resume.
+	// These are typically very short (like "...\n") and don't contain useful reasoning.
+	messages = filterMeaninglessThinking(messages)
+
 	// Merge consecutive thinking + text messages from the same assistant turn.
 	// The streaming handler stores thinking and text as separate DB messages;
 	// when loaded back, the thinking-only message has Content="" which causes
@@ -96,6 +102,9 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// Build and inject all attachments (TodoList, SessionMemory, UserMemory).
 	// Attachments are dynamic content that provides the LLM with persistent
 	// context beyond the conversation history.
+	//
+	// Attachments are prepended to the message array (not appended) because
+	// they use system role, and Claude API requires system messages at the start.
 	if len(messages) > 0 && h.attachmentManager != nil {
 		// Get userID from session
 		var userID uuid.UUID
@@ -113,7 +122,10 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 				"error":      err.Error(),
 			})
 		} else if len(attachmentMsgs) > 0 {
-			messages = append(messages, attachmentMsgs...)
+			// Prepend attachments to the start of the message array.
+			// This ensures system-role attachments appear before user/assistant
+			// messages, complying with Claude API requirements.
+			messages = append(attachmentMsgs, messages...)
 		}
 	}
 
@@ -129,6 +141,27 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// commands' prompt contributions. The /goal command is now handled by
 	// GoalWorkflow registered in the registry (see goal_workflow.go).
 	messages = h.injectCommandPrompts(ctx, sid, messages)
+
+	// Debug logging: record ALL loaded messages for troubleshooting.
+	// Print each message's role and first 10 characters to diagnose checkpoint resume issues.
+	if len(messages) > 0 {
+		var preview []string
+		for i, msg := range messages {
+			content := msg.Content
+			if content == "" && msg.ReasoningContent != "" {
+				content = "[thinking]" + msg.ReasoningContent
+			}
+			if len(content) > 10 {
+				content = content[:10] + "..."
+			}
+			preview = append(preview, fmt.Sprintf("[%d]%s:%s", i, msg.Role, content))
+		}
+		h.logIfEnabled(ctx, "loadMessages.all_messages", map[string]any{
+			"session_id":     sid.String(),
+			"message_count":  len(messages),
+			"messages":       preview,
+		})
+	}
 
 	return messages, nil
 }
@@ -260,6 +293,48 @@ func buildMessagesFromSummaryItems(items []primitives.SummaryItem, createdAt tim
 	}
 	return msgs
 }
+
+// filterMeaninglessThinking removes thinking messages that contain only
+// placeholder content (like "...\n" or "[no content]\n") which can appear
+// after interrupt/resume due to eino checkpoint restoration issues.
+//
+// Instead of pattern-matching each variant, we use a simple length threshold:
+// thinking content shorter than minThinkingLength (after trimming) is not
+// useful reasoning — no real LLM reasoning fits in under 20 characters.
+//
+// This catches all known variants: "...", "[no content]", empty strings, etc.
+//
+// The filter only removes assistant messages that:
+// 1. Have no Content or ToolCalls (pure thinking, no other output)
+// 2. Have ReasoningContent shorter than minThinkingLength after trimming
+func filterMeaninglessThinking(messages []*turnagent.Message) []*turnagent.Message {
+	result := make([]*turnagent.Message, 0, len(messages))
+	for _, msg := range messages {
+		if msg == nil {
+			continue
+		}
+
+		// Only filter assistant messages with no content or tool calls.
+		if msg.Role == turnagent.RoleAssistant &&
+			msg.Content == "" &&
+			len(msg.ToolCalls) == 0 {
+
+			trimmed := strings.TrimSpace(msg.ReasoningContent)
+			if utf8.RuneCountInString(trimmed) < minThinkingLength {
+				// Skip this message (filter it out)
+				continue
+			}
+		}
+
+		result = append(result, msg)
+	}
+	return result
+}
+
+// minThinkingLength is the minimum character count (after trimming) for
+// thinking content to be considered meaningful. Real LLM reasoning is
+// always longer than this; shorter content is a placeholder artifact.
+const minThinkingLength = 20
 
 // mergeAssistantMessages merges consecutive thinking + text/tool messages from
 // the same assistant turn into single messages.

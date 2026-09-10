@@ -16,6 +16,7 @@ type Turn struct {
 	SessionID    uuid.UUID  `gorm:"type:uuid;not null;index" json:"session_id"`
 	Status       string     `gorm:"size:20;not null;default:pending;index" json:"status"`
 	ErrorMessage string     `gorm:"type:text" json:"error_message,omitempty"`
+	InterruptID  string     `gorm:"size:255" json:"interrupt_id,omitempty"` // eino interrupt ID, used to build ResumeParams on resume
 	CreatedAt    time.Time  `json:"created_at"`
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	CompletedAt  *time.Time `json:"completed_at,omitempty"`

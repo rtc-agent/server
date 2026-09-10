@@ -405,6 +405,51 @@ redis.call("EXPIRE", lock_key, ttl)
 return {next_work_id, credential}
 `)
 
+// requeueGhostWorkScript atomically checks for and requeues a ghost work item.
+// A ghost work occurs when a worker crashes after claiming work but before
+// completing it — the work remains "processing" while the session lock expires.
+//
+// KEYS[1] = session lock ("session:lock:<sessionID>")
+// KEYS[2] = session active pointer ("session:active:<sessionID>")
+// KEYS[3] = session queue (zset) "queue:session:<sessionID>"
+// Returns: {work_id} if requeued, nil if no ghost work.
+var requeueGhostWorkScript = redis.NewScript(`
+-- 1. Get active work pointer
+local active_id = redis.call("GET", KEYS[2])
+if not active_id then
+    return nil
+end
+
+-- 2. Check if lock exists (worker is alive)
+if redis.call("EXISTS", KEYS[1]) == 1 then
+    return nil
+end
+
+-- 3. Load work and verify status
+local work_key = "work:" .. active_id
+local status = redis.call("HGET", work_key, "status")
+if not status or status ~= "processing" then
+    -- Clean up stale pointer
+    redis.call("DEL", KEYS[2])
+    return nil
+end
+
+-- 4. Requeue: status → pending, clear worker, add back to queue
+local priority = tonumber(redis.call("HGET", work_key, "priority")) or 0
+local now = tonumber(ARGV[1])
+redis.call("HSET", work_key,
+    "status", "pending",
+    "worker_id", "",
+    "claimed_at", "0",
+    "updated_at", now)
+redis.call("ZADD", KEYS[3], 0 - priority, active_id)
+
+-- 5. Clean up stale active pointer
+redis.call("DEL", KEYS[2])
+
+return {active_id}
+`)
+
 // requeueWorkScript atomically moves a work item from "processing" back to
 // "pending" and re-adds it to the session's priority queue. This prevents
 // "ghost work" — items claimed from Redis but never processed because the

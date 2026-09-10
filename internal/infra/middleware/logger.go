@@ -40,10 +40,17 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 // 为每个请求创建 trace span，记录 trace_id 到日志，并记录请求耗时和状态码。
 // 对于错误响应（状态码 >= 400），会捕获并记录响应体中的错误信息。
 // 注意：WebSocket 升级请求不会被包装，以避免干扰协议升级。
+// 注意：/healthz 和 /metrics 路径不会记录日志，避免日志噪音。
 func RequestLogger(next http.Handler) http.Handler {
 	tracer := otel.Tracer("http")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 跳过 /healthz 和 /metrics 路径的日志记录
+		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// 检测是否是 WebSocket 升级请求
 		isWebSocketUpgrade := strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 

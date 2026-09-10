@@ -82,6 +82,14 @@ func (e *SessionMemoryExtractor) ExtractIfNeeded(
 	messages []*schema.Message,
 	state *ExtractionState,
 ) (extracted bool, newState *ExtractionState, err error) {
+	// 检查 chatModel 是否已配置
+	if e.chatModel == nil {
+		e.log(ctx, "extractor.skip_chatmodel_nil", map[string]any{
+			"session_id": sessionID.String(),
+		})
+		return false, state, nil
+	}
+
 	// 计算当前 token 数
 	currentTokens, err := e.tokenCounter(ctx, messages)
 	if err != nil {
@@ -437,6 +445,14 @@ func (e *SessionMemoryExtractor) log(ctx context.Context, event string, fields m
 // triggerSessionMemoryExtraction triggers background session memory extraction.
 // This is called from data_context.go after loading messages.
 func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID uuid.UUID, messages []*turnagent.Message) {
+	// Early return if ChatModel is not configured (LLM disabled)
+	if h.deps.ChatModel == nil {
+		h.logger.Info(ctx, "[triggerSessionMemoryExtraction] skip: ChatModel is nil (LLM not configured)", map[string]any{
+			"session_id": sessionID.String(),
+		})
+		return
+	}
+
 	// Convert turnagent.Message to schema.Message for the extractor
 	schemaMessages := make([]*schema.Message, 0, len(messages))
 	for _, msg := range messages {

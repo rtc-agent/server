@@ -121,7 +121,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	}
 	worker := provideQueueWorker(queue, agent, cfg)
 	streamStore := provideStreamStore(universalClient, cfg)
-	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, worker, streamStore)
+	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, worker, queue, streamStore)
 	return serverServer, nil
 }
 
@@ -423,6 +423,7 @@ func provideServer(
 	oauth2Handler *httphandler.OAuth2Handler,
 	interruptHandler *httphandler.InterruptHandler,
 	queueWorker *rtcqueue.Worker,
+	queue *rtcqueue.Queue,
 	streamStore *agent.StreamStore,
 ) *server.Server {
 
@@ -436,5 +437,6 @@ func provideServer(
 		oauth2Handler,
 		interruptHandler,
 		queueWorker,
+		queue,
 	)
 }

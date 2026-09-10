@@ -19,12 +19,27 @@ type TurnRepo interface {
 	FindByClientID(ctx context.Context, clientID string) (*model.Turn, error)
 	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Turn, error)
 	FindActiveBySession(ctx context.Context, sessionID uuid.UUID) ([]*model.Turn, error)
+	// FindStaleTurns finds all turns in the given statuses that are "stale"
+	// (i.e., left over from a previous server crash or restart). Used for
+	// crash recovery on startup.
+	FindStaleTurns(ctx context.Context, statuses []string) ([]*model.Turn, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, errMsg string) error
 	// UpdateStatusBySession batch-updates all turns for a session that are in
 	// any of the given statuses to the target status. Returns the number of
 	// rows affected. Used by stopActiveTurns to cancel pending/running turns
 	// as a belt-and-suspenders measure after rtc-queue CancelSession.
 	UpdateStatusBySession(ctx context.Context, sessionID uuid.UUID, fromStatuses []string, toStatus protocol.TurnStatus) (int64, error)
+	// UpdateStatusAndInterruptID atomically updates both status and interrupt_id
+	// in a single DB write. This prevents a race condition where SubmitRtcResult
+	// could read the interrupted status before InterruptID is persisted.
+	UpdateStatusAndInterruptID(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, interruptID string) error
+	// UpdateInterruptID sets the eino interrupt ID on a turn. Used when a turn
+	// is interrupted so that SubmitRtcResult can include the interrupt ID in
+	// the resume work payload, enabling eino's ResumeParams to resume from the
+	// exact interrupt point.
+	//
+	// Deprecated: Use UpdateStatusAndInterruptID for atomic updates.
+	UpdateInterruptID(ctx context.Context, id uuid.UUID, interruptID string) error
 	// GetByIDs 批量查询 Turn，返回 map[id]*Turn。未找到的 ID 不会出现在 map 中。
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Turn, error)
 }
@@ -107,6 +122,24 @@ func (r *turnRepo) FindActiveBySession(ctx context.Context, sessionID uuid.UUID)
 	return turns, nil
 }
 
+// FindStaleTurns finds all turns in the given statuses. Used for crash recovery
+// on startup to detect turns that were left in a non-terminal state when the
+// server crashed or restarted.
+func (r *turnRepo) FindStaleTurns(ctx context.Context, statuses []string) ([]*model.Turn, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	var turns []*model.Turn
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("status IN ?", statuses).
+		Order("created_at ASC").
+		Find(&turns).Error
+	if err != nil {
+		return nil, fmt.Errorf("find stale turns: %w", err)
+	}
+	return turns, nil
+}
+
 func (r *turnRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, errMsg string) error {
 	updates := map[string]any{
 		"status":        string(status),
@@ -124,6 +157,30 @@ func (r *turnRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status protoc
 	}
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("update turn %s status: %w", id, ErrTurnNotFound)
+	}
+	return nil
+}
+
+// UpdateStatusAndInterruptID atomically updates both status and interrupt_id
+// in a single DB write. This prevents a race condition where SubmitRtcResult
+// could read the interrupted status before InterruptID is persisted.
+func (r *turnRepo) UpdateStatusAndInterruptID(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, interruptID string) error {
+	updates := map[string]any{
+		"status":        string(status),
+		"interrupt_id":  interruptID,
+	}
+	if status == model.TurnStatusRunning {
+		updates["started_at"] = gorm.Expr("NOW()")
+	}
+	if status == model.TurnStatusCompleted || status == model.TurnStatusFailed || status == model.TurnStatusCancelled || status == model.TurnStatusMerged {
+		updates["completed_at"] = gorm.Expr("NOW()")
+	}
+	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Turn{}).Where("id = ?", id).Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("update turn %s status and interrupt_id: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("update turn %s status and interrupt_id: %w", id, ErrTurnNotFound)
 	}
 	return nil
 }
@@ -150,6 +207,17 @@ func (r *turnRepo) UpdateStatusBySession(ctx context.Context, sessionID uuid.UUI
 		return 0, fmt.Errorf("update turns for session %s to %s: %w", sessionID, toStatus, result.Error)
 	}
 	return result.RowsAffected, nil
+}
+
+func (r *turnRepo) UpdateInterruptID(ctx context.Context, id uuid.UUID, interruptID string) error {
+	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Turn{}).Where("id = ?", id).Update("interrupt_id", interruptID)
+	if result.Error != nil {
+		return fmt.Errorf("update turn %s interrupt_id: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("update turn %s interrupt_id: %w", id, ErrTurnNotFound)
+	}
+	return nil
 }
 
 func (r *turnRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Turn, error) {

@@ -93,7 +93,13 @@ func NewAttachmentManager(
 	}
 }
 
-// BuildAttachments builds all attachments and returns them as system messages.
+// BuildAttachments builds all attachments and returns them as system-role messages.
+//
+// Attachments use system role and are prepended to the message array (not appended)
+// to comply with Claude API requirements. System messages must be at the start of
+// the message array. Appending system-role messages after the last user message can
+// cause the eino-ext Claude adapter to produce empty content blocks, making the LLM
+// think the user sent nothing.
 //
 // The method:
 // 1. Iterates through all registered attachments in order
@@ -103,7 +109,7 @@ func NewAttachmentManager(
 // 5. Skips remaining attachments if total budget is exceeded
 // 6. Records metrics and logs for each attachment
 //
-// Returns a slice of system messages ready to be prepended to the conversation.
+// Returns a slice of system-role messages to be prepended to the conversation.
 // Attachment order is preserved: the first attachment in the list appears first
 // in the returned slice (highest priority position).
 func (m *AttachmentManager) BuildAttachments(
@@ -175,7 +181,10 @@ func (m *AttachmentManager) BuildAttachments(
 			break
 		}
 
-		// Add the attachment as a system message
+		// Add the attachment as a system-role message.
+		// Using system role and prepending (not appending) to the message array
+		// prevents the Claude adapter from producing empty content blocks when
+		// attachments would otherwise appear after the last user message.
 		collected = append(collected, &turnagent.Message{
 			Role: turnagent.RoleSystem, Content: content,
 		})

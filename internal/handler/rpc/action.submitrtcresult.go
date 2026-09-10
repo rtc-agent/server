@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/infra/cache"
@@ -304,9 +305,92 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 		// Happy path: there's an active (most likely interrupted) turn.
 		// Publish a Resume work item at high priority so it's claimed before
 		// any pending Submit items.
+		//
+		// Find the interrupted turn to get its InterruptID for ResumeParams.
+		// If the turn is still "running" (interruptTurn hasn't executed yet),
+		// wait briefly for the InterruptID to be persisted.
+		var interruptID string
+		var interruptResult *string
+		var interruptedTurnID uuid.UUID
+
+		// First pass: look for an interrupted turn
+		for _, t := range activeTurns {
+			if protocol.TurnStatus(t.Status) == protocol.TurnStatusInterrupted {
+				interruptID = t.InterruptID
+				interruptedTurnID = t.ID
+				// Convert RTC result to string for the interrupt result.
+				if rtc.Result != "" {
+					resultStr := string(rtc.Result)
+					interruptResult = &resultStr
+				}
+				break
+			}
+		}
+
+		// If no interrupted turn found, the turn may still be "running"
+		// (interruptTurn hasn't persisted InterruptID yet). Wait briefly.
+		if interruptID == "" {
+			for _, t := range activeTurns {
+				if protocol.TurnStatus(t.Status) == protocol.TurnStatusRunning ||
+					protocol.TurnStatus(t.Status) == protocol.TurnStatusPending {
+					interruptedTurnID = t.ID
+					break
+				}
+			}
+
+			if interruptedTurnID != uuid.Nil {
+				// Retry a few times, waiting for interruptTurn to persist InterruptID
+				for attempt := 0; attempt < 10; attempt++ {
+					time.Sleep(50 * time.Millisecond)
+					updatedTurn, err := h.deps.Deps.TurnRepo.GetByID(ctx, interruptedTurnID)
+					if err != nil {
+						break
+					}
+					if protocol.TurnStatus(updatedTurn.Status) == protocol.TurnStatusInterrupted && updatedTurn.InterruptID != "" {
+						interruptID = updatedTurn.InterruptID
+						if rtc.Result != "" {
+							resultStr := string(rtc.Result)
+							interruptResult = &resultStr
+						}
+						break
+					}
+				}
+				if interruptID == "" {
+					logger.Warn(ctx, "[resumeTurnAfterRtc] InterruptID not available after retry",
+						zap.String("turn", interruptedTurnID.String()),
+						zap.String("session", rtc.SessionID.String()))
+				}
+			}
+		}
+
+		// Dedup check: if a Resume work item is already pending or processing
+		// for this session, skip publishing another one. Without this check,
+		// concurrent SubmitRtcResult calls (e.g. network retries) would each
+		// publish a Resume work item, causing the AI to load the same
+		// conversation history and execute the same task multiple times.
+		if h.deps.Queue != nil {
+			hasPending, checkErr := h.deps.Queue.HasPendingWorkByKind(
+				ctx, rtc.SessionID.String(), string(turnagent.WorkKindResume),
+			)
+			if checkErr != nil {
+				logger.Warn(ctx, "[resumeTurnAfterRtc] dedup check failed (proceeding anyway)",
+					zap.String("rtc", rtc.ID.String()),
+					zap.String("session", rtc.SessionID.String()),
+					zap.Error(checkErr))
+			} else if hasPending {
+				logger.Info(ctx, "[resumeTurnAfterRtc] skip: resume work already pending",
+					zap.String("rtc", rtc.ID.String()),
+					zap.String("session", rtc.SessionID.String()),
+					zap.String("turn", activeTurns[len(activeTurns)-1].ID.String()))
+				return
+			}
+		}
+
 		payload, marshalErr := json.Marshal(turnagent.WorkPayload{
-			Kind:      turnagent.WorkKindResume,
-			SessionID: rtc.SessionID.String(),
+			Kind:            turnagent.WorkKindResume,
+			SessionID:       rtc.SessionID.String(),
+			InterruptID:     interruptID,
+			InterruptResult: interruptResult,
 		})
 		if marshalErr != nil {
 			logger.Error(ctx, "[resumeTurnAfterRtc] marshal resume payload", zap.Error(marshalErr))

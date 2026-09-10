@@ -450,11 +450,27 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 		subAgentResult = &lastMessage.Content
 	}
 
+	// Find the parent session's interrupted turn to get its InterruptID.
+	var interruptID string
+	if parentSID, parseErr := uuid.Parse(parentSessionID); parseErr == nil {
+		activeTurns, findErr := h.deps.TurnRepo.FindActiveBySession(ctx, parentSID)
+		if findErr == nil {
+			for _, t := range activeTurns {
+				if protocol.TurnStatus(t.Status) == protocol.TurnStatusInterrupted {
+					interruptID = t.InterruptID
+					break
+				}
+			}
+		}
+	}
+
 	// Publish Resume work item to parent session's rtc-queue.
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:           turnagent.WorkKindResume,
 		SessionID:      parentSessionID,
 		SubAgentResult: subAgentResult,
+		InterruptID:    interruptID,
+		InterruptResult: subAgentResult, // Sub agent result is the interrupt resolution
 	})
 	if marshalErr != nil {
 		h.logIfEnabled(ctx, "resumeParentAfterSubAgent.marshal_failed", map[string]any{
@@ -739,8 +755,11 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 		return fmt.Errorf("interruptTurn: invalid turn ID %q: %w", turnID, err)
 	}
 
-	if err := h.deps.TurnRepo.UpdateStatus(ctx, tid, protocol.TurnStatusInterrupted, ""); err != nil {
-		return fmt.Errorf("interruptTurn: update status: %w", err)
+	// Atomically update status AND interrupt ID in a single DB write.
+	// This prevents a race condition where SubmitRtcResult could read the
+	// interrupted status before InterruptID is persisted.
+	if err := h.deps.TurnRepo.UpdateStatusAndInterruptID(ctx, tid, protocol.TurnStatusInterrupted, interruptID); err != nil {
+		return fmt.Errorf("interruptTurn: update status and interrupt_id: %w", err)
 	}
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
