@@ -77,8 +77,10 @@ type AuthConfig struct {
 
 // ProvidersConfig OAuth2 Provider 配置集合
 type ProvidersConfig struct {
-	Mock        MockProviderConfig `mapstructure:"mock"`
-	HTTPTimeout time.Duration      `mapstructure:"http_timeout"` // OAuth2 HTTP 客户端超时，默认 10s
+	Mock        MockProviderConfig     `mapstructure:"mock"`
+	GitHub      GitHubProviderConfig   `mapstructure:"github"`
+	Google      GoogleProviderConfig   `mapstructure:"google"`
+	HTTPTimeout time.Duration          `mapstructure:"http_timeout"` // OAuth2 HTTP 客户端超时，默认 10s
 }
 
 // MockProviderConfig Mock OAuth2 Provider 配置
@@ -87,6 +89,24 @@ type MockProviderConfig struct {
 	URL          string `mapstructure:"url"`
 	ClientID     string `mapstructure:"client_id"`
 	ClientSecret string `mapstructure:"client_secret"`
+}
+
+// GitHubProviderConfig GitHub OAuth2 Provider 配置
+type GitHubProviderConfig struct {
+	Enabled      bool   `mapstructure:"enabled"`
+	ClientID     string `mapstructure:"client_id"`
+	ClientSecret string `mapstructure:"client_secret"`
+	// Scope 请求的权限范围，默认 "read:user user:email"
+	Scope string `mapstructure:"scope"`
+}
+
+// GoogleProviderConfig Google OAuth2 Provider 配置
+type GoogleProviderConfig struct {
+	Enabled      bool   `mapstructure:"enabled"`
+	ClientID     string `mapstructure:"client_id"`
+	ClientSecret string `mapstructure:"client_secret"`
+	// Scope 请求的权限范围，默认 "openid email profile"
+	Scope string `mapstructure:"scope"`
 }
 
 // CORSConfig 跨域配置
@@ -261,6 +281,14 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("providers.mock.url", "http://localhost:10060")
 	v.SetDefault("providers.mock.client_id", "test-client")
 	v.SetDefault("providers.mock.client_secret", "test-client-secret")
+	v.SetDefault("providers.github.enabled", false)
+	v.SetDefault("providers.github.client_id", "")
+	v.SetDefault("providers.github.client_secret", "")
+	v.SetDefault("providers.github.scope", "read:user user:email")
+	v.SetDefault("providers.google.enabled", false)
+	v.SetDefault("providers.google.client_id", "")
+	v.SetDefault("providers.google.client_secret", "")
+	v.SetDefault("providers.google.scope", "openid email profile")
 	v.SetDefault("providers.http_timeout", 10*time.Second)
 	v.SetDefault("cors.allow_origins", []string{})
 	v.SetDefault("server.shutdown_timeout", 10*time.Second)
@@ -344,6 +372,10 @@ func ExpandEnvRef(s string) string {
 func (c *Config) Validate() error {
 	if c.LLM.APIKey == "" {
 		return fmt.Errorf("llm.api_key is required: set it directly or via ${LLM_API_KEY} environment variable")
+	}
+	// 校验至少启用了一个 OAuth Provider
+	if !c.Providers.Mock.Enabled && !c.Providers.GitHub.Enabled && !c.Providers.Google.Enabled {
+		return fmt.Errorf("at least one OAuth provider must be enabled (mock, github, or google)")
 	}
 	return nil
 }

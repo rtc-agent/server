@@ -46,6 +46,34 @@ func BuildProviderClients(cfg *config.Config) []*oauth.ProviderConfig {
 			ClientSecret: cfg.Providers.Mock.ClientSecret,
 		})
 	}
+	if cfg.Providers.GitHub.Enabled {
+		scope := cfg.Providers.GitHub.Scope
+		if scope == "" {
+			scope = "read:user user:email"
+		}
+		list = append(list, &oauth.ProviderConfig{
+			Name:         "github",
+			AuthURL:      "https://github.com/login/oauth/authorize?scope=" + scope,
+			TokenURL:     "https://github.com/login/oauth/access_token",
+			UserInfoURL:  "https://api.github.com/user",
+			ClientID:     cfg.Providers.GitHub.ClientID,
+			ClientSecret: cfg.Providers.GitHub.ClientSecret,
+		})
+	}
+	if cfg.Providers.Google.Enabled {
+		scope := cfg.Providers.Google.Scope
+		if scope == "" {
+			scope = "openid email profile"
+		}
+		list = append(list, &oauth.ProviderConfig{
+			Name:         "google",
+			AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth?scope=" + scope,
+			TokenURL:     "https://oauth2.googleapis.com/token",
+			UserInfoURL:  "https://www.googleapis.com/oauth2/v2/userinfo",
+			ClientID:     cfg.Providers.Google.ClientID,
+			ClientSecret: cfg.Providers.Google.ClientSecret,
+		})
+	}
 	return list
 }
 

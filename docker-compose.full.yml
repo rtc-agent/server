@@ -178,6 +178,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: rtc-full-server-1
+    env_file:
+      - .env
     environment:
       DEBUG: true
       LLM_API_KEY: "${LLM_API_KEY}"
@@ -201,6 +203,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: rtc-full-server-2
+    env_file:
+      - .env
     environment:
       DEBUG: true
       LLM_API_KEY: "${LLM_API_KEY}"

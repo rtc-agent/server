@@ -42,6 +42,7 @@ type StateStore interface {
 type ProviderClient interface {
 	GetAuthorizationURL(provider string, state string, redirectURI string) (string, error)
 	ExchangeCode(ctx context.Context, provider string, code string, redirectURI string) (*oauth.ProviderUserInfo, error)
+	GetProviders() []string
 }
 
 // OAuth2Handler OAuth2 端点处理器
@@ -69,6 +70,16 @@ func (h *OAuth2Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /oauth2/authorize", h.handleAuthorize)
 	mux.HandleFunc("POST /oauth2/token", h.handleToken)
 	mux.HandleFunc("POST /oauth2/refresh", h.handleRefresh)
+	mux.HandleFunc("GET /oauth2/providers", h.handleProviders)
+}
+
+// handleProviders 处理 GET /oauth2/providers
+// 返回当前已启用的 provider 列表
+func (h *OAuth2Handler) handleProviders(w http.ResponseWriter, r *http.Request) {
+	providers := h.providerClient.GetProviders()
+	httputil.WriteJSON(w, http.StatusOK, map[string][]string{
+		"providers": providers,
+	})
 }
 
 // handleAuthorize 处理 GET /oauth2/authorize
