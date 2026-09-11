@@ -100,6 +100,15 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	messages = applyToolResultBudget(messages, h.toolResultBudgetConfig())
 	messages = microcompactMessages(messages, h.microcompactConfig())
 
+	// Slash-command framework. Detect any command prefix on the last user
+	// message, update per-session activation state, and append the
+	// commands' prompt contributions. The /goal command is now handled by
+	// GoalWorkflow registered in the registry (see goal_workflow.go).
+	// NOTE: This is done BEFORE attachments so that command system prompts
+	// (like /goal) appear after attachments in the final message order:
+	// [system] Attachments → [system] Command prompts → [conversation]
+	messages = h.injectCommandPrompts(ctx, sid, messages)
+
 	// Build and inject all attachments (TodoList, SessionMemory, UserMemory).
 	// Attachments are dynamic content that provides the LLM with persistent
 	// context beyond the conversation history.
@@ -136,12 +145,6 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	if len(messages) > 0 {
 		h.triggerSessionMemoryExtraction(ctx, sid, messages)
 	}
-
-	// Slash-command framework. Detect any command prefix on the last user
-	// message, update per-session activation state, and append the
-	// commands' prompt contributions. The /goal command is now handled by
-	// GoalWorkflow registered in the registry (see goal_workflow.go).
-	messages = h.injectCommandPrompts(ctx, sid, messages)
 
 	// Debug logging: record ALL loaded messages for troubleshooting.
 	// Print each message's role and first 10 characters to diagnose checkpoint resume issues.

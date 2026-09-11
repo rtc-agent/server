@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -779,6 +780,10 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 		}
 	}
 
+	// Accumulate streamed content for lastMessage tracking (Sub Agent support)
+	var streamedContent strings.Builder
+	var streamedReasoningContent strings.Builder
+
 	type recvResult struct {
 		msg *schema.Message
 		err error
@@ -803,6 +808,19 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 		case res := <-ch:
 			if errors.Is(res.err, io.EOF) {
 				stream.Close()
+				// For assistant messages, set lastMessage from accumulated content
+				// This is needed for Sub Agent support to report the final result
+				if role == string(schema.Assistant) {
+					content := streamedContent.String()
+					reasoning := streamedReasoningContent.String()
+					if content != "" || reasoning != "" {
+						mgr.setLastMessage(&Message{
+							Role:             role,
+							Content:          content,
+							ReasoningContent: reasoning,
+						})
+					}
+				}
 				var aggregatedTokenUsage *TokenUsage
 				if maxUsage != nil {
 					aggregatedTokenUsage = extractTokenUsage(maxUsage)
@@ -840,6 +858,13 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 				if res.msg.ResponseMeta.Usage != nil {
 					tokenUsage = extractTokenUsage(res.msg.ResponseMeta.Usage)
 				}
+			}
+			// Accumulate content for lastMessage tracking
+			if res.msg.Content != "" {
+				streamedContent.WriteString(res.msg.Content)
+			}
+			if res.msg.ReasoningContent != "" {
+				streamedReasoningContent.WriteString(res.msg.ReasoningContent)
 			}
 			if err := mgr.cfg.PublishEvent(ctx, mgr.sessionID, turnID, &Event{
 				Kind:             EventKindStreamChunk,

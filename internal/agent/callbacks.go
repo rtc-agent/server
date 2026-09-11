@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/channel"
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -749,7 +751,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 // interrupt handling (e.g., SubmitRtcResult) is responsible for publishing
 // a Resume work item to rtc-queue. The subscribe-and-wait logic is no longer
 // needed here because turn-agent manages the turn lifecycle.
-func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID string, interruptInfo any) error {
+func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID string, interruptInfo any, allInterruptContexts []*turnagent.InterruptContext) error {
 	tid, err := uuid.Parse(turnID)
 	if err != nil {
 		return fmt.Errorf("interruptTurn: invalid turn ID %q: %w", turnID, err)
@@ -760,6 +762,27 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 	// interrupted status before InterruptID is persisted.
 	if err := h.deps.TurnRepo.UpdateStatusAndInterruptID(ctx, tid, protocol.TurnStatusInterrupted, interruptID); err != nil {
 		return fmt.Errorf("interruptTurn: update status and interrupt_id: %w", err)
+	}
+
+	// For batch interrupts: store the mapping from RtcID to eino's InterruptCtx.ID
+	// This is needed because ResumeParams.Targets uses eino's internal IDs, not RtcIDs.
+	if len(allInterruptContexts) > 1 && h.deps.Redis != nil {
+		turnUUID, parseErr := uuid.Parse(turnID)
+		if parseErr == nil {
+			interruptMapKey := cache.RtcBatchInterruptMap(turnUUID.String())
+			for _, ic := range allInterruptContexts {
+				// Extract RtcID from rtcInterruptInfo
+				if info, ok := ic.Info.(rtcInterruptInfo); ok && info.RtcID != "" {
+					// Store mapping: RtcID -> eino's InterruptCtx.ID
+					h.deps.Redis.HSet(ctx, interruptMapKey, info.RtcID, ic.ID)
+				}
+			}
+			h.deps.Redis.Expire(ctx, interruptMapKey, 10*time.Minute)
+			h.logIfEnabled(ctx, "interruptTurn.batch_interrupt_mapping_stored", map[string]any{
+				"turn_id":         turnID,
+				"interrupt_count": len(allInterruptContexts),
+			})
+		}
 	}
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)

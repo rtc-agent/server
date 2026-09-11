@@ -102,5 +102,5 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	}
 
 	// 返回给 LLM 的结果（不包含在 transcript 中）
-	return "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable.", nil
+	return "<notification>Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable.</notification>", nil
 }

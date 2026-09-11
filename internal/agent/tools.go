@@ -329,11 +329,11 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	// 6. Register RTC in batch pending set for batch resume.
 	// This tracks all RTCs created in this turn. When all RTCs complete,
 	// SubmitRtcResult will publish a single Resume work item.
-	// We also store the mapping from RTC ID to tool_call_id (InterruptID)
-	// so GenResume can build multi-target ResumeParams.
+	// Note: We don't store the interrupt mapping here because we don't have
+	// eino's internal InterruptCtx.ID yet. The mapping is stored later in
+	// the interruptTurn callback when all tools have interrupted.
 	if r.helpers.deps.Redis != nil {
 		batchKey := cache.RtcBatchPending(turnUUID.String())
-		interruptMapKey := cache.RtcBatchInterruptMap(turnUUID.String())
 		if err := r.helpers.deps.Redis.SAdd(ctx, batchKey, rtcID.String()).Err(); err != nil {
 			r.helpers.logIfEnabled(ctx, "rtcToolBase.batch_register_failed", map[string]any{
 				"rtc_id":  rtcID.String(),
@@ -342,17 +342,8 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 			})
 			// Non-fatal: continue without batch tracking
 		} else {
-			// Store RTC ID -> tool_call_id mapping
-			if hSetErr := r.helpers.deps.Redis.HSet(ctx, interruptMapKey, rtcID.String(), callID).Err(); hSetErr != nil {
-				r.helpers.logIfEnabled(ctx, "rtcToolBase.batch_interrupt_map_failed", map[string]any{
-					"rtc_id":  rtcID.String(),
-					"turn_id": turnUUID.String(),
-					"error":   hSetErr.Error(),
-				})
-			}
 			// Set TTL on first registration (idempotent: only sets if key is new)
 			r.helpers.deps.Redis.Expire(ctx, batchKey, 10*time.Minute)
-			r.helpers.deps.Redis.Expire(ctx, interruptMapKey, 10*time.Minute)
 		}
 	}
 

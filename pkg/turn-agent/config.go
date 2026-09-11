@@ -120,6 +120,12 @@ type CompleteTurnFunc func(ctx context.Context, sessionID string, turnID string,
 // opaque info passed to StatefulInterrupt (e.g., rtcInterruptInfo); its
 // concrete type is application-defined.
 //
+// For batch interrupts (multiple tools interrupting simultaneously),
+// allInterruptContexts contains all interrupt contexts. Each context has:
+//   - ID: eino's internal interrupt ID (used as key in ResumeParams.Targets)
+//   - Info: the opaque info passed to StatefulInterrupt
+//   - State: the opaque state passed to StatefulInterrupt
+//
 // The eino checkpoint has already been persisted to the CheckpointStore.
 // The implementation should persist the "interrupted" state and notify the
 // frontend if needed.
@@ -135,7 +141,16 @@ type CompleteTurnFunc func(ctx context.Context, sessionID string, turnID string,
 //
 // If this callback returns an error, the error is logged and Process() still
 // returns nil — the turn has reached its terminal state.
-type InterruptTurnFunc func(ctx context.Context, turnID string, interruptID string, interruptInfo any) error
+type InterruptTurnFunc func(ctx context.Context, turnID string, interruptID string, interruptInfo any, allInterruptContexts []*InterruptContext) error
+
+// InterruptContext represents a single interrupt context from eino.
+// Used for batch interrupt tracking where multiple tools may interrupt simultaneously.
+type InterruptContext struct {
+	// ID is eino's internal interrupt ID (used as key in ResumeParams.Targets)
+	ID string
+	// Info is the opaque info passed to StatefulInterrupt (e.g., rtcInterruptInfo)
+	Info any
+}
 
 // ResumeTurnFunc is called after LookupTurn, to mark an interrupted turn as
 // "running" again before eino's TurnLoop re-enters the tool.

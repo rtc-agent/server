@@ -47,7 +47,7 @@ func (g *GoalWorkflow) SustainPrompt(ctx command.Context, args string) (*command
 		return nil, nil
 	}
 	return &command.PromptContribution{
-		Role:    "user",
+		Role:    "system",
 		Content: buildGoalManagementPrompt(goal),
 	}, nil
 }

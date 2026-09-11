@@ -461,16 +461,28 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			}
 			return exitReason
 		}
+
+		// Convert eino's InterruptCtx to our InterruptContext type
+		allContexts := make([]*InterruptContext, 0, len(iErr.InterruptContexts))
+		for _, ctx := range iErr.InterruptContexts {
+			allContexts = append(allContexts, &InterruptContext{
+				ID:   ctx.ID,
+				Info: ctx.Info,
+			})
+		}
+
 		a.logIfEnabled(turnCtx, LogLevelInfo, "interrupt", map[string]any{
-			"session_id":   p.SessionID,
-			"turn_id":      turnID,
-			"interrupt_id": root.ID,
-			"reason":       "stateful_interrupt",
+			"session_id":     p.SessionID,
+			"turn_id":        turnID,
+			"interrupt_id":   root.ID,
+			"interrupt_count": len(allContexts),
+			"reason":         "stateful_interrupt",
 		})
 		a.addEventIfEnabled(turnCtx, "interrupt",
 			attribute.String("session.id", p.SessionID),
 			attribute.String("turn.id", turnID),
 			attribute.String("interrupt.id", root.ID),
+			attribute.Int("interrupt.count", len(allContexts)),
 			attribute.String("reason", "stateful_interrupt"),
 		)
 		a.recordMetricIfEnabled(turnCtx, func(m Metrics) {
@@ -482,7 +494,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			})
 		})
 		recordEnd("interrupt", nil)
-		if err := a.cfg.InterruptTurn(turnCtx, turnID, root.ID, root.Info); err != nil {
+		if err := a.cfg.InterruptTurn(turnCtx, turnID, root.ID, root.Info, allContexts); err != nil {
 			a.logIfEnabled(turnCtx, LogLevelError, "turn.interrupt_callback_failed", map[string]any{
 				"session_id":   p.SessionID,
 				"turn_id":      turnID,
