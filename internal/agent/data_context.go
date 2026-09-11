@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -157,9 +158,9 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 			preview = append(preview, fmt.Sprintf("[%d]%s:%s", i, msg.Role, content))
 		}
 		h.logIfEnabled(ctx, "loadMessages.all_messages", map[string]any{
-			"session_id":     sid.String(),
-			"message_count":  len(messages),
-			"messages":       preview,
+			"session_id":    sid.String(),
+			"message_count": len(messages),
+			"messages":      preview,
 		})
 	}
 
@@ -200,6 +201,12 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 
 	case protocol.ContentTypeText, protocol.ContentTypeMarkdown:
 		text, _ := primitives.ContentDataString(contentData.Data)
+		// Sanitize leaked think tags from assistant message content.
+		// This is a defensive measure against models (typically qwen3.7-plus via proxy)
+		// that leak thinking tags into the text content field.
+		if msg.Role == string(schema.Assistant) {
+			text = sanitizeThinkTagLeak(text)
+		}
 		return []*turnagent.Message{{
 			Role:       msg.Role,
 			Content:    text,
@@ -335,6 +342,20 @@ func filterMeaninglessThinking(messages []*turnagent.Message) []*turnagent.Messa
 // thinking content to be considered meaningful. Real LLM reasoning is
 // always longer than this; shorter content is a placeholder artifact.
 const minThinkingLength = 20
+
+// thinkTagPattern matches a complete `<think>...</think>` block (case-insensitive,
+// dot-all) that may leak into assistant text content during streaming (observed with
+// qwen3.7-plus via proxy). See: https://github.com/cloudwego/eino-ext/issues/518, #767
+// See: https://github.com/cloudwego/eino-ext/issues/518, #767
+var thinkTagPattern = regexp.MustCompile(`(?is)<think>.*?</think>\s*`)
+
+// sanitizeThinkTagLeak removes complete `<think>...</think>` blocks from assistant text content.
+// This is a defensive measure — the model (typically qwen3.7-plus via proxy)
+// sometimes leaks thinking tags into the text content field, polluting the
+// context for subsequent turns.
+func sanitizeThinkTagLeak(content string) string {
+	return thinkTagPattern.ReplaceAllString(content, "")
+}
 
 // mergeAssistantMessages merges consecutive thinking + text/tool messages from
 // the same assistant turn into single messages.

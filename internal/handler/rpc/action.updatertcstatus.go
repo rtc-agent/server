@@ -105,6 +105,17 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		}
 	}
 
+	// For terminal statuses, also trigger batch completion logic.
+	// This handles cases where RTC times out or is rejected without a result submission.
+	switch req.Status {
+	case protocol.RtcStatusFailed, protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
+		// Reload RTC to get latest state for batch processing
+		updatedRtc, reloadErr := h.deps.Deps.RtcRepo.GetByID(ctx, rtcUUID)
+		if reloadErr == nil && updatedRtc != nil {
+			h.resumeTurnAfterRtc(ctx, updatedRtc)
+		}
+	}
+
 	return &protocol.UpdateRtcStatusResponse{
 		Result:  protocol.UpdateRtcStatusResult{Success: true},
 		Updates: updates.DerefUpdates(pushUpdates),

@@ -32,13 +32,13 @@ const sessionRenewalInterval = 30 * time.Second
 //	exitState := mgr.Wait()
 //	// cleanup runs automatically after Wait returns
 type SessionTurnManager struct {
-	sessionID  string
-	workerID   string
-	turnID     string // turnID for work items
-	queue      *rtcqueue.Queue
-	cfg        Config
-	tracker    *WorkTracker
-	registry   *SessionManagerRegistry // back-reference for cleanup
+	sessionID string
+	workerID  string
+	turnID    string // turnID for work items
+	queue     *rtcqueue.Queue
+	cfg       Config
+	tracker   *WorkTracker
+	registry  *SessionManagerRegistry // back-reference for cleanup
 
 	credMu     sync.Mutex
 	credential string // lock credential from initial ClaimWithCredential
@@ -54,7 +54,7 @@ type SessionTurnManager struct {
 
 	renewCancel context.CancelFunc
 	done        chan struct{} // closed when cleanup completes
-	cleanupOnce sync.Once    // ensures cleanup runs exactly once
+	cleanupOnce sync.Once     // ensures cleanup runs exactly once
 
 	// loopExitState is set after Wait() returns.
 	// waitOnce ensures loop.Wait() is called exactly once, even when both
@@ -338,7 +338,7 @@ func (mgr *SessionTurnManager) notifyPendingWork(ctx context.Context) {
 	// Publish notification so workers wake up and claim the pending work.
 	mgr.queue.Client().Publish(ctx, "session:new", mgr.sessionID)
 	mgr.log(ctx, LogLevelInfo, "session_manager.notified_pending_work", map[string]any{
-		"session_id":  mgr.sessionID,
+		"session_id":    mgr.sessionID,
 		"pending_count": count,
 	})
 }
@@ -377,6 +377,11 @@ func (mgr *SessionTurnManager) runLockRenewal(ctx context.Context) {
 
 // buildEinoConfig constructs the eino TurnLoopConfig for this manager.
 func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem, *schema.Message] {
+	// prevResumeCancel tracks the cancel function from the most recent GenResume call.
+	// Each GenResume creates a fresh context.WithTimeout; the previous one must be
+	// cancelled to release its timer resources.
+	var prevResumeCancel context.CancelFunc
+
 	return adk.TurnLoopConfig[TurnWorkItem, *schema.Message]{
 		GenInput: func(ctx context.Context, loop *adk.TurnLoop[TurnWorkItem, *schema.Message], items []TurnWorkItem) (*adk.GenInputResult[TurnWorkItem, *schema.Message], error) {
 			if len(items) == 0 {
@@ -397,11 +402,11 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 			}
 			if isResumeWork {
 				mgr.log(ctx, LogLevelWarn, "gen_input.resume_work_fallback", map[string]any{
-					"session_id":        mgr.sessionID,
-					"turn_id":           turnID,
-					"interrupt_id":      resumeInterruptID,
-					"message":           "Resume work item in GenInput - checkpoint was NOT found, starting fresh turn",
-					"checkpoint_id":     mgr.checkpointID,
+					"session_id":    mgr.sessionID,
+					"turn_id":       turnID,
+					"interrupt_id":  resumeInterruptID,
+					"message":       "Resume work item in GenInput - checkpoint was NOT found, starting fresh turn",
+					"checkpoint_id": mgr.checkpointID,
 				})
 			}
 
@@ -441,6 +446,12 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 		},
 
 		GenResume: func(ctx context.Context, loop *adk.TurnLoop[TurnWorkItem, *schema.Message], interrupted, unhandled, newItems []TurnWorkItem) (*adk.GenResumeResult[TurnWorkItem, *schema.Message], error) {
+			// Cancel the previous resume context to release its timer.
+			// Each GenResume creates a fresh context; the previous one is no longer needed.
+			if prevResumeCancel != nil {
+				prevResumeCancel()
+			}
+
 			var turnID string
 			if len(newItems) > 0 {
 				turnID = newItems[0].TurnID
@@ -450,36 +461,42 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 				turnID = unhandled[0].TurnID
 			}
 
+			// Create a fresh context with timeout for this resume attempt.
+			// This prevents context cancellation issues when work items are
+			// requeued and processed by different workers after interrupt/resume cycles.
+			resumeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			prevResumeCancel = cancel // Tracked for cleanup on next GenResume call
+
 			// Diagnostic: log all items received by GenResume
-			mgr.log(ctx, LogLevelInfo, "gen_resume.called", map[string]any{
-				"session_id":           mgr.sessionID,
-				"turn_id":              turnID,
-				"checkpoint_id":        mgr.checkpointID,
-				"interrupted_count":    len(interrupted),
-				"unhandled_count":      len(unhandled),
-				"newItems_count":       len(newItems),
+			mgr.log(resumeCtx, LogLevelInfo, "gen_resume.called", map[string]any{
+				"session_id":        mgr.sessionID,
+				"turn_id":           turnID,
+				"checkpoint_id":     mgr.checkpointID,
+				"interrupted_count": len(interrupted),
+				"unhandled_count":   len(unhandled),
+				"newItems_count":    len(newItems),
 			})
 
 			// Log details of newItems (these should contain the resume work item)
 			for i, item := range newItems {
-				mgr.log(ctx, LogLevelDebug, "gen_resume.newItem", map[string]any{
-					"index":          i,
-					"kind":           item.Kind,
-					"turn_id":        item.TurnID,
-					"work_id":        item.WorkID,
-					"interrupt_id":   item.InterruptID,
-					"has_result":     item.InterruptResult != nil,
+				mgr.log(resumeCtx, LogLevelDebug, "gen_resume.newItem", map[string]any{
+					"index":            i,
+					"kind":             item.Kind,
+					"turn_id":          item.TurnID,
+					"work_id":          item.WorkID,
+					"interrupt_id":     item.InterruptID,
+					"has_result":       item.InterruptResult != nil,
 					"sub_agent_result": item.SubAgentResult != nil,
 				})
 			}
 
-			ctx = WithSessionID(ctx, mgr.sessionID)
+			resumeCtx = WithSessionID(resumeCtx, mgr.sessionID)
 			if turnID != "" {
-				ctx = WithTurnID(ctx, turnID)
+				resumeCtx = WithTurnID(resumeCtx, turnID)
 			}
 
 			if len(mgr.cfg.Callbacks) > 0 {
-				ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{}, mgr.cfg.Callbacks...)
+				resumeCtx = callbacks.InitCallbacks(resumeCtx, &callbacks.RunInfo{}, mgr.cfg.Callbacks...)
 			}
 
 			allItems := make([]TurnWorkItem, 0, len(interrupted)+len(unhandled)+len(newItems))
@@ -492,11 +509,42 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 			// the application persists the interrupt ID, includes it in the
 			// resume work payload along with the result, and GenResume builds
 			// ResumeParams.Targets so eino can resume the interrupted tool.
+			//
+			// With batch resume: we now support multiple interrupts per turn.
+			// BatchResumeItems contains all interrupt IDs and their results.
+			// If BatchResumeItems is present, it takes precedence over the
+			// single InterruptID/InterruptResult fields.
 			var resumeParams *adk.ResumeParams
 			for _, item := range newItems {
+				// Check for batch resume items first
+				if len(item.BatchResumeItems) > 0 {
+					if resumeParams == nil {
+						resumeParams = &adk.ResumeParams{
+							Targets: map[string]any{},
+						}
+					}
+					for _, batchItem := range item.BatchResumeItems {
+						resumeParams.Targets[batchItem.InterruptID] = batchItem.Result
+						mgr.log(resumeCtx, LogLevelInfo, "gen_resume.batch_resume_item", map[string]any{
+							"session_id":   mgr.sessionID,
+							"turn_id":      turnID,
+							"interrupt_id": batchItem.InterruptID,
+						})
+					}
+					mgr.log(resumeCtx, LogLevelInfo, "gen_resume.batch_resume_complete", map[string]any{
+						"session_id": mgr.sessionID,
+						"turn_id":    turnID,
+						"item_count": len(item.BatchResumeItems),
+					})
+					continue
+				}
+
+				// Fall back to single interrupt
 				if item.InterruptID != "" {
-					resumeParams = &adk.ResumeParams{
-						Targets: map[string]any{},
+					if resumeParams == nil {
+						resumeParams = &adk.ResumeParams{
+							Targets: map[string]any{},
+						}
 					}
 					// Use InterruptResult if set, otherwise fall back to SubAgentResult.
 					var result any
@@ -507,28 +555,27 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 					}
 					resumeParams.Targets[item.InterruptID] = result
 
-					mgr.log(ctx, LogLevelInfo, "gen_resume.resume_params", map[string]any{
+					mgr.log(resumeCtx, LogLevelInfo, "gen_resume.resume_params", map[string]any{
 						"session_id":   mgr.sessionID,
 						"turn_id":      turnID,
 						"interrupt_id": item.InterruptID,
 						"has_result":   result != nil,
 					})
-					break
 				}
 			}
 
 			// Diagnostic: log if ResumeParams was NOT built
 			if resumeParams == nil {
-				mgr.log(ctx, LogLevelWarn, "gen_resume.no_resume_params", map[string]any{
-					"session_id":   mgr.sessionID,
-					"turn_id":      turnID,
-					"message":      "No InterruptID found in newItems - ResumeParams will be nil",
+				mgr.log(resumeCtx, LogLevelWarn, "gen_resume.no_resume_params", map[string]any{
+					"session_id":     mgr.sessionID,
+					"turn_id":        turnID,
+					"message":        "No InterruptID found in newItems - ResumeParams will be nil",
 					"newItems_count": len(newItems),
 				})
 			}
 
 			// Debug logging: record GenResume result for troubleshooting.
-			mgr.log(ctx, LogLevelInfo, "gen_resume.result", map[string]any{
+			mgr.log(resumeCtx, LogLevelInfo, "gen_resume.result", map[string]any{
 				"session_id":        mgr.sessionID,
 				"turn_id":           turnID,
 				"consumed_count":    len(allItems),
@@ -539,7 +586,7 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 			})
 
 			return &adk.GenResumeResult[TurnWorkItem, *schema.Message]{
-				RunCtx:       ctx,
+				RunCtx:       resumeCtx,
 				Consumed:     allItems,
 				ResumeParams: resumeParams,
 			}, nil

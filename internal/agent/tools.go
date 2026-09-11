@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -228,6 +230,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	}
 
 	// === First-call path ===
+
 	// 1. Get tool_call_id (eino injects it into context before calling the tool).
 	callID := compose.GetToolCallID(ctx)
 	if callID == "" {
@@ -323,7 +326,37 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		"turn_id":    turnUUID.String(),
 	})
 
-	// 6. Build interrupt state.
+	// 6. Register RTC in batch pending set for batch resume.
+	// This tracks all RTCs created in this turn. When all RTCs complete,
+	// SubmitRtcResult will publish a single Resume work item.
+	// We also store the mapping from RTC ID to tool_call_id (InterruptID)
+	// so GenResume can build multi-target ResumeParams.
+	if r.helpers.deps.Redis != nil {
+		batchKey := cache.RtcBatchPending(turnUUID.String())
+		interruptMapKey := cache.RtcBatchInterruptMap(turnUUID.String())
+		if err := r.helpers.deps.Redis.SAdd(ctx, batchKey, rtcID.String()).Err(); err != nil {
+			r.helpers.logIfEnabled(ctx, "rtcToolBase.batch_register_failed", map[string]any{
+				"rtc_id":  rtcID.String(),
+				"turn_id": turnUUID.String(),
+				"error":   err.Error(),
+			})
+			// Non-fatal: continue without batch tracking
+		} else {
+			// Store RTC ID -> tool_call_id mapping
+			if hSetErr := r.helpers.deps.Redis.HSet(ctx, interruptMapKey, rtcID.String(), callID).Err(); hSetErr != nil {
+				r.helpers.logIfEnabled(ctx, "rtcToolBase.batch_interrupt_map_failed", map[string]any{
+					"rtc_id":  rtcID.String(),
+					"turn_id": turnUUID.String(),
+					"error":   hSetErr.Error(),
+				})
+			}
+			// Set TTL on first registration (idempotent: only sets if key is new)
+			r.helpers.deps.Redis.Expire(ctx, batchKey, 10*time.Minute)
+			r.helpers.deps.Redis.Expire(ctx, interruptMapKey, 10*time.Minute)
+		}
+	}
+
+	// 7. Build interrupt state.
 	state = rtcInterruptState{
 		RtcID:      rtcID.String(),
 		ToolCallID: callID,
@@ -364,9 +397,9 @@ func parseToolArgs(ctx context.Context, h *helpers, toolName string, argumentsIn
 			argPreview = argPreview[:maxPreviewLen] + "...(truncated)"
 		}
 		h.logIfEnabled(ctx, "tool.parse_arguments_failed", map[string]any{
-			"tool_name":  toolName,
-			"error":      err.Error(),
-			"raw_length": len(argumentsInJSON),
+			"tool_name":   toolName,
+			"error":       err.Error(),
+			"raw_length":  len(argumentsInJSON),
 			"raw_preview": argPreview,
 		})
 		return false, fmt.Sprintf(

@@ -259,3 +259,25 @@ var InterruptSetPublish = redis.NewScript(`
 redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
 return redis.call('PUBLISH', KEYS[2], ARGV[1])
 `)
+
+// BatchComplete 原子完成批量恢复中的一个 RTC：存储结果、从待完成集合移除、返回剩余数量。
+//
+//	KEYS[1] = rtc:batch:pending:{turnID}   待完成 RTC 集合
+//	KEYS[2] = rtc:batch:results:{turnID}   结果存储 Hash
+//	ARGV[1] = RTC ID
+//	ARGV[2] = RTC 结果字符串
+//	ARGV[3] = TTL（秒）
+//
+//	返回：-1 表示 batch key 不存在（TTL 过期或未创建），>=0 表示移除后的剩余成员数。
+//
+//	原子性保证：HSET + SREM + SCARD + EXPIRE 在同一脚本中执行，避免多个 RTC 并发完成时的竞态。
+//	当返回值为 0 时，调用方知道所有 RTC 均已完成，可以触发批量恢复。
+var BatchComplete = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 0 then
+    return -1
+end
+redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
+redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3]))
+redis.call('SREM', KEYS[1], ARGV[1])
+return redis.call('SCARD', KEYS[1])
+`)

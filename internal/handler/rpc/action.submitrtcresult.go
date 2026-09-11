@@ -249,6 +249,11 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 // resumeTurnAfterRtc publishes a Resume work item to rtc-queue so the
 // turn-agent can continue the interrupted turn from its eino checkpoint.
 //
+// With batch resume: if this RTC is part of a batch (multiple RTCs in the
+// same turn), we wait until all RTCs in the batch complete before publishing
+// a single Resume work item. This prevents checkpoint corruption from
+// multiple concurrent interrupts.
+//
 // If the turn that created the RTC is no longer active (e.g. worker crash,
 // turn already terminal), we publish a Submit work item instead. The turn
 // will be created by turn-agent's CreateTurn callback when the worker
@@ -276,6 +281,76 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 		logger.Debug(ctx, "[resumeTurnAfterRtc] entry",
 			zap.String("rtc", rtc.ID.String()),
 			zap.String("session", rtc.SessionID.String()))
+	}
+
+	// === Batch Resume Logic ===
+	// Check if this RTC is part of a batch. If so, atomically store the result,
+	// remove the RTC from the pending set, and check if all RTCs have completed.
+	// Only publish Resume when the pending set becomes empty.
+	var batchResumeItems []turnagent.BatchResumeItem
+	if h.deps.Deps.Redis != nil {
+		batchKey := cache.RtcBatchPending(rtc.TurnID.String())
+		resultsKey := cache.RtcBatchResults(rtc.TurnID.String())
+		interruptMapKey := cache.RtcBatchInterruptMap(rtc.TurnID.String())
+
+		// Build the result string for this RTC
+		resultStr := string(rtc.Result)
+		if rtc.Status == string(protocol.RtcStatusFailed) && rtc.ErrorMessage != "" {
+			resultStr = rtc.ErrorMessage
+		}
+
+		// Atomically: check batch exists, store result, remove from pending, get remaining count.
+		// Returns -1 if batch key doesn't exist (TTL expired or never created).
+		remaining, scriptErr := cache.BatchComplete.Run(
+			ctx, h.deps.Deps.Redis,
+			[]string{batchKey, resultsKey},
+			rtc.ID.String(), resultStr, 600, // 600s = 10min TTL on results key
+		).Int64()
+
+		if scriptErr != nil {
+			logger.Warn(ctx, "[resumeTurnAfterRtc] batch complete script failed",
+				zap.String("rtc", rtc.ID.String()),
+				zap.String("turn", rtc.TurnID.String()),
+				zap.Error(scriptErr))
+			// Fall through to non-batch resume path
+		} else if remaining == -1 {
+			// Batch key doesn't exist (TTL expired or never created) — skip batch logic
+		} else {
+			logger.Info(ctx, "[resumeTurnAfterRtc] batch progress",
+				zap.String("rtc", rtc.ID.String()),
+				zap.String("turn", rtc.TurnID.String()),
+				zap.Int64("remaining", remaining))
+
+			if remaining > 0 {
+				// More RTCs to go, don't resume yet
+				return
+			}
+
+			// All RTCs completed! Build BatchResumeItems from stored data
+			results, _ := h.deps.Deps.Redis.HGetAll(ctx, resultsKey).Result()
+			interruptMap, _ := h.deps.Deps.Redis.HGetAll(ctx, interruptMapKey).Result()
+
+			// Build BatchResumeItems: map each RTC ID to its interrupt ID and result
+			for rtcID, interruptID := range interruptMap {
+				result := results[rtcID]
+				batchResumeItems = append(batchResumeItems, turnagent.BatchResumeItem{
+					InterruptID: interruptID,
+					Result:      result,
+				})
+				logger.Info(ctx, "[resumeTurnAfterRtc] batch item",
+					zap.String("rtc_id", rtcID),
+					zap.String("interrupt_id", interruptID),
+					zap.String("result_len", fmt.Sprintf("%d", len(result))))
+			}
+
+			// Clean up all batch-related keys
+			h.deps.Deps.Redis.Del(ctx, batchKey, resultsKey, interruptMapKey)
+			logger.Info(ctx, "[resumeTurnAfterRtc] batch complete, resuming turn",
+				zap.String("turn", rtc.TurnID.String()),
+				zap.String("session", rtc.SessionID.String()),
+				zap.Int("batch_size", len(batchResumeItems)))
+			// Continue to the resume logic below with batchResumeItems populated
+		}
 	}
 
 	// 0. 前置检查：session 已 closed 则不触发新 turn
@@ -319,10 +394,12 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 				interruptID = t.InterruptID
 				interruptedTurnID = t.ID
 				// Convert RTC result to string for the interrupt result.
-				if rtc.Result != "" {
-					resultStr := string(rtc.Result)
-					interruptResult = &resultStr
-				}
+				// Even if rtc.Result is empty, we set interruptResult to a non-nil
+				// value (empty string) so the interrupted tool knows it was resumed.
+				// A nil result would make compose.GetResumeContext unable to distinguish
+				// between "no result provided" and "not resumed yet".
+				resultStr := string(rtc.Result)
+				interruptResult = &resultStr
 				break
 			}
 		}
@@ -348,10 +425,10 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 					}
 					if protocol.TurnStatus(updatedTurn.Status) == protocol.TurnStatusInterrupted && updatedTurn.InterruptID != "" {
 						interruptID = updatedTurn.InterruptID
-						if rtc.Result != "" {
-							resultStr := string(rtc.Result)
-							interruptResult = &resultStr
-						}
+						// Always set interruptResult (even if empty) so the tool
+						// receives a non-nil resume result.
+						resultStr := string(rtc.Result)
+						interruptResult = &resultStr
 						break
 					}
 				}
@@ -387,10 +464,11 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 		}
 
 		payload, marshalErr := json.Marshal(turnagent.WorkPayload{
-			Kind:            turnagent.WorkKindResume,
-			SessionID:       rtc.SessionID.String(),
-			InterruptID:     interruptID,
-			InterruptResult: interruptResult,
+			Kind:             turnagent.WorkKindResume,
+			SessionID:        rtc.SessionID.String(),
+			InterruptID:      interruptID,
+			InterruptResult:  interruptResult,
+			BatchResumeItems: batchResumeItems, // Use batch items if available
 		})
 		if marshalErr != nil {
 			logger.Error(ctx, "[resumeTurnAfterRtc] marshal resume payload", zap.Error(marshalErr))
@@ -402,10 +480,15 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 				zap.String("session", rtc.SessionID.String()),
 				zap.Error(err))
 		} else {
-			logger.Info(ctx, "[resumeTurnAfterRtc] resume published",
+			logMsg := "[resumeTurnAfterRtc] resume published"
+			if len(batchResumeItems) > 0 {
+				logMsg = "[resumeTurnAfterRtc] batch resume published"
+			}
+			logger.Info(ctx, logMsg,
 				zap.String("rtc", rtc.ID.String()),
 				zap.String("session", rtc.SessionID.String()),
-				zap.String("turn", activeTurns[len(activeTurns)-1].ID.String()))
+				zap.String("turn", activeTurns[len(activeTurns)-1].ID.String()),
+				zap.Int("batch_size", len(batchResumeItems)))
 		}
 		return
 	}

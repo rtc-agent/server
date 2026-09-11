@@ -134,10 +134,28 @@ type WorkPayload struct {
 	// Used by WorkKindResume to build eino's ResumeParams so the TurnLoop
 	// can resume from the exact interrupt point. Follows the pattern in
 	// eino's official example (turnloop-server.example.go).
+	// For batch resume (multiple RTCs), use BatchResumeItems instead.
 	InterruptID string `json:"interrupt_id,omitempty"`
 
 	// InterruptResult is the resolution value for the interrupt (e.g., RTC
 	// output, approval decision). Paired with InterruptID, it becomes the
 	// ResumeParams.Targets entry that eino uses to resume the interrupted tool.
+	// For batch resume (multiple RTCs), use BatchResumeItems instead.
 	InterruptResult *string `json:"interrupt_result,omitempty"`
+
+	// BatchResumeItems contains multiple interrupt results for batch resume.
+	// Used when multiple RTCs in the same turn all complete and we need to
+	// resume all of them at once. Each item has an InterruptID and Result.
+	// When present, this takes precedence over InterruptID/InterruptResult.
+	BatchResumeItems []BatchResumeItem `json:"batch_resume_items,omitempty"`
+}
+
+// BatchResumeItem represents a single interrupt result in a batch resume.
+// Used when multiple RTCs in the same turn complete and need to be resumed together.
+type BatchResumeItem struct {
+	// InterruptID is the eino-assigned ID of the interrupt (typically the tool_call_id).
+	InterruptID string `json:"interrupt_id"`
+
+	// Result is the resolution value for the interrupt (e.g., RTC output).
+	Result string `json:"result"`
 }

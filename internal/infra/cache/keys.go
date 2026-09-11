@@ -135,6 +135,26 @@ const (
 	// value: "1"; TTL: 24 小时
 	// 用途：确保同一 RTC 只触发一次孤儿 turn（crash 恢复后客户端上报时去重）
 	PrefixRtcOrphanTriggered = "rtc:orphan:triggered:"
+
+	// ========== 批量恢复（Batch Resume）相关前缀 ==========
+
+	// PrefixRtcBatchPending 批量恢复待完成 RTC 集合前缀（Redis Set）
+	// 完整 key: rtc:batch:pending:{turnID}
+	// members: RTC ID 列表；TTL: 10 分钟
+	// 用途：跟踪同一 turn 中所有需要中断的 RTC，当集合为空时触发批量恢复
+	PrefixRtcBatchPending = "rtc:batch:pending:"
+
+	// PrefixRtcBatchResults 批量恢复结果存储前缀（Redis Hash）
+	// 完整 key: rtc:batch:results:{turnID}
+	// field: RTC ID, value: JSON 编码的结果；TTL: 10 分钟
+	// 用途：存储每个 RTC 的完成结果，供 GenResume 构建多目标 ResumeParams
+	PrefixRtcBatchResults = "rtc:batch:results:"
+
+	// PrefixRtcBatchInterruptMap 批量恢复 InterruptID 映射前缀（Redis Hash）
+	// 完整 key: rtc:batch:interrupt_map:{turnID}
+	// field: RTC ID, value: InterruptID (tool_call_id)；TTL: 10 分钟
+	// 用途：存储 RTC ID 到 eino InterruptID 的映射，供 GenResume 构建 Targets
+	PrefixRtcBatchInterruptMap = "rtc:batch:interrupt_map:"
 )
 
 // ========== 构造函数 ==========
@@ -247,4 +267,21 @@ func RtcResultKey(rtcID string) string {
 // RtcOrphanTriggered 返回孤儿 turn 触发去重的 Redis key
 func RtcOrphanTriggered(rtcID string) string {
 	return PrefixRtcOrphanTriggered + rtcID
+}
+
+// ========== 批量恢复（Batch Resume）构造函数 ==========
+
+// RtcBatchPending 返回批量恢复待完成 RTC 集合的 Redis key
+func RtcBatchPending(turnID string) string {
+	return PrefixRtcBatchPending + turnID
+}
+
+// RtcBatchResults 返回批量恢复结果存储的 Redis key
+func RtcBatchResults(turnID string) string {
+	return PrefixRtcBatchResults + turnID
+}
+
+// RtcBatchInterruptMap 返回批量恢复 InterruptID 映射的 Redis key
+func RtcBatchInterruptMap(turnID string) string {
+	return PrefixRtcBatchInterruptMap + turnID
 }
