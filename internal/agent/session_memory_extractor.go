@@ -5,10 +5,10 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 
 	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
@@ -181,52 +181,158 @@ func (e *SessionMemoryExtractor) ExtractIfNeeded(
 }
 
 // extractMemories 调用 LLM 提取记忆
+//
+// 使用 tool calling 而非解析自由文本：LLM 必须调用 save_session_memories tool，
+// 参数由 JSON schema 约束，彻底避免了从 LLM 输出中解析 JSON 的可靠性问题。
+// 使用 Stream（而非 Generate）因为模型要求长时间操作必须流式。
 func (e *SessionMemoryExtractor) extractMemories(
 	ctx context.Context,
 	sessionID uuid.UUID,
 	messages []*schema.Message,
 	existingMemories []*model.SessionMemory,
 ) ([]*model.SessionMemory, error) {
+	// 构建 tool
+	extractTool := &saveSessionMemoriesTool{sessionID: sessionID}
+	toolInfo, err := extractTool.Info(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("tool info: %w", err)
+	}
+
+	// 绑定 tool 到 chatModel
+	boundModel, err := e.chatModel.WithTools([]*schema.ToolInfo{toolInfo})
+	if err != nil {
+		return nil, fmt.Errorf("bind tools: %w", err)
+	}
+
 	// 构建提示词
 	prompt := e.buildExtractPrompt(messages, existingMemories)
+	inputMessages := []*schema.Message{schema.UserMessage(prompt)}
 
-	// 调用 LLM（使用 Stream，禁用 thinking 以节省 token）
-	stream, err := e.chatModel.Stream(ctx, []*schema.Message{
-		schema.UserMessage(prompt),
-	}, e.noThinkingOptions...)
+	// 调用 LLM（使用 Stream，禁用 thinking）
+	stream, err := boundModel.Stream(ctx, inputMessages, e.noThinkingOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("chat model stream: %w", err)
 	}
-	defer stream.Close()
 
-	// 消费流以构建完整响应
-	var contentBuilder strings.Builder
-	for {
-		msg, recvErr := stream.Recv()
-		if recvErr != nil {
-			if recvErr == io.EOF {
-				break
-			}
-			return nil, fmt.Errorf("stream recv: %w", recvErr)
-		}
-		if msg == nil {
-			continue
-		}
-		contentBuilder.WriteString(msg.Content)
-	}
-
-	content := contentBuilder.String()
-	if content == "" {
-		return nil, fmt.Errorf("chat model returned empty response")
-	}
-
-	// 解析响应
-	memories, err := e.parseExtractResponse(content, sessionID)
+	// 消费流，合并所有 chunk（包括增量分片的 tool calls）
+	// ConcatMessageStream 内部会关闭 stream，不需要 defer stream.Close()
+	resp, err := schema.ConcatMessageStream(stream)
 	if err != nil {
-		return nil, fmt.Errorf("parse extract response: %w", err)
+		return nil, fmt.Errorf("consume stream: %w", err)
 	}
+
+	// 检查 LLM 是否调用了 tool
+	if len(resp.ToolCalls) == 0 {
+		e.log(ctx, "extractor.no_tool_call", map[string]any{
+			"session_id": sessionID.String(),
+		})
+		return nil, nil // 非致命：LLM 认为无需提取
+	}
+
+	// 直接解析 tool call 参数（JSON schema 约束，100% 可靠）
+	tc := resp.ToolCalls[0]
+	if tc.Function.Name != "save_session_memories" {
+		return nil, fmt.Errorf("unexpected tool call: %s", tc.Function.Name)
+	}
+
+	var args struct {
+		Decision  []memoryItem `json:"decision"`
+		Context   []memoryItem `json:"context"`
+		Progress  []memoryItem `json:"progress"`
+		Issue     []memoryItem `json:"issue"`
+		Learnings []memoryItem `json:"learnings"`
+	}
+	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+		return nil, fmt.Errorf("unmarshal tool args: %w", err)
+	}
+
+	// 转换为 model.SessionMemory
+	var memories []*model.SessionMemory
+	addMemories := func(category string, items []memoryItem) {
+		for _, item := range items {
+			tokenCount := estimateMemoryTokens(item.Content)
+			mem := &model.SessionMemory{
+				SessionID:  sessionID,
+				Category:   category,
+				Title:      item.Title,
+				Content:    item.Content,
+				Metadata:   item.Metadata,
+				TokenCount: &tokenCount,
+			}
+			memories = append(memories, mem)
+		}
+	}
+	addMemories(model.SessionMemoryCategoryDecision, args.Decision)
+	addMemories(model.SessionMemoryCategoryContext, args.Context)
+	addMemories(model.SessionMemoryCategoryProgress, args.Progress)
+	addMemories(model.SessionMemoryCategoryIssue, args.Issue)
+	addMemories(model.SessionMemoryCategoryLearnings, args.Learnings)
 
 	return memories, nil
+}
+
+// saveSessionMemoriesTool 是 memory extraction 专用的 tool。
+// LLM 通过调用此 tool 提交提取的记忆，参数由 JSON schema 约束。
+type saveSessionMemoriesTool struct {
+	sessionID uuid.UUID
+}
+
+func (t *saveSessionMemoriesTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	memoryItemSchema := &schema.ParameterInfo{
+		Type: schema.Object,
+		Desc: "A single memory item",
+		SubParams: map[string]*schema.ParameterInfo{
+			"title": {
+				Type:     schema.String,
+				Desc:     "Short title (5-10 words)",
+				Required: true,
+			},
+			"content": {
+				Type:     schema.String,
+				Desc:     "Detailed description with specifics: file paths, function names, exact values, etc.",
+				Required: true,
+			},
+			"metadata": {
+				Type:     schema.Object,
+				Desc:     "Optional structured data (e.g. related_files, code_snippets)",
+				Required: false,
+			},
+		},
+	}
+
+	return &schema.ToolInfo{
+		Name: "save_session_memories",
+		Desc: "Save extracted session memories. Call this tool with the memories you extracted from the conversation. Only include categories that have NEW information.",
+		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+			"decision":  {Type: schema.Array, Desc: "技术决策: technology choices, design decisions, architecture", Required: false, ElemInfo: memoryItemSchema},
+			"context":   {Type: schema.Array, Desc: "当前上下文: what is being worked on, current tasks", Required: false, ElemInfo: memoryItemSchema},
+			"progress":  {Type: schema.Array, Desc: "任务进展: completed tasks, current status", Required: false, ElemInfo: memoryItemSchema},
+			"issue":     {Type: schema.Array, Desc: "问题与解决: errors, fixes, user corrections", Required: false, ElemInfo: memoryItemSchema},
+			"learnings": {Type: schema.Array, Desc: "经验教训: what worked, what didn't, insights", Required: false, ElemInfo: memoryItemSchema},
+		}),
+	}, nil
+}
+
+func (t *saveSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	var args struct {
+		Decision  []memoryItem `json:"decision"`
+		Context   []memoryItem `json:"context"`
+		Progress  []memoryItem `json:"progress"`
+		Issue     []memoryItem `json:"issue"`
+		Learnings []memoryItem `json:"learnings"`
+	}
+	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+	total := len(args.Decision) + len(args.Context) + len(args.Progress) + len(args.Issue) + len(args.Learnings)
+	return fmt.Sprintf("Successfully saved %d memories.", total), nil
+}
+
+// memoryItem 用于 tool 参数解析
+type memoryItem struct {
+	Title    string           `json:"title"`
+	Content  string           `json:"content"`
+	Metadata model.JSONB[any] `json:"metadata"`
 }
 
 // buildExtractPrompt 构建提取提示词
@@ -255,58 +361,6 @@ func (e *SessionMemoryExtractor) buildExtractPrompt(
 	sb.WriteString(formatMessagesForMemoryExtract(messages))
 
 	return sb.String()
-}
-
-// parseExtractResponse 解析 LLM 响应
-func (e *SessionMemoryExtractor) parseExtractResponse(response string, sessionID uuid.UUID) ([]*model.SessionMemory, error) {
-	// 提取 JSON 部分（可能在 markdown 代码块中）
-	jsonStr := extractJSONFromResponse(response)
-
-	// 解析 JSON
-	var result struct {
-		Decision  []memoryJSON `json:"decision"`
-		Context   []memoryJSON `json:"context"`
-		Progress  []memoryJSON `json:"progress"`
-		Issue     []memoryJSON `json:"issue"`
-		Learnings []memoryJSON `json:"learnings"`
-	}
-
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		return nil, fmt.Errorf("unmarshal json: %w", err)
-	}
-
-	// 转换为 model.SessionMemory
-	var memories []*model.SessionMemory
-
-	addMemories := func(category string, items []memoryJSON) {
-		for _, item := range items {
-			tokenCount := estimateMemoryTokens(item.Content)
-			mem := &model.SessionMemory{
-				SessionID:  sessionID,
-				Category:   category,
-				Title:      item.Title,
-				Content:    item.Content,
-				Metadata:   item.Metadata,
-				TokenCount: &tokenCount,
-			}
-			memories = append(memories, mem)
-		}
-	}
-
-	addMemories(model.SessionMemoryCategoryDecision, result.Decision)
-	addMemories(model.SessionMemoryCategoryContext, result.Context)
-	addMemories(model.SessionMemoryCategoryProgress, result.Progress)
-	addMemories(model.SessionMemoryCategoryIssue, result.Issue)
-	addMemories(model.SessionMemoryCategoryLearnings, result.Learnings)
-
-	return memories, nil
-}
-
-// memoryJSON 用于解析 JSON 响应
-type memoryJSON struct {
-	Title    string         `json:"title"`
-	Content  string         `json:"content"`
-	Metadata model.JSONB[any] `json:"metadata,omitempty"`
 }
 
 // countToolCalls 计算 tool call 数量（从上次提取之后）
@@ -392,29 +446,6 @@ func formatMessagesForMemoryExtract(messages []*schema.Message) string {
 	return sb.String()
 }
 
-// extractJSONFromResponse 从响应中提取 JSON
-func extractJSONFromResponse(response string) string {
-	// 尝试提取 markdown 代码块中的 JSON
-	if idx := strings.Index(response, "```json"); idx != -1 {
-		start := idx + 7
-		if end := strings.Index(response[start:], "```"); end != -1 {
-			return strings.TrimSpace(response[start : start+end])
-		}
-	}
-
-	// 尝试找到 JSON 对象
-	if idx := strings.Index(response, "{"); idx != -1 {
-		// 找到最后一个 }
-		for i := len(response) - 1; i >= idx; i-- {
-			if response[i] == '}' {
-				return response[idx : i+1]
-			}
-		}
-	}
-
-	return response
-}
-
 // truncateString 截断字符串（按 rune 截断，避免在多字节字符中间截断）
 func truncateString(s string, maxLen int) string {
 	runes := []rune(s)
@@ -497,18 +528,21 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 	// For now, use nil state (will be enhanced later to persist state)
 	var state *ExtractionState
 
-	// Run extraction in background goroutine
+	// Run extraction in background goroutine.
+	// Use context.WithoutCancel to detach from the parent context, so extraction
+	// continues even if the turn completes and the parent context is canceled.
 	go func() {
-		extracted, newState, err := extractor.ExtractIfNeeded(ctx, sessionID, schemaMessages, state)
+		bgCtx := context.WithoutCancel(ctx)
+		extracted, newState, err := extractor.ExtractIfNeeded(bgCtx, sessionID, schemaMessages, state)
 		if err != nil {
-			h.logger.Info(ctx, "[triggerSessionMemoryExtraction] error", map[string]any{
+			h.logger.Info(bgCtx, "[triggerSessionMemoryExtraction] error", map[string]any{
 				"session_id": sessionID.String(),
 				"error":      err.Error(),
 			})
 			return
 		}
 		if extracted {
-			h.logger.Info(ctx, "[triggerSessionMemoryExtraction] extracted", map[string]any{
+			h.logger.Info(bgCtx, "[triggerSessionMemoryExtraction] extracted", map[string]any{
 				"session_id": sessionID.String(),
 				"new_state":  newState,
 			})

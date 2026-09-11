@@ -46,28 +46,16 @@ Focus on these categories:
 
 **Example**: "Using connection pooling improved query performance by 10x"
 
-## Output Format
+## How to Submit
 
-Return a JSON object with the following structure. Only include categories that have NEW information to add:
+You MUST call the `save_session_memories` tool to submit extracted memories. Do NOT output JSON as text — the tool is the only valid way to submit memories.
 
-```json
-{
-  "decision": [
-    {
-      "title": "Short title (5-10 words)",
-      "content": "Detailed description with specifics: file paths, function names, exact values, etc.",
-      "metadata": {
-        "related_files": ["path/to/file.go"],
-        "code_snippets": ["relevant code snippet"]
-      }
-    }
-  ],
-  "context": [...],
-  "progress": [...],
-  "issue": [...],
-  "learnings": [...]
-}
-```
+For each category that has NEW information, pass an array of memory items as arguments to the tool. Each item has:
+- `title`: Short title (5-10 words)
+- `content`: Detailed description with specifics: file paths, function names, exact values, etc.
+- `metadata`: Optional structured data (e.g. `{"related_files": ["path/to/file.go"]}`)
+
+If there is no new information to extract at all, simply respond with an empty text message.
 
 ## Guidelines
 

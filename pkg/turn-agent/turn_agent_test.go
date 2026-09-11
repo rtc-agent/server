@@ -538,7 +538,7 @@ func minimalConfig(t *testing.T) Config {
 		CompleteTurn: func(ctx context.Context, sessionID, turnID string, lastMessage *Message) error {
 			return nil
 		},
-		InterruptTurn: func(ctx context.Context, turnID, interruptID string, interruptInfo any) error {
+		InterruptTurn: func(ctx context.Context, turnID, interruptID string, interruptInfo any, allInterruptContexts []*InterruptContext) error {
 			return nil
 		},
 		ResumeTurn: func(ctx context.Context, turnID string) error { return nil },
