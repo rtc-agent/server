@@ -15,6 +15,7 @@ const (
 	ContentTypeThinking       ContentType = "thinking"
 	ContentTypeToolCallInput  ContentType = "toolcall_input"
 	ContentTypeToolCallOutput ContentType = "toolcall_output"
+	ContentTypeUserMessage    ContentType = "user_message"
 )
 
 // Valid indicates whether the value is a known member of the ContentType enum.
@@ -31,6 +32,8 @@ func (e ContentType) Valid() bool {
 	case ContentTypeToolCallInput:
 		return true
 	case ContentTypeToolCallOutput:
+		return true
+	case ContentTypeUserMessage:
 		return true
 	default:
 		return false
@@ -363,6 +366,7 @@ type CompactSessionResult struct {
 // - `thinking`: Data 为字符串
 // - `toolcall_input`: Data 为 ToolCall 对象
 // - `toolcall_output`: Data 为 ToolCall 对象
+// - `user_message`: Data 为 UserMessageContent 对象
 type ContentData struct {
 	// Data 具体内容（结构由 type 决定），类型取决于 type 字段
 	Data interface{} `json:"data"`
@@ -371,6 +375,18 @@ type ContentData struct {
 
 // ContentType defines model for ContentType.
 type ContentType string
+
+// FileAttachment 文件附件（预留）
+type FileAttachment struct {
+	// Extra 扩展字段（如文件名、大小等）
+	Extra *map[string]interface{} `json:"extra,omitempty"`
+
+	// Fileid 文件唯一标识（用于引用已上传的文件）
+	Fileid string `json:"fileid"`
+
+	// Mimetype MIME 类型（如 image/png, application/pdf）
+	Mimetype string `json:"mimetype"`
+}
 
 // ForkSessionRequest 分叉对话
 type ForkSessionRequest struct {
@@ -381,6 +397,7 @@ type ForkSessionRequest struct {
 	// - `thinking`: Data 为字符串
 	// - `toolcall_input`: Data 为 ToolCall 对象
 	// - `toolcall_output`: Data 为 ToolCall 对象
+	// - `user_message`: Data 为 UserMessageContent 对象
 	ContentData ContentData `json:"content_data"`
 
 	// Limit Fork 多少条消息？默认200；最多1000条；
@@ -692,6 +709,18 @@ type RtcListResponse struct {
 // RtcStatus defines model for RtcStatus.
 type RtcStatus string
 
+// ScenarioRef 场景引用（包含完整内容）
+type ScenarioRef struct {
+	// FileContent 场景文件完整内容（Markdown 格式）
+	FileContent string `json:"file_content"`
+
+	// Filepath 场景文件路径（如 "/scenarios/create-and-complete.md"）
+	Filepath string `json:"filepath"`
+
+	// Title 场景标题（如 "Create and Complete a Task"）
+	Title string `json:"title"`
+}
+
 // SendMessageRequest 发送消息请求，自动创建 session（如不存在）和 turn
 type SendMessageRequest struct {
 	// AgentPrompt AGENT.md 内容快照，创建 session 时写入，后续每轮通过 attachment 注入 LLM 上下文
@@ -710,6 +739,7 @@ type SendMessageRequest struct {
 	// - `thinking`: Data 为字符串
 	// - `toolcall_input`: Data 为 ToolCall 对象
 	// - `toolcall_output`: Data 为 ToolCall 对象
+	// - `user_message`: Data 为 UserMessageContent 对象
 	ContentData ContentData `json:"content_data"`
 
 	// ServerSessionId protocol 内 UUID 类型，JSON 线上为字符串
@@ -998,6 +1028,18 @@ type UpdateSessionResult struct {
 
 // UpdateType defines model for UpdateType.
 type UpdateType string
+
+// UserMessageContent 用户消息内容（支持文本 + 场景 + 文件预留）
+type UserMessageContent struct {
+	// Files 文件附件列表（预留字段，暂不实现）
+	Files *[]FileAttachment `json:"files,omitempty"`
+
+	// Scenarios 场景列表（包含完整内容，无需再读取文件）
+	Scenarios *[]ScenarioRef `json:"scenarios,omitempty"`
+
+	// Text 消息文本内容
+	Text string `json:"text"`
+}
 
 // GetOAuth2RedirectUrlParams defines parameters for GetOAuth2RedirectUrl.
 type GetOAuth2RedirectUrlParams struct {

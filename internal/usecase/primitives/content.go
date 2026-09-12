@@ -115,6 +115,34 @@ func ContentDataBytes(data any) ([]byte, error) {
 	return json.Marshal(data)
 }
 
+// ParseUserMessageContent 解析 UserMessageContent
+// data 参数经过 JSON 反序列化后是 map[string]interface{}，需要二次转换
+func ParseUserMessageContent(data any) (protocol.UserMessageContent, error) {
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return protocol.UserMessageContent{}, fmt.Errorf("marshal user message data: %w", err)
+	}
+	var umc protocol.UserMessageContent
+	if err := json.Unmarshal(bytes, &umc); err != nil {
+		return protocol.UserMessageContent{}, fmt.Errorf("unmarshal user message content: %w", err)
+	}
+	return umc, nil
+}
+
+// UserMessageContentData 创建用户消息类型的 ContentData
+func UserMessageContentData(text string, scenarios []protocol.ScenarioRef) (protocol.ContentData, error) {
+	content := protocol.UserMessageContent{
+		Text: text,
+	}
+	if len(scenarios) > 0 {
+		content.Scenarios = &scenarios
+	}
+	return protocol.ContentData{
+		Type: protocol.ContentTypeUserMessage,
+		Data: content,
+	}, nil
+}
+
 // ContentDataString 将 ContentData.Data（any）提取为字符串。
 // JSON 字符串 → 直接返回；其他类型 → 序列化为 JSON 字符串。
 func ContentDataString(data any) (string, error) {

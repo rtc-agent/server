@@ -109,6 +109,12 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// [system] Attachments → [system] Command prompts → [conversation]
 	messages = h.injectCommandPrompts(ctx, sid, messages)
 
+	// Inject scenario prompts from the last user message's scenarios field.
+	// Scenarios are injected as a system message after command prompts but
+	// before attachments are prepended, so the final order is:
+	// [system] Attachments → [system] Scenarios → [system] Command prompts → [conversation]
+	messages = h.injectScenarioPrompts(ctx, sid, messages)
+
 	// Build and inject all attachments (TodoList, SessionMemory, UserMemory).
 	// Attachments are dynamic content that provides the LLM with persistent
 	// context beyond the conversation history.
@@ -201,6 +207,18 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 	switch contentData.Type {
 	case protocol.ContentTypeSummary:
 		return convertSummaryContent(contentData.Data, msg.CreatedAt)
+
+	case protocol.ContentTypeUserMessage:
+		umc, err := primitives.ParseUserMessageContent(contentData.Data)
+		if err != nil {
+			return nil
+		}
+		return []*turnagent.Message{{
+			Role:       msg.Role,
+			Content:    umc.Text,
+			TokenUsage: tokenUsage,
+			CreatedAt:  msg.CreatedAt,
+		}}
 
 	case protocol.ContentTypeText, protocol.ContentTypeMarkdown:
 		text, _ := primitives.ContentDataString(contentData.Data)
@@ -514,4 +532,97 @@ func (h *helpers) injectCommandPrompts(goCtx context.Context, sessionID uuid.UUI
 
 func wrapWithTag(name, content string) string {
 	return "<command name=\"" + name + "\">\n" + content + "\n</command>"
+}
+
+// injectScenarioPrompts 注入场景内容作为系统提示词
+// 从最后一条 user 消息的 ContentData 中提取 scenarios，将每个 scenario 的 FileContent
+// 包裹为 <scenario> 标签，作为 system message 注入到消息数组开头。
+//
+// 注入顺序（最终）：
+// [system] Attachments (TodoList, SessionMemory, UserMemory)
+// [system] Scenarios (本函数注入)
+// [system] Command prompts (/goal, /persona, etc.)
+// [user/assistant] Conversation history
+func (h *helpers) injectScenarioPrompts(
+	ctx context.Context,
+	sessionID uuid.UUID,
+	messages []*turnagent.Message,
+) []*turnagent.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	// 从数据库加载最近的消息，找到最后一条 user 消息
+	// 不能从 messages 中获取，因为 convertDBMessage 已经丢失了 scenarios 信息
+	dbMsgs, err := h.deps.MessageRepo.ListRecentBySession(ctx, sessionID, 10)
+	if err != nil || len(dbMsgs) == 0 {
+		return messages
+	}
+
+	// 找到最后一条 user 消息
+	var lastUserMsg *model.Message
+	for i := len(dbMsgs) - 1; i >= 0; i-- {
+		if dbMsgs[i].Role == string(schema.User) {
+			lastUserMsg = dbMsgs[i]
+			break
+		}
+	}
+
+	if lastUserMsg == nil {
+		return messages
+	}
+
+	// 解析 ContentData
+	contentData, err := primitives.ParseContentData(lastUserMsg.Content)
+	if err != nil {
+		return messages
+	}
+
+	// 只处理 user_message 类型
+	if contentData.Type != protocol.ContentTypeUserMessage {
+		return messages
+	}
+
+	// 解析 UserMessageContent
+	umc, err := primitives.ParseUserMessageContent(contentData.Data)
+	if err != nil {
+		return messages
+	}
+
+	// 检查是否有 scenarios
+	if umc.Scenarios == nil || len(*umc.Scenarios) == 0 {
+		return messages
+	}
+
+	// 构建场景提示词
+	var scenarioPrompts []string
+	for _, scenario := range *umc.Scenarios {
+		if scenario.Title != "" && scenario.FileContent != "" {
+			scenarioPrompts = append(scenarioPrompts,
+				fmt.Sprintf("<scenario title=\"%s\">\n%s\n</scenario>", scenario.Title, scenario.FileContent))
+		}
+	}
+
+	if len(scenarioPrompts) == 0 {
+		return messages
+	}
+
+	// 拼接所有场景
+	combinedScenarios := strings.Join(scenarioPrompts, "\n\n")
+
+	// 创建 system 消息
+	scenarioMsg := &turnagent.Message{
+		Role:    turnagent.RoleSystem,
+		Content: fmt.Sprintf("<scenarios>\n%s\n</scenarios>", combinedScenarios),
+	}
+
+	// 插入到消息数组开头（system 消息必须在最前面）
+	// 注意：attachments 会在后续 prepend，所以最终顺序是：
+	// [system] Attachments
+	// [system] Scenarios (本函数注入)
+	// [system] Command prompts
+	// [conversation history]
+	messages = append([]*turnagent.Message{scenarioMsg}, messages...)
+
+	return messages
 }

@@ -33,8 +33,13 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	creator := usecase.UserCreator{UserID: userID, DeviceID: deviceID}
 
 	content := ""
-	if req.ContentData.Type == protocol.ContentTypeText {
+	switch req.ContentData.Type {
+	case protocol.ContentTypeText:
 		content, _ = primitives.ContentDataString(req.ContentData.Data)
+	case protocol.ContentTypeUserMessage:
+		if umc, err := primitives.ParseUserMessageContent(req.ContentData.Data); err == nil {
+			content = umc.Text
+		}
 	}
 
 	if err := primitives.ValidateCreateMessageRequest(content); err != nil {
