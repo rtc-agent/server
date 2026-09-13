@@ -68,7 +68,7 @@ func (e *TokenEstimator) TriggerThreshold() int64 {
 //
 // Parameters:
 //   - sessionID: 会话 ID
-//   - sessionTotalTokens: 当前 Session.TotalTokens（含本轮 delta）
+//   - currentContextTokens: 当前上下文实际 token 数（含本轮 delta），用于进度和轮次计算
 //   - prevEWMA: 上一次的 EWMA（从 Session.TokenEstimateEWMA 读取）
 //   - roundDelta: 本轮的 token 增量（= usage.TotalTokens）
 //
@@ -77,7 +77,7 @@ func (e *TokenEstimator) TriggerThreshold() int64 {
 func (e *TokenEstimator) Estimate(
 	_ context.Context,
 	_ uuid.UUID,
-	sessionTotalTokens int64,
+	currentContextTokens int64,
 	prevEWMA float64,
 	roundDelta int64,
 ) *TokenEstimate {
@@ -90,18 +90,18 @@ func (e *TokenEstimator) Estimate(
 	// 2. EWMA 增量更新：α * old_ewma + (1-α) * new_observation
 	newEWMA := e.alpha*lastEWMA + (1-e.alpha)*float64(roundDelta)
 
-	// 3. 预估下一轮
-	estimatedNext := sessionTotalTokens + int64(newEWMA)
+	// 3. 预估下一轮（基于当前上下文大小 + 增量）
+	estimatedNext := currentContextTokens + int64(newEWMA)
 
 	// 4. 计算压缩进度
-	progress := float64(sessionTotalTokens) / float64(e.triggerThreshold) * 100
+	progress := float64(currentContextTokens) / float64(e.triggerThreshold) * 100
 	progress = math.Min(progress, 100)
 
 	// 5. 计算距离压缩的轮次
-	roundsUntil := calcRounds(sessionTotalTokens, e.triggerThreshold, newEWMA)
+	roundsUntil := calcRounds(currentContextTokens, e.triggerThreshold, newEWMA)
 
 	return &TokenEstimate{
-		CurrentTokens:          sessionTotalTokens,
+		CurrentTokens:          currentContextTokens,
 		EstimatedNextRound:     estimatedNext,
 		CompressionThreshold:   e.triggerThreshold,
 		CompressionProgress:    progress,
@@ -170,7 +170,8 @@ func (e *TokenEstimator) ReestimateAfterCompact(
 		}, nil
 	}
 
-	currentTokens := session.TotalTokens
+	// 使用 tokensAfter（压缩后实际上下文大小）而非 session.TotalTokens（累计值）。
+	currentTokens := int64(tokensAfter)
 	estimatedNext := currentTokens + int64(newEWMA)
 	progress := math.Min(float64(currentTokens)/float64(e.triggerThreshold)*100, 100)
 	roundsUntil := calcRounds(currentTokens, e.triggerThreshold, newEWMA)

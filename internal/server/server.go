@@ -146,6 +146,11 @@ func (s *Server) Stop() {
 		logger.Debug(ctx, "[Server] rtc-queue Worker stopped")
 	}
 
+	// 关闭 RPC Handler（停止 recorder worker）
+	if s.rpcHandler != nil {
+		s.rpcHandler.Close()
+	}
+
 	_ = s.svcCtx.CentrifugeNode.Shutdown(ctx)
 	_ = s.svcCtx.Broker.Close(ctx)
 

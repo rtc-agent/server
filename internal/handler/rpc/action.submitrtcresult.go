@@ -234,6 +234,13 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		}
 	}
 
+	// === Script Execution 记录（异步，不影响主流程）===
+	if rtc.ToolName == "script" {
+		// 使用 context.WithoutCancel 解耦 RPC handler 生命周期
+		recorderCtx := context.WithoutCancel(ctx)
+		h.recorder.submit(recorderCtx, rtc, req)
+	}
+
 	// Resume the interrupted turn via rtc-queue. The old architecture used
 	// Redis SET+PUBLISH to wake a handleInterrupt goroutine; in the new
 	// architecture we publish a Resume work item that the turn-agent picks

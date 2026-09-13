@@ -35,7 +35,8 @@ type ServiceContext struct {
 	DeviceRepo        repo.DeviceRepo
 	RefreshTokenRepo  repo.RefreshTokenRepo
 	SessionMemoryRepo repo.SessionMemoryRepo
-	UserMemoryRepo    repo.UserMemoryRepo
+	UserMemoryRepo      repo.UserMemoryRepo
+	ScriptExecutionRepo repo.ScriptExecutionRepo
 
 	// Services
 	EmbeddingService embedding.Service
@@ -61,6 +62,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
 	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
 	userMemoryRepo := repo.NewUserMemoryRepo(db)
+	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 
 	// 创建 Embedding Service
 	embeddingService, err := embedding.NewService(embedding.Config{
@@ -125,12 +127,13 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		DeviceRepo:        deviceRepo,
 		RefreshTokenRepo:  refreshTokenRepo,
 		SessionMemoryRepo: sessionMemoryRepo,
-		UserMemoryRepo:    userMemoryRepo,
-		EmbeddingService:  embeddingService,
-		UpdatePublisher:   updatePublisher,
-		CentrifugeNode:    node,
-		Broker:            dualBroker,
-		JWTSigner:         jwtSigner,
+		UserMemoryRepo:      userMemoryRepo,
+		ScriptExecutionRepo: scriptExecutionRepo,
+		EmbeddingService:    embeddingService,
+		UpdatePublisher:     updatePublisher,
+		CentrifugeNode:      node,
+		Broker:              dualBroker,
+		JWTSigner:           jwtSigner,
 	}
 }
 
@@ -150,6 +153,7 @@ func NewServiceContextWithDeps(
 	refreshTokenRepo repo.RefreshTokenRepo,
 	sessionMemoryRepo repo.SessionMemoryRepo,
 	userMemoryRepo repo.UserMemoryRepo,
+	scriptExecutionRepo repo.ScriptExecutionRepo,
 	embeddingService embedding.Service,
 	updatePublisher *updates.UpdatePublisher,
 	node *centrifuge.Node,
@@ -183,12 +187,13 @@ func NewServiceContextWithDeps(
 		DeviceRepo:        deviceRepo,
 		RefreshTokenRepo:  refreshTokenRepo,
 		SessionMemoryRepo: sessionMemoryRepo,
-		UserMemoryRepo:    userMemoryRepo,
-		EmbeddingService:  embeddingService,
-		UpdatePublisher:   updatePublisher,
-		CentrifugeNode:    node,
-		Broker:            broker,
-		JWTSigner:         jwtSigner,
+		UserMemoryRepo:      userMemoryRepo,
+		ScriptExecutionRepo: scriptExecutionRepo,
+		EmbeddingService:    embeddingService,
+		UpdatePublisher:     updatePublisher,
+		CentrifugeNode:      node,
+		Broker:              broker,
+		JWTSigner:           jwtSigner,
 	}
 }
 

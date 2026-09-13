@@ -50,6 +50,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
 	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
 	userMemoryRepo := repo.NewUserMemoryRepo(db)
+	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	service, err := provideEmbeddingService(cfg)
 	if err != nil {
 		return nil, err
@@ -67,7 +68,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, service, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, service, updatePublisher, node, dualBroker, jwtSigner)
 	return serviceContext, nil
 }
 
@@ -84,6 +85,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
 	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
 	userMemoryRepo := repo.NewUserMemoryRepo(db)
+	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	service, err := provideEmbeddingService(cfg)
 	if err != nil {
 		return nil, err
@@ -101,7 +103,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, service, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, service, updatePublisher, node, dualBroker, jwtSigner)
 	prometheusMetrics := provideMetrics()
 	cmdChatModelResult, err := provideChatModel(cfg, prometheusMetrics)
 	if err != nil {
@@ -109,7 +111,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	}
 	dependencies := provideUsecaseDependencies(serviceContext, cmdChatModelResult, cfg)
 	queue := provideQueue(rdb)
-	handler := provideRPCHandler(dependencies, sessionRepo, queue, cfg)
+	handler := provideRPCHandler(serviceContext, dependencies, sessionRepo, queue, cfg, prometheusMetrics)
 	httphandlerHandler := provideHTTPHandler(serviceContext)
 	redisStore := provideStateStore(universalClient)
 	client := provideOAuth2ProviderClient(cfg)
@@ -128,7 +130,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 // wire.go:
 
 // RepositorySet provides all repository implementations.
-var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewGoalRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo, repo.NewSessionMemoryRepo, repo.NewUserMemoryRepo)
+var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewGoalRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo, repo.NewSessionMemoryRepo, repo.NewUserMemoryRepo, repo.NewScriptExecutionRepo)
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
 var ServiceSet = wire.NewSet(
@@ -395,16 +397,20 @@ func provideOAuth2ProviderClient(cfg *config.Config) *oauth.Client {
 }
 
 func provideRPCHandler(
+	svcCtx *svc.ServiceContext,
 	deps *usecase.Dependencies,
 	sessionRepo repo.SessionRepo,
 	queue *rtcqueue.Queue,
 	cfg *config.Config,
+	metrics *turnagent.PrometheusMetrics,
 ) *rpchandler.Handler {
 	handler := rpchandler.NewHandler(&rpchandler.Dependencies{
-		Deps:        deps,
-		SessionRepo: sessionRepo,
-		Queue:       queue,
-		API:         cfg.API,
+		Deps:                deps,
+		SessionRepo:         sessionRepo,
+		Queue:               queue,
+		API:                 cfg.API,
+		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
+		Metrics:             metrics,
 	})
 	svc.RegisterRPCHandler(handler)
 	return handler

@@ -105,6 +105,33 @@ groups:
         annotations:
           summary: "RTC Agent server 10 分钟内重启超过 2 次"
 
+      # Script 执行错误率
+      - alert: ScriptExecutionHighErrorRate
+        expr: >
+          sum(rate(rtc_script_executions_total{job="rtc-agent-server",status="failed"}[5m]))
+          /
+          sum(rate(rtc_script_executions_total{job="rtc-agent-server"}[5m]))
+          > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Script 执行错误率超过 10%"
+          description: "Script 工具执行失败率在过去 5 分钟内超过 10%，当前值: {{ $value | humanizePercentage }}"
+
+      # Script 执行延迟
+      - alert: ScriptExecutionSlow
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(rtc_script_execution_duration_seconds_bucket{job="rtc-agent-server"}[5m])) by (le)
+          ) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Script 执行延迟过高"
+          description: "Script 执行 P95 延迟超过 30 秒，当前值: {{ $value }}s"
+
   - name: infra-alerts
     rules:
       - alert: PostgresDown

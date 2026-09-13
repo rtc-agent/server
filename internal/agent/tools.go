@@ -16,7 +16,9 @@ import (
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
+	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.uber.org/zap"
 )
 
 // Each tool's Info returns the tool metadata; InvokableRun delegates to
@@ -129,6 +131,11 @@ func (t *scriptTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 		Name: "script",
 		Desc: "Execute JavaScript code in the browser environment. Provide either a file path or inline code (mutually exclusive)",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+			"title": {
+				Type:     schema.String,
+				Desc:     "简短描述本次脚本执行的目的，不超过20个字，如 '分析销售数据趋势'",
+				Required: true,
+			},
 			"action": {
 				Type:     schema.String,
 				Enum:     []string{"run", "save", "eval"},
@@ -325,6 +332,23 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		"message_id": msgID.String(),
 		"turn_id":    turnUUID.String(),
 	})
+
+	if toolName == "script" {
+		var scriptArgs struct {
+			Title  string `json:"title"`
+			Action string `json:"action"`
+			Name   string `json:"name"`
+		}
+		_ = json.Unmarshal([]byte(argumentsInJSON), &scriptArgs)
+		logger.Info(ctx, "script.execution_started",
+			zap.String("rtc_id", rtcID.String()),
+			zap.String("session_id", r.session.ID.String()),
+			zap.String("turn_id", turnUUID.String()),
+			zap.String("title", scriptArgs.Title),
+			zap.String("action", scriptArgs.Action),
+			zap.String("name", scriptArgs.Name),
+		)
+	}
 
 	// 6. Register RTC in batch pending set for batch resume.
 	// This tracks all RTCs created in this turn. When all RTCs complete,

@@ -89,6 +89,18 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 	// 5. Count tokens after compression.
 	tokensAfter, _ := cumulativeTokenCounter(ctx, compressed)
 
+	// 5b. 压缩后回写 current_context_tokens，让前端进度条反映真实上下文大小。
+	if tokensAfter > 0 {
+		if err := h.deps.SessionRepo.Update(compactCtx, sid, map[string]any{
+			"current_context_tokens": tokensAfter,
+		}); err != nil {
+			h.logIfEnabled(ctx, "compact.update_context_tokens_failed", map[string]any{
+				"session_id": sessionID,
+				"error":      err.Error(),
+			})
+		}
+	}
+
 	// 6. Re-estimate token usage after compression.
 	// This replaces the stale pre-compact estimate with a fresh one based on
 	// the new TotalTokens baseline. The EWMA is adjusted by the compression

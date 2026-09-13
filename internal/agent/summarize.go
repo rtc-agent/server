@@ -656,6 +656,19 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 		"session_id": sessionID.String(),
 	})
 
+	// 压缩后回写 current_context_tokens：使用 compressed 消息的实际 token 数。
+	// 这会让前端进度条从累计的 TotalTokens 切换到真实的上下文大小。
+	if tokensAfter, err := cumulativeTokenCounter(ctx, compressed); err == nil && tokensAfter > 0 {
+		if err := h.deps.SessionRepo.Update(ctx, sessionID, map[string]any{
+			"current_context_tokens": tokensAfter,
+		}); err != nil {
+			h.logIfEnabled(ctx, "persistCompressedMessages.update_context_tokens_failed", map[string]any{
+				"session_id": sessionID.String(),
+				"error":      err.Error(),
+			})
+		}
+	}
+
 	// Note: we do NOT call tokenEstimator.Invalidate here.
 	// For manual compact: ReestimateAfterCompact handles cache management
 	// (it reads the pre-compact EWMA saved by processCompactWorker, adjusts by

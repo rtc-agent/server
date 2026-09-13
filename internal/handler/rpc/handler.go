@@ -19,20 +19,24 @@ import (
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/protocol"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // Dependencies RPC Handler 所需的依赖
 type Dependencies struct {
-	Deps        *usecase.Dependencies
-	SessionRepo repo.SessionRepo
-	Queue       *rtcqueue.Queue // rtc-queue for publishing/cancelling work items
-	API         config.APIConfig
+	Deps                *usecase.Dependencies
+	SessionRepo         repo.SessionRepo
+	Queue               *rtcqueue.Queue           // rtc-queue for publishing/cancelling work items
+	API                 config.APIConfig
+	ScriptExecutionRepo repo.ScriptExecutionRepo // script execution 持久化
+	Metrics             *turnagent.PrometheusMetrics // Prometheus 指标
 }
 
 // Handler RPC 处理器
 type Handler struct {
-	deps   *Dependencies
-	routes map[protocol.RpcMethod]routeHandler
+	deps     *Dependencies
+	routes   map[protocol.RpcMethod]routeHandler
+	recorder *scriptExecutionRecorder // 异步记录 script 执行详情
 }
 
 // routeHandler 单条路由的处理函数
@@ -40,9 +44,22 @@ type routeHandler func(ctx context.Context, data []byte) (any, error)
 
 // NewHandler 创建 RPC 处理器
 func NewHandler(deps *Dependencies) *Handler {
-	h := &Handler{deps: deps}
+	h := &Handler{
+		deps: deps,
+		recorder: newScriptExecutionRecorder(deps,
+			4,    // workerCount: 4 个并发 writer
+			1000, // bufferSize: 队列容量 1000
+		),
+	}
 	h.registerRoutes()
 	return h
+}
+
+// Close 关闭 Handler 持有的资源（停止 recorder worker）。
+func (h *Handler) Close() {
+	if h.recorder != nil {
+		h.recorder.shutdown()
+	}
 }
 
 // registerRoutes 注册所有 RPC 路由。

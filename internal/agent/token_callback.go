@@ -71,22 +71,29 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 		// Step 3: Compute token estimate (EWMA + derived fields)
 		// ===============================================================
 		var estimate *TokenEstimate
+		// 使用 CurrentContextTokens（压缩后回写的实际值）作为进度计算基准，
+		// fallback 到 TotalTokens（旧 session 尚未初始化 CurrentContextTokens）。
+		currentCtxTokens := session.TotalTokens + fullUsage.TotalTokens
+		if session != nil && session.CurrentContextTokens > 0 {
+			currentCtxTokens = session.CurrentContextTokens + fullUsage.TotalTokens
+		}
 		if session != nil && h.tokenEstimator != nil {
 			prevEWMA := session.TokenEstimateEWMA
-			estimate = h.tokenEstimator.Estimate(ctx, sessionID, session.TotalTokens+fullUsage.TotalTokens, prevEWMA, fullUsage.TotalTokens)
+			estimate = h.tokenEstimator.Estimate(ctx, sessionID, currentCtxTokens, prevEWMA, fullUsage.TotalTokens)
 		}
 
 		// ===============================================================
 		// Step 4: SQL atomic accumulate Session token usage + persist EWMA
 		// ===============================================================
 		delta := repo.TokenUsageDelta{
-			InputDelta:       fullUsage.InputTokens,
-			OutputDelta:      fullUsage.OutputTokens,
-			TotalDelta:       fullUsage.TotalTokens,
-			CachedReadDelta:  fullUsage.CachedReadTokens,
-			CachedWriteDelta: fullUsage.CachedWriteTokens,
-			ReasoningDelta:   fullUsage.ReasoningTokens,
-			CostMicrosDelta:  costMicros,
+			InputDelta:              fullUsage.InputTokens,
+			OutputDelta:             fullUsage.OutputTokens,
+			TotalDelta:              fullUsage.TotalTokens,
+			CachedReadDelta:         fullUsage.CachedReadTokens,
+			CachedWriteDelta:        fullUsage.CachedWriteTokens,
+			ReasoningDelta:          fullUsage.ReasoningTokens,
+			CostMicrosDelta:         costMicros,
+			SetCurrentContextTokens: currentCtxTokens,
 		}
 		if estimate != nil {
 			delta.SetEWMA = estimate.NewEWMA
@@ -102,6 +109,7 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 		// Update session with new TotalTokens for publishing
 		if session != nil && estimate != nil {
 			session.TotalTokens += fullUsage.TotalTokens
+			session.CurrentContextTokens = currentCtxTokens
 			session.TotalInputTokens += fullUsage.InputTokens
 			session.TotalOutputTokens += fullUsage.OutputTokens
 			session.TotalCachedReadTokens += fullUsage.CachedReadTokens

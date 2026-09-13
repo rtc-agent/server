@@ -77,6 +77,26 @@
         "expr": "{container=~\"rtc-full-.*\"}",
         "legendFormat": ""
       }]
+    },
+    {
+      "title": "Script 执行日志",
+      "type": "logs",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 40 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      },
+      "targets": [{
+        "expr": "{container=~\"rtc-full-server-.*\"} |= \"script.execution\"",
+        "legendFormat": ""
+      }]
     }
   ],
   "refresh": "10s",

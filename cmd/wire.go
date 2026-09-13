@@ -51,6 +51,7 @@ var RepositorySet = wire.NewSet(
 	repo.NewRefreshTokenRepo,
 	repo.NewSessionMemoryRepo,
 	repo.NewUserMemoryRepo,
+	repo.NewScriptExecutionRepo,
 )
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
@@ -327,16 +328,20 @@ func provideOAuth2ProviderClient(cfg *config.Config) *oauth.Client {
 }
 
 func provideRPCHandler(
+	svcCtx *svc.ServiceContext,
 	deps *usecase.Dependencies,
 	sessionRepo repo.SessionRepo,
 	queue *rtcqueue.Queue,
 	cfg *config.Config,
+	metrics *turnagent.PrometheusMetrics,
 ) *rpchandler.Handler {
 	handler := rpchandler.NewHandler(&rpchandler.Dependencies{
-		Deps:        deps,
-		SessionRepo: sessionRepo,
-		Queue:       queue,
-		API:         cfg.API,
+		Deps:                deps,
+		SessionRepo:         sessionRepo,
+		Queue:               queue,
+		API:                 cfg.API,
+		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
+		Metrics:             metrics,
 	})
 	// Register globally for Centrifuge RPC callbacks
 	svc.RegisterRPCHandler(handler)

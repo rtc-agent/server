@@ -208,6 +208,79 @@
         "expr": "histogram_quantile(0.95, rate(rtc_checkpoint_data_bytes_bucket{job=\"rtc-agent-server\"}[5m]))",
         "legendFormat": "{{operation}}"
       }]
+    },
+    {
+      "type": "row",
+      "title": "Script 执行",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 60 },
+      "collapsed": false
+    },
+    {
+      "title": "Script 执行速率 (by action, status)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 61 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [{
+        "expr": "sum by (action, status) (rate(rtc_script_executions_total{job=\"rtc-agent-server\"}[5m]))",
+        "legendFormat": "{{action}} - {{status}}"
+      }]
+    },
+    {
+      "title": "Script 执行延迟 p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 61 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(rtc_script_execution_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(rtc_script_execution_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m])) by (le))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum(rate(rtc_script_execution_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m])) by (le))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "title": "Script 错误率",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 61 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 10 }] } }, "overrides": [] },
+      "targets": [{
+        "expr": "sum(rate(rtc_script_executions_total{job=\"rtc-agent-server\",status=\"failed\"}[5m])) / sum(rate(rtc_script_executions_total{job=\"rtc-agent-server\"}[5m])) * 100",
+        "legendFormat": "error rate"
+      }]
+    },
+    {
+      "title": "Script 结果大小 p95",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 69 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(rtc_script_result_size_bytes_bucket{job=\"rtc-agent-server\"}[5m])) by (le))",
+        "legendFormat": "p95"
+      }]
+    },
+    {
+      "title": "Script 代码大小 p95",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 69 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(rtc_script_code_size_bytes_bucket{job=\"rtc-agent-server\"}[5m])) by (le))",
+        "legendFormat": "p95"
+      }]
+    },
+    {
+      "title": "Script 累计执行次数",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 69 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "sum by (action) (rtc_script_executions_total{job=\"rtc-agent-server\"})",
+        "legendFormat": "{{action}}"
+      }]
     }
   ],
   "refresh": "10s",

@@ -50,6 +50,11 @@ type TokenUsageDelta struct {
 	// SetEWMA 如果 > 0，原子设置 token_estimate_ewma 为该值。
 	// 用于 TokenEstimator 在每次 LLM 调用后更新持久化的 EWMA。
 	SetEWMA float64
+
+	// SetCurrentContextTokens 如果 > 0，原子设置 current_context_tokens 为该值。
+	// 用于 token_callback 在每次 LLM 调用后更新当前上下文大小，
+	// 以及压缩后由 persistCompressedMessages / compact 写入准确的压缩后 token 数。
+	SetCurrentContextTokens int64
 }
 
 type sessionRepo struct {
@@ -222,6 +227,9 @@ func (r *sessionRepo) AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UU
 	}
 	if delta.SetEWMA > 0 {
 		updates["token_estimate_ewma"] = delta.SetEWMA
+	}
+	if delta.SetCurrentContextTokens > 0 {
+		updates["current_context_tokens"] = delta.SetCurrentContextTokens
 	}
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.Session{}).

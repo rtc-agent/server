@@ -782,6 +782,9 @@ type Session struct {
 	CompressionThreshold *int64    `json:"compression_threshold,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 
+	// CurrentContextTokens 当前上下文实际 token 数（压缩后由 cumulativeTokenCounter 回写，用于前端压缩进度计算）
+	CurrentContextTokens *int64 `json:"current_context_tokens,omitempty"`
+
 	// DeletedAt 软删除时间
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 

@@ -28,6 +28,12 @@ type PrometheusMetrics struct {
 	llmHTTPRequestCount    *prometheus.CounterVec
 	llmHTTPRequestDuration *prometheus.HistogramVec
 	llmHTTPResponseTokens  *prometheus.CounterVec
+
+	// Script metrics
+	scriptExecutions        *prometheus.CounterVec
+	scriptExecutionDuration *prometheus.HistogramVec
+	scriptResultSize        *prometheus.HistogramVec
+	scriptCodeSize          *prometheus.HistogramVec
 }
 
 // NewPrometheusMetrics 创建并注册所有 Prometheus 指标。
@@ -137,6 +143,37 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name:      "http_tokens_total",
 			Help:      "Total tokens from LLM HTTP responses (transport layer, 100% coverage).",
 		}, []string{"model", "type"}), // type: "input" or "output"
+
+		scriptExecutions: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "script",
+			Name:      "executions_total",
+			Help:      "Total number of script tool executions.",
+		}, []string{"action", "status"}),
+
+		scriptExecutionDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rtc",
+			Subsystem: "script",
+			Name:      "execution_duration_seconds",
+			Help:      "Script execution duration in seconds (frontend-reported).",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 15),
+		}, []string{"action"}),
+
+		scriptResultSize: promauto.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rtc",
+			Subsystem: "script",
+			Name:      "result_size_bytes",
+			Help:      "Script execution result size in bytes.",
+			Buckets:   prometheus.ExponentialBuckets(64, 2, 18),
+		}, []string{"action"}),
+
+		scriptCodeSize: promauto.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rtc",
+			Subsystem: "script",
+			Name:      "code_size_bytes",
+			Help:      "Script source code size in bytes.",
+			Buckets:   prometheus.ExponentialBuckets(64, 2, 12),
+		}, []string{"action"}),
 	}
 }
 
@@ -230,5 +267,29 @@ func (m *PrometheusMetrics) RecordAttachment(ctx context.Context, attrs Attachme
 	// Record truncation events
 	if status == "truncated" {
 		m.attachmentTruncated.WithLabelValues(attrs.Name).Inc()
+	}
+}
+
+// ScriptExecutionMetricsAttrs contains attributes for a script execution event.
+type ScriptExecutionMetricsAttrs struct {
+	Action     string
+	Status     string
+	DurationMs int64
+	ResultSize int64
+	CodeSize   int64
+}
+
+// RecordScriptExecution records metrics for a script execution event.
+// Defined on concrete type, not the Metrics interface (see design doc rationale).
+func (m *PrometheusMetrics) RecordScriptExecution(ctx context.Context, attrs ScriptExecutionMetricsAttrs) {
+	m.scriptExecutions.WithLabelValues(attrs.Action, attrs.Status).Inc()
+	if attrs.DurationMs > 0 {
+		m.scriptExecutionDuration.WithLabelValues(attrs.Action).Observe(float64(attrs.DurationMs) / 1000)
+	}
+	if attrs.ResultSize > 0 {
+		m.scriptResultSize.WithLabelValues(attrs.Action).Observe(float64(attrs.ResultSize))
+	}
+	if attrs.CodeSize > 0 {
+		m.scriptCodeSize.WithLabelValues(attrs.Action).Observe(float64(attrs.CodeSize))
 	}
 }

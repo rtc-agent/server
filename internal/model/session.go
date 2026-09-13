@@ -48,6 +48,12 @@ type Session struct {
 	// TotalTokens 累计总 token 数（包含所有类型，与 eino TotalTokens 对齐）
 	TotalTokens int64 `gorm:"default:0" json:"total_tokens"`
 
+	// CurrentContextTokens 当前上下文实际 token 数。
+	// 压缩后由 cumulativeTokenCounter 回写，非压缩轮次由 token_callback 近似更新。
+	// 用于前端压缩进度计算（替代 TotalTokens，解决累计值永不减少导致进度 100% 的 bug）。
+	// 默认 0 表示尚未初始化，ComputeTokenEstimate 会 fallback 到 TotalTokens。
+	CurrentContextTokens int64 `gorm:"default:0" json:"current_context_tokens"`
+
 	// TotalCachedReadTokens 累计缓存读取（cache hit）token 数
 	TotalCachedReadTokens int64 `gorm:"default:0" json:"total_cached_read_tokens"`
 
@@ -172,6 +178,7 @@ func ToProtocolSession(m *Session) protocol.Session {
 		TotalInputTokens:       ptrTo(m.TotalInputTokens),
 		TotalOutputTokens:      ptrTo(m.TotalOutputTokens),
 		TotalTokens:            ptrTo(m.TotalTokens),
+		CurrentContextTokens:   ptrTo(m.CurrentContextTokens),
 		TotalCachedReadTokens:  ptrTo(m.TotalCachedReadTokens),
 		TotalCachedWriteTokens: ptrTo(m.TotalCachedWriteTokens),
 		TotalReasoningTokens:   ptrTo(m.TotalReasoningTokens),
@@ -203,7 +210,12 @@ func (s *Session) ComputeTokenEstimate(threshold int64) *TokenEstimateFields {
 	}
 
 	ewma := s.TokenEstimateEWMA
-	currentTokens := s.TotalTokens
+	// 优先使用 CurrentContextTokens（压缩后回写的实际上下文大小），
+	// fallback 到 TotalTokens（旧 session 或压缩前的累计值）。
+	currentTokens := s.CurrentContextTokens
+	if currentTokens <= 0 {
+		currentTokens = s.TotalTokens
+	}
 
 	// Compression progress (0-100)
 	progress := float64(currentTokens) / float64(threshold) * 100
