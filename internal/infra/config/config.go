@@ -173,6 +173,13 @@ type WorkerConfig struct {
 	// 低于此阈值时输出 warn 日志。负数表示禁用告警。
 	// 默认 0.88（88%）
 	CacheHitRateWarnThreshold float64 `mapstructure:"cache_hit_rate_warn_threshold"`
+
+	// TokenCounterMode 控制 token 计数策略（可选）
+	// 选项：
+	//   - "heuristic"（默认）：快速，约 4 字符/token，适合英文文本
+	//   - "tokenizer"：精确，使用 cl100k_base 编码（tiktoken-go），对中文精度提升 3-4 倍
+	// 注意：tokenizer 模式首次加载约 50-200ms，内存占用约 5MB
+	TokenCounterMode string `mapstructure:"token_counter_mode"`
 }
 
 // LLMConfig LLM 模型配置（支持 Claude 和 OpenAI 协议）
@@ -342,6 +349,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("worker.interrupt_answer_ttl", 10*time.Minute)
 	v.SetDefault("worker.orphan_trigger_ttl", 24*time.Hour)
 	v.SetDefault("worker.lock_ttl_sec", 120)
+	v.SetDefault("worker.token_counter_mode", "heuristic")
 	v.SetDefault("llm.thinking_budget_tokens", 50000)
 	v.SetDefault("llm.reasoning_effort", "medium")
 	v.SetDefault("llm.retry_max_attempts", 0)
@@ -417,6 +425,29 @@ func (c *Config) Validate() error {
 	// 校验至少启用了一个 OAuth Provider
 	if !c.Providers.Mock.Enabled && !c.Providers.GitHub.Enabled && !c.Providers.Google.Enabled {
 		return fmt.Errorf("at least one OAuth provider must be enabled (mock, github, or google)")
+	}
+	// 校验 Worker 压缩阈值配置
+	if err := c.Worker.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Validate 校验 WorkerConfig 中的压缩阈值配置。
+// context_tokens_limit 必须大于 auto_compact_buffer_tokens，否则实际阈值将为非正数，
+// 导致频繁触发压缩。
+func (c *WorkerConfig) Validate() error {
+	if c.ContextTokensLimit > 0 && c.AutoCompactBufferTokens > 0 &&
+		c.ContextTokensLimit <= c.AutoCompactBufferTokens {
+		return fmt.Errorf("worker.context_tokens_limit (%d) must be > worker.auto_compact_buffer_tokens (%d)",
+			c.ContextTokensLimit, c.AutoCompactBufferTokens)
+	}
+	// 校验 TokenCounterMode 合法值
+	switch c.TokenCounterMode {
+	case "", "heuristic", "tokenizer":
+		// valid
+	default:
+		return fmt.Errorf("worker.token_counter_mode (%q) must be \"heuristic\" or \"tokenizer\"", c.TokenCounterMode)
 	}
 	return nil
 }

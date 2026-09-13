@@ -249,9 +249,12 @@ func (m *AttachmentManager) logError(ctx context.Context, msg string, fields map
 }
 
 // estimateStringTokens estimates the number of tokens in a string.
-// Uses a rough heuristic: 4 bytes per token, with a 1.33x safety margin.
+// Uses the global TokenCounter (configurable: heuristic or tiktoken).
+// Falls back to 4 bytes per token with 1.33x safety margin for backward compatibility.
 func estimateStringTokens(s string) int {
-	return int(float64(len(s)) / 4.0 * 1.33)
+	tokens := turnagent.CountStringTokens(s)
+	// Apply 1.33x safety margin for backward compatibility
+	return int(float64(tokens) * 1.33)
 }
 
 // truncateToTokens truncates a string to fit within the given token budget.

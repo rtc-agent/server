@@ -16,6 +16,7 @@ import (
 	"github.com/rtc-agent/server/internal/updates"
 	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/logger"
+	"github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // ServiceContext 服务上下文，用于依赖注入
@@ -26,15 +27,15 @@ type ServiceContext struct {
 	Redis  redis.UniversalClient
 
 	// Repos
-	SessionRepo       repo.SessionRepo
-	MessageRepo       repo.MessageRepo
-	TurnRepo          repo.TurnRepo
-	RtcRepo           repo.RtcRepo
-	GoalRepo          repo.GoalRepo
-	OAuth2UserRepo    repo.OAuth2UserRepo
-	DeviceRepo        repo.DeviceRepo
-	RefreshTokenRepo  repo.RefreshTokenRepo
-	SessionMemoryRepo repo.SessionMemoryRepo
+	SessionRepo         repo.SessionRepo
+	MessageRepo         repo.MessageRepo
+	TurnRepo            repo.TurnRepo
+	RtcRepo             repo.RtcRepo
+	GoalRepo            repo.GoalRepo
+	OAuth2UserRepo      repo.OAuth2UserRepo
+	DeviceRepo          repo.DeviceRepo
+	RefreshTokenRepo    repo.RefreshTokenRepo
+	SessionMemoryRepo   repo.SessionMemoryRepo
 	UserMemoryRepo      repo.UserMemoryRepo
 	ScriptExecutionRepo repo.ScriptExecutionRepo
 
@@ -88,7 +89,23 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	if compactBuffer <= 0 {
 		compactBuffer = 13000
 	}
-	updatePublisher.SetCompressionThreshold(int64(contextLimit - compactBuffer))
+	threshold := contextLimit - compactBuffer
+	if threshold <= 0 {
+		// Fallback to 80% of contextLimit when configuration is invalid
+		// This prevents threshold=1 which would cause compression on every turn
+		threshold = int(float64(contextLimit) * 0.8)
+		logger.Warn(context.Background(), "servicecontext.threshold_fallback",
+			zap.Int("context_limit", contextLimit),
+			zap.Int("compact_buffer", compactBuffer),
+			zap.Int("fallback_threshold", threshold))
+	}
+	updatePublisher.SetCompressionThreshold(int64(threshold))
+
+	// 初始化全局 TokenCounter（用于 token 估算）
+	tc := turnagent.NewTokenCounter(cfg.Worker.TokenCounterMode)
+	turnagent.SetGlobalTokenCounter(tc)
+	logger.Info(context.Background(), "servicecontext.token_counter_initialized",
+		zap.String("mode", cfg.Worker.TokenCounterMode))
 
 	jwtSigner, err := auth.NewJWTSigner(
 		cfg.Auth.JWTSecret,
@@ -115,18 +132,18 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	updatePublisher.SetBroker(dualBroker)
 
 	return &ServiceContext{
-		Config:            cfg,
-		DB:                db,
-		Redis:             rdb,
-		SessionRepo:       sessionRepo,
-		MessageRepo:       messageRepo,
-		TurnRepo:          turnRepo,
-		RtcRepo:           rtcRepo,
-		GoalRepo:          goalRepo,
-		OAuth2UserRepo:    oauth2UserRepo,
-		DeviceRepo:        deviceRepo,
-		RefreshTokenRepo:  refreshTokenRepo,
-		SessionMemoryRepo: sessionMemoryRepo,
+		Config:              cfg,
+		DB:                  db,
+		Redis:               rdb,
+		SessionRepo:         sessionRepo,
+		MessageRepo:         messageRepo,
+		TurnRepo:            turnRepo,
+		RtcRepo:             rtcRepo,
+		GoalRepo:            goalRepo,
+		OAuth2UserRepo:      oauth2UserRepo,
+		DeviceRepo:          deviceRepo,
+		RefreshTokenRepo:    refreshTokenRepo,
+		SessionMemoryRepo:   sessionMemoryRepo,
 		UserMemoryRepo:      userMemoryRepo,
 		ScriptExecutionRepo: scriptExecutionRepo,
 		EmbeddingService:    embeddingService,
@@ -172,21 +189,37 @@ func NewServiceContextWithDeps(
 	if compactBuffer <= 0 {
 		compactBuffer = 13000
 	}
-	updatePublisher.SetCompressionThreshold(int64(contextLimit - compactBuffer))
+	threshold := contextLimit - compactBuffer
+	if threshold <= 0 {
+		// Fallback to 80% of contextLimit when configuration is invalid
+		// This prevents threshold=1 which would cause compression on every turn
+		threshold = int(float64(contextLimit) * 0.8)
+		logger.Warn(context.Background(), "servicecontext.threshold_fallback",
+			zap.Int("context_limit", contextLimit),
+			zap.Int("compact_buffer", compactBuffer),
+			zap.Int("fallback_threshold", threshold))
+	}
+	updatePublisher.SetCompressionThreshold(int64(threshold))
+
+	// 初始化全局 TokenCounter（用于 token 估算）
+	tc := turnagent.NewTokenCounter(cfg.Worker.TokenCounterMode)
+	turnagent.SetGlobalTokenCounter(tc)
+	logger.Info(context.Background(), "servicecontext.token_counter_initialized",
+		zap.String("mode", cfg.Worker.TokenCounterMode))
 
 	return &ServiceContext{
-		Config:            cfg,
-		DB:                db,
-		Redis:             rdb,
-		SessionRepo:       sessionRepo,
-		MessageRepo:       messageRepo,
-		TurnRepo:          turnRepo,
-		RtcRepo:           rtcRepo,
-		GoalRepo:          goalRepo,
-		OAuth2UserRepo:    oauth2UserRepo,
-		DeviceRepo:        deviceRepo,
-		RefreshTokenRepo:  refreshTokenRepo,
-		SessionMemoryRepo: sessionMemoryRepo,
+		Config:              cfg,
+		DB:                  db,
+		Redis:               rdb,
+		SessionRepo:         sessionRepo,
+		MessageRepo:         messageRepo,
+		TurnRepo:            turnRepo,
+		RtcRepo:             rtcRepo,
+		GoalRepo:            goalRepo,
+		OAuth2UserRepo:      oauth2UserRepo,
+		DeviceRepo:          deviceRepo,
+		RefreshTokenRepo:    refreshTokenRepo,
+		SessionMemoryRepo:   sessionMemoryRepo,
 		UserMemoryRepo:      userMemoryRepo,
 		ScriptExecutionRepo: scriptExecutionRepo,
 		EmbeddingService:    embeddingService,

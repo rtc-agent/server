@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/callbacks"
+	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
@@ -36,7 +36,7 @@ type SessionMemoryExtractor struct {
 	logger       turnagent.Logger
 
 	// 配置
-	InitThreshold int // 初始化阈值，默认 10000
+	InitThreshold   int // 初始化阈值，默认 10000
 	UpdateThreshold int // 更新阈值，默认 5000
 	MinToolCalls    int // 最小 tool call 数量，默认 3
 
@@ -57,14 +57,14 @@ func NewSessionMemoryExtractor(
 	tokenCallbackHandler callbacks.Handler,
 ) *SessionMemoryExtractor {
 	return &SessionMemoryExtractor{
-		chatModel:           chatModel,
-		memoryRepo:          memoryRepo,
-		tokenCounter:        tokenCounter,
-		logger:              logger,
-		InitThreshold:       10000,
-		UpdateThreshold:     5000,
-		MinToolCalls:        3,
-		noThinkingOptions:   noThinkingOptions,
+		chatModel:            chatModel,
+		memoryRepo:           memoryRepo,
+		tokenCounter:         tokenCounter,
+		logger:               logger,
+		InitThreshold:        10000,
+		UpdateThreshold:      5000,
+		MinToolCalls:         3,
+		noThinkingOptions:    noThinkingOptions,
 		tokenCallbackHandler: tokenCallbackHandler,
 	}
 }
@@ -471,9 +471,9 @@ func truncateString(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "..."
 }
 
-// estimateMemoryTokens 估算 token 数（重命名以避免与 summarize.go 中的 estimateTokens 冲突）
+// estimateMemoryTokens 估算 token 数（使用全局 TokenCounter）
 func estimateMemoryTokens(s string) int {
-	return len(s) / 4 // 4 chars per token
+	return turnagent.CountStringTokens(s)
 }
 
 func (e *SessionMemoryExtractor) log(ctx context.Context, event string, fields map[string]any) {
@@ -537,8 +537,8 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 			return total, nil
 		},
 		h.logger,
-		h.noThinkingOptions(),      // 禁用 thinking，节省 token
-		h.tokenCallbackHandler,     // 追踪 token 消耗到 Session.TotalTokens
+		h.noThinkingOptions(),  // 禁用 thinking，节省 token
+		h.tokenCallbackHandler, // 追踪 token 消耗到 Session.TotalTokens
 	)
 
 	// Load extraction state from session metadata (if available)
