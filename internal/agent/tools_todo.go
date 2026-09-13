@@ -70,13 +70,13 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	// 验证 todos
 	for i, todo := range args.Todos {
 		if todo.Content == "" {
-			return "", fmt.Errorf("todo[%d].content cannot be empty", i)
+			return "", fmt.Errorf("todo[%d].content is required but was empty. Ensure all required fields (content, status, active_form) are present with correct snake_case names", i)
 		}
 		if todo.ActiveForm == "" {
-			return "", fmt.Errorf("todo[%d].active_form cannot be empty", i)
+			return "", fmt.Errorf("todo[%d].active_form is required but was empty. Make sure you use 'active_form' (snake_case), not 'activeForm'", i)
 		}
 		if todo.Status != "pending" && todo.Status != "in_progress" && todo.Status != "completed" {
-			return "", fmt.Errorf("todo[%d].status must be pending|in_progress|completed", i)
+			return "", fmt.Errorf("todo[%d].status must be one of: pending, in_progress, completed. Got: %q", i, todo.Status)
 		}
 	}
 

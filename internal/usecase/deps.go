@@ -16,6 +16,7 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/callbacks"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -63,4 +64,10 @@ type Dependencies struct {
 	// injection, tool collection, and turn hooks for all registered
 	// commands (e.g., /goal, /persona).
 	CommandRegistry *command.CommandRegistry
+
+	// TokenCallbackHandler is the eino callback handler for recording LLM token
+	// usage. Set by agent.New() after construction. Background LLM calls
+	// (title summarization, memory extraction) inject this into their context
+	// via callbacks.InitCallbacks so token consumption is tracked to Session.TotalTokens.
+	TokenCallbackHandler callbacks.Handler
 }

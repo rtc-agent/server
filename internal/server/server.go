@@ -110,6 +110,7 @@ func (s *Server) Start() error {
 	handler := middleware.Chain(
 		middleware.CORS(s.cfg.CORS.AllowOrigins, isDev),
 		middleware.SecurityHeaders,
+		middleware.HTTPMetrics(),
 		middleware.RequestLogger,
 	)(mux)
 

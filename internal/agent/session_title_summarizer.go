@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/cloudwego/eino/callbacks"
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
@@ -19,6 +20,7 @@ import (
 	appmodel "github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"go.uber.org/zap"
 )
 
@@ -31,12 +33,13 @@ const maxConversationText = 1000
 
 // SessionTitleSummarizer 会话标题摘要生成器
 type SessionTitleSummarizer struct {
-	chatModel   einomodel.ToolCallingChatModel
-	sessionRepo repo.SessionRepo
-	messageRepo repo.MessageRepo
-	llmConfig   config.LLMConfig
-	maxMessages int // 用于生成摘要的最大消息数
-	maxTitleLen int // 标题最大长度（字符数）
+	chatModel            einomodel.ToolCallingChatModel
+	sessionRepo          repo.SessionRepo
+	messageRepo          repo.MessageRepo
+	llmConfig            config.LLMConfig
+	maxMessages          int // 用于生成摘要的最大消息数
+	maxTitleLen          int // 标题最大长度（字符数）
+	tokenCallbackHandler callbacks.Handler
 }
 
 // NewSessionTitleSummarizer 创建 SessionTitleSummarizer
@@ -45,14 +48,16 @@ func NewSessionTitleSummarizer(
 	sessionRepo repo.SessionRepo,
 	messageRepo repo.MessageRepo,
 	llmConfig config.LLMConfig,
+	tokenCallbackHandler callbacks.Handler,
 ) *SessionTitleSummarizer {
 	return &SessionTitleSummarizer{
-		chatModel:   chatModel,
-		sessionRepo: sessionRepo,
-		messageRepo: messageRepo,
-		llmConfig:   llmConfig,
-		maxMessages: 10,
-		maxTitleLen: 50,
+		chatModel:            chatModel,
+		sessionRepo:          sessionRepo,
+		messageRepo:          messageRepo,
+		llmConfig:            llmConfig,
+		maxMessages:          10,
+		maxTitleLen:          50,
+		tokenCallbackHandler: tokenCallbackHandler,
 	}
 }
 
@@ -78,6 +83,15 @@ func (s *SessionTitleSummarizer) noThinkingOptions() []einomodel.Option {
 // SummarizeIfNeeded 为指定会话生成并更新标题
 // 仅当会话标题仍以 "（" 开头（即初始截断标题）时才生成新标题
 func (s *SessionTitleSummarizer) SummarizeIfNeeded(ctx context.Context, sessionID uuid.UUID) (string, error) {
+	// Set sessionID in context so the token callback handler can find it.
+	ctx = turnagent.WithSessionID(ctx, sessionID.String())
+
+	// Initialize eino callbacks so the LLM call's token usage is recorded
+	// to Session.TotalTokens via the shared token callback handler.
+	if s.tokenCallbackHandler != nil {
+		ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{}, s.tokenCallbackHandler)
+	}
+
 	// 获取会话消息（最近的 N 条）
 	modelMessages, err := s.messageRepo.ListRecentBySession(ctx, sessionID, s.maxMessages)
 	if err != nil {

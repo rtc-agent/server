@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
+	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
-	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/google/uuid"
 
 	"github.com/rtc-agent/server/internal/usecase"
@@ -58,9 +58,9 @@ func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, 
 	}
 
 	h.logIfEnabled(context.Background(), "summarize.middleware_config", map[string]any{
-		"context_tokens_limit":      h.contextTokensLimit,
-		"auto_compact_buffer":       h.autoCompactBufferTokens,
-		"actual_trigger_threshold":  actualTriggerThreshold,
+		"context_tokens_limit":     h.contextTokensLimit,
+		"auto_compact_buffer":      h.autoCompactBufferTokens,
+		"actual_trigger_threshold": actualTriggerThreshold,
 	})
 
 	mw, err := turnagent.NewSummarizationMiddleware(&turnagent.SummarizationConfig{
@@ -100,9 +100,10 @@ func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, 
 //   - Otherwise, fall back to LLM summarization.
 //
 // Streaming flow:
-//   1. Create pending summary message (published to topic channel)
-//   2. During LLM streaming, publish chunks to live channel in real-time
-//   3. On completion, finalize message with metadata and publish to topic channel
+//  1. Create pending summary message (published to topic channel)
+//  2. During LLM streaming, publish chunks to live channel in real-time
+//  3. On completion, finalize message with metadata and publish to topic channel
+//
 // compressContext compresses the conversation context by summarizing older messages.
 //
 // If force is true, compression is performed regardless of token thresholds.
@@ -113,9 +114,9 @@ func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, 
 //   - Otherwise, fall back to LLM summarization.
 //
 // Streaming flow:
-//   1. Create pending summary message (published to topic channel)
-//   2. During LLM streaming, publish chunks to live channel in real-time
-//   3. On completion, finalize message with metadata and publish to topic channel
+//  1. Create pending summary message (published to topic channel)
+//  2. During LLM streaming, publish chunks to live channel in real-time
+//  3. On completion, finalize message with metadata and publish to topic channel
 func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, customInstruction *string, force bool) ([]*schema.Message, error) {
 	// For automatic compression (force=false), check thresholds
 	if !force {
@@ -655,6 +656,14 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 		"session_id": sessionID.String(),
 	})
 
+	// Note: we do NOT call tokenEstimator.Invalidate here.
+	// For manual compact: ReestimateAfterCompact handles cache management
+	// (it reads the pre-compact EWMA saved by processCompactWorker, adjusts by
+	// compression ratio, and writes a fresh estimate).
+	// For auto-compression: the token callback's Estimate call already wrote
+	// a new EWMA to cache. Deleting it here would lose that information and
+	// cause the next Estimate to fall back to defaultGrowth.
+
 	return nil
 }
 
@@ -810,4 +819,3 @@ func getSessionIDFromContext(ctx context.Context) uuid.UUID {
 	id, _ := ctx.Value(sessionIDKey{}).(uuid.UUID)
 	return id
 }
-

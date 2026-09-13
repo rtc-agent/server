@@ -78,7 +78,7 @@
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [{
         "expr": "http_in_flight_requests{job=\"rtc-agent-server\"}",
-        "legendFormat": "{{handler}}"
+        "legendFormat": "in-flight"
       }]
     }
   ],

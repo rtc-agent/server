@@ -18,6 +18,9 @@ log:
   # 启用后将完整 LLM 请求/响应写入 logs/llm-payload.log（JSON Lines）
   # 仅开发环境使用，生产环境请勿开启
   llm_payload: false
+  # 服务器日志文件路径（JSON 格式，用于 promtail 采集）
+  # 留空则不写文件。所有日志文件均使用 lumberjack 自动轮转（100MB/文件，保留 3 个，7 天，gzip 压缩）
+  server_log_file: "etc/dev/logs/server.log"
 
 auth:
   # JWT 签名密钥（开发环境示例值，生产环境请使用强随机字符串）
@@ -48,6 +51,15 @@ llm:
   # retry_max_attempts: 3  # 最大重试次数，0 表示不重试（默认）
   # retry_base_delay: 1s   # 重试基础退避时间，实际退避 = base_delay * 2^(attempt-1)
 
+  # 模型定价配置（可选，用于成本计算）
+  # 未配置时使用默认价格（Claude 3.5 Sonnet）
+  # pricing:
+  #   input_per_million: 3.0        # 正常 input token 价格（USD）
+  #   output_per_million: 15.0      # output token 价格（USD）
+  #   cached_read_per_million: 0.3  # cache read 价格（USD），通常为 input 的 10%
+  #   cached_write_per_million: 3.75 # cache write 价格（USD），通常为 input 的 125%
+  #   reasoning_per_million: 0.0    # reasoning token 价格（USD）
+
 # Worker 配置（开发环境）
 worker:
   system_prompt: |
@@ -73,7 +85,8 @@ worker:
     - You MUST call tools to perform actions. Do NOT claim you did something without actually calling the tool.
     - You MUST wait for tool responses before claiming success or failure.
     - NEVER pretend to execute a task. If you need to run a script, you MUST call the script tool.
-    - If a tool call fails, report the actual error to the user. Do not hide failures.
+    - If a tool call fails due to parameter errors (e.g., missing fields, invalid values), you MUST fix the parameters and retry the tool call. Do NOT report parameter errors to the user — fix them yourself.
+    - Only report to the user if the error is unrecoverable (e.g., permission denied, resource not found, network failure).
     - Only say "done" or "completed" AFTER the tool confirms success.
 
     Language:

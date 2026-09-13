@@ -43,3 +43,20 @@ func DerefUpdates(src []*protocol.Update) *[]protocol.Update {
 	}
 	return &out
 }
+
+// enrichSessionWithTokenEstimate 从 Session 模型的持久化 EWMA 计算预估字段，
+// 填充 protocol.Session 的预估字段。
+// threshold 为压缩触发阈值（contextTokensLimit - autoCompactBufferTokens）。
+func enrichSessionWithTokenEstimate(ps *protocol.Session, session *model.Session, threshold int64) {
+	if session == nil || threshold <= 0 {
+		return
+	}
+	estimate := session.ComputeTokenEstimate(threshold)
+	if estimate == nil {
+		return
+	}
+	ps.CompressionThreshold = &estimate.CompressionThreshold
+	ps.CompressionProgress = &estimate.CompressionProgress
+	ps.RoundsUntilCompression = &estimate.RoundsUntilCompression
+	ps.EstimatedNextRoundTokens = &estimate.EstimatedNextRound
+}

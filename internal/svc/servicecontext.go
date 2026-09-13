@@ -77,6 +77,17 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	// 创建 UpdatePublisher（需要先创建 repos）
 	updatePublisher := updates.NewUpdatePublisher(db, rdb, sessionRepo, messageRepo, turnRepo, rtcRepo)
 
+	// 设置压缩触发阈值（用于计算 Token 预估字段）
+	contextLimit := cfg.Worker.ContextTokensLimit
+	if contextLimit <= 0 {
+		contextLimit = 25000
+	}
+	compactBuffer := cfg.Worker.AutoCompactBufferTokens
+	if compactBuffer <= 0 {
+		compactBuffer = 13000
+	}
+	updatePublisher.SetCompressionThreshold(int64(contextLimit - compactBuffer))
+
 	jwtSigner, err := auth.NewJWTSigner(
 		cfg.Auth.JWTSecret,
 		time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second,
@@ -147,6 +158,17 @@ func NewServiceContextWithDeps(
 ) *ServiceContext {
 	// 注入 broker 到 UpdatePublisher（解决循环依赖）
 	updatePublisher.SetBroker(broker)
+
+	// 设置压缩触发阈值（用于计算 Token 预估字段）
+	contextLimit := cfg.Worker.ContextTokensLimit
+	if contextLimit <= 0 {
+		contextLimit = 25000
+	}
+	compactBuffer := cfg.Worker.AutoCompactBufferTokens
+	if compactBuffer <= 0 {
+		compactBuffer = 13000
+	}
+	updatePublisher.SetCompressionThreshold(int64(contextLimit - compactBuffer))
 
 	return &ServiceContext{
 		Config:            cfg,

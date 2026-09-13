@@ -178,8 +178,10 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	// Wrap all tools with error handler: convert tool errors to string results
 	// so the LLM can see error messages and self-correct, instead of terminating
 	// the entire turn with NodeRunError. Interrupt errors are preserved (not wrapped).
+	// Use <error> XML tags to clearly delimit the error, following Claude Code's
+	// convention — this helps the LLM distinguish errors from normal output.
 	errorHandler := func(ctx context.Context, err error) string {
-		return fmt.Sprintf("Error: %s. Please adjust your arguments and try again.", err.Error())
+		return fmt.Sprintf("<error>%s</error>", err.Error())
 	}
 	wrappedTools := make([]tool.BaseTool, len(tools))
 	for i, t := range tools {

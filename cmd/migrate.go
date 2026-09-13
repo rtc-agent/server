@@ -33,7 +33,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	logger.Init(cfg.Log.Level)
+	logger.Init(cfg.Log.Level, cfg.Log.ServerLogFile)
 	defer logger.Sync()
 
 	logger.Info(context.Background(), "Running database migration...")

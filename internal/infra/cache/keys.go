@@ -155,6 +155,9 @@ const (
 	// field: RTC ID, value: InterruptID (tool_call_id)；TTL: 10 分钟
 	// 用途：存储 RTC ID 到 eino InterruptID 的映射，供 GenResume 构建 Targets
 	PrefixRtcBatchInterruptMap = "rtc:batch:interrupt_map:"
+
+	// ========== Token 预估相关前缀 ==========
+	// 注：Token 预估数据已迁移至 Session 表持久化，不再使用 Redis 缓存。
 )
 
 // ========== 构造函数 ==========
@@ -285,3 +288,7 @@ func RtcBatchResults(turnID string) string {
 func RtcBatchInterruptMap(turnID string) string {
 	return PrefixRtcBatchInterruptMap + turnID
 }
+
+// ========== Token 预估 ==========
+// 注：Token 预估数据已迁移至 Session 表持久化，不再使用 Redis 缓存。
+// 原 TokenEstimate() 函数已删除。

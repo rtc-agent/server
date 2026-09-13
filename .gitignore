@@ -36,3 +36,7 @@ logs/
 .env
 .env.local
 etc/config.local.yaml
+
+# FRP (local dev only)
+docker-compose.frp.yml
+frpc.toml

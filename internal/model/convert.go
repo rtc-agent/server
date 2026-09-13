@@ -18,3 +18,6 @@ func DerefStr(s *string) string {
 
 // strPtr 是 StrPtr 的别名，保留供包内使用。
 func strPtr(s string) *string { return StrPtr(s) }
+
+// ptrTo 返回指向 v 的指针（泛型版本）
+func ptrTo[T any](v T) *T { return &v }

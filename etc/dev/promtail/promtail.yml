@@ -27,3 +27,21 @@ scrape_configs:
         target_label: "service"
     pipeline_stages:
       - docker: {}
+
+  # Collect logs from host-mounted log directory (for app server running on host)
+  - job_name: host_logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: "rtc-agent-server"
+          container: "rtc-agent-server"
+          service: "server"
+          __path__: /var/log/rtc-agent/*.log
+    pipeline_stages:
+      - json:
+          expressions:
+            level: level
+            msg: msg
+      - labels:
+          level:

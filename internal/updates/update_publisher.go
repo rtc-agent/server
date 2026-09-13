@@ -52,12 +52,13 @@ type StreamStoreAccessor interface {
 // UpdatePublisher 用户更新发布器
 // 负责将实体变化事件保存到数据库（Topic 频道）并通过 Centrifuge 推送给客户端
 type UpdatePublisher struct {
-	db          *gorm.DB
-	redis       redis.UniversalClient
-	mu          sync.RWMutex // 保护 broker 和 streamStore 的并发读写
-	broker      Broker
-	resolvers   map[string]EntityResolver
-	streamStore StreamStoreAccessor // 可选：用于读取 streaming 状态消息的 chunks
+	db                   *gorm.DB
+	redis                redis.UniversalClient
+	mu                   sync.RWMutex // 保护 broker 和 streamStore 的并发读写
+	broker               Broker
+	resolvers            map[string]EntityResolver
+	streamStore          StreamStoreAccessor // 可选：用于读取 streaming 状态消息的 chunks
+	compressionThreshold int64               // 压缩触发阈值，用于计算 Token 预估字段
 }
 
 // NewUpdatePublisher 创建 UpdatePublisher
@@ -83,7 +84,10 @@ func NewUpdatePublisher(
 		}
 		result := make(map[uuid.UUID]any, len(sessions))
 		for id, s := range sessions {
-			result[id] = toProtocolSession(s)
+			ps := toProtocolSession(s)
+			// 从 Session 持久化的 EWMA 计算 Token 预估字段
+			enrichSessionWithTokenEstimate(&ps, s, u.compressionThreshold)
+			result[id] = ps
 		}
 		return result, nil
 	}
@@ -216,6 +220,12 @@ func (u *UpdatePublisher) SetStreamStore(s StreamStoreAccessor) {
 	u.mu.Lock()
 	u.streamStore = s
 	u.mu.Unlock()
+}
+
+// SetCompressionThreshold 设置压缩触发阈值（contextTokensLimit - autoCompactBufferTokens）。
+// 用于计算 Token 预估字段（compression_progress, rounds_until_compression, estimated_next_round_tokens）。
+func (u *UpdatePublisher) SetCompressionThreshold(threshold int64) {
+	u.compressionThreshold = threshold
 }
 
 // ResolveMessageContent 返回消息的完整内容（JSON 字符串）。

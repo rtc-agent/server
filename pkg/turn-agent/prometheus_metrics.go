@@ -160,6 +160,12 @@ func (m *PrometheusMetrics) RecordLLMCall(ctx context.Context, attrs LLMCallMetr
 
 	m.llmTokens.WithLabelValues(attrs.Model, "input").Add(float64(attrs.InputTokens))
 	m.llmTokens.WithLabelValues(attrs.Model, "output").Add(float64(attrs.OutputTokens))
+	if attrs.CachedTokens > 0 {
+		m.llmTokens.WithLabelValues(attrs.Model, "cached").Add(float64(attrs.CachedTokens))
+	}
+	if attrs.ReasoningTokens > 0 {
+		m.llmTokens.WithLabelValues(attrs.Model, "reasoning").Add(float64(attrs.ReasoningTokens))
+	}
 	m.llmLatency.WithLabelValues(attrs.Model, status).Observe(float64(attrs.LatencyMs) / 1000)
 }
 

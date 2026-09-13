@@ -71,6 +71,7 @@ services:
       - ./promtail/promtail.yml:/etc/promtail/config.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - promtail-positions:/tmp
+      - ./logs:/var/log/rtc-agent:ro
     depends_on:
       - loki
     restart: unless-stopped

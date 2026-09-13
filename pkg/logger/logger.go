@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var log = zap.NewNop()
@@ -22,7 +23,8 @@ var DebugMode bool
 // 除 cfg.Level 外，还会检查环境变量 DEBUG：
 //   - DEBUG=true / DEBUG=1 → 启用 DebugMode，额外输出到 logs/debug.log（console 编码）
 //   - 其他值 → 仅使用 cfg.Level 配置
-func Init(level string) {
+// serverLogFile 如果非空，会额外输出 JSON 格式日志到该文件（用于 promtail 采集）。
+func Init(level string, serverLogFile ...string) {
 	var zapLevel zapcore.Level
 	switch level {
 	case "debug":
@@ -78,18 +80,49 @@ func Init(level string) {
 		consoleEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 		consoleEncoder := zapcore.NewConsoleEncoder(consoleEncoderConfig)
 
-		// 文件 core：Debug 级别，输出到 logs/debug.log
-		debugFile, fileErr := os.OpenFile("logs/debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if fileErr == nil {
-			fileCore := zapcore.NewCore(
-				consoleEncoder,
-				zapcore.AddSync(debugFile),
-				zapcore.DebugLevel,
-			)
-
-			// 将 stdout (JSON) 和 file (console) 合并为 Tee
-			l = zap.New(zapcore.NewTee(l.Core(), fileCore))
+		// lumberjack 轮转 writer：100MB/文件，保留 3 个旧文件，最多 7 天，gzip 压缩
+		debugLJ := &lumberjack.Logger{
+			Filename:   "logs/debug.log",
+			MaxSize:    100, // MB
+			MaxBackups: 3,
+			MaxAge:     7,   // days
+			Compress:   true,
 		}
+
+		// 文件 core：Debug 级别，输出到 logs/debug.log
+		fileCore := zapcore.NewCore(
+			consoleEncoder,
+			zapcore.AddSync(debugLJ),
+			zapcore.DebugLevel,
+		)
+
+		// 将 stdout (JSON) 和 file (console) 合并为 Tee
+		l = zap.New(zapcore.NewTee(l.Core(), fileCore))
+	}
+
+	// 服务器日志文件（JSON 格式，用于 promtail 采集）
+	if len(serverLogFile) > 0 && serverLogFile[0] != "" {
+		logPath := serverLogFile[0]
+		// 确保目录存在
+		if dir := logPath[:strings.LastIndex(logPath, "/")]; dir != "" {
+			_ = os.MkdirAll(dir, 0o755)
+		}
+		// lumberjack 轮转 writer：100MB/文件，保留 3 个旧文件，最多 7 天，gzip 压缩
+		serverLJ := &lumberjack.Logger{
+			Filename:   logPath,
+			MaxSize:    100, // MB
+			MaxBackups: 3,
+			MaxAge:     7,   // days
+			Compress:   true,
+		}
+		// JSON 编码器（与 stdout 相同）
+		jsonEncoder := zapcore.NewJSONEncoder(encoderConfig)
+		fileCore := zapcore.NewCore(
+			jsonEncoder,
+			zapcore.AddSync(serverLJ),
+			zapLevel,
+		)
+		l = zap.New(zapcore.NewTee(l.Core(), fileCore))
 	}
 
 	log = l

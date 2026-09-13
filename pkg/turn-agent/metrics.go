@@ -103,6 +103,10 @@ type LLMCallMetricsAttrs struct {
 	OutputTokens int
 	// TotalTokens is the total tokens used (InputTokens + OutputTokens).
 	TotalTokens int
+	// CachedTokens is the number of tokens read from cache (cache hit).
+	CachedTokens int
+	// ReasoningTokens is the number of tokens used for reasoning (thinking).
+	ReasoningTokens int
 	// LatencyMs is the API call latency in milliseconds.
 	LatencyMs int64
 	// Error is set if the call failed (nil for success).

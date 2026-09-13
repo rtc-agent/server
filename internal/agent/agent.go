@@ -89,6 +89,12 @@ type Config struct {
 	// If <= 0, defaults to 13000.
 	AutoCompactBufferTokens int
 
+	// CacheHitRateWarnThreshold is the cache hit rate warning threshold.
+	// Session cumulative cache hit rate = TotalCachedReadTokens / (TotalCachedReadTokens + TotalInputTokens).
+	// When below this threshold, a warn log is emitted. Negative value disables the alert.
+	// If 0 (not set), defaults to 0.88 (88%).
+	CacheHitRateWarnThreshold float64
+
 	// MaxOutputTokensForSummary is the maximum output tokens for summarization.
 	// If <= 0, defaults to 20000.
 	MaxOutputTokensForSummary int
@@ -121,6 +127,10 @@ type Config struct {
 	// If <= 0, defaults to 10000 (≈40KB). This prevents oversized tool outputs
 	// from consuming excessive context space.
 	ToolResultBudgetMaxTokens int
+
+	// ModelPricing 模型定价配置（可选，用于成本计算）
+	// 未配置时使用默认价格（Claude 3.5 Sonnet）
+	ModelPricing *ModelPricingConfig
 }
 
 // New constructs a *turnagent.Agent with all callbacks wired to the
@@ -156,6 +166,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		metrics:                   cfg.Metrics,
 		contextTokensLimit:        cfg.ContextTokensLimit,
 		autoCompactBufferTokens:   cfg.AutoCompactBufferTokens,
+		cacheHitRateWarnThreshold: cfg.CacheHitRateWarnThreshold,
 		maxOutputTokensForSummary: cfg.MaxOutputTokensForSummary,
 		enableLLMLogging:          cfg.EnableLLMLogging,
 		streamChunkTTL:            defaultStreamChunkTTL(cfg.StreamChunkTTL),
@@ -170,6 +181,10 @@ func New(cfg Config) (*turnagent.Agent, error) {
 	if h.autoCompactBufferTokens <= 0 {
 		h.autoCompactBufferTokens = 13000
 	}
+	// Default cache hit rate threshold: 88%. Negative disables the alert.
+	if h.cacheHitRateWarnThreshold == 0 {
+		h.cacheHitRateWarnThreshold = 0.88
+	}
 	if h.maxOutputTokensForSummary <= 0 {
 		h.maxOutputTokensForSummary = 20000
 	}
@@ -182,6 +197,11 @@ func New(cfg Config) (*turnagent.Agent, error) {
 	if h.toolResultBudgetMaxTokens <= 0 {
 		h.toolResultBudgetMaxTokens = DefaultToolResultMaxTokens
 	}
+
+	// Token 预估相关初始化
+	h.tokenEstimator = NewTokenEstimator(h.contextTokensLimit, h.autoCompactBufferTokens, cfg.Deps.SessionRepo)
+	h.tokenUpdateThrottle = NewThrottle(500 * time.Millisecond)
+	h.modelPricing = NewModelPricing(cfg.ModelPricing)
 
 	// Register built-in slash commands into the command registry.
 	// GoalWorkflow closes over helpers (for DB/queue access and tool construction).
@@ -217,6 +237,15 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		return nil, fmt.Errorf("agent: build summarization middleware: %w", err)
 	}
 	h.summarizeMW = summarizeMW
+
+	// Build the token usage callback handler once and store it on helpers.
+	// This allows the compact flow (which bypasses the turn loop) to initialize
+	// the same callbacks in its context, so compact's LLM calls are tracked.
+	h.tokenCallbackHandler = h.newTokenUsageCallbackHandler()
+
+	// Share the token callback handler with the RPC layer so background LLM calls
+	// (title summarization, session memory extraction) can also track token usage.
+	cfg.Deps.TokenCallbackHandler = h.tokenCallbackHandler
 
 	// Build the turnagent.Config with all callbacks.
 	taCfg := turnagent.Config{
@@ -258,8 +287,9 @@ func New(cfg Config) (*turnagent.Agent, error) {
 
 		// eino Callbacks — the token usage handler records metrics and logs
 		// for every ChatModel call (including summarizeMessages).
+		// Uses the handler stored on helpers so the compact flow can reuse it.
 		Callbacks: []callbacks.Handler{
-			newTokenUsageCallbackHandler(cfg.Metrics, cfg.Logger),
+			h.tokenCallbackHandler,
 		},
 
 		// Observability
@@ -274,7 +304,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		},
 
 		// Reactive compact — recover from prompt too long errors
-		RecoverFromPromptTooLong: h.recoverFromPromptTooLong,
+		RecoverFromPromptTooLong:   h.recoverFromPromptTooLong,
 		MaxReactiveCompactAttempts: 3,
 
 		// Explicit compact — process compact work items
@@ -300,12 +330,18 @@ type helpers struct {
 	metrics                   turnagent.Metrics
 	contextTokensLimit        int
 	autoCompactBufferTokens   int
+	cacheHitRateWarnThreshold float64
 	maxOutputTokensForSummary int
 	enableLLMLogging          bool
 	streamChunkTTL            time.Duration
 	microcompactGapMinutes    int
 	microcompactKeepRecent    int
 	toolResultBudgetMaxTokens int
+
+	// Token 预估相关
+	tokenEstimator      *TokenEstimator
+	tokenUpdateThrottle *Throttle
+	modelPricing        ModelPricing
 
 	// summarizeMW is the summarization middleware, created once in New().
 	// Stored on helpers so CreateAgent can close over it without capturing
@@ -331,6 +367,11 @@ type helpers struct {
 	// Key: sessionID (string), Value: summaryMsgID (string).
 	// Concurrent-safe since compressions are sequential per session.
 	persistedSummaryMsgIDs sync.Map
+
+	// tokenCallbackHandler is the eino callback handler for recording LLM token
+	// usage. Stored on helpers so it can be reused by the compact flow (which
+	// bypasses the turn loop and must initialize callbacks itself).
+	tokenCallbackHandler callbacks.Handler
 }
 
 // defaultCheckpointTTL returns the configured checkpoint TTL, defaulting to 24h.

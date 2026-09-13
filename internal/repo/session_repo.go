@@ -31,6 +31,25 @@ type SessionRepo interface {
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Session, error)
 	// ListByRoot 按 root_server_session_id 查询所有子孙会话，按指定 status 过滤，排除 root 自身。
 	ListByRoot(ctx context.Context, rootServerSessionID uuid.UUID, status string) ([]*model.Session, error)
+	// AtomicAddTokenUsage 原子累加 Session 的 token 使用统计
+	AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UUID, delta TokenUsageDelta) error
+	// AtomicUpdateEWMA 原子更新 Session 的 token 预估 EWMA 值
+	AtomicUpdateEWMA(ctx context.Context, sessionID uuid.UUID, ewma float64) error
+}
+
+// TokenUsageDelta Token 使用增量
+type TokenUsageDelta struct {
+	InputDelta       int64
+	OutputDelta      int64
+	TotalDelta       int64
+	CachedReadDelta  int64
+	CachedWriteDelta int64
+	ReasoningDelta   int64
+	CostMicrosDelta  int64
+
+	// SetEWMA 如果 > 0，原子设置 token_estimate_ewma 为该值。
+	// 用于 TokenEstimator 在每次 LLM 调用后更新持久化的 EWMA。
+	SetEWMA float64
 }
 
 type sessionRepo struct {
@@ -188,4 +207,42 @@ func (r *sessionRepo) ListByRoot(ctx context.Context, rootServerSessionID uuid.U
 		return nil, fmt.Errorf("list sessions by root %s: %w", rootServerSessionID, err)
 	}
 	return sessions, nil
+}
+
+func (r *sessionRepo) AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UUID, delta TokenUsageDelta) error {
+	updates := map[string]interface{}{
+		"total_input_tokens":        gorm.Expr("total_input_tokens + ?", delta.InputDelta),
+		"total_output_tokens":       gorm.Expr("total_output_tokens + ?", delta.OutputDelta),
+		"total_tokens":              gorm.Expr("total_tokens + ?", delta.TotalDelta),
+		"total_cached_read_tokens":  gorm.Expr("total_cached_read_tokens + ?", delta.CachedReadDelta),
+		"total_cached_write_tokens": gorm.Expr("total_cached_write_tokens + ?", delta.CachedWriteDelta),
+		"total_reasoning_tokens":    gorm.Expr("total_reasoning_tokens + ?", delta.ReasoningDelta),
+		"total_cost_micros":         gorm.Expr("total_cost_micros + ?", delta.CostMicrosDelta),
+		"last_token_update_at":      time.Now(),
+	}
+	if delta.SetEWMA > 0 {
+		updates["token_estimate_ewma"] = delta.SetEWMA
+	}
+	result := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.Session{}).
+		Where("id = ? AND status != ?", sessionID, model.SessionStatusClosed).
+		Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("atomic add token usage for session %s: %w", sessionID, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("session %s not found or closed: %w", sessionID, ErrSessionClosedOrNotFound)
+	}
+	return nil
+}
+
+func (r *sessionRepo) AtomicUpdateEWMA(ctx context.Context, sessionID uuid.UUID, ewma float64) error {
+	result := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.Session{}).
+		Where("id = ?", sessionID).
+		Update("token_estimate_ewma", ewma)
+	if result.Error != nil {
+		return fmt.Errorf("atomic update ewma for session %s: %w", sessionID, result.Error)
+	}
+	return nil
 }

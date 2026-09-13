@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -72,5 +73,33 @@ func (h *helpers) batchLifecyclePublish(ctx context.Context, turnID uuid.UUID, s
 			"action":     action,
 			"error":      err.Error(),
 		})
+	}
+}
+
+// publishSessionUpdate publishes session field updates to the frontend.
+// Used by background LLM calls (compact, title summarizer, memory extractor)
+// to notify the frontend about token/session changes.
+//
+// If throttled is true and a throttle is configured, the publish is throttled
+// by sessionID to avoid event storms during rapid LLM calls.
+func (h *helpers) publishSessionUpdate(ctx context.Context, session *model.Session, throttled bool) {
+	if session == nil || h.deps.UpdatePublisher == nil {
+		return
+	}
+
+	doPublish := func() {
+		updates := primitives.BuildSessionUpdateUpdates(session)
+		if _, err := h.deps.UpdatePublisher.Publish(ctx, updates...); err != nil {
+			h.logIfEnabled(ctx, "publishSessionUpdate.failed", map[string]any{
+				"session_id": session.ID,
+				"error":      err.Error(),
+			})
+		}
+	}
+
+	if throttled && h.tokenUpdateThrottle != nil {
+		h.tokenUpdateThrottle.Do(session.ID.String(), doPublish)
+	} else {
+		doPublish()
 	}
 }

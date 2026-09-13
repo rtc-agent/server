@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/callbacks"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
@@ -35,12 +36,15 @@ type SessionMemoryExtractor struct {
 	logger       turnagent.Logger
 
 	// 配置
-	InitThreshold   int // 初始化阈值，默认 10000
+	InitThreshold int // 初始化阈值，默认 10000
 	UpdateThreshold int // 更新阈值，默认 5000
 	MinToolCalls    int // 最小 tool call 数量，默认 3
 
 	// noThinkingOptions 禁用 thinking 的选项（压缩任务不需要推理）
 	noThinkingOptions []einomodel.Option
+
+	// tokenCallbackHandler 用于追踪 LLM 调用的 token 消耗
+	tokenCallbackHandler callbacks.Handler
 }
 
 // NewSessionMemoryExtractor 创建 SessionMemoryExtractor
@@ -50,16 +54,18 @@ func NewSessionMemoryExtractor(
 	tokenCounter turnagent.TokenCounterFunc,
 	logger turnagent.Logger,
 	noThinkingOptions []einomodel.Option,
+	tokenCallbackHandler callbacks.Handler,
 ) *SessionMemoryExtractor {
 	return &SessionMemoryExtractor{
-		chatModel:         chatModel,
-		memoryRepo:        memoryRepo,
-		tokenCounter:      tokenCounter,
-		logger:            logger,
-		InitThreshold:     10000,
-		UpdateThreshold:   5000,
-		MinToolCalls:      3,
-		noThinkingOptions: noThinkingOptions,
+		chatModel:           chatModel,
+		memoryRepo:          memoryRepo,
+		tokenCounter:        tokenCounter,
+		logger:              logger,
+		InitThreshold:       10000,
+		UpdateThreshold:     5000,
+		MinToolCalls:        3,
+		noThinkingOptions:   noThinkingOptions,
+		tokenCallbackHandler: tokenCallbackHandler,
 	}
 }
 
@@ -191,6 +197,16 @@ func (e *SessionMemoryExtractor) extractMemories(
 	messages []*schema.Message,
 	existingMemories []*model.SessionMemory,
 ) ([]*model.SessionMemory, error) {
+	// Set sessionID in context (may already be set by caller, but ensure it's there
+	// for the token callback handler to find).
+	ctx = turnagent.WithSessionID(ctx, sessionID.String())
+
+	// Initialize eino callbacks so the LLM call's token usage is recorded
+	// to Session.TotalTokens via the shared token callback handler.
+	if e.tokenCallbackHandler != nil {
+		ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{}, e.tokenCallbackHandler)
+	}
+
 	// 构建 tool
 	extractTool := &saveSessionMemoriesTool{sessionID: sessionID}
 	toolInfo, err := extractTool.Info(ctx)
@@ -521,7 +537,8 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 			return total, nil
 		},
 		h.logger,
-		h.noThinkingOptions(), // 禁用 thinking，节省 token
+		h.noThinkingOptions(),      // 禁用 thinking，节省 token
+		h.tokenCallbackHandler,     // 追踪 token 消耗到 Session.TotalTokens
 	)
 
 	// Load extraction state from session metadata (if available)

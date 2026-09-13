@@ -173,7 +173,8 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 			h.deps.Deps.ChatModel,
 			h.deps.Deps.SessionRepo,
 			h.deps.Deps.MessageRepo,
-				h.deps.Deps.LLMConfig,
+			h.deps.Deps.LLMConfig,
+			h.deps.Deps.TokenCallbackHandler,
 		)
 		// Use a detached context so the summarization continues even if the
 		// request context is cancelled. Set a reasonable timeout.

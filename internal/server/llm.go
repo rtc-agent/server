@@ -59,10 +59,11 @@ func newClaudeModel(ctx context.Context, cfg *config.LLMConfig, httpClient *http
 	}
 
 	claudeCfg := &claude.Config{
-		APIKey:         cfg.APIKey,
-		Model:          cfg.Model,
-		MaxTokens:      cfg.MaxTokens,
-		ThinkingConfig: new(anthropic.ThinkingConfigParamOfEnabled(cfg.ThinkingBudgetTokens)),
+		APIKey:           cfg.APIKey,
+		Model:            cfg.Model,
+		MaxTokens:        cfg.MaxTokens,
+		ThinkingConfig:   new(anthropic.ThinkingConfigParamOfEnabled(cfg.ThinkingBudgetTokens)),
+		AutoCacheControl: &claude.CacheControl{}, // 启用 Anthropic prompt caching，降低 60-80% 成本
 	}
 
 	// BaseURL 可选

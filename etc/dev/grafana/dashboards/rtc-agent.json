@@ -125,6 +125,24 @@
       }]
     },
     {
+      "title": "Token 消耗明细 (5 维度)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 38 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "input" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] },
+        { "matcher": { "id": "byName", "options": "output" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+        { "matcher": { "id": "byName", "options": "cached" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+        { "matcher": { "id": "byName", "options": "reasoning" }, "properties": [{ "id": "color", "value": { "fixedColor": "purple", "mode": "fixed" } }] }
+      ] },
+      "targets": [
+        { "expr": "sum by (type) (rtc_llm_tokens_total{job=\"rtc-agent-server\",type=\"input\"})", "legendFormat": "input" },
+        { "expr": "sum by (type) (rtc_llm_tokens_total{job=\"rtc-agent-server\",type=\"output\"})", "legendFormat": "output" },
+        { "expr": "sum by (type) (rtc_llm_tokens_total{job=\"rtc-agent-server\",type=\"cached\"})", "legendFormat": "cached" },
+        { "expr": "sum by (type) (rtc_llm_tokens_total{job=\"rtc-agent-server\",type=\"reasoning\"})", "legendFormat": "reasoning" }
+      ]
+    },
+    {
       "type": "row",
       "title": "Turn 执行",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },

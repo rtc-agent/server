@@ -26,7 +26,7 @@ auth:
 
 providers:
   mock:
-    enabled: true
+    enabled: false
     url: "http://192.168.31.60:20060"
     client_id: "test-client"
     client_secret: "test-client-secret"
@@ -43,6 +43,15 @@ llm:
   max_tokens: 131072
   retry_max_attempts: 10
   retry_base_delay: 1s
+
+  # 模型定价配置（可选，用于成本计算）
+  # 未配置时使用默认价格（Claude 3.5 Sonnet）
+  # pricing:
+  #   input_per_million: 3.0        # 正常 input token 价格（USD）
+  #   output_per_million: 15.0      # output token 价格（USD）
+  #   cached_read_per_million: 0.3  # cache read 价格（USD），通常为 input 的 10%
+  #   cached_write_per_million: 3.75 # cache write 价格（USD），通常为 input 的 125%
+  #   reasoning_per_million: 0.0    # reasoning token 价格（USD）
 
 # Worker 配置（从 config.local.yaml 同步）
 worker:

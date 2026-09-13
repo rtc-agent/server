@@ -773,14 +773,29 @@ type Session struct {
 	ClientId *string `json:"client_id,omitempty"`
 
 	// ClosedAt 关闭时间
-	ClosedAt  *time.Time `json:"closed_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
+	ClosedAt *time.Time `json:"closed_at,omitempty"`
+
+	// CompressionProgress 压缩进度 (0-100)，后端实时计算
+	CompressionProgress *float64 `json:"compression_progress,omitempty"`
+
+	// CompressionThreshold 压缩触发阈值（contextTokensLimit - autoCompactBufferTokens），前端用于计算圆环进度
+	CompressionThreshold *int64    `json:"compression_threshold,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
 
 	// DeletedAt 软删除时间
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 
+	// DeviceId 创建此 Session 的设备 ID（来自 JWT Token），用于前端判断 RTC 请求归属
+	DeviceId *string `json:"device_id,omitempty"`
+
+	// EstimatedNextRoundTokens 预估下一轮 token 数
+	EstimatedNextRoundTokens *int64 `json:"estimated_next_round_tokens,omitempty"`
+
 	// Id protocol 内 UUID 类型，JSON 线上为字符串
 	Id UUID `json:"id"`
+
+	// LastTokenUpdateAt 最后一次 token 统计更新时间
+	LastTokenUpdateAt *time.Time `json:"last_token_update_at,omitempty"`
 
 	// OwnerKind 所有者类型（user / system）
 	OwnerKind string `json:"owner_kind"`
@@ -794,8 +809,11 @@ type Session struct {
 	RootClientSessionId   *string `json:"root_client_session_id,omitempty"`
 
 	// RootServerSessionId protocol 内 UUID 类型，JSON 线上为字符串
-	RootServerSessionId *UUID         `json:"root_server_session_id,omitempty"`
-	Status              SessionStatus `json:"status"`
+	RootServerSessionId *UUID `json:"root_server_session_id,omitempty"`
+
+	// RoundsUntilCompression 距离压缩的轮次（-1 表示已超过阈值）
+	RoundsUntilCompression *int          `json:"rounds_until_compression,omitempty"`
+	Status                 SessionStatus `json:"status"`
 
 	// SubAgentParentMessageId protocol 内 UUID 类型，JSON 线上为字符串
 	SubAgentParentMessageId *UUID `json:"sub_agent_parent_message_id,omitempty"`
@@ -804,8 +822,29 @@ type Session struct {
 	Title *string `json:"title,omitempty"`
 
 	// TodoList 会话任务列表（对齐 Claude Code 的 TodoWrite 工具）
-	TodoList  *[]TodoItem `json:"todo_list,omitempty"`
-	UpdatedAt time.Time   `json:"updated_at"`
+	TodoList *[]TodoItem `json:"todo_list,omitempty"`
+
+	// TotalCachedReadTokens 累计缓存读取 token 数
+	TotalCachedReadTokens *int64 `json:"total_cached_read_tokens,omitempty"`
+
+	// TotalCachedWriteTokens 累计缓存写入 token 数
+	TotalCachedWriteTokens *int64 `json:"total_cached_write_tokens,omitempty"`
+
+	// TotalCostUsd 累计成本（美元）
+	TotalCostUsd *float64 `json:"total_cost_usd,omitempty"`
+
+	// TotalInputTokens 累计纯输入 token 数（不含 cached read/write）
+	TotalInputTokens *int64 `json:"total_input_tokens,omitempty"`
+
+	// TotalOutputTokens 累计输出 token 数
+	TotalOutputTokens *int64 `json:"total_output_tokens,omitempty"`
+
+	// TotalReasoningTokens 累计推理 token 数
+	TotalReasoningTokens *int64 `json:"total_reasoning_tokens,omitempty"`
+
+	// TotalTokens 累计总 token 数（包含所有类型）
+	TotalTokens *int64    `json:"total_tokens,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // SessionStatus defines model for SessionStatus.

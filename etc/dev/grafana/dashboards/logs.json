@@ -14,7 +14,7 @@
       "datasource": { "type": "loki", "uid": "loki" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [{
-        "expr": "sum by (service) (rate({service_name=\"rtc-agent\"}[$__interval]))",
+        "expr": "sum by (service) (rate({container=~\"rtc-full-.*\"}[$__interval]))",
         "legendFormat": "{{service}}"
       }]
     },
@@ -34,12 +34,12 @@
         "dedupStrategy": "none"
       },
       "targets": [{
-        "expr": "{service_name=\"rtc-agent\"} |= \"level=error\"",
+        "expr": "{container=~\"rtc-full-.*\"} |= \"error\"",
         "legendFormat": ""
       }]
     },
     {
-      "title": "RTC Agent Server 日志",
+      "title": "RTC Agent Server 日志 (Host)",
       "type": "logs",
       "gridPos": { "h": 12, "w": 24, "x": 0, "y": 16 },
       "datasource": { "type": "loki", "uid": "loki" },
@@ -54,7 +54,7 @@
         "dedupStrategy": "none"
       },
       "targets": [{
-        "expr": "{service=\"rtc-agent-server\"}",
+        "expr": "{container=~\"rtc-full-server-.*\"}",
         "legendFormat": ""
       }]
     },
@@ -74,7 +74,7 @@
         "dedupStrategy": "none"
       },
       "targets": [{
-        "expr": "{container=~\"rtc-agent-.*\"}",
+        "expr": "{container=~\"rtc-full-.*\"}",
         "legendFormat": ""
       }]
     }

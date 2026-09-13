@@ -58,6 +58,11 @@ type LogConfig struct {
 	// 以 JSON Lines 格式写入 logs/llm-payload.log。
 	// 仅用于开发/调试环境，生产环境请勿开启。
 	LLMPayload bool `mapstructure:"llm_payload"`
+
+	// ServerLogFile 服务器日志文件路径（JSON 格式）。
+	// 设置后，所有日志会同时输出到 stdout 和该文件。
+	// 用于开发环境 promtail 采集宿主机日志。留空则不写文件。
+	ServerLogFile string `mapstructure:"server_log_file"`
 }
 
 // RedisConfig Redis 连接配置
@@ -77,10 +82,10 @@ type AuthConfig struct {
 
 // ProvidersConfig OAuth2 Provider 配置集合
 type ProvidersConfig struct {
-	Mock        MockProviderConfig     `mapstructure:"mock"`
-	GitHub      GitHubProviderConfig   `mapstructure:"github"`
-	Google      GoogleProviderConfig   `mapstructure:"google"`
-	HTTPTimeout time.Duration          `mapstructure:"http_timeout"` // OAuth2 HTTP 客户端超时，默认 10s
+	Mock        MockProviderConfig   `mapstructure:"mock"`
+	GitHub      GitHubProviderConfig `mapstructure:"github"`
+	Google      GoogleProviderConfig `mapstructure:"google"`
+	HTTPTimeout time.Duration        `mapstructure:"http_timeout"` // OAuth2 HTTP 客户端超时，默认 10s
 }
 
 // MockProviderConfig Mock OAuth2 Provider 配置
@@ -162,6 +167,12 @@ type WorkerConfig struct {
 	// LockTTLSeconds rtc-queue session 锁的 TTL（秒）
 	// 默认 120
 	LockTTLSeconds int `mapstructure:"lock_ttl_sec"`
+
+	// CacheHitRateWarnThreshold 缓存命中率告警阈值（可选）
+	// Session 累计缓存命中率 = TotalCachedReadTokens / (TotalCachedReadTokens + TotalInputTokens)
+	// 低于此阈值时输出 warn 日志。负数表示禁用告警。
+	// 默认 0.88（88%）
+	CacheHitRateWarnThreshold float64 `mapstructure:"cache_hit_rate_warn_threshold"`
 }
 
 // LLMConfig LLM 模型配置（支持 Claude 和 OpenAI 协议）
@@ -202,6 +213,30 @@ type LLMConfig struct {
 	// RetryBaseDelay 重试的基础退避时间（可选）
 	// 默认 1s。实际退避时间 = RetryBaseDelay * 2^(attempt-1)，即指数退避
 	RetryBaseDelay time.Duration `mapstructure:"retry_base_delay"`
+
+	// Pricing 模型定价配置（可选，用于成本计算）
+	// 未配置时使用默认价格（Claude 3.5 Sonnet）
+	Pricing *ModelPricingConfig `mapstructure:"pricing"`
+}
+
+// ModelPricingConfig 模型价格配置（USD per million tokens）
+type ModelPricingConfig struct {
+	// InputPerMillion 正常 input token 价格（USD）
+	InputPerMillion float64 `mapstructure:"input_per_million"`
+
+	// OutputPerMillion output token 价格（USD）
+	OutputPerMillion float64 `mapstructure:"output_per_million"`
+
+	// CachedReadPerMillion cache read（cache hit）价格（USD）
+	// 通常为 input 的 10%
+	CachedReadPerMillion float64 `mapstructure:"cached_read_per_million"`
+
+	// CachedWritePerMillion cache write（cache creation）价格（USD）
+	// 通常为 input 的 125%
+	CachedWritePerMillion float64 `mapstructure:"cached_write_per_million"`
+
+	// ReasoningPerMillion reasoning（thinking）token 价格（USD）
+	ReasoningPerMillion float64 `mapstructure:"reasoning_per_million"`
 }
 
 // APIConfig API 层配置（分页、限流等）
@@ -311,6 +346,12 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("llm.reasoning_effort", "medium")
 	v.SetDefault("llm.retry_max_attempts", 0)
 	v.SetDefault("llm.retry_base_delay", 1*time.Second)
+	// 默认定价：Claude 3.5 Sonnet（USD per million tokens）
+	v.SetDefault("llm.pricing.input_per_million", 3.0)
+	v.SetDefault("llm.pricing.output_per_million", 15.0)
+	v.SetDefault("llm.pricing.cached_read_per_million", 0.3)
+	v.SetDefault("llm.pricing.cached_write_per_million", 3.75)
+	v.SetDefault("llm.pricing.reasoning_per_million", 0.0)
 	v.SetDefault("api.query_default_limit", 50)
 	v.SetDefault("api.query_max_limit", 100)
 	v.SetDefault("tracing.enabled", false)

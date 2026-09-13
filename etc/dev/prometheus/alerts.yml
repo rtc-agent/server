@@ -52,6 +52,30 @@ groups:
           summary: "LLM 调用错误率 > 10%"
           description: "当前错误率: {{ $value | humanizePercentage }}"
 
+      # Token 消耗速率异常（1 分钟超过 100k tokens）
+      - alert: HighTokenConsumptionRate
+        expr: sum(rate(rtc_llm_tokens_total{job="rtc-agent-server"}[1m])) > 100000
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Token 消耗速率异常 ({{ $value | humanize }} tokens/s)"
+          description: "1 分钟内平均 Token 消耗速率超过 100k/s，可能存在异常调用"
+
+      # Reasoning Token 占比过高（可能配置错误）
+      - alert: HighReasoningTokenRatio
+        expr: |
+          (
+            sum(rate(rtc_llm_tokens_total{job="rtc-agent-server",type="reasoning"}[5m]))
+            / sum(rate(rtc_llm_tokens_total{job="rtc-agent-server"}[5m]))
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reasoning Token 占比 > 50%"
+          description: "Reasoning Token 占比异常高，可能影响成本，请检查模型配置"
+
       # Goroutine 泄漏
       - alert: GoroutineLeak
         expr: go_goroutines{job="rtc-agent-server"} > 5000

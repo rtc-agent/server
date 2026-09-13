@@ -39,7 +39,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 
 	// Init logger
-	logger.Init(cfg.Log.Level)
+	logger.Init(cfg.Log.Level, cfg.Log.ServerLogFile)
 	defer logger.Sync()
 
 	// Init LLM payload logger (dev only — writes full LLM request/response to logs/llm-payload.log)
@@ -55,6 +55,9 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 	if cfg.Log.LLMPayload {
 		logger.Info(context.Background(), "LLM payload logging enabled — writing to logs/llm-payload.log")
+	}
+	if cfg.Log.ServerLogFile != "" {
+		logger.Info(context.Background(), "Server log file enabled — writing to "+cfg.Log.ServerLogFile)
 	}
 
 	// Init tracing (OpenTelemetry + Jaeger)

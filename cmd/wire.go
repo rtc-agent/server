@@ -244,13 +244,29 @@ func provideAgent(
 		Queue:                     queue,
 		ContextTokensLimit:        cfg.Worker.ContextTokensLimit,
 		AutoCompactBufferTokens:   cfg.Worker.AutoCompactBufferTokens,
+		CacheHitRateWarnThreshold: cfg.Worker.CacheHitRateWarnThreshold,
 		MaxOutputTokensForSummary: cfg.Worker.MaxOutputTokensForSummary,
 		EnableLLMLogging:          logger.DebugMode,
 		CheckpointTTL:             cfg.Worker.CheckpointTTL,
 		StreamChunkTTL:            cfg.Worker.StreamChunkTTL,
 		Logger:                    agent.NewLogger(),
 		Metrics:                   metrics,
+		ModelPricing:              convertModelPricing(cfg.LLM.Pricing),
 	})
+}
+
+// convertModelPricing 将配置层的 ModelPricingConfig 转换为 agent 层的 ModelPricingConfig
+func convertModelPricing(cfg *config.ModelPricingConfig) *agent.ModelPricingConfig {
+	if cfg == nil {
+		return nil
+	}
+	return &agent.ModelPricingConfig{
+		InputPerMillion:       cfg.InputPerMillion,
+		OutputPerMillion:      cfg.OutputPerMillion,
+		CachedReadPerMillion:  cfg.CachedReadPerMillion,
+		CachedWritePerMillion: cfg.CachedWritePerMillion,
+		ReasoningPerMillion:   cfg.ReasoningPerMillion,
+	}
 }
 
 // provideMetrics 创建 Prometheus 指标收集器
