@@ -45,7 +45,7 @@ func DefaultToolResultBudgetConfig() ToolResultBudgetConfig {
 // original full content remains in the database for potential future retrieval.
 //
 // Token estimation uses ~4 bytes per token, consistent with the rest of the
-// codebase (see summarize_middleware.go's estimateMessageTokens).
+// codebase (see pkg/turn-agent/token_counter.go's EstimateMessageTokensPrecise).
 func applyToolResultBudget(messages []*turnagent.Message, cfg ToolResultBudgetConfig) []*turnagent.Message {
 	if len(messages) == 0 {
 		return messages

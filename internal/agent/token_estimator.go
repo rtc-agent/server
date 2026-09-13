@@ -49,7 +49,11 @@ type TokenEstimator struct {
 func NewTokenEstimator(contextLimit, compactBuffer int, sessionRepo repo.SessionRepo) *TokenEstimator {
 	threshold := int64(contextLimit - compactBuffer)
 	if threshold <= 0 {
-		threshold = 1
+		// Fallback to 80% of contextLimit when configuration is invalid
+		// This prevents threshold=1 which would cause compression on every turn
+		threshold = int64(float64(contextLimit) * 0.8)
+		// Note: Fallback logging is handled by summarize.go's "summarize.threshold_fallback"
+		// and servicecontext.go's "servicecontext.threshold_fallback" warnings.
 	}
 	return &TokenEstimator{
 		sessionRepo:      sessionRepo,

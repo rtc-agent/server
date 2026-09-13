@@ -193,10 +193,25 @@ func TestNewTokenEstimator_Defaults(t *testing.T) {
 		t.Errorf("triggerThreshold = %d, want 12000", est.triggerThreshold)
 	}
 
-	// Test negative threshold protection
+	// Test fallback threshold when contextLimit <= compactBuffer
+	// Expected: 80% of contextLimit = 100 * 0.8 = 80
 	est2 := NewTokenEstimator(100, 200, mockRepo)
-	if est2.triggerThreshold != 1 {
-		t.Errorf("negative threshold should be clamped to 1, got %d", est2.triggerThreshold)
+	if est2.triggerThreshold != 80 {
+		t.Errorf("invalid config threshold = %d, want 80 (80%% of 100)", est2.triggerThreshold)
+	}
+
+	// Test edge case: contextLimit equals compactBuffer
+	// Expected: 80% of contextLimit = 1000 * 0.8 = 800
+	est3 := NewTokenEstimator(1000, 1000, mockRepo)
+	if est3.triggerThreshold != 800 {
+		t.Errorf("equal values threshold = %d, want 800 (80%% of 1000)", est3.triggerThreshold)
+	}
+
+	// Test edge case: compactBuffer is 0 (should use contextLimit - 0 = contextLimit)
+	// Expected: contextLimit - 0 = 5000
+	est4 := NewTokenEstimator(5000, 0, mockRepo)
+	if est4.triggerThreshold != 5000 {
+		t.Errorf("zero compactBuffer threshold = %d, want 5000", est4.triggerThreshold)
 	}
 }
 

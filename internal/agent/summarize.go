@@ -53,8 +53,14 @@ func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, 
 	// This ensures compression triggers before hitting the hard limit.
 	actualTriggerThreshold := h.contextTokensLimit - h.autoCompactBufferTokens
 	if actualTriggerThreshold <= 0 {
-		// If the calculated threshold is non-positive, use a small value to trigger immediately
-		actualTriggerThreshold = 1
+		// Fallback to 80% of contextTokensLimit when configuration is invalid
+		// This prevents threshold=1 which would cause compression on every turn
+		actualTriggerThreshold = int(float64(h.contextTokensLimit) * 0.8)
+		h.logIfEnabled(context.Background(), "summarize.threshold_fallback", map[string]any{
+			"context_tokens_limit":     h.contextTokensLimit,
+			"auto_compact_buffer":      h.autoCompactBufferTokens,
+			"actual_trigger_threshold": actualTriggerThreshold,
+		})
 	}
 
 	h.logIfEnabled(context.Background(), "summarize.middleware_config", map[string]any{
@@ -118,6 +124,10 @@ func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, 
 //  2. During LLM streaming, publish chunks to live channel in real-time
 //  3. On completion, finalize message with metadata and publish to topic channel
 func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, customInstruction *string, force bool) ([]*schema.Message, error) {
+	// BUG-08 fix: Mark context as compression call so token callback skips
+	// CurrentContextTokens update (prevents double-counting compression overhead).
+	ctx = withCompressContext(ctx)
+
 	// For automatic compression (force=false), check thresholds
 	if !force {
 		if !shouldCompressByTokenCount(msgs) {
@@ -682,107 +692,19 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 
 // cumulativeTokenCounter estimates the total token count across all messages.
 //
-// Strategy:
-//   - For messages with ResponseMeta.Usage (from LLM responses), use TotalTokens
-//     as the context size baseline at that point in the conversation.
-//     TotalTokens already includes cache read + cache creation tokens.
-//   - For messages without Usage data, estimate via precise estimation that
-//     considers Content, ReasoningContent, MultiContent, and ToolCalls.
-//   - Walk backwards to find the last message with Usage, use its TotalTokens
-//     as the cumulative baseline, then add estimates for newer messages.
-//   - If no messages have Usage data at all, fall back to estimating every
-//     message from content length.
-func cumulativeTokenCounter(_ context.Context, messages []*schema.Message) (int, error) {
-	// 1. 从后向前查找最后一条带 Usage 的 assistant 消息作为基线。
-	var baseTokens int
-	incrementStart := 0
-
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.ResponseMeta != nil && msg.ResponseMeta.Usage != nil {
-			usage := msg.ResponseMeta.Usage
-			// TotalTokens 已经是准确值（包含 cache read + cache creation）
-			if usage.TotalTokens > 0 {
-				baseTokens = usage.TotalTokens
-				incrementStart = i + 1
-				break
-			}
-		}
-	}
-
-	// 2. 累加基线之后新增消息的估算 token（使用精确估算）。
-	var estimated int
-	for _, msg := range messages[incrementStart:] {
-		estimated += estimateMessageTokensPrecise(msg)
-	}
-
-	return baseTokens + estimated, nil
+// Delegates to the shared implementation in pkg/turn-agent.
+// See turnagent.CumulativeTokenCounter for the full algorithm.
+func cumulativeTokenCounter(ctx context.Context, messages []*schema.Message) (int, error) {
+	return turnagent.CumulativeTokenCounter(ctx, messages)
 }
 
 // estimateMessageTokensPrecise estimates token count for a single message
 // with high precision (~4 chars per token).
 //
-// Unlike the simpler estimateTokens, this function considers:
-//   - Content and ReasoningContent
-//   - UserInputMultiContent (user input multimodal content)
-//   - AssistantGenMultiContent (model output multimodal content)
-//   - ToolCalls (function name, arguments, and ID)
-//   - Tool result metadata (ToolCallID, ToolName)
+// Delegates to the shared implementation in pkg/turn-agent.
+// See turnagent.EstimateMessageTokensPrecise for details.
 func estimateMessageTokensPrecise(msg *schema.Message) int {
-	if msg == nil {
-		return 0
-	}
-
-	var charCount int
-
-	// 主内容
-	charCount += len(msg.Content)
-	charCount += len(msg.ReasoningContent)
-
-	// UserInputMultiContent（用户输入多模态内容）
-	for _, part := range msg.UserInputMultiContent {
-		if part.Type == schema.ChatMessagePartTypeText {
-			charCount += len(part.Text)
-		}
-		// 图片等多模态内容按固定 token 估算（约 250 tokens）
-		if part.Type == schema.ChatMessagePartTypeImageURL {
-			charCount += 1000
-		}
-	}
-
-	// AssistantGenMultiContent（模型输出多模态内容）
-	for _, part := range msg.AssistantGenMultiContent {
-		if part.Type == schema.ChatMessagePartTypeText {
-			charCount += len(part.Text)
-		} else if part.Type == schema.ChatMessagePartTypeReasoning && part.Reasoning != nil {
-			charCount += len(part.Reasoning.Text)
-		}
-	}
-
-	// ToolCalls（工具调用）
-	for _, tc := range msg.ToolCalls {
-		charCount += len(tc.Function.Name)
-		charCount += len(tc.Function.Arguments)
-		charCount += len(tc.ID) // tool call ID
-	}
-
-	// Tool 结果消息
-	if msg.Role == schema.Tool {
-		charCount += len(msg.ToolCallID)
-		charCount += len(msg.ToolName)
-	}
-
-	return charCount / 4 // 4 chars per token
-}
-
-// estimateTokens estimates token count for a single message (~4 chars/token).
-// This is the simpler version kept for backward compatibility.
-// For more precise estimation, use estimateMessageTokensPrecise.
-func estimateTokens(msg *schema.Message) int {
-	if msg == nil {
-		return 0
-	}
-	return len(msg.Content)/4 + len(msg.ReasoningContent)/4
+	return turnagent.EstimateMessageTokensPrecise(msg)
 }
 
 // =============================================================================
@@ -816,6 +738,28 @@ func compressModeString(retentionIndex int) string {
 // =============================================================================
 // Session context helpers
 // =============================================================================
+
+// compressContextKey marks a context as originating from a compression LLM call.
+// When this key is set, the token callback skips updating CurrentContextTokens
+// to avoid double-counting compression overhead.
+//
+// BUG-08 fix: Compression flow writes CurrentContextTokens twice:
+//   1. persistCompressedMessages writes accurate tokensAfter
+//   2. token callback writes tokensAfter + fullUsage.TotalTokens (incorrect)
+// The context mark prevents the second write for compression calls only.
+type compressContextKey struct{}
+
+// withCompressContext returns a child context marked as a compression LLM call.
+// The token callback checks this mark and skips CurrentContextTokens update.
+func withCompressContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, compressContextKey{}, true)
+}
+
+// isCompressContext checks if the context is marked as a compression call.
+func isCompressContext(ctx context.Context) bool {
+	v, _ := ctx.Value(compressContextKey{}).(bool)
+	return v
+}
 
 type sessionIDKey struct{}
 

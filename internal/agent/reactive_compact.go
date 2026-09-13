@@ -226,6 +226,10 @@ func minimalRetentionConfig() RetentionConfig {
 // This reuses the existing summarizeMessages pipeline, which means
 // logSummarizeTokenUsage is called for the summarization LLM call.
 func (h *helpers) forceCompressContext(ctx context.Context, msgs []*schema.Message, config RetentionConfig) ([]*schema.Message, error) {
+	// BUG-08 fix: Mark context as compression call so token callback skips
+	// CurrentContextTokens update (prevents double-counting compression overhead).
+	ctx = withCompressContext(ctx)
+
 	if len(msgs) < 2 {
 		return msgs, nil
 	}

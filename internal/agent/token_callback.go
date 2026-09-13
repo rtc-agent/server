@@ -67,19 +67,29 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 			})
 		}
 
+		// BUG-08 fix: Check if this is a compression LLM call.
+		// Compression calls should NOT update CurrentContextTokens because
+		// persistCompressedMessages already writes the accurate post-compression value.
+		// Without this check, the callback would overwrite with tokensAfter + compressionTokens,
+		// causing CurrentContextTokens to be overestimated.
+		isCompress := isCompressContext(ctx)
+
 		// ===============================================================
 		// Step 3: Compute token estimate (EWMA + derived fields)
 		// ===============================================================
+		var currentCtxTokens int64
 		var estimate *TokenEstimate
-		// 使用 CurrentContextTokens（压缩后回写的实际值）作为进度计算基准，
-		// fallback 到 TotalTokens（旧 session 尚未初始化 CurrentContextTokens）。
-		currentCtxTokens := session.TotalTokens + fullUsage.TotalTokens
-		if session != nil && session.CurrentContextTokens > 0 {
-			currentCtxTokens = session.CurrentContextTokens + fullUsage.TotalTokens
-		}
-		if session != nil && h.tokenEstimator != nil {
-			prevEWMA := session.TokenEstimateEWMA
-			estimate = h.tokenEstimator.Estimate(ctx, sessionID, currentCtxTokens, prevEWMA, fullUsage.TotalTokens)
+		if session != nil {
+			// 使用 CurrentContextTokens（压缩后回写的实际值）作为进度计算基准，
+			// fallback 到 TotalTokens（旧 session 尚未初始化 CurrentContextTokens）。
+			currentCtxTokens = session.TotalTokens + fullUsage.TotalTokens
+			if session.CurrentContextTokens > 0 {
+				currentCtxTokens = session.CurrentContextTokens + fullUsage.TotalTokens
+			}
+			if h.tokenEstimator != nil {
+				prevEWMA := session.TokenEstimateEWMA
+				estimate = h.tokenEstimator.Estimate(ctx, sessionID, currentCtxTokens, prevEWMA, fullUsage.TotalTokens)
+			}
 		}
 
 		// ===============================================================
@@ -93,8 +103,17 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 			CachedWriteDelta:        fullUsage.CachedWriteTokens,
 			ReasoningDelta:          fullUsage.ReasoningTokens,
 			CostMicrosDelta:         costMicros,
-			SetCurrentContextTokens: currentCtxTokens,
+			SetCurrentContextTokens: 0, // default: don't update
 		}
+
+		// BUG-08 fix: Only update CurrentContextTokens for non-compression calls.
+		// Compression calls are handled by persistCompressedMessages which writes
+		// the accurate post-compression value. Updating here would overwrite it
+		// with an overestimated value (tokensAfter + compressionTokens).
+		if !isCompress && session != nil {
+			delta.SetCurrentContextTokens = currentCtxTokens
+		}
+
 		if estimate != nil {
 			delta.SetEWMA = estimate.NewEWMA
 		}
@@ -109,7 +128,13 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 		// Update session with new TotalTokens for publishing
 		if session != nil && estimate != nil {
 			session.TotalTokens += fullUsage.TotalTokens
-			session.CurrentContextTokens = currentCtxTokens
+			// BUG-08 fix: Only update CurrentContextTokens for non-compression calls.
+			// For compression calls, the in-memory session object may be stale,
+			// but persistCompressedMessages will write the accurate value to DB.
+			// The next GetByID will fetch the correct value.
+			if !isCompress {
+				session.CurrentContextTokens = currentCtxTokens
+			}
 			session.TotalInputTokens += fullUsage.InputTokens
 			session.TotalOutputTokens += fullUsage.OutputTokens
 			session.TotalCachedReadTokens += fullUsage.CachedReadTokens
@@ -272,8 +297,9 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 			// Streaming path: OnEndWithStreamOutput fires with a StreamReader of
 			// chunks. Drain it in a goroutine and report once at EOF.
 			//
-			// Per-call state (maxUsage, modelName, lastMessage, thinkingContent) is captured in
-			// this closure so concurrent streams do not interfere with each other.
+			// Per-call state (maxUsage, modelName, lastMessage, thinkingContent,
+			// cachedWriteTokens) is captured in this closure so concurrent streams
+			// do not interfere with each other.
 			OnEndWithStreamOutput: func(ctx context.Context, info *callbacks.RunInfo, output *schema.StreamReader[*model.CallbackOutput]) context.Context {
 				// Per-call accumulator — safe for concurrent invocations because
 				// each OnEndWithStreamOutput call creates its own closure frame.
@@ -281,6 +307,11 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 				var modelName string
 				var lastMessage *schema.Message
 				var thinkingContent string // Accumulate thinking content from all chunks
+				// BUG-02 fix: Anthropic reports cache_creation_input_tokens only on
+				// message_start (empty content, often skipped by lastMessage overwrite)
+				// and 0 on message_delta. Accumulate across all chunks by taking the
+				// max, mirroring how thinkingContent is aggregated.
+				var cachedWriteTokens int
 
 				mergeUsage := func(u *model.TokenUsage) {
 					if u == nil {
@@ -323,6 +354,12 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 							if thinking, ok := einoclaude.GetThinking(chunk.Message); ok && thinking != "" {
 								thinkingContent += thinking
 							}
+							// BUG-02 fix: accumulate cache creation input tokens across
+							// chunks (take the max). message_start carries the value but
+							// has empty Content; later chunks carry content but often 0.
+							if v, ok := einoclaude.GetCacheCreationInputTokens(chunk.Message); ok && v > cachedWriteTokens {
+								cachedWriteTokens = v
+							}
 						}
 					}
 
@@ -345,6 +382,25 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 					}
 					fullUsage := extractFullUsage(fullOutput)
 					if fullUsage != nil {
+						// BUG-02 fix: streaming path lost cache creation tokens because
+						// message_start (which carries them) has empty Content and gets
+						// overwritten by later chunks; message_delta reports 0. Override
+						// with the accumulated max when it's larger.
+						if int64(cachedWriteTokens) > fullUsage.CachedWriteTokens {
+							fullUsage.CachedWriteTokens = int64(cachedWriteTokens)
+							// Recompute pure input tokens.
+							// In eino's Claude mapping:
+							//   TotalTokens = PromptTokens + CompletionTokens
+							//   PromptTokens = pureInput + CachedRead + CachedWrite
+							// So: pureInput = TotalTokens - OutputTokens - CachedRead - CachedWrite
+							// (ReasoningTokens is a subset of OutputTokens, not subtracted again.)
+							promptTokens := fullUsage.TotalTokens - fullUsage.OutputTokens
+							pureInput := promptTokens - fullUsage.CachedReadTokens - fullUsage.CachedWriteTokens
+							if pureInput < 0 {
+								pureInput = 0
+							}
+							fullUsage.InputTokens = pureInput
+						}
 						reportLLMCall(ctx, fullUsage, modelName)
 					}
 				}()

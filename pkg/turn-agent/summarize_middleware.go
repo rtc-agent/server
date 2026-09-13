@@ -42,6 +42,12 @@ type TokenCounterFunc func(ctx context.Context, messages []*schema.Message) (int
 // receives the current messages and must return compressed messages that fit
 // within the context window. This is a blocking call — the middleware waits
 // for it to complete.
+//
+// Contract: If compression is skipped (e.g., messages below internal threshold),
+// the function MUST return the original slice unchanged (same pointer).
+// Returning a new slice with identical content will be treated as compression.
+// The middleware uses pointer equality (&compressed[0] == &messages[0]) to
+// detect "no compression" and skip the OnCompress callback.
 type CompressContextFunc func(ctx context.Context, messages []*schema.Message) ([]*schema.Message, error)
 
 // CompressionMetricsAttrs describes a single compression event for metrics
@@ -263,6 +269,17 @@ func (m *summarizationMiddleware) BeforeModelRewriteState(
 		return ctx, state, fmt.Errorf("summarization middleware: compression failed: %w", err)
 	}
 
+	// BUG-10 fix: If compressed is the same slice as the original messages,
+	// compression was skipped (e.g., messages count below threshold).
+	// Skip OnCompress to avoid corrupting data by persisting the first
+	// original message as if it were a summary.
+	if len(compressed) == len(state.Messages) && (len(compressed) == 0 || &compressed[0] == &state.Messages[0]) {
+		m.log(ctx, "debug", "compress.skipped_no_compression", map[string]any{
+			"messages_count": len(state.Messages),
+		})
+		return ctx, state, nil
+	}
+
 	compressDuration := time.Since(compressStart)
 	tokensBeforeFinal, _ := m.countTokens(ctx, state.Messages)
 	tokensAfter, _ := m.countTokens(ctx, compressed)
@@ -280,11 +297,12 @@ func (m *summarizationMiddleware) BeforeModelRewriteState(
 		})
 	}
 
+	originalCount := len(state.Messages)
 	state.Messages = compressed
 
 	m.log(ctx, "debug", "compress.state_updated", map[string]any{
 		"compressed_messages_count": len(compressed),
-		"original_messages_count":   len(state.Messages),
+		"original_messages_count":   originalCount,
 	})
 
 	if m.cfg.OnCompress != nil {
@@ -376,58 +394,18 @@ func (m *summarizationMiddleware) countTokens(ctx context.Context, messages []*s
 	return defaultTokenCounter(ctx, messages)
 }
 
-// defaultTokenCounter estimates token count using:
-//   - Last assistant message's ResponseMeta.Usage.TotalTokens as baseline
-//   - ~4 chars per token for other messages
-func defaultTokenCounter(_ context.Context, messages []*schema.Message) (int, error) {
-	var baseTokens, incrementStart int
-
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.Role == schema.Assistant && msg.ResponseMeta != nil && msg.ResponseMeta.Usage != nil {
-			baseTokens = msg.ResponseMeta.Usage.TotalTokens
-			incrementStart = i + 1
-			break
-		}
-	}
-
-	var incrementTokens int
-	for _, msg := range messages[incrementStart:] {
-		incrementTokens += estimateMessageTokens(msg)
-	}
-
-	return baseTokens + incrementTokens, nil
+// defaultTokenCounter estimates token count using the shared cumulative
+// token counter implementation.
+//
+// Delegates to CumulativeTokenCounter in this package.
+func defaultTokenCounter(ctx context.Context, messages []*schema.Message) (int, error) {
+	return CumulativeTokenCounter(ctx, messages)
 }
 
 // estimateMessageTokens estimates token count for a single message (~4 chars
 // per token).
+//
+// Delegates to EstimateMessageTokensPrecise in this package.
 func estimateMessageTokens(msg *schema.Message) int {
-	if msg == nil {
-		return 0
-	}
-
-	var charCount int
-
-	charCount += len(msg.Content)
-
-	for _, part := range msg.UserInputMultiContent {
-		if part.Type == schema.ChatMessagePartTypeText {
-			charCount += len(part.Text)
-		}
-	}
-	for _, part := range msg.AssistantGenMultiContent {
-		if part.Type == schema.ChatMessagePartTypeText {
-			charCount += len(part.Text)
-		} else if part.Type == schema.ChatMessagePartTypeReasoning && part.Reasoning != nil {
-			charCount += len(part.Reasoning.Text)
-		}
-	}
-
-	charCount += len(msg.ReasoningContent)
-
-	for _, tc := range msg.ToolCalls {
-		charCount += len(tc.Function.Name) + len(tc.Function.Arguments)
-	}
-
-	return charCount / 4
+	return EstimateMessageTokensPrecise(msg)
 }
