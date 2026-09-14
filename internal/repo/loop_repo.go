@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -18,6 +19,12 @@ type LoopRepo interface {
 	FindActive(ctx context.Context, sessionID uuid.UUID) (*model.Loop, error)
 	Update(ctx context.Context, id uuid.UUID, fields map[string]any) error
 	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Loop, error)
+	// FindStaleLoops 查找 stale loops（active 且需要 recovery 的）
+	// Stale 条件：status='active' AND (asynq_task_id IS NULL OR asynq_task_id='') AND last_run_at IS NOT NULL AND last_run_at < staleThreshold
+	FindStaleLoops(ctx context.Context, staleThreshold time.Time) ([]*model.Loop, error)
+	// FindExpiredLoops 查找过期 loops
+	// Expired 条件：status='active' AND expires_at IS NOT NULL AND expires_at < now
+	FindExpiredLoops(ctx context.Context) ([]*model.Loop, error)
 }
 
 type loopRepo struct {
@@ -95,6 +102,32 @@ func (r *loopRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, curso
 	}
 	if err := q.Limit(limit).Find(&loops).Error; err != nil {
 		return nil, fmt.Errorf("list loops for session %s: %w", sessionID, err)
+	}
+	return loops, nil
+}
+
+// FindStaleLoops 查找 stale loops（active 且缺少 asynq task 的）
+func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time) ([]*model.Loop, error) {
+	var loops []*model.Loop
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("status = ? AND (asynq_task_id IS NULL OR asynq_task_id = '') AND last_run_at IS NOT NULL AND last_run_at < ?",
+			string(model.LoopStatusActive), staleThreshold).
+		Find(&loops).Error
+	if err != nil {
+		return nil, fmt.Errorf("find stale loops: %w", err)
+	}
+	return loops, nil
+}
+
+// FindExpiredLoops 查找过期 loops
+func (r *loopRepo) FindExpiredLoops(ctx context.Context) ([]*model.Loop, error) {
+	var loops []*model.Loop
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("status = ? AND expires_at IS NOT NULL AND expires_at < ?",
+			string(model.LoopStatusActive), time.Now()).
+		Find(&loops).Error
+	if err != nil {
+		return nil, fmt.Errorf("find expired loops: %w", err)
 	}
 	return loops, nil
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/centrifugal/centrifuge"
+	hibikenasynq "github.com/hibiken/asynq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
@@ -30,9 +31,12 @@ type Server struct {
 	interruptHandler *httphandler.InterruptHandler
 	memoriesHandler  *httphandler.MemoriesHandler
 	httpServer       *http.Server
-	queueWorker      *rtcqueue.Worker // rtc-queue distributed worker
-	queue            *rtcqueue.Queue  // rtc-queue for publishing recovery work items
+	queueWorker      *rtcqueue.Worker  // rtc-queue distributed worker
+	queue            *rtcqueue.Queue   // rtc-queue for publishing recovery work items
 	workerCancel     context.CancelFunc
+	asynqServer      *hibikenasynq.Server // asynq worker for loop tasks
+	asynqMux         *hibikenasynq.ServeMux
+	recoveryCancel   context.CancelFunc   // cancels the recovery goroutine
 }
 
 // BuildProviderClients 根据配置构造 Provider 列表
@@ -100,6 +104,20 @@ func (s *Server) Start() error {
 		logger.Debug(ctx, "[Server] rtc-queue Worker started successfully")
 	}
 
+	// Start asynq server (loop worker)
+	if s.asynqServer != nil && s.asynqMux != nil {
+		asynqSrv := s.asynqServer
+		asynqMux := s.asynqMux
+		logger.SafeGo("asynq-worker", func() {
+			if err := asynqSrv.Run(asynqMux); err != nil {
+				logger.Error(context.Background(), "[Server] asynq server exited with error", zap.Error(err))
+			}
+		})
+		if logger.DebugMode {
+			logger.Debug(ctx, "[Server] asynq worker started")
+		}
+	}
+
 	// 启动 HTTP 服务器
 	mux := http.NewServeMux()
 
@@ -145,6 +163,19 @@ func (s *Server) Stop() {
 	}
 	if logger.DebugMode {
 		logger.Debug(ctx, "[Server] rtc-queue Worker stopped")
+	}
+
+	// Stop asynq server
+	if s.asynqServer != nil {
+		s.asynqServer.Stop()
+		if logger.DebugMode {
+			logger.Debug(ctx, "[Server] asynq worker stopped")
+		}
+	}
+
+	// Stop recovery goroutine
+	if s.recoveryCancel != nil {
+		s.recoveryCancel()
 	}
 
 	// 关闭 RPC Handler（停止 recorder worker）
@@ -222,6 +253,9 @@ func NewWithDeps(
 	memoriesHandler *httphandler.MemoriesHandler,
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
+	asynqServer *hibikenasynq.Server,
+	asynqMux *hibikenasynq.ServeMux,
+	recoveryCancel context.CancelFunc,
 ) *Server {
 	return &Server{
 		cfg:              cfg,
@@ -233,6 +267,9 @@ func NewWithDeps(
 		memoriesHandler:  memoriesHandler,
 		queueWorker:      queueWorker,
 		queue:            queue,
+		asynqServer:      asynqServer,
+		asynqMux:         asynqMux,
+		recoveryCancel:   recoveryCancel,
 	}
 }
 

@@ -23,6 +23,23 @@ type Config struct {
 	LLM       LLMConfig       `mapstructure:"llm"`
 	API       APIConfig       `mapstructure:"api"`
 	Tracing   TracingConfig   `mapstructure:"tracing"`
+	Asynq     AsynqConfig     `mapstructure:"asynq"`
+}
+
+// AsynqConfig asynq 任务调度配置
+type AsynqConfig struct {
+	// RedisAddr Redis 地址，默认使用主 Redis
+	RedisAddr string `mapstructure:"redis_addr"`
+	// RedisPassword Redis 密码
+	RedisPassword string `mapstructure:"redis_password"`
+	// RedisDB Redis DB 编号
+	RedisDB int `mapstructure:"redis_db"`
+	// Concurrency asynq worker 并发数
+	Concurrency int `mapstructure:"concurrency"`
+	// Queue 队列名
+	Queue string `mapstructure:"queue"`
+	// RecoveryInterval recovery 扫描间隔
+	RecoveryInterval time.Duration `mapstructure:"recovery_interval"`
 }
 
 // ServerConfig HTTP/WebSocket 服务器监听地址配置。
@@ -341,6 +358,10 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("tracing.endpoint", "localhost:4317")
 	v.SetDefault("tracing.sample_rate", 1.0)
 	v.SetDefault("log.llm_payload", false)
+	// asynq defaults
+	v.SetDefault("asynq.concurrency", 10)
+	v.SetDefault("asynq.queue", "loop")
+	v.SetDefault("asynq.recovery_interval", 1*time.Minute)
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, err

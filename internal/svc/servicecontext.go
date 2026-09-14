@@ -39,6 +39,7 @@ type ServiceContext struct {
 	UserMemoryRepo      repo.UserMemoryRepo
 	ScriptExecutionRepo repo.ScriptExecutionRepo
 	MemoryRepo          memory.Repository // Phase 2: 统一 Memory 存储
+	LoopRepo            repo.LoopRepo
 
 	// 基础设施
 	UpdatePublisher *updates.UpdatePublisher
@@ -63,6 +64,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	userMemoryRepo := repo.NewUserMemoryRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	memoryRepo := repo.NewMemoryRepo(db)
+	loopRepo := repo.NewLoopRepo(db)
 
 	// 创建 UpdatePublisher（需要先创建 repos）
 	updatePublisher := updates.NewUpdatePublisher(db, rdb, sessionRepo, messageRepo, turnRepo, rtcRepo)
@@ -134,6 +136,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		UserMemoryRepo:      userMemoryRepo,
 		ScriptExecutionRepo: scriptExecutionRepo,
 		MemoryRepo:          memoryRepo,
+		LoopRepo:            loopRepo,
 		UpdatePublisher:     updatePublisher,
 		CentrifugeNode:      node,
 		Broker:              dualBroker,
@@ -159,6 +162,7 @@ func NewServiceContextWithDeps(
 	userMemoryRepo repo.UserMemoryRepo,
 	scriptExecutionRepo repo.ScriptExecutionRepo,
 	memoryRepo memory.Repository,
+	loopRepo repo.LoopRepo,
 	updatePublisher *updates.UpdatePublisher,
 	node *centrifuge.Node,
 	broker *centrifugeplus.DualBroker,
@@ -210,6 +214,7 @@ func NewServiceContextWithDeps(
 		UserMemoryRepo:      userMemoryRepo,
 		ScriptExecutionRepo: scriptExecutionRepo,
 		MemoryRepo:          memoryRepo,
+		LoopRepo:            loopRepo,
 		UpdatePublisher:     updatePublisher,
 		CentrifugeNode:      node,
 		Broker:              broker,

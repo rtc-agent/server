@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	hibikenasynq "github.com/hibiken/asynq"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
@@ -30,6 +31,7 @@ type Dependencies struct {
 	API                 config.APIConfig
 	ScriptExecutionRepo repo.ScriptExecutionRepo // script execution 持久化
 	Metrics             *turnagent.PrometheusMetrics // Prometheus 指标
+	AsynqInspector      *hibikenasynq.Inspector     // asynq inspector for loop task cleanup
 }
 
 // Handler RPC 处理器

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
+	"github.com/rtc-agent/server/internal/loop"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -57,6 +58,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		if err := primitives.UpdateSessionStatus(txCtx, h.deps.Deps, session.ID, protocol.SessionStatusClosed); err != nil {
 			return nil, err
 		}
+
 		// Delete session memories (soft delete; they have served their purpose for compression).
 		if err := h.deps.Deps.SessionMemoryRepo.DeleteBySession(txCtx, session.ID); err != nil {
 			// Non-fatal: log but don't block session close.
@@ -106,6 +108,11 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 //  1. Cancel all pending/processing work via rtc-queue CancelSession.
 //  2. Query active turns and mark them cancelled in DB.
 //  3. Publish turn.updated events for each cancelled turn.
+//  4. Cancel active loops and goals (cleanup orphaned asynq tasks).
 func (h *Handler) stopActiveTurns(ctx context.Context, sessionID uuid.UUID) {
 	primitives.StopActiveTurns(ctx, h.deps.Deps, h.deps.Queue, sessionID, "stopped_by_user")
+
+	// 3. Cancel active loops and goals for the session.
+	// This ensures no orphaned asynq tasks remain after session close.
+	loop.CancelAllForSession(ctx, h.deps.Deps.LoopRepo, h.deps.Deps.GoalRepo, h.deps.AsynqInspector, sessionID)
 }

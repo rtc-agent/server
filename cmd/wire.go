@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	hibikenasynq "github.com/hibiken/asynq"
 	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 
 	"github.com/centrifugal/centrifuge"
@@ -23,10 +24,12 @@ import (
 	"github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/loop"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/server"
 	"github.com/rtc-agent/server/internal/svc"
+	"github.com/rtc-agent/server/internal/taskscheduler"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -52,6 +55,7 @@ var RepositorySet = wire.NewSet(
 	repo.NewUserMemoryRepo,
 	repo.NewScriptExecutionRepo,
 	repo.NewMemoryRepo,
+	repo.NewLoopRepo,
 )
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
@@ -67,7 +71,16 @@ var ServiceSet = wire.NewSet(
 var UsecaseSet = wire.NewSet(
 	provideMetrics,
 	provideChatModel,
+	provideTaskScheduler,
 	provideUsecaseDependencies,
+)
+
+// AsynqSet provides asynq components for loop task scheduling.
+var AsynqSet = wire.NewSet(
+	provideAsynqServer,
+	provideAsynqMux,
+	provideAsynqInspector,
+	provideRecoveryCancel,
 )
 
 // QueueSet provides rtc-queue components.
@@ -193,6 +206,7 @@ func provideUsecaseDependencies(
 	svcCtx *svc.ServiceContext,
 	chatModelResult *chatModelResult,
 	cfg *config.Config,
+	taskScheduler usecase.TaskScheduler,
 ) *usecase.Dependencies {
 	return &usecase.Dependencies{
 		DB:                svcCtx.DB,
@@ -202,6 +216,7 @@ func provideUsecaseDependencies(
 		TurnRepo:          svcCtx.TurnRepo,
 		RtcRepo:           svcCtx.RtcRepo,
 		GoalRepo:          svcCtx.GoalRepo,
+		LoopRepo:          svcCtx.LoopRepo,
 		SessionMemoryRepo: svcCtx.SessionMemoryRepo,
 		UserMemoryRepo:    svcCtx.UserMemoryRepo,
 		UpdatePublisher:   svcCtx.UpdatePublisher,
@@ -210,6 +225,7 @@ func provideUsecaseDependencies(
 		SystemPrompt:      cfg.Worker.SystemPrompt,
 		WorkerConfig:      cfg.Worker,
 		CommandRegistry:   command.NewCommandRegistry(),
+		TaskScheduler:     taskScheduler,
 	}
 }
 
@@ -323,6 +339,7 @@ func provideRPCHandler(
 	queue *rtcqueue.Queue,
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
+	inspector *hibikenasynq.Inspector,
 ) *rpchandler.Handler {
 	handler := rpchandler.NewHandler(&rpchandler.Dependencies{
 		Deps:                deps,
@@ -331,6 +348,7 @@ func provideRPCHandler(
 		API:                 cfg.API,
 		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
 		Metrics:             metrics,
+		AsynqInspector:      inspector,
 	})
 	// Register globally for Centrifuge RPC callbacks
 	svc.RegisterRPCHandler(handler)
@@ -376,6 +394,9 @@ func provideServer(
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
 	streamStore *agent.StreamStore,
+	asynqServer *hibikenasynq.Server,
+	asynqMux *hibikenasynq.ServeMux,
+	recoveryCancel context.CancelFunc,
 ) *server.Server {
 	// Inject stream store into UpdatePublisher
 	svcCtx.UpdatePublisher.SetStreamStore(streamStore)
@@ -390,7 +411,100 @@ func provideServer(
 		memoriesHandler,
 		queueWorker,
 		queue,
+		asynqServer,
+		asynqMux,
+		recoveryCancel,
 	)
+}
+
+// =============================================================================
+// Asynq provider functions
+// =============================================================================
+
+// provideTaskScheduler creates the asynq-based TaskScheduler.
+// It returns the usecase.TaskScheduler interface for injection into usecase.Dependencies.
+func provideTaskScheduler(cfg *config.Config) (usecase.TaskScheduler, error) {
+	addr := cfg.Asynq.RedisAddr
+	if addr == "" {
+		addr = cfg.Redis.Addr
+	}
+	return taskscheduler.NewTaskScheduler(addr)
+}
+
+// provideAsynqServer creates the asynq Server for processing loop tasks.
+func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
+	addr := cfg.Asynq.RedisAddr
+	if addr == "" {
+		addr = cfg.Redis.Addr
+	}
+	concurrency := cfg.Asynq.Concurrency
+	if concurrency <= 0 {
+		concurrency = 10
+	}
+	queueName := cfg.Asynq.Queue
+	if queueName == "" {
+		queueName = "loop"
+	}
+	return hibikenasynq.NewServer(
+		hibikenasynq.RedisClientOpt{Addr: addr},
+		hibikenasynq.Config{
+			Concurrency: concurrency,
+			Queues: map[string]int{
+				queueName: 6,
+				"default": 3,
+			},
+		},
+	)
+}
+
+// provideAsynqMux creates the asynq ServeMux with loop task handlers registered.
+func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo) *hibikenasynq.ServeMux {
+	worker := loop.NewWorker(queue, loopRepo)
+	mux := hibikenasynq.NewServeMux()
+	worker.RegisterHandlers(mux)
+	return mux
+}
+
+// provideAsynqInspector creates the asynq Inspector for task management.
+func provideAsynqInspector(cfg *config.Config) *hibikenasynq.Inspector {
+	addr := cfg.Asynq.RedisAddr
+	if addr == "" {
+		addr = cfg.Redis.Addr
+	}
+	return hibikenasynq.NewInspector(hibikenasynq.RedisClientOpt{Addr: addr})
+}
+
+// provideRecoveryCancel creates the recovery goroutine and returns its cancel function.
+func provideRecoveryCancel(
+	cfg *config.Config,
+	loopRepo repo.LoopRepo,
+	scheduler usecase.TaskScheduler,
+) context.CancelFunc {
+	// Recovery needs direct access to asynq client/inspector.
+	// Extract them from the concrete scheduler type.
+	type clientProvider interface {
+		Client() *hibikenasynq.Client
+		Inspector() *hibikenasynq.Inspector
+	}
+	cp, ok := scheduler.(clientProvider)
+	if !ok || cp == nil {
+		// TaskScheduler not available or wrong type; return no-op cancel.
+		return func() {}
+	}
+
+	interval := cfg.Asynq.RecoveryInterval
+	if interval <= 0 {
+		interval = 1 * time.Minute
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go loop.RunRecovery(ctx, loop.RecoveryDeps{
+		LoopRepo:  loopRepo,
+		Client:    cp.Client(),
+		Inspector: cp.Inspector(),
+		Interval:  interval,
+	})
+	return cancel
 }
 
 // =============================================================================
@@ -423,6 +537,7 @@ func InitializeServer(
 		UsecaseSet,
 		QueueSet,
 		HandlerSet,
+		AsynqSet,
 		svc.NewServiceContextWithDeps,
 		provideServer,
 	)
