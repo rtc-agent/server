@@ -16,6 +16,7 @@ import (
 	"github.com/rtc-agent/server/internal/updates"
 	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/logger"
+	"github.com/rtc-agent/server/pkg/memory"
 	"github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -38,6 +39,7 @@ type ServiceContext struct {
 	SessionMemoryRepo   repo.SessionMemoryRepo
 	UserMemoryRepo      repo.UserMemoryRepo
 	ScriptExecutionRepo repo.ScriptExecutionRepo
+	MemoryRepo          memory.Repository // Phase 2: 统一 Memory 存储
 
 	// Services
 	EmbeddingService embedding.Service
@@ -64,6 +66,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
 	userMemoryRepo := repo.NewUserMemoryRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
+	memoryRepo := repo.NewMemoryRepo(db)
 
 	// 创建 Embedding Service
 	embeddingService, err := embedding.NewService(embedding.Config{
@@ -146,6 +149,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		SessionMemoryRepo:   sessionMemoryRepo,
 		UserMemoryRepo:      userMemoryRepo,
 		ScriptExecutionRepo: scriptExecutionRepo,
+		MemoryRepo:          memoryRepo,
 		EmbeddingService:    embeddingService,
 		UpdatePublisher:     updatePublisher,
 		CentrifugeNode:      node,
@@ -171,6 +175,7 @@ func NewServiceContextWithDeps(
 	sessionMemoryRepo repo.SessionMemoryRepo,
 	userMemoryRepo repo.UserMemoryRepo,
 	scriptExecutionRepo repo.ScriptExecutionRepo,
+	memoryRepo memory.Repository,
 	embeddingService embedding.Service,
 	updatePublisher *updates.UpdatePublisher,
 	node *centrifuge.Node,
@@ -222,6 +227,7 @@ func NewServiceContextWithDeps(
 		SessionMemoryRepo:   sessionMemoryRepo,
 		UserMemoryRepo:      userMemoryRepo,
 		ScriptExecutionRepo: scriptExecutionRepo,
+		MemoryRepo:          memoryRepo,
 		EmbeddingService:    embeddingService,
 		UpdatePublisher:     updatePublisher,
 		CentrifugeNode:      node,

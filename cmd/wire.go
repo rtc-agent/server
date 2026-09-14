@@ -52,6 +52,7 @@ var RepositorySet = wire.NewSet(
 	repo.NewSessionMemoryRepo,
 	repo.NewUserMemoryRepo,
 	repo.NewScriptExecutionRepo,
+	repo.NewMemoryRepo,
 )
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
@@ -87,6 +88,7 @@ var HandlerSet = wire.NewSet(
 	provideHTTPHandler,
 	provideOAuth2Handler,
 	provideInterruptHandler,
+	provideMemoriesHandler,
 )
 
 // ServerSet provides the main Server.
@@ -369,6 +371,13 @@ func provideInterruptHandler(
 	return httphandler.NewInterruptHandler(redisClient, cfg.Worker)
 }
 
+func provideMemoriesHandler(
+	svcCtx *svc.ServiceContext,
+	jwtSigner *auth.JWTSigner,
+) *httphandler.MemoriesHandler {
+	return httphandler.NewMemoriesHandler(svcCtx, jwtSigner)
+}
+
 func provideServer(
 	cfg *config.Config,
 	svcCtx *svc.ServiceContext,
@@ -376,6 +385,7 @@ func provideServer(
 	httpHandler *httphandler.Handler,
 	oauth2Handler *httphandler.OAuth2Handler,
 	interruptHandler *httphandler.InterruptHandler,
+	memoriesHandler *httphandler.MemoriesHandler,
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
 	streamStore *agent.StreamStore,
@@ -390,6 +400,7 @@ func provideServer(
 		httpHandler,
 		oauth2Handler,
 		interruptHandler,
+		memoriesHandler,
 		queueWorker,
 		queue,
 	)

@@ -28,6 +28,7 @@ type Server struct {
 	httpHandler      *httphandler.Handler
 	oauth2Handler    *httphandler.OAuth2Handler
 	interruptHandler *httphandler.InterruptHandler
+	memoriesHandler  *httphandler.MemoriesHandler
 	httpServer       *http.Server
 	queueWorker      *rtcqueue.Worker // rtc-queue distributed worker
 	queue            *rtcqueue.Queue  // rtc-queue for publishing recovery work items
@@ -173,6 +174,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Interrupt 端点（前端提交 interrupt 答案）
 	s.interruptHandler.RegisterRoutes(mux)
 
+	// Memories 端点（Memory 导出）
+	isDevMemories := s.cfg.Server.Env == "development"
+	s.memoriesHandler.RegisterRoutes(mux, isDevMemories)
+
 	// Centrifuge WebSocket 端点
 	wsHandler := centrifuge.NewWebsocketHandler(s.svcCtx.CentrifugeNode, centrifuge.WebsocketConfig{
 		CheckOrigin: func(r *http.Request) bool {
@@ -214,6 +219,7 @@ func NewWithDeps(
 	httpHandler *httphandler.Handler,
 	oauth2Handler *httphandler.OAuth2Handler,
 	interruptHandler *httphandler.InterruptHandler,
+	memoriesHandler *httphandler.MemoriesHandler,
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
 ) *Server {
@@ -224,6 +230,7 @@ func NewWithDeps(
 		httpHandler:      httpHandler,
 		oauth2Handler:    oauth2Handler,
 		interruptHandler: interruptHandler,
+		memoriesHandler:  memoriesHandler,
 		queueWorker:      queueWorker,
 		queue:            queue,
 	}

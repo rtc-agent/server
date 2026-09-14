@@ -51,6 +51,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
 	userMemoryRepo := repo.NewUserMemoryRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
+	memoryRepo := repo.NewMemoryRepo(db)
 	service, err := provideEmbeddingService(cfg)
 	if err != nil {
 		return nil, err
@@ -68,7 +69,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, service, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, memoryRepo, service, updatePublisher, node, dualBroker, jwtSigner)
 	return serviceContext, nil
 }
 
@@ -86,6 +87,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
 	userMemoryRepo := repo.NewUserMemoryRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
+	memoryRepo := repo.NewMemoryRepo(db)
 	service, err := provideEmbeddingService(cfg)
 	if err != nil {
 		return nil, err
@@ -103,7 +105,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, service, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, memoryRepo, service, updatePublisher, node, dualBroker, jwtSigner)
 	prometheusMetrics := provideMetrics()
 	cmdChatModelResult, err := provideChatModel(cfg, prometheusMetrics)
 	if err != nil {
@@ -117,20 +119,21 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	client := provideOAuth2ProviderClient(cfg)
 	oAuth2Handler := provideOAuth2Handler(serviceContext, jwtSigner, redisStore, client, cfg)
 	interruptHandler := provideInterruptHandler(universalClient, cfg)
+	memoriesHandler := provideMemoriesHandler(serviceContext, jwtSigner)
 	agent, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics)
 	if err != nil {
 		return nil, err
 	}
 	worker := provideQueueWorker(queue, agent, cfg)
 	streamStore := provideStreamStore(universalClient, cfg)
-	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, worker, queue, streamStore)
+	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, memoriesHandler, worker, queue, streamStore)
 	return serverServer, nil
 }
 
 // wire.go:
 
 // RepositorySet provides all repository implementations.
-var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewGoalRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo, repo.NewSessionMemoryRepo, repo.NewUserMemoryRepo, repo.NewScriptExecutionRepo)
+var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewGoalRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo, repo.NewSessionMemoryRepo, repo.NewUserMemoryRepo, repo.NewScriptExecutionRepo, repo.NewMemoryRepo)
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
 var ServiceSet = wire.NewSet(
@@ -165,6 +168,7 @@ var HandlerSet = wire.NewSet(
 	provideHTTPHandler,
 	provideOAuth2Handler,
 	provideInterruptHandler,
+	provideMemoriesHandler,
 )
 
 // ServerSet provides the main Server.
@@ -437,6 +441,13 @@ func provideInterruptHandler(
 	return httphandler.NewInterruptHandler(redisClient, cfg.Worker)
 }
 
+func provideMemoriesHandler(
+	svcCtx *svc.ServiceContext,
+	jwtSigner *auth.JWTSigner,
+) *httphandler.MemoriesHandler {
+	return httphandler.NewMemoriesHandler(svcCtx, jwtSigner)
+}
+
 func provideServer(
 	cfg *config.Config,
 	svcCtx *svc.ServiceContext,
@@ -444,6 +455,7 @@ func provideServer(
 	httpHandler *httphandler.Handler,
 	oauth2Handler *httphandler.OAuth2Handler,
 	interruptHandler *httphandler.InterruptHandler,
+	memoriesHandler *httphandler.MemoriesHandler,
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
 	streamStore *agent.StreamStore,
@@ -458,6 +470,7 @@ func provideServer(
 		httpHandler,
 		oauth2Handler,
 		interruptHandler,
+		memoriesHandler,
 		queueWorker,
 		queue,
 	)
