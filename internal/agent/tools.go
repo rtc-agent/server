@@ -276,6 +276,8 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		}
 
 		// Create Message (role=tool, type=toolcall_input).
+		// Note: Token usage is intentionally NOT recorded on tool messages.
+		// See Message struct comments in model/message.go for design rationale.
 		msg, createErr := primitives.CreateMessage(
 			txCtx, r.helpers.deps,
 			r.session.ID, &turnUUID,

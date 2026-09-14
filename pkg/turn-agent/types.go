@@ -20,7 +20,11 @@ type TurnWorkItem struct {
 // schema.TokenUsage or model.TokenUsage. The upper application uses this
 // type for persistence and metrics without importing eino.
 type TokenUsage struct {
-	// InputTokens is the number of input (prompt) tokens.
+	// InputTokens is the number of input (prompt) tokens, INCLUDING cached
+	// read/write tokens. This aligns with eino's schema.TokenUsage semantics
+	// where TotalTokens = InputTokens + OutputTokens and InputTokens already
+	// contains the cached portion.
+	// For pure input tokens (excluding cache), see FullTokenUsage.InputTokens.
 	InputTokens int
 	// OutputTokens is the number of output (completion) tokens.
 	OutputTokens int

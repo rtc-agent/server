@@ -182,6 +182,8 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		}
 
 		// 创建 toolcall_output Message
+		// Note: Token usage is intentionally NOT recorded on tool messages.
+		// See Message struct comments in model/message.go for design rationale.
 		parentMsgID := rtc.MessageID
 		outputMsg, createErr := primitives.CreateMessage(
 			txCtx, h.deps.Deps,

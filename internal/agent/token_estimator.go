@@ -86,6 +86,9 @@ func (e *TokenEstimator) Estimate(
 	roundDelta int64,
 ) *TokenEstimate {
 	// 1. 使用传入的 EWMA（来自 Session.TokenEstimateEWMA）
+	// When prevEWMA <= 0 (first call or after reset), use defaultGrowth as a
+	// reasonable fallback. This is defensive programming, not a bug.
+	// prevEWMA itself is not modified; only the local lastEWMA gets the fallback.
 	lastEWMA := prevEWMA
 	if lastEWMA <= 0 {
 		lastEWMA = e.defaultGrowth
@@ -191,6 +194,10 @@ func (e *TokenEstimator) ReestimateAfterCompact(
 }
 
 // calcRounds calculates the estimated rounds until compression threshold is reached.
+// Note: When ewma is very small (e.g., after multiple rounds with roundDelta=0),
+// the EWMA naturally decays. This is normal EWMA behavior, not a bug.
+// The explicit guard (if ewma > 0) prevents division by zero; when ewma <= 0
+// we return 999 as a sentinel meaning "effectively unknown / very large".
 func calcRounds(currentTokens, threshold int64, ewma float64) int {
 	if currentTokens >= threshold {
 		return -1

@@ -528,14 +528,7 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 	extractor := NewSessionMemoryExtractor(
 		h.deps.ChatModel,
 		h.deps.SessionMemoryRepo,
-		func(ctx context.Context, msgs []*schema.Message) (int, error) {
-			// Simple token estimation: 4 chars per token
-			total := 0
-			for _, msg := range msgs {
-				total += len(msg.Content) / 4
-			}
-			return total, nil
-		},
+		turnagent.CumulativeTokenCounter,
 		h.logger,
 		h.noThinkingOptions(),  // 禁用 thinking，节省 token
 		h.tokenCallbackHandler, // 追踪 token 消耗到 Session.TotalTokens

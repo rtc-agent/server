@@ -28,6 +28,10 @@ type Message struct {
 	DeletedAt       *time.Time `gorm:"index" json:"-"`
 
 	// Token 用量（仅 assistant 消息有值，其余角色通常为 NULL）
+	// 设计说明：toolcall_input / toolcall_output 消息不记录 token，因为：
+	// 1. Session 表已通过 AtomicAddTokenUsage 正确累加所有 token（无数据丢失）
+	// 2. 一次 LLM 调用可能返回多个 tool_calls，token 无法合理分摊到单个消息
+	// 3. 如需按消息维度统计，可通过 Session 表的累计字段查看总量
 	InputTokens     *int `json:"input_tokens,omitempty"`
 	OutputTokens    *int `json:"output_tokens,omitempty"`
 	TotalTokens     *int `json:"total_tokens,omitempty"`
@@ -62,6 +66,8 @@ const (
 )
 
 // TokenUsageUpdate carries the token usage values for a message update.
+// InputTokens here follows the same semantics as TokenUsage.InputTokens
+// (i.e., includes cached read/write), consistent with eino's schema.TokenUsage.
 type TokenUsageUpdate struct {
 	InputTokens     int
 	OutputTokens    int

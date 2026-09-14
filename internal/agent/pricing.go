@@ -18,6 +18,11 @@ type ModelPricing struct {
 // FullTokenUsage 完整的 token 使用数据。
 // 覆盖所有 token 类型维度，用于成本计算和 Session 级累加。
 type FullTokenUsage struct {
+	// InputTokens is the number of pure input tokens, EXCLUDING cached
+	// read/write tokens. Used for cost calculation where cached and uncached
+	// prices differ. CachedReadTokens and CachedWriteTokens are tracked
+	// separately for fine-grained billing.
+	// For total input tokens (including cache), see TokenUsage.InputTokens.
 	InputTokens       int64 // 纯 input（不含 cache read/write）
 	OutputTokens      int64
 	CachedReadTokens  int64 // cache hit
