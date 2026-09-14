@@ -81,6 +81,19 @@ type Session struct {
 	TokenEstimateEWMA float64 `gorm:"default:2000" json:"token_estimate_ewma"`
 
 	// ========================================================================
+	// Memory 提取状态（用于 Session Memory 后台提取器）
+	// ========================================================================
+
+	// MemoryExtractionLastTokens 上次提取 session memory 时的 token 数。
+	// 由 triggerSessionMemoryExtraction 在成功提取后更新。
+	// 0 表示从未提取过。
+	MemoryExtractionLastTokens int `gorm:"default:0" json:"memory_extraction_last_tokens"`
+
+	// MemoryExtractionLastMessages 上次提取 session memory 时的消息数。
+	// 用于计算自上次提取以来的增量 tool call 数量。
+	MemoryExtractionLastMessages int `gorm:"default:0" json:"memory_extraction_last_messages"`
+
+	// ========================================================================
 	// 元数据
 	// ========================================================================
 

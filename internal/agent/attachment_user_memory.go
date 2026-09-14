@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
@@ -62,6 +63,9 @@ func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, u
 		return "", nil
 	}
 
+	// Detect user language for preamble and category labels.
+	lang := a.detectUserLanguage(ctx, sessionID)
+
 	// Split by importance: critical/high first, then medium
 	var criticalHigh []*model.UserMemory
 	var medium []*model.UserMemory
@@ -72,14 +76,15 @@ func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, u
 			criticalHigh = append(criticalHigh, mem)
 		case model.ImportanceMedium:
 			medium = append(medium, mem)
-		// low importance: skip
+			// low importance: skip
 		}
 	}
 
 	// Build the output
 	var sb strings.Builder
 	sb.WriteString("<user_memory>\n")
-	sb.WriteString("以下是关于当前用户的持久记忆。请在回复时参考这些信息，避免重复询问已知内容。\n\n")
+	sb.WriteString(userMemoryPreamble(lang))
+	sb.WriteString("\n")
 
 	// Group by category
 	categories := map[string][]*model.UserMemory{
@@ -101,12 +106,7 @@ func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, u
 	}
 
 	// Output by category
-	categoryLabels := map[string]string{
-		model.UserMemoryCategoryUser:      "关于用户",
-		model.UserMemoryCategoryFeedback:  "工作偏好与反馈",
-		model.UserMemoryCategoryProject:   "项目信息",
-		model.UserMemoryCategoryReference: "参考资料",
-	}
+	categoryLabels := userMemoryCategoryLabels(lang)
 
 	for _, cat := range model.ValidUserMemoryCategories {
 		items := categories[cat]
@@ -124,6 +124,107 @@ func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, u
 	sb.WriteString("</user_memory>")
 
 	return sb.String(), nil
+}
+
+// detectUserLanguage attempts to determine the user's preferred language.
+//
+// Strategy:
+// 1. Check the session's AgentPrompt for language directives
+// 2. Fall back to English (safe default)
+func (a *UserMemoryAttachment) detectUserLanguage(ctx context.Context, sessionID uuid.UUID) string {
+	session, err := a.helpers.deps.SessionRepo.GetByID(ctx, sessionID)
+	if err != nil || session == nil {
+		return "en"
+	}
+
+	// Check AgentPrompt for language directives
+	prompt := strings.ToLower(session.AgentPrompt)
+	if containsCJKDirective(prompt) || containsChineseHint(prompt) {
+		return "zh"
+	}
+
+	return "en"
+}
+
+// containsCJKDirective checks for explicit "respond in Chinese" directives.
+func containsCJKDirective(text string) bool {
+	hints := []string{
+		"respond in chinese",
+		"respond in 中文",
+		"回复使用中文",
+		"用中文回复",
+		"使用中文",
+		"respond in zh",
+	}
+	for _, h := range hints {
+		if strings.Contains(text, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsChineseHint checks for Chinese-specific instructions or heavy CJK content.
+func containsChineseHint(text string) bool {
+	// Check for CJK-specific phrases in the prompt
+	cjkHints := []string{
+		"始终使用中文",
+		"always respond in chinese",
+		"detect the user's language",
+	}
+	lower := strings.ToLower(text)
+	for _, h := range cjkHints {
+		if strings.Contains(lower, h) {
+			return true
+		}
+	}
+
+	// Check if the prompt itself contains significant CJK content
+	// (indicating the user configured it in Chinese)
+	cjkCount := 0
+	totalLetters := 0
+	for _, r := range text {
+		if unicode.IsLetter(r) {
+			totalLetters++
+			if unicode.Is(unicode.Han, r) {
+				cjkCount++
+			}
+		}
+	}
+	if totalLetters > 20 && float64(cjkCount)/float64(totalLetters) > 0.3 {
+		return true
+	}
+	return false
+}
+
+// userMemoryPreamble returns the preamble text in the given language.
+func userMemoryPreamble(lang string) string {
+	switch lang {
+	case "zh":
+		return "以下是关于当前用户的持久记忆。请在回复时参考这些信息，避免重复询问已知内容。"
+	default:
+		return "The following are persistent memories about the current user. Reference this information in your responses and avoid re-asking known details."
+	}
+}
+
+// userMemoryCategoryLabels returns category labels in the given language.
+func userMemoryCategoryLabels(lang string) map[string]string {
+	switch lang {
+	case "zh":
+		return map[string]string{
+			model.UserMemoryCategoryUser:      "关于用户",
+			model.UserMemoryCategoryFeedback:  "工作偏好与反馈",
+			model.UserMemoryCategoryProject:   "项目信息",
+			model.UserMemoryCategoryReference: "参考资料",
+		}
+	default:
+		return map[string]string{
+			model.UserMemoryCategoryUser:      "About User",
+			model.UserMemoryCategoryFeedback:  "Work Preferences & Feedback",
+			model.UserMemoryCategoryProject:   "Project Info",
+			model.UserMemoryCategoryReference: "References",
+		}
+	}
 }
 
 // formatUserMemoryForInjection formats a single user memory for injection into LLM context.

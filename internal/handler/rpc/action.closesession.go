@@ -50,10 +50,19 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		}, nil
 	}
 
-	// 1. Close the session
+	// 1. Close the session and delete session memories.
+	// Session memories are transient (used for context compression within a session).
+	// Once the session is closed, they are no longer needed and should be cleaned up.
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		if err := primitives.UpdateSessionStatus(txCtx, h.deps.Deps, session.ID, protocol.SessionStatusClosed); err != nil {
 			return nil, err
+		}
+		// Delete session memories (physical delete; they have served their purpose for compression).
+		if err := h.deps.Deps.SessionMemoryRepo.DeleteBySession(txCtx, session.ID); err != nil {
+			// Non-fatal: log but don't block session close.
+			logger.Warn(ctx, "[CloseSession] failed to delete session memories (non-fatal)",
+				zap.String("session", session.ID.String()),
+				zap.Error(err))
 		}
 		return primitives.BuildSessionCloseUpdates(session), nil
 	})

@@ -35,10 +35,10 @@ type SessionMemoryRepo interface {
 	// Update 更新记忆
 	Update(ctx context.Context, id uuid.UUID, fields map[string]any) error
 
-	// Delete 软删除记忆
+	// Delete 删除记忆（物理删除，SessionMemory 使用 *time.Time 而非 gorm.DeletedAt）
 	Delete(ctx context.Context, id uuid.UUID) error
 
-	// DeleteBySession 软删除会话的所有记忆
+	// DeleteBySession 删除会话的所有记忆（物理删除）
 	DeleteBySession(ctx context.Context, sessionID uuid.UUID) error
 
 	// CountTokensBySession 统计会话的总 token 数
