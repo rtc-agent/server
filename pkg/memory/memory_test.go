@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -433,7 +432,7 @@ func TestFormatter_FormatForExport_Basic(t *testing.T) {
 		Title:       "Use PostgreSQL",
 		Description: "Choose PostgreSQL as main database",
 		Content:     "We chose PostgreSQL for its JSONB support and full-text search.",
-		Tags:        model.StringArray{"database", "architecture"},
+		Tags:        StringArray{"database", "architecture"},
 		Resource:    "https://www.postgresql.org/",
 		Timestamp:   now,
 		CreatedAt:   now,
@@ -486,7 +485,7 @@ func TestFormatter_FormatForExport_EmptyTags(t *testing.T) {
 		Type:      "progress",
 		Title:     "Done",
 		Content:   "Finished.",
-		Tags:      model.StringArray{},
+		Tags:      StringArray{},
 		Timestamp: time.Now(),
 		CreatedAt: time.Now(),
 	}

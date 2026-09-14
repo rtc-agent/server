@@ -1,8 +1,10 @@
 package memory
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Formatter 将 Memory 格式化为不同用途的文本
@@ -23,7 +25,8 @@ var typeOrder = []string{
 //
 // 参考 formatSessionMemoriesForInjection，但适配统一 Memory 模型。
 // 使用 <system-reminder> 标签包裹，每类别最多 3 条，内容截断 200 字符。
-// language 参数预留用于未来多语言支持（当前未使用）。
+// language 参数预留用于未来多语言支持（当前未使用，始终输出英文标签）。
+// TODO: 根据 language 切换标签（context/progress/decision 等）
 func (f *Formatter) FormatForInjection(memories []*Memory, language string) string {
 	if len(memories) == 0 {
 		return ""
@@ -55,8 +58,9 @@ func (f *Formatter) FormatForInjection(memories []*Memory, language string) stri
 		for i := 0; i < limit; i++ {
 			item := items[i]
 			content := item.Content
-			if len(content) > 200 {
-				content = content[:200] + "..."
+			runes := []rune(content)
+			if len(runes) > 200 {
+				content = string(runes[:200]) + "..."
 			}
 			fmt.Fprintf(&sb, "- **[%s]** %s: %s\n", memType, item.Title, content)
 		}
@@ -108,10 +112,6 @@ func (f *Formatter) FormatForSummary(memories []*Memory) string {
 		knownTypes[t.key] = true
 	}
 	var unknownItems []*Memory
-	for _, item := range grouped[""] {
-		// This won't trigger; empty-key items shouldn't exist after validation.
-		_ = item
-	}
 	for memType, items := range grouped {
 		if !knownTypes[memType] {
 			unknownItems = append(unknownItems, items...)
@@ -149,8 +149,16 @@ func (f *Formatter) FormatForSummary(memories []*Memory) string {
 //
 // 参考设计文档中的导出能力设计章节。
 // 生成符合 OKF v0.2 规范的 YAML frontmatter + markdown body。
+// 从 Metadata 中提取 Provenance (sources)、Trust (generated/verified)、
+// Lifecycle (status/stale_after) 字段并渲染到 frontmatter。
 func (f *Formatter) FormatForExport(m *Memory) string {
 	var sb strings.Builder
+
+	// 解析 Metadata
+	var metadata map[string]any
+	if m.Metadata != "" {
+		_ = json.Unmarshal([]byte(m.Metadata), &metadata)
+	}
 
 	// YAML frontmatter
 	sb.WriteString("---\n")
@@ -171,10 +179,62 @@ func (f *Formatter) FormatForExport(m *Memory) string {
 		fmt.Fprintf(&sb, "resource: %s\n", m.Resource)
 	}
 
-	// Trust: generated info
-	sb.WriteString("generated:\n")
-	fmt.Fprintf(&sb, "  by: rtc-agent/1.0\n")
-	fmt.Fprintf(&sb, "  at: \"%s\"\n", m.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"))
+	if metadata != nil {
+		// OKF Provenance: sources
+		if sources, ok := metadata["sources"].([]any); ok && len(sources) > 0 {
+			sb.WriteString("sources:\n")
+			for _, src := range sources {
+				if s, ok := src.(map[string]any); ok {
+					sb.WriteString("  - \n")
+					for k, v := range s {
+						fmt.Fprintf(&sb, "    %s: %v\n", k, v)
+					}
+				}
+			}
+		}
+
+		// OKF Trust: generated
+		sb.WriteString("generated:\n")
+		generatedBy := "rtc-agent/1.0"
+		if gen, ok := metadata["generated"].(map[string]any); ok {
+			if by, ok := gen["by"].(string); ok {
+				generatedBy = by
+			}
+		}
+		fmt.Fprintf(&sb, "  by: %s\n", generatedBy)
+		fmt.Fprintf(&sb, "  at: \"%s\"\n", m.CreatedAt.UTC().Format(time.RFC3339))
+
+		// OKF Trust: verified
+		if verified, ok := metadata["verified"].([]any); ok && len(verified) > 0 {
+			sb.WriteString("verified:\n")
+			for _, v := range verified {
+				if vMap, ok := v.(map[string]any); ok {
+					sb.WriteString("  - \n")
+					for k, val := range vMap {
+						fmt.Fprintf(&sb, "    %s: %v\n", k, val)
+					}
+				}
+			}
+		}
+
+		// OKF Lifecycle: status
+		if status, ok := metadata["status"].(string); ok {
+			fmt.Fprintf(&sb, "status: %s\n", status)
+		} else {
+			sb.WriteString("status: stable\n")
+		}
+
+		// OKF Lifecycle: stale_after
+		if staleAfter, ok := metadata["stale_after"].(string); ok {
+			fmt.Fprintf(&sb, "stale_after: %s\n", staleAfter)
+		}
+	} else {
+		// 最小 generated 信息
+		sb.WriteString("generated:\n")
+		fmt.Fprintf(&sb, "  by: rtc-agent/1.0\n")
+		fmt.Fprintf(&sb, "  at: \"%s\"\n", m.CreatedAt.UTC().Format(time.RFC3339))
+		sb.WriteString("status: stable\n")
+	}
 
 	sb.WriteString("---\n\n")
 

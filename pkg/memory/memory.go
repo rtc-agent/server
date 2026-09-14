@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/model"
 	"gorm.io/gorm"
 )
 
@@ -66,18 +65,28 @@ type Memory struct {
 	Title       string            `json:"title" gorm:"type:varchar(200);not null"`     // 5-10 词摘要
 	Description string            `json:"description" gorm:"type:varchar(500)"`        // 一句话描述
 	Content     string            `json:"content" gorm:"type:text;not null"`           // markdown body
-	Tags        model.StringArray `json:"tags" gorm:"type:jsonb;default:'[]'"`         // 标签数组
-	Resource    string            `json:"resource" gorm:"type:varchar(500)"`           // 外部链接
-	Timestamp   time.Time         `json:"timestamp" gorm:"not null"`                   // 知识时间戳
+	// Tags 使用 JSONB 数组而非 PostgreSQL text[]，因为：
+	// 1. JSONB 更灵活，支持嵌套结构（未来扩展）
+	// 2. 与 Metadata 字段保持一致的存储策略
+	// 3. 查询性能差异在标签数量少的场景下可忽略
+	// 注意：与 UserMemory.Tags (text[]) 不一致，迁移时需要转换。
+	Tags        StringArray  `json:"tags" gorm:"type:jsonb;default:'[]'"`         // 标签数组
+	Resource    string       `json:"resource" gorm:"type:varchar(500)"`           // 外部链接
+	Timestamp   time.Time    `json:"timestamp" gorm:"not null"`                   // 知识时间戳
 
 	// ─── 扩展 ───
-	Metadata   model.JSONBString `json:"metadata" gorm:"type:jsonb;default:'{}'"` // OKF Provenance/Trust/Lifecycle
+	Metadata   JSONBString  `json:"metadata" gorm:"type:jsonb;default:'{}'"` // OKF Provenance/Trust/Lifecycle
 	TokenCount int               `json:"tokenCount" gorm:"default:0"`             // 预估 token
 
 	// ─── 审计 ───
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt time.Time      `json:"updatedAt"`
-	DeletedAt gorm.DeletedAt `json:"deletedAt" gorm:"index"` // 使用 gorm.DeletedAt 实现软删除
+	// DeletedAt 使用 gorm.DeletedAt 而非 *time.Time，因为：
+	// 1. GORM 自动处理软删除过滤，减少手动 WHERE 条件
+	// 2. 与 GORM 生态更一致，便于使用 Unscoped() 等 API
+	// 注意：与现有 SessionMemory/UserMemory 的 *time.Time 不一致，
+	// 迁移时需要统一或编写适配层。
+	DeletedAt gorm.DeletedAt `json:"deletedAt" gorm:"index"`
 }
 
 // TableName 指定表名

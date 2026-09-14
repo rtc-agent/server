@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -36,9 +37,13 @@ type Repository interface {
 
 // ListOptions 查询选项
 type ListOptions struct {
-	Type    string   // 按类型过滤
-	Tags    []string // 按标签过滤（OR 逻辑）
-	Limit   int      // 分页大小
-	Offset  int      // 偏移量
-	OrderBy string   // 排序字段（默认 created_at DESC）
+	Type           string    // 按类型过滤
+	Tags           []string  // 按标签过滤（OR 逻辑）
+	ScopeID        uuid.UUID // 按 ScopeID 过滤（可选，覆盖方法参数）
+	CreatedAfter   time.Time // 创建时间下限
+	CreatedBefore  time.Time // 创建时间上限
+	IncludeDeleted bool      // 是否包含已删除记录
+	Limit          int       // 分页大小
+	Offset         int       // 偏移量
+	OrderBy        string    // 排序字段（默认 created_at DESC）
 }
