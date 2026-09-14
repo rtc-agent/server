@@ -1,0 +1,175 @@
+package memory
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/model"
+	"gorm.io/gorm"
+)
+
+// ScopeType 定义 Memory 的作用域
+type ScopeType string
+
+const (
+	ScopeSession ScopeType = "session" // 会话级，随 session 结束归档
+	ScopeUser    ScopeType = "user"    // 用户级，跨 session 持久化
+	ScopeGlobal  ScopeType = "global"  // 全局级，所有用户共享
+)
+
+// ValidScopeTypes 所有有效的作用域
+var ValidScopeTypes = []ScopeType{ScopeSession, ScopeUser, ScopeGlobal}
+
+// IsValidScopeType 检查作用域是否有效
+func IsValidScopeType(scope ScopeType) bool {
+	for _, s := range ValidScopeTypes {
+		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidMemoryTypes 所有有效的 Memory 类型
+var ValidMemoryTypes = []string{
+	"decision", "context", "progress", "issue", "learnings",
+	"user", "feedback", "project", "reference",
+}
+
+// IsValidMemoryType 检查类型是否有效
+func IsValidMemoryType(t string) bool {
+	for _, v := range ValidMemoryTypes {
+		if v == t {
+			return true
+		}
+	}
+	return false
+}
+
+// Memory 是 OKF 兼容的知识单元
+type Memory struct {
+	ID uuid.UUID `json:"id" gorm:"type:uuid;primaryKey"`
+
+	// ─── 作用域 ───
+	Scope   ScopeType `json:"scope" gorm:"type:varchar(20);not null;index"`
+	ScopeID uuid.UUID `json:"scopeId" gorm:"type:uuid;index"` // session_id / user_id / zero for global
+
+	// ─── OKF 标准字段 ───
+	Type        string            `json:"type" gorm:"type:varchar(50);not null;index"` // decision | context | progress | issue | learnings | ...
+	Title       string            `json:"title" gorm:"type:varchar(200);not null"`     // 5-10 词摘要
+	Description string            `json:"description" gorm:"type:varchar(500)"`        // 一句话描述
+	Content     string            `json:"content" gorm:"type:text;not null"`           // markdown body
+	Tags        model.StringArray `json:"tags" gorm:"type:jsonb;default:'[]'"`         // 标签数组
+	Resource    string            `json:"resource" gorm:"type:varchar(500)"`           // 外部链接
+	Timestamp   time.Time         `json:"timestamp" gorm:"not null"`                   // 知识时间戳
+
+	// ─── 扩展 ───
+	Metadata   model.JSONBString `json:"metadata" gorm:"type:jsonb;default:'{}'"` // OKF Provenance/Trust/Lifecycle
+	TokenCount int               `json:"tokenCount" gorm:"default:0"`             // 预估 token
+
+	// ─── 审计 ───
+	CreatedAt time.Time      `json:"createdAt"`
+	UpdatedAt time.Time      `json:"updatedAt"`
+	DeletedAt gorm.DeletedAt `json:"deletedAt" gorm:"index"` // 使用 gorm.DeletedAt 实现软删除
+}
+
+// TableName 指定表名
+func (Memory) TableName() string {
+	return "memories"
+}
+
+// BeforeCreate 自动生成 UUID v7
+func (m *Memory) BeforeCreate(tx *gorm.DB) error {
+	if m.ID == uuid.Nil {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return err
+		}
+		m.ID = id
+	}
+	return nil
+}
+
+// Validate 验证模型字段
+func (m *Memory) Validate() error {
+	if !IsValidScopeType(m.Scope) {
+		return fmt.Errorf("%w: %q", ErrInvalidScope, m.Scope)
+	}
+	if !IsValidMemoryType(m.Type) {
+		return fmt.Errorf("%w: %q", ErrInvalidType, m.Type)
+	}
+	if m.Title == "" {
+		return fmt.Errorf("title is required")
+	}
+	if m.Content == "" {
+		return fmt.Errorf("content is required")
+	}
+	if m.Timestamp.IsZero() {
+		return fmt.Errorf("timestamp is required")
+	}
+	// ScopeID 要求：session 和 user scope 必须有 ScopeID
+	if (m.Scope == ScopeSession || m.Scope == ScopeUser) && m.ScopeID == uuid.Nil {
+		return fmt.Errorf("scopeId is required for %s scope", m.Scope)
+	}
+	return nil
+}
+
+// ─── MemoryLink ───
+
+// MemoryLink 表示概念间的语义关系
+type MemoryLink struct {
+	ID       uuid.UUID `json:"id" gorm:"type:uuid;primaryKey"`
+	FromID   uuid.UUID `json:"fromId" gorm:"type:uuid;not null;index"`
+	ToID     uuid.UUID `json:"toId" gorm:"type:uuid;not null;index"`
+	Relation string    `json:"relation" gorm:"type:varchar(50);not null"` // related | depends_on | supersedes | derives_from
+
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// TableName 指定表名
+func (MemoryLink) TableName() string {
+	return "memory_links"
+}
+
+// BeforeCreate 自动生成 UUID v7
+func (l *MemoryLink) BeforeCreate(tx *gorm.DB) error {
+	if l.ID == uuid.Nil {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return err
+		}
+		l.ID = id
+	}
+	return nil
+}
+
+// ValidRelations 所有有效的关系类型
+var ValidRelations = []string{"related", "depends_on", "supersedes", "derives_from"}
+
+// IsValidRelation 检查关系类型是否有效
+func IsValidRelation(relation string) bool {
+	for _, r := range ValidRelations {
+		if r == relation {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate 验证 link 字段
+func (l *MemoryLink) Validate() error {
+	if l.FromID == uuid.Nil {
+		return fmt.Errorf("fromId is required")
+	}
+	if l.ToID == uuid.Nil {
+		return fmt.Errorf("toId is required")
+	}
+	if l.FromID == l.ToID {
+		return fmt.Errorf("fromId and toId must be different")
+	}
+	if !IsValidRelation(l.Relation) {
+		return fmt.Errorf("invalid relation: %q", l.Relation)
+	}
+	return nil
+}
