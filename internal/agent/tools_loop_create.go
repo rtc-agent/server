@@ -55,14 +55,7 @@ type createLoopResult struct {
 func (t *createLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "create_loop",
-		Desc: "Create a recurring loop for the current session. The agent will execute the prompt at regular intervals.\n\n" +
-			"Call this ONLY after:\n" +
-			"1. Understanding the user's recurring task intent\n" +
-			"2. Refining the prompt and parameters (interval, max_turns)\n" +
-			"3. Proposing the plan to the user and receiving explicit confirmation\n\n" +
-			"IMPORTANT: You MUST NOT call this tool if there is already an active loop. " +
-			"You MUST NOT call this tool if there is an active goal (they are mutually exclusive). " +
-			"You MUST NOT decide the parameters for the user — user confirmation is required.",
+		Desc: createLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"prompt": {
 				Type:     schema.String,

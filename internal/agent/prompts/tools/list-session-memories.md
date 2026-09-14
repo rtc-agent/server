@@ -1,0 +1,1 @@
+List all session memories for the current session. Use this to review what has been remembered so far.

@@ -1,0 +1,1 @@
+Search across session memories and user memories. Use this to find relevant information from past conversations or general knowledge. User memories support keyword-based search.

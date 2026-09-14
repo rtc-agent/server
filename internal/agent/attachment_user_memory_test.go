@@ -36,7 +36,7 @@ func TestUserMemoryPreamble(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := userMemoryPreamble(tt.lang)
+			result := userMemoryPreambleText(tt.lang)
 			assert.Contains(t, result, tt.contains)
 		})
 	}
@@ -44,7 +44,7 @@ func TestUserMemoryPreamble(t *testing.T) {
 
 func TestUserMemoryCategoryLabels(t *testing.T) {
 	t.Run("Chinese labels", func(t *testing.T) {
-		labels := userMemoryCategoryLabels("zh")
+		labels := userMemoryLabels("zh")
 		assert.Equal(t, "关于用户", labels["user"])
 		assert.Equal(t, "工作偏好与反馈", labels["feedback"])
 		assert.Equal(t, "项目信息", labels["project"])
@@ -52,7 +52,7 @@ func TestUserMemoryCategoryLabels(t *testing.T) {
 	})
 
 	t.Run("English labels", func(t *testing.T) {
-		labels := userMemoryCategoryLabels("en")
+		labels := userMemoryLabels("en")
 		assert.Equal(t, "About User", labels["user"])
 		assert.Equal(t, "Work Preferences & Feedback", labels["feedback"])
 		assert.Equal(t, "Project Info", labels["project"])
@@ -60,7 +60,7 @@ func TestUserMemoryCategoryLabels(t *testing.T) {
 	})
 
 	t.Run("Unknown language falls back to English", func(t *testing.T) {
-		labels := userMemoryCategoryLabels("ja")
+		labels := userMemoryLabels("ja")
 		assert.Equal(t, "About User", labels["user"])
 	})
 }

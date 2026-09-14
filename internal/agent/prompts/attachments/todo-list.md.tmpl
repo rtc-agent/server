@@ -1,0 +1,12 @@
+## Current Tasks
+
+{{ if .InProgress }}### In Progress
+{{ range .InProgress }}- **{{ .Content }}**
+{{ end }}
+{{ end }}{{ if .Pending }}### Pending
+{{ range .Pending }}- {{ .Content }}
+{{ end }}
+{{ end }}{{ if .Completed }}### Completed
+{{ range .Completed }}- ~~{{ .Content }}~~
+{{ end }}
+{{ end }}

@@ -1,0 +1,1 @@
+Stop a running sub agent session and all its descendant sessions. The sub agent's current work will be cancelled, and the parent session will be resumed. Use this when a sub agent is stuck, no longer needed, or needs to be terminated.

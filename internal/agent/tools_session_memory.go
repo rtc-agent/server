@@ -22,9 +22,7 @@ func (h *helpers) createSaveSessionMemoryTool() tool.InvokableTool {
 func (t *saveSessionMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "save_session_memory",
-		Desc: "Save important information from the current conversation to session memory. " +
-			"Use this to remember key decisions, progress, issues, and learnings throughout the session. " +
-			"These memories will be used for context compression and can be retrieved later.",
+		Desc: saveSessionMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
 				Type:     schema.String,
@@ -103,8 +101,7 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 		"token_count": tokenCount,
 	})
 
-	return fmt.Sprintf("Session memory saved successfully (ID: %s, Category: %s, Title: %s)",
-		memory.ID.String(), args.Category, args.Title), nil
+	return formatSessionMemorySaved(memory.ID.String(), args.Category, args.Title), nil
 }
 
 // listSessionMemoriesTool 列出会话记忆
@@ -119,8 +116,7 @@ func (h *helpers) createListSessionMemoriesTool() tool.InvokableTool {
 func (t *listSessionMemoriesTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "list_session_memories",
-		Desc: "List all session memories for the current session. " +
-			"Use this to review what has been remembered so far.",
+		Desc: listSessionMemoriesDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
 				Type:     schema.String,
@@ -169,21 +165,24 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 	}
 
 	if len(memories) == 0 {
-		return "No session memories found.", nil
+		return formatNoSessionMemories(), nil
 	}
 
 	// Format output
-	var output string
-	output += fmt.Sprintf("Found %d session memories:\n\n", len(memories))
-
+	items := make([]sessionMemoryItem, len(memories))
 	for i, mem := range memories {
-		output += fmt.Sprintf("%d. **[%s]** %s\n", i+1, mem.Category, mem.Title)
-		output += fmt.Sprintf("   %s\n", truncateString(mem.Content, 200))
+		createdAt := ""
 		if !mem.CreatedAt.IsZero() {
-			output += fmt.Sprintf("   Created: %s\n", mem.CreatedAt.Format("2006-01-02 15:04"))
+			createdAt = mem.CreatedAt.Format("2006-01-02 15:04")
 		}
-		output += "\n"
+		items[i] = sessionMemoryItem{
+			Index:     i + 1,
+			Category:  mem.Category,
+			Title:     mem.Title,
+			Content:   truncateString(mem.Content, 200),
+			CreatedAt: createdAt,
+		}
 	}
 
-	return output, nil
+	return formatSessionMemoriesList(len(memories), items), nil
 }

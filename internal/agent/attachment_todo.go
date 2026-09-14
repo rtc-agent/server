@@ -3,10 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/model"
 )
 
 // TodoListAttachment injects the current todo list into LLM context.
@@ -48,46 +46,5 @@ func (a *TodoListAttachment) Build(ctx context.Context, sessionID uuid.UUID, use
 		return "", nil
 	}
 
-	// Group tasks by status
-	var inProgress, pending, completed []model.TodoItem
-	for _, item := range session.TodoList {
-		switch item.Status {
-		case "in_progress":
-			inProgress = append(inProgress, item)
-		case "pending":
-			pending = append(pending, item)
-		case "completed":
-			completed = append(completed, item)
-		}
-	}
-
-	// Build the output
-	var sb strings.Builder
-	sb.WriteString("## Current Tasks\n\n")
-
-	if len(inProgress) > 0 {
-		sb.WriteString("### In Progress\n")
-		for _, item := range inProgress {
-			fmt.Fprintf(&sb, "- **%s**\n", item.Content)
-		}
-		sb.WriteString("\n")
-	}
-
-	if len(pending) > 0 {
-		sb.WriteString("### Pending\n")
-		for _, item := range pending {
-			fmt.Fprintf(&sb, "- %s\n", item.Content)
-		}
-		sb.WriteString("\n")
-	}
-
-	if len(completed) > 0 {
-		sb.WriteString("### Completed\n")
-		for _, item := range completed {
-			fmt.Fprintf(&sb, "- ~~%s~~\n", item.Content)
-		}
-		sb.WriteString("\n")
-	}
-
-	return sb.String(), nil
+	return formatTodoList(session.TodoList), nil
 }

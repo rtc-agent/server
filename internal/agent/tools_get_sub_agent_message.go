@@ -49,7 +49,7 @@ type getSubAgentMessageResult struct {
 func (t *getSubAgentMessageTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "get_sub_agent_message",
-		Desc: "Get the last message from a specific sub agent session. Use this to check the latest output or status of a sub agent. Returns the message content, role, and metadata.",
+		Desc: getSubAgentMessageDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"sub_session_id": {
 				Type:     schema.String,

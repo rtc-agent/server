@@ -1,0 +1,7 @@
+Found {{.Count}} memories:
+
+{{range .Memories}}{{.Index}}. **[\{{.MemoryType}}/{{.Category}}]** {{.Title}}
+   {{.Content}}
+   Created: {{.CreatedAt}}
+
+{{end}}

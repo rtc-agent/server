@@ -1,0 +1,1 @@
+List all running sub agent sessions (descendants of the current session tree). Returns an array of sub agent sessions with their session ID, title, status, and creation time. Use this to check the status of spawned sub agents.

@@ -71,19 +71,7 @@ type subAgentInterruptState struct {
 func (t *subAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "sub_agent",
-		Desc: `Create a sub agent session to handle a complex, multi-step task.
-
-The sub agent runs in its own session with a fresh context.
-
-Two modes are available:
-- **async** (default): Returns immediately with the sub session ID. The parent session continues running. When the sub agent completes, a notification message will be delivered to the parent session in a new turn. Use this when the parent can continue working without waiting for the result.
-- **sync**: The parent session is paused until the sub agent completes, then its final response is returned as the tool result. Use this when the parent needs the result before continuing.
-
-Usage notes:
-- Always include a short title (3-5 words) summarizing the task
-- The sub agent starts with a blank context. Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters
-- Explain what you're trying to accomplish and why. Describe what you've already learned or ruled out
-- Never delegate understanding. Don't write vague instructions like "handle this task" — include specific requirements, file paths, and relevant context`,
+		Desc: subAgentDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"title": {
 				Type:     schema.String,
@@ -158,7 +146,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 				"sub_session_id": subSessionID.String(),
 				"error":          msgErr.Error(),
 			})
-			return "Sub agent completed, but no result message found.", nil
+			return formatSubAgentNoResult(), nil
 		}
 
 		// Find the last assistant message.
@@ -170,7 +158,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 			}
 		}
 		if lastMsg == nil {
-			return "Sub agent completed, but no assistant message found.", nil
+			return formatSubAgentNoAssistant(), nil
 		}
 
 		// Deserialize the message content.
@@ -180,14 +168,14 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 				"sub_session_id": subSessionID.String(),
 				"error":          err.Error(),
 			})
-			return "Sub agent completed, but result could not be parsed.", nil
+			return formatSubAgentParseFailed(), nil
 		}
 
 		// Extract the text content.
 		resultText := extractTextFromContent(content)
 
 		if resultText == "" {
-			resultText = "Sub agent completed with no output."
+			resultText = formatSubAgentNoOutput()
 		}
 
 		t.helpers.logIfEnabled(ctx, "subAgent.resume.completed", map[string]any{
@@ -406,11 +394,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 
 	// 7. Async mode: create toolcall_output and return immediately.
 	if mode == "async" {
-		asyncResult := fmt.Sprintf(
-			"Sub agent task created successfully.\n- Session ID: %s\n- Title: %s\n\nThe sub agent is working asynchronously in the background. It will notify you when the task is complete. You can continue with other work in the meantime.",
-			subSessionID.String(),
-			args.Title,
-		)
+		asyncResult := formatSubAgentAsyncResult(subSessionID.String(), args.Title)
 
 		completedStatus := "completed"
 		outputToolCall := protocol.ToolCall{

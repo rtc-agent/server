@@ -55,7 +55,7 @@ type stoppedSession struct {
 func (t *stopSubAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "stop_sub_agent",
-		Desc: "Stop a running sub agent session and all its descendant sessions. The sub agent's current work will be cancelled, and the parent session will be resumed. Use this when a sub agent is stuck, no longer needed, or needs to be terminated.",
+		Desc: stopSubAgentDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"sub_session_id": {
 				Type:     schema.String,

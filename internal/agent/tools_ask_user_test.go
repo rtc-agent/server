@@ -115,8 +115,8 @@ func TestFormatAskUserResult_Completed_NonJSONFallback(t *testing.T) {
 
 func TestFormatAskUserResult_Failed(t *testing.T) {
 	got := formatAskUserResult(newTestRtc(protocol.RtcStatusFailed, "boom", "execution blew up"))
-	if !strings.Contains(got, "[Tool Error]") {
-		t.Errorf("expected [Tool Error] prefix, got: %s", got)
+	if !strings.Contains(got, "encountered an error") {
+		t.Errorf("expected error message, got: %s", got)
 	}
 	if !strings.Contains(got, "ask_user") {
 		t.Errorf("missing tool name: %s", got)
@@ -129,15 +129,15 @@ func TestFormatAskUserResult_Failed(t *testing.T) {
 
 func TestFormatAskUserResult_Timeout(t *testing.T) {
 	got := formatAskUserResult(newTestRtc(protocol.RtcStatusTimeout, "", ""))
-	if !strings.Contains(got, "[Tool Timeout]") {
-		t.Errorf("expected [Tool Timeout], got: %s", got)
+	if !strings.Contains(got, "timed out") {
+		t.Errorf("expected timeout message, got: %s", got)
 	}
 }
 
 func TestFormatAskUserResult_Rejected(t *testing.T) {
 	got := formatAskUserResult(newTestRtc(protocol.RtcStatusRejected, "", ""))
-	if !strings.Contains(got, "[Tool Rejected]") {
-		t.Errorf("expected [Tool Rejected], got: %s", got)
+	if !strings.Contains(got, "rejected") {
+		t.Errorf("expected rejected message, got: %s", got)
 	}
 	if !strings.Contains(got, "rejected by user") {
 		t.Errorf("expected 'rejected by user' message, got: %s", got)
@@ -146,7 +146,7 @@ func TestFormatAskUserResult_Rejected(t *testing.T) {
 
 func TestFormatAskUserResult_Pending(t *testing.T) {
 	got := formatAskUserResult(newTestRtc(protocol.RtcStatusPending, "", ""))
-	if !strings.Contains(got, "[Tool Pending]") {
-		t.Errorf("expected [Tool Pending], got: %s", got)
+	if !strings.Contains(got, "still pending") {
+		t.Errorf("expected pending message, got: %s", got)
 	}
 }

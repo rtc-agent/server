@@ -54,7 +54,7 @@ type (
 func (t *askUserTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "ask_user",
-		Desc: "Asks the user 1-4 multiple-choice questions to gather preferences, clarify ambiguity, understand requirements, or get decisions on implementation choices. Users can always pick 'Other' to provide free-form text.",
+		Desc: askUserDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"questions": {
 				Type:     schema.Array,
@@ -143,17 +143,17 @@ func formatAskUserResult(dbRtc *model.Rtc) string {
 	}
 
 	if len(dbRtc.Result) == 0 {
-		return "User has answered your questions: (no answers received). You can now continue."
+		return formatAskUserNoAnswers()
 	}
 
 	var result askUserResult
 	if err := json.Unmarshal([]byte(dbRtc.Result), &result); err != nil {
 		// Client submitted non-JSON result: treat as opaque text.
-		return fmt.Sprintf("User has answered your questions: %s. You can now continue with the user's answers in mind.", string(dbRtc.Result))
+		return formatAskUserResultText(string(dbRtc.Result))
 	}
 
 	if len(result.Answers) == 0 {
-		return "User has answered your questions: (no answers received). You can now continue."
+		return formatAskUserNoAnswers()
 	}
 
 	// Build answer entries preserving Claude Code's format.
@@ -171,6 +171,5 @@ func formatAskUserResult(dbRtc *model.Rtc) string {
 		parts = append(parts, entry)
 	}
 
-	return fmt.Sprintf("User has answered your questions: %s. You can now continue with the user's answers in mind.",
-		strings.Join(parts, ", "))
+	return formatAskUserResultText(strings.Join(parts, ", "))
 }

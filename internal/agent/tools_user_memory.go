@@ -50,10 +50,7 @@ func (h *helpers) createSaveUserMemoryTool() tool.InvokableTool {
 func (t *saveUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "save_user_memory",
-		Desc: "Save persistent user-level memory that persists across sessions. " +
-			"Use this to remember user preferences, project details, feedback, and references. " +
-			"Categories: user (about the user), feedback (how to work with user), project (ongoing work), reference (external resources). " +
-			"For feedback and project categories, content MUST include '**Why:**' and '**How to apply:**' sections.",
+		Desc: saveUserMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
 				Type:     schema.String,
@@ -168,8 +165,7 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		"importance": args.Importance,
 	})
 
-	return fmt.Sprintf("User memory saved successfully (ID: %s, Category: %s, Importance: %s, Title: %s)",
-		memory.ID.String(), args.Category, args.Importance, args.Title), nil
+	return formatUserMemorySaved(memory.ID.String(), args.Category, args.Importance, args.Title), nil
 }
 
 // validateStructuredContent 验证 feedback/project 类型的内容结构
@@ -206,9 +202,7 @@ func (h *helpers) createUpdateUserMemoryTool() tool.InvokableTool {
 func (t *updateUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "update_user_memory",
-		Desc: "Update an existing user memory. " +
-			"You can update title, content, description, tags, importance, or metadata. " +
-			"Only the fields you provide will be updated.",
+		Desc: updateUserMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"memory_id": {
 				Type:     schema.String,
@@ -332,7 +326,7 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		return "", fmt.Errorf("update memory: %w", err)
 	}
 
-	return fmt.Sprintf("User memory %s updated successfully.", args.MemoryID), nil
+	return formatUserMemoryUpdated(args.MemoryID), nil
 }
 
 // =============================================================================
@@ -350,7 +344,7 @@ func (h *helpers) createDeleteUserMemoryTool() tool.InvokableTool {
 func (t *deleteUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "delete_user_memory",
-		Desc: "Soft-delete a user memory. The memory will be marked as deleted and won't appear in future queries.",
+		Desc: deleteUserMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"memory_id": {
 				Type:     schema.String,
@@ -396,7 +390,7 @@ func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		return "", fmt.Errorf("delete memory: %w", err)
 	}
 
-	return fmt.Sprintf("User memory %s deleted successfully.", args.MemoryID), nil
+	return formatUserMemoryDeleted(args.MemoryID), nil
 }
 
 // =============================================================================
@@ -414,8 +408,7 @@ func (h *helpers) createListUserMemoryTool() tool.InvokableTool {
 func (t *listUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "list_user_memory",
-		Desc: "List user memories. Optionally filter by category. " +
-			"Shows title, category, importance, and a preview of content.",
+		Desc: listUserMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
 				Type:     schema.String,
@@ -464,21 +457,24 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	}
 
 	if len(memories) == 0 {
-		return "No user memories found.", nil
+		return formatNoUserMemories(), nil
 	}
 
-	var output strings.Builder
-	fmt.Fprintf(&output, "Found %d user memories:\n\n", len(memories))
-
+	items := make([]userMemoryItem, len(memories))
 	for i, mem := range memories {
-		fmt.Fprintf(&output, "%d. **[%s/%s]** %s\n", i+1, mem.Category, mem.Importance, mem.Title)
-		fmt.Fprintf(&output, "   %s\n", truncateString(mem.Content, 200))
-		fmt.Fprintf(&output, "   ID: %s | Created: %s | Accesses: %d\n",
-			mem.ID.String(), mem.CreatedAt.Format("2006-01-02"), mem.AccessCount)
-		output.WriteString("\n")
+		items[i] = userMemoryItem{
+			Index:       i + 1,
+			Category:    mem.Category,
+			Importance:  mem.Importance,
+			Title:       mem.Title,
+			Content:     truncateString(mem.Content, 200),
+			ID:          mem.ID.String(),
+			CreatedAt:   mem.CreatedAt.Format("2006-01-02"),
+			AccessCount: mem.AccessCount,
+		}
 	}
 
-	return output.String(), nil
+	return formatUserMemoriesList(len(memories), items), nil
 }
 
 // =============================================================================

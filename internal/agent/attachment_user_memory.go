@@ -80,12 +80,6 @@ func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, u
 		}
 	}
 
-	// Build the output
-	var sb strings.Builder
-	sb.WriteString("<user_memory>\n")
-	sb.WriteString(userMemoryPreamble(lang))
-	sb.WriteString("\n")
-
 	// Group by category
 	categories := map[string][]*model.UserMemory{
 		model.UserMemoryCategoryUser:      {},
@@ -106,24 +100,21 @@ func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, u
 	}
 
 	// Output by category
-	categoryLabels := userMemoryCategoryLabels(lang)
+	categoryLabels := userMemoryLabels(lang)
 
+	var cats []userMemoryCategory
 	for _, cat := range model.ValidUserMemoryCategories {
 		items := categories[cat]
 		if len(items) == 0 {
 			continue
 		}
-		label := categoryLabels[cat]
-		fmt.Fprintf(&sb, "## %s\n", label)
-		for _, mem := range items {
-			sb.WriteString(formatUserMemoryForInjection(mem))
-		}
-		sb.WriteString("\n")
+		cats = append(cats, userMemoryCategory{
+			Label: categoryLabels[cat],
+			Items: items,
+		})
 	}
 
-	sb.WriteString("</user_memory>")
-
-	return sb.String(), nil
+	return formatUserMemoryWrapper(lang, cats), nil
 }
 
 // detectUserLanguage attempts to determine the user's preferred language.
@@ -195,50 +186,4 @@ func containsChineseHint(text string) bool {
 		return true
 	}
 	return false
-}
-
-// userMemoryPreamble returns the preamble text in the given language.
-func userMemoryPreamble(lang string) string {
-	switch lang {
-	case "zh":
-		return "以下是关于当前用户的持久记忆。请在回复时参考这些信息，避免重复询问已知内容。"
-	default:
-		return "The following are persistent memories about the current user. Reference this information in your responses and avoid re-asking known details."
-	}
-}
-
-// userMemoryCategoryLabels returns category labels in the given language.
-func userMemoryCategoryLabels(lang string) map[string]string {
-	switch lang {
-	case "zh":
-		return map[string]string{
-			model.UserMemoryCategoryUser:      "关于用户",
-			model.UserMemoryCategoryFeedback:  "工作偏好与反馈",
-			model.UserMemoryCategoryProject:   "项目信息",
-			model.UserMemoryCategoryReference: "参考资料",
-		}
-	default:
-		return map[string]string{
-			model.UserMemoryCategoryUser:      "About User",
-			model.UserMemoryCategoryFeedback:  "Work Preferences & Feedback",
-			model.UserMemoryCategoryProject:   "Project Info",
-			model.UserMemoryCategoryReference: "References",
-		}
-	}
-}
-
-// formatUserMemoryForInjection formats a single user memory for injection into LLM context.
-func formatUserMemoryForInjection(mem *model.UserMemory) string {
-	var sb strings.Builder
-
-	// Frontmatter with metadata
-	sb.WriteString("### ")
-	sb.WriteString(mem.Title)
-	sb.WriteString("\n")
-
-	// Content
-	sb.WriteString(mem.Content)
-	sb.WriteString("\n\n")
-
-	return sb.String()
 }

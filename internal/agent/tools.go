@@ -32,7 +32,7 @@ type lsTool struct{ base *rtcToolBase }
 func (l *lsTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "ls",
-		Desc: "List directory contents at the given path",
+		Desc: lsDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"path": {Type: schema.String, Desc: "The directory path to list (defaults to current directory)", Required: false},
 		}),
@@ -50,7 +50,7 @@ type readTool struct{ base *rtcToolBase }
 func (t *readTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "read",
-		Desc: "Read file contents from the virtual filesystem",
+		Desc: readDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"path":   {Type: schema.String, Desc: "The file path to read", Required: true},
 			"offset": {Type: schema.Integer, Desc: "Byte offset to start reading from (default: 0)", Required: false},
@@ -70,7 +70,7 @@ type writeTool struct{ base *rtcToolBase }
 func (t *writeTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "write",
-		Desc: "Write or create a file in the virtual filesystem",
+		Desc: writeDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"path":    {Type: schema.String, Desc: "The file path to write to", Required: true},
 			"content": {Type: schema.String, Desc: "The content to write", Required: true},
@@ -90,7 +90,7 @@ type grepTool struct{ base *rtcToolBase }
 func (t *grepTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "grep",
-		Desc: "Search for a pattern across file contents in the virtual filesystem",
+		Desc: grepDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"pattern":        {Type: schema.String, Desc: "Regex pattern to search for", Required: true},
 			"path":           {Type: schema.String, Desc: "File or directory path to search in (default: root '/')", Required: false},
@@ -110,7 +110,7 @@ type findTool struct{ base *rtcToolBase }
 func (t *findTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "find",
-		Desc: "Find files by name pattern in the virtual filesystem",
+		Desc: findDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"pattern": {Type: schema.String, Desc: "Glob pattern to match file names (e.g. '*.ts', '**/*.go')", Required: true},
 			"path":    {Type: schema.String, Desc: "Directory path to search in (default: root '/')", Required: false},
@@ -129,7 +129,7 @@ type scriptTool struct{ base *rtcToolBase }
 func (t *scriptTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "script",
-		Desc: "Execute JavaScript code in the browser environment. Provide either a file path or inline code (mutually exclusive)",
+		Desc: scriptDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"title": {
 				Type:     schema.String,
@@ -419,10 +419,7 @@ func parseToolArgs(ctx context.Context, h *helpers, toolName string, argumentsIn
 			"raw_length":  len(argumentsInJSON),
 			"raw_preview": argPreview,
 		})
-		return false, fmt.Sprintf(
-			"Error: failed to parse tool arguments (%s). Please provide valid JSON. Received: %s",
-			err.Error(), argPreview,
-		)
+		return false, formatParseError(err.Error(), argPreview)
 	}
 	return true, ""
 }

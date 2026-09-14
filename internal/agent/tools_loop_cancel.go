@@ -35,12 +35,7 @@ type cancelLoopResult struct {
 func (t *cancelLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "cancel_loop",
-		Desc: "Cancel the current active loop.\n\n" +
-			"Call this when:\n" +
-			"- The user explicitly asks to stop (e.g., '停下', '算了', 'cancel')\n" +
-			"- You determine the loop objective has been achieved\n" +
-			"- You determine the loop cannot continue\n\n" +
-			"IMPORTANT: After calling this tool, end your turn immediately.",
+		Desc: cancelLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"reason": {
 				Type:     schema.String,
@@ -136,9 +131,7 @@ type completeLoopResult struct {
 func (t *completeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "complete_loop",
-		Desc: "Mark the current active loop as completed.\n\n" +
-			"Call this when you have VERIFIED that the loop objective is fully achieved.\n\n" +
-			"IMPORTANT: This is a mandatory step. If the loop objective is met, you MUST call this tool.",
+		Desc: completeLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"reason": {
 				Type:     schema.String,

@@ -1,0 +1,1 @@
+Get the last message from a specific sub agent session. Use this to check the latest output or status of a sub agent. Returns the message content, role, and metadata.

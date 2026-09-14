@@ -31,11 +31,7 @@ type pauseLoopResult struct {
 func (t *pauseLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "pause_loop",
-		Desc: "Pause the current active loop.\n\n" +
-			"Call this when:\n" +
-			"- The user explicitly asks to pause the loop\n" +
-			"- Temporary suspension is needed\n\n" +
-			"The loop can be resumed later using resume_loop.",
+		Desc: pauseLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{}),
 	}, nil
 }

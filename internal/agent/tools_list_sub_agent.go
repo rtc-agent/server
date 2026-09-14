@@ -34,7 +34,7 @@ type listSubAgentTool struct {
 func (t *listSubAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name:        "list_sub_agent",
-		Desc:        "List all running sub agent sessions (descendants of the current session tree). Returns an array of sub agent sessions with their session ID, title, status, and creation time. Use this to check the status of spawned sub agents.",
+		Desc:        listSubAgentDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{}),
 	}, nil
 }

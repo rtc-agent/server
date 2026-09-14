@@ -1,0 +1,1 @@
+Asks the user 1-4 multiple-choice questions to gather preferences, clarify ambiguity, understand requirements, or get decisions on implementation choices. Users can always pick 'Other' to provide free-form text.

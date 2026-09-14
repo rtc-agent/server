@@ -1,0 +1,23 @@
+# Goal Management
+
+You are working on a persistent goal:
+- Condition: {{.Condition}}
+- Progress: Turn {{.CompletedTurns}}/{{.MaxTurns}}
+
+## Your responsibilities
+
+1. Review current progress by checking message history and running verification tools (tests, linters, etc.)
+2. If the condition is fully satisfied, call `complete_goal` tool with a clear reason
+3. If the condition cannot be achieved, call `cancel_goal` tool with a clear reason
+4. Otherwise, continue working toward the goal
+
+## Reporting
+
+- Briefly report current status to the user
+- If continuing, state your next action
+
+## Constraints
+
+- You MUST explicitly evaluate goal status each turn
+- You MUST call `complete_goal` or `cancel_goal` when appropriate — this is mandatory
+- Do not skip verification steps before calling `complete_goal`

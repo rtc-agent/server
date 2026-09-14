@@ -44,9 +44,7 @@ type listLoopsResult struct {
 func (t *listLoopsTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "list_loops",
-		Desc: "List loops for the current session.\n\n" +
-			"Returns a paginated list of loops, including active, paused, and completed ones.\n" +
-			"Use cursor and limit for pagination.",
+		Desc: listLoopsDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"cursor": {
 				Type:     schema.String,

@@ -47,13 +47,7 @@ type createGoalResult struct {
 func (t *createGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "create_goal",
-		Desc: "Create a persistent goal for the current session. The agent will keep working across turns until the condition is met or the goal is cancelled.\n\n" +
-			"Call this ONLY after:\n" +
-			"1. Investigating the current state (run tests, inspect files, etc.)\n" +
-			"2. Refining the user's intent into a SMART condition (Specific, Measurable, Achievable, Relevant, Time-bound)\n" +
-			"3. Proposing the condition to the user and receiving explicit confirmation\n\n" +
-			"IMPORTANT: You MUST NOT call this tool if there is already an active goal. " +
-			"You MUST NOT decide the condition for the user — user confirmation is required.",
+		Desc: createGoalDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"condition": {
 				Type:     schema.String,
@@ -155,11 +149,7 @@ type completeGoalResult struct {
 func (t *completeGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "complete_goal",
-		Desc: "Mark the current active goal as completed.\n\n" +
-			"Call this when you have VERIFIED that the goal condition is fully satisfied " +
-			"(e.g., run tests, check outputs, lint code). " +
-			"Do NOT skip verification steps before calling this tool.\n\n" +
-			"IMPORTANT: This is a mandatory step. If the goal condition is met, you MUST call this tool. Do not skip it.",
+		Desc: completeGoalDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"reason": {
 				Type:     schema.String,
@@ -241,11 +231,7 @@ type cancelGoalResult struct {
 func (t *cancelGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "cancel_goal",
-		Desc: "Cancel the current active goal.\n\n" +
-			"Call this when:\n" +
-			"- The user explicitly asks to stop (e.g., '停下', '算了', 'cancel')\n" +
-			"- You determine the goal is impossible to achieve\n\n" +
-			"IMPORTANT: After calling this tool, end your turn immediately.",
+		Desc: cancelGoalDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"reason": {
 				Type:     schema.String,

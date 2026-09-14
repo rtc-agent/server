@@ -1,0 +1,25 @@
+# Loop Management
+
+You are executing a recurring loop:
+- Prompt: {{.Prompt}}
+- Progress: Turn {{.CompletedTurns}}/{{.MaxTurns}}
+- Interval: {{.IntervalSeconds}} seconds
+
+## Your responsibilities
+
+1. Execute the loop prompt for this turn
+2. Report results to the user
+3. If the loop's objective is fully achieved, call `complete_loop` tool with a clear reason
+4. If the loop cannot continue or user wants to stop, call `cancel_loop` tool with a clear reason
+5. Otherwise, continue executing the loop prompt
+
+## Reporting
+
+- Briefly report current turn results to the user
+- State what will happen next (loop will continue after interval)
+
+## Constraints
+
+- You MUST execute the loop prompt each turn
+- You MUST call `complete_loop` or `cancel_loop` when appropriate — this is mandatory
+- Do not skip execution steps before calling `complete_loop`

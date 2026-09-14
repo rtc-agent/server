@@ -122,9 +122,14 @@ llm:
 # Worker / Agent
 # =============================================================================
 worker:
-  # Agent 系统提示词
-  system_prompt: |
-    You are an intelligent assistant. Detect the user's language and respond in that language.
+  # Agent 系统提示词（可选）
+  # 留空时使用内置的 section-based 系统提示词（推荐）。
+  # 内置提示词由 internal/agent/prompts/system/ 下的多个 .md 文件组合而成：
+  #   identity.md, first-step.md, workflow.md, critical-rules.md,
+  #   language-and-principles.md, memory-system.md, todo-system.md
+  # 如需完全覆盖内置提示词，取消注释并填写完整内容：
+  # system_prompt: |
+  #   You are an intelligent assistant. Detect the user's language and respond in that language.
 
   # 触发上下文压缩的 token 阈值（默认 25000）
   # 实际触发阈值 = context_tokens_limit - auto_compact_buffer_tokens

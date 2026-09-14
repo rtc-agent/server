@@ -1,0 +1,7 @@
+Found {{.Count}} session memories:
+
+{{range .Memories}}{{.Index}}. **[\{{.Category}}]** {{.Title}}
+   {{.Content}}
+   Created: {{.CreatedAt}}
+
+{{end}}

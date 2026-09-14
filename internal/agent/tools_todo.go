@@ -22,7 +22,7 @@ type todoWriteTool struct {
 func (t *todoWriteTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "todo_write",
-		Desc: "Update the todo list for the current session. Replaces the entire list. Use proactively to track progress and pending tasks. Make sure that at least one task is in_progress at all times. Always provide both content (imperative) and active_form (present continuous) for each task.",
+		Desc: todoWriteDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"todos": {
 				Type:     schema.Array,
@@ -102,5 +102,5 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	}
 
 	// 返回给 LLM 的结果（不包含在 transcript 中）
-	return "<notification>Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable.</notification>", nil
+	return formatTodoNotification(), nil
 }

@@ -1,0 +1,7 @@
+Found {{.Count}} user memories:
+
+{{range .Memories}}{{.Index}}. **[\{{.Category}}/{{.Importance}}]** {{.Title}}
+   {{.Content}}
+   ID: {{.ID}} | Created: {{.CreatedAt}} | Accesses: {{.AccessCount}}
+
+{{end}}

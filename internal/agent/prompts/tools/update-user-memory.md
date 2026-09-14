@@ -1,0 +1,1 @@
+Update an existing user memory. You can update title, content, description, tags, importance, or metadata. Only the fields you provide will be updated.

@@ -82,9 +82,6 @@ func getCompactPrompt(mode CompactMode) string {
 func formatCompactUserMessage(formattedSummary string) string {
 	msg := strings.TrimSpace(compactUserSummaryMessage)
 	msg = strings.ReplaceAll(msg, "{formattedSummary}", formattedSummary)
-	// Note: {transcriptPath} is not used in RTC-Agent currently because
-	// the frontend provides access to historical messages directly.
-	msg = strings.ReplaceAll(msg, "{transcriptPath}", "the session history")
 	return msg
 }
 

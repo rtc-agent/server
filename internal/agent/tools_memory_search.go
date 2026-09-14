@@ -26,9 +26,7 @@ func (h *helpers) createSearchMemoryTool() tool.InvokableTool {
 func (t *searchMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "search_memory",
-		Desc: "Search across session memories and user memories. " +
-			"Use this to find relevant information from past conversations or general knowledge. " +
-			"User memories support keyword-based search.",
+		Desc: searchMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"query": {
 				Type:     schema.String,
@@ -107,24 +105,27 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	}
 
 	if len(results) == 0 {
-		return "No memories found matching the query.", nil
+		return formatNoSearchResults(), nil
 	}
 
 	// Format output
-	var output strings.Builder
-	fmt.Fprintf(&output, "Found %d memories:\n\n", len(results))
-
+	items := make([]searchResultItem, len(results))
 	for i, result := range results {
-		fmt.Fprintf(&output, "%d. **[%s/%s]** %s\n",
-			i+1, result.MemoryType, result.Category, result.Title)
-		fmt.Fprintf(&output, "   %s\n", truncateString(result.Content, 300))
+		createdAt := ""
 		if !result.CreatedAt.IsZero() {
-			fmt.Fprintf(&output, "   Created: %s\n", result.CreatedAt.Format("2006-01-02 15:04"))
+			createdAt = result.CreatedAt.Format("2006-01-02 15:04")
 		}
-		output.WriteString("\n")
+		items[i] = searchResultItem{
+			Index:      i + 1,
+			MemoryType: result.MemoryType,
+			Category:   result.Category,
+			Title:      result.Title,
+			Content:    truncateString(result.Content, 300),
+			CreatedAt:  createdAt,
+		}
 	}
 
-	return output.String(), nil
+	return formatSearchResultsList(len(results), items), nil
 }
 
 // searchResult 统一的搜索结果格式

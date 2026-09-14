@@ -36,6 +36,8 @@ func init() {
 
 // formatToolCallOutput formats a tool call's output for injection into the
 // agent's context. Mirrors the old formatToolCallOutput in context.go.
+// Output templates are centralised in prompts/outputs/ and accessed via
+// the format* helpers in output_prompts.go.
 func formatToolCallOutput(toolCall protocol.ToolCall) string {
 	output := ""
 	if toolCall.Output != nil {
@@ -50,13 +52,13 @@ func formatToolCallOutput(toolCall protocol.ToolCall) string {
 	case protocol.RtcStatusCompleted:
 		return output
 	case protocol.RtcStatusFailed:
-		return fmt.Sprintf("[Tool Error] %s failed: %s", toolCall.ToolName, output)
+		return formatToolError(toolCall.ToolName, output)
 	case protocol.RtcStatusTimeout:
-		return fmt.Sprintf("[Tool Timeout] %s timed out", toolCall.ToolName)
+		return formatToolTimeout(toolCall.ToolName)
 	case protocol.RtcStatusRejected:
-		return fmt.Sprintf("[Tool Rejected] %s was rejected by user", toolCall.ToolName)
+		return formatToolRejected(toolCall.ToolName)
 	default:
-		return fmt.Sprintf("[Tool Pending] %s is still %s", toolCall.ToolName, status)
+		return formatToolPending(toolCall.ToolName, status)
 	}
 }
 
@@ -181,7 +183,7 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	// Use <error> XML tags to clearly delimit the error, following Claude Code's
 	// convention — this helps the LLM distinguish errors from normal output.
 	errorHandler := func(ctx context.Context, err error) string {
-		return fmt.Sprintf("<error>%s</error>", err.Error())
+		return formatErrorWrapper(err.Error())
 	}
 	wrappedTools := make([]tool.BaseTool, len(tools))
 	for i, t := range tools {
@@ -214,12 +216,25 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		"turn_id":    turnID,
 		"tool_count": len(tools),
 	})
+	// Resolve the effective system prompt.
+	// If worker.system_prompt is set in YAML config, it completely overrides
+	// the embedded default (backward-compatible). Otherwise, assemble from
+	// the section-based embedded prompts.
+	systemPrompt := h.deps.SystemPrompt
+	if systemPrompt == "" {
+		built, err := BuildDefaultSystemPrompt()
+		if err != nil {
+			return nil, fmt.Errorf("createAgent: failed to build default system prompt: %w", err)
+		}
+		systemPrompt = built
+	}
+
 	// Validate required dependencies
 	if h.deps.ChatModel == nil {
 		return nil, fmt.Errorf("createAgent: ChatModel is nil (LLM not configured)")
 	}
-	if h.deps.SystemPrompt == "" {
-		return nil, fmt.Errorf("createAgent: SystemPrompt is empty")
+	if systemPrompt == "" {
+		return nil, fmt.Errorf("createAgent: system prompt is empty after resolution")
 	}
 
 	// Inject sessionID into context for summarization middleware callbacks.
@@ -260,7 +275,7 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:             fmt.Sprintf("session-%s", sessionID),
 		Description:      "RTC Agent session handler",
-		Instruction:      h.deps.SystemPrompt + "\n" + session.AgentPrompt,
+		Instruction:      systemPrompt + "\n" + session.AgentPrompt,
 		Model:            h.deps.ChatModel,
 		Handlers:         handlers,
 		ModelRetryConfig: retryConfig,
@@ -268,7 +283,7 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools: tools,
 				UnknownToolsHandler: func(ctx context.Context, name, input string) (string, error) {
-					return fmt.Sprintf("<system>\nExit with code: 404, tool %s not found\n</system>", name), nil
+					return formatUnknownTool(name), nil
 				},
 				ExecuteSequentially: true,
 			},

@@ -31,11 +31,7 @@ type resumeLoopResult struct {
 func (t *resumeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "resume_loop",
-		Desc: "Resume a paused loop.\n\n" +
-			"Call this when:\n" +
-			"- The user explicitly asks to resume the loop\n" +
-			"- The temporary suspension is over\n\n" +
-			"The loop will continue from where it left off.",
+		Desc: resumeLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{}),
 	}, nil
 }

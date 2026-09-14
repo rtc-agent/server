@@ -1,0 +1,1 @@
+The following are persistent memories about the current user. Reference this information in your responses and avoid re-asking known details.

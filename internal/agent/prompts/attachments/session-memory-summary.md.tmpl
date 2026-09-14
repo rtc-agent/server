@@ -1,0 +1,11 @@
+# Session Memory
+
+This is a summary of the current session, extracted from the conversation history.
+
+{{ range .Categories }}## {{ .DisplayName }}
+
+{{ range .Items }}### {{ .Title }}
+
+{{ .Content }}
+
+{{ end }}{{ end }}

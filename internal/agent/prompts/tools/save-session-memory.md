@@ -1,0 +1,1 @@
+Save important information from the current conversation to session memory. Use this to remember key decisions, progress, issues, and learnings throughout the session. These memories will be used for context compression and can be retrieved later.
