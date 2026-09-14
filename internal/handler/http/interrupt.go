@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/infra/httputil"
+	"github.com/rtc-agent/server/internal/infra/middleware"
+	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 
 	"github.com/google/uuid"
@@ -25,19 +29,26 @@ import (
 // The subscriber (handleInterrupt) does SUBSCRIBE then GET to catch answers
 // that arrived before the subscription was established.
 type InterruptHandler struct {
-	redis     redis.UniversalClient
-	workerCfg config.WorkerConfig
+	redis       redis.UniversalClient
+	workerCfg   config.WorkerConfig
+	sessionRepo repo.SessionRepo
+	signer      *auth.JWTSigner
 }
 
 // NewInterruptHandler creates an InterruptHandler.
-func NewInterruptHandler(redis redis.UniversalClient, workerCfg config.WorkerConfig) *InterruptHandler {
-	return &InterruptHandler{redis: redis, workerCfg: workerCfg}
+func NewInterruptHandler(redis redis.UniversalClient, workerCfg config.WorkerConfig, sessionRepo repo.SessionRepo, signer *auth.JWTSigner) *InterruptHandler {
+	return &InterruptHandler{redis: redis, workerCfg: workerCfg, sessionRepo: sessionRepo, signer: signer}
 }
 
 // RegisterRoutes registers interrupt-related routes on the given ServeMux.
-func (h *InterruptHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/sessions/{sessionID}/interrupts/{interruptID}/answer",
-		h.SubmitAnswer)
+//
+// The answer endpoint requires JWT authentication and validates session ownership.
+// When allowDevBypass is true (development only), requests may use X-User-ID /
+// X-Device-ID headers instead of a Bearer token.
+func (h *InterruptHandler) RegisterRoutes(mux *http.ServeMux, allowDevBypass bool) {
+	authMiddleware := middleware.JWTAuth(h.signer, allowDevBypass)
+	handler := authMiddleware(http.HandlerFunc(h.SubmitAnswer))
+	mux.Handle("POST /api/sessions/{sessionID}/interrupts/{interruptID}/answer", handler)
 }
 
 // SubmitAnswer receives an interrupt answer from the frontend and delivers it
@@ -45,7 +56,12 @@ func (h *InterruptHandler) RegisterRoutes(mux *http.ServeMux) {
 //
 // Route: POST /api/sessions/{sessionID}/interrupts/{interruptID}/answer
 // Body:  {"answer": "..."}
+//
+// Security: Requires JWT authentication and validates session ownership.
 func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) {
+	// Limit request body size to prevent abuse (1MB)
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 	sessionIDStr := r.PathValue("sessionID")
 	interruptID := r.PathValue("interruptID")
 
@@ -70,8 +86,38 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteError(w, http.StatusBadRequest, "interrupt.empty_answer", "answer must not be empty")
 		return
 	}
+	// Validate answer length to prevent excessive Redis memory usage
+	if len(req.Answer) > 10000 {
+		httputil.WriteError(w, http.StatusBadRequest, "interrupt.answer_too_long", "answer must be <= 10000 characters")
+		return
+	}
 
 	ctx := r.Context()
+
+	// Verify session ownership: caller must own the session
+	userID, ok := contextx.GetUserID(ctx)
+	if !ok {
+		httputil.WriteError(w, http.StatusUnauthorized, "auth.required", "authentication required")
+		return
+	}
+
+	session, err := h.sessionRepo.GetByID(ctx, sessionID)
+	if err != nil {
+		if repo.IsNotFound(err) {
+			httputil.WriteError(w, http.StatusNotFound, "interrupt.session_not_found", "session not found")
+		} else {
+			logger.Error(ctx, "[interrupt] failed to get session",
+				zap.String("session", sessionID.String()),
+				zap.Error(err))
+			httputil.WriteError(w, http.StatusInternalServerError, "interrupt.db_error", "failed to get session")
+		}
+		return
+	}
+
+	if session.OwnerRefID != userID.String() {
+		httputil.WriteError(w, http.StatusForbidden, "auth.forbidden", "not authorized for this session")
+		return
+	}
 
 	if logger.DebugMode {
 		logger.Debug(ctx, "[interrupt.HTTP] entry",

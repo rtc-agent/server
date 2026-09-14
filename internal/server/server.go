@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/centrifugal/centrifuge"
 	hibikenasynq "github.com/hibiken/asynq"
@@ -31,12 +32,12 @@ type Server struct {
 	interruptHandler *httphandler.InterruptHandler
 	memoriesHandler  *httphandler.MemoriesHandler
 	httpServer       *http.Server
-	queueWorker      *rtcqueue.Worker  // rtc-queue distributed worker
-	queue            *rtcqueue.Queue   // rtc-queue for publishing recovery work items
+	queueWorker      *rtcqueue.Worker // rtc-queue distributed worker
+	queue            *rtcqueue.Queue  // rtc-queue for publishing recovery work items
 	workerCancel     context.CancelFunc
 	asynqServer      *hibikenasynq.Server // asynq worker for loop tasks
 	asynqMux         *hibikenasynq.ServeMux
-	recoveryCancel   context.CancelFunc   // cancels the recovery goroutine
+	recoveryCancel   context.CancelFunc // cancels the recovery goroutine
 }
 
 // BuildProviderClients 根据配置构造 Provider 列表
@@ -135,8 +136,12 @@ func (s *Server) Start() error {
 
 	addr := fmt.Sprintf("%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
 	s.httpServer = &http.Server{
-		Addr:    addr,
-		Handler: handler,
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	logger.Info(ctx, "HTTP server listening", zap.String("addr", addr))
@@ -197,13 +202,22 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// 公开端点（无需鉴权）
 	mux.HandleFunc("GET /healthz", s.httpHandler.Healthz)
 	mux.HandleFunc("GET /readyz", s.httpHandler.Readyz)
-	mux.Handle("GET /metrics", promhttp.Handler()) // Prometheus 指标
+
+	// Prometheus 指标端点（可选 basic auth）
+	metricsHandler := promhttp.Handler()
+	if s.cfg.Metrics.User != "" && s.cfg.Metrics.Password != "" {
+		metricsHandler = basicAuth(metricsHandler, s.cfg.Metrics.User, s.cfg.Metrics.Password)
+	} else if s.cfg.Server.Env != "development" {
+		logger.Warn(context.Background(), "metrics endpoint without authentication - configure metrics.user and metrics.password")
+	}
+	mux.Handle("GET /metrics", metricsHandler)
 
 	// OAuth2 端点
 	s.oauth2Handler.RegisterRoutes(mux)
 
 	// Interrupt 端点（前端提交 interrupt 答案）
-	s.interruptHandler.RegisterRoutes(mux)
+	isDevInterrupt := s.cfg.Server.Env == "development"
+	s.interruptHandler.RegisterRoutes(mux, isDevInterrupt)
 
 	// Memories 端点（Memory 导出）
 	isDevMemories := s.cfg.Server.Env == "development"
@@ -372,4 +386,18 @@ func (s *Server) recoverStaleTurns(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// basicAuth HTTP Basic Authentication 中间件。
+// 用于保护 /metrics 等内部管理端点。
+func basicAuth(next http.Handler, user, password string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != user || p != password {
+			w.Header().Set("WWW-Authenticate", `Basic realm="metrics"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

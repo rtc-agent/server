@@ -608,7 +608,9 @@ func (h *helpers) injectScenarioPrompts(
 	for _, scenario := range *umc.Scenarios {
 		if scenario.Title != "" && scenario.FileContent != "" {
 			scenarioPrompts = append(scenarioPrompts,
-				fmt.Sprintf("<scenario title=\"%s\">\n%s\n</scenario>", scenario.Title, scenario.FileContent))
+				fmt.Sprintf("<scenario title=\"%s\">\n%s\n</scenario>",
+					escapeXMLAttr(scenario.Title),
+					escapeXMLContent(scenario.FileContent)))
 		}
 	}
 

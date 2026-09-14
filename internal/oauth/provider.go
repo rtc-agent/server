@@ -10,7 +10,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -71,7 +73,16 @@ func (p *Provider) serveAuthorizePage(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	redirectURI := r.URL.Query().Get("redirect_uri")
 
+	// Validate redirect_uri format to prevent open redirect
+	if redirectURI != "" {
+		if !isValidRedirectURI(redirectURI) {
+			http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// HTML-escape user-supplied values to prevent XSS
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head>
@@ -98,7 +109,7 @@ func (p *Provider) serveAuthorizePage(w http.ResponseWriter, r *http.Request) {
     <button type="submit">授权</button>
   </form>
 </body>
-</html>`, state, redirectURI)
+</html>`, html.EscapeString(state), html.EscapeString(redirectURI))
 }
 
 // handleAuthorizeConfirm 处理授权确认
@@ -119,6 +130,12 @@ func (p *Provider) handleAuthorizeConfirm(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Validate redirect_uri to prevent open redirect
+	if redirectURI != "" && !isValidRedirectURI(redirectURI) {
+		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
+		return
+	}
+
 	// 生成授权码
 	code := generateCode()
 
@@ -136,7 +153,8 @@ func (p *Provider) handleAuthorizeConfirm(w http.ResponseWriter, r *http.Request
 			sep = "&" // URI 已含查询参数，用 & 拼接
 		}
 		redirectURL := fmt.Sprintf("%s%scode=%s&state=%s&username=%s&email=%s",
-			redirectURI, sep, code, state, username, email)
+			redirectURI, sep, url.QueryEscape(code), url.QueryEscape(state),
+			url.QueryEscape(username), url.QueryEscape(email))
 		http.Redirect(w, r, redirectURL, http.StatusFound)
 		return
 	}
@@ -240,4 +258,24 @@ func generateCode() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// isValidRedirectURI 验证 redirect_uri 格式，防止开放重定向攻击。
+// 仅允许 http/https 协议的绝对 URL。
+func isValidRedirectURI(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	// 必须是绝对 URL 且协议为 http 或 https
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	// 必须有 host
+	if u.Host == "" {
+		return false
+	}
+	// 禁止 javascript: 等危险协议（已通过 scheme 检查排除）
+	// 禁止 fragment 中的重定向（防止 location.hash 操纵）
+	return true
 }

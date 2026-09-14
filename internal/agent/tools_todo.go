@@ -89,6 +89,11 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		return "", fmt.Errorf("update todo_list: %w", err)
 	}
 
+	// Update in-memory session object to ensure published events reflect
+	// the latest state. Without this, the frontend would receive stale
+	// todo_list data and flash back to the old state.
+	t.session.TodoList = todoList
+
 	// 发布 update 事件通知前端
 	_, err = t.helper.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		return primitives.BuildSessionUpdatedUpdates(t.session), nil

@@ -9,11 +9,17 @@ import (
 	"net/http"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	"github.com/rtc-agent/server/internal/infra/httputil"
 	"github.com/rtc-agent/server/internal/svc"
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
 )
+
+// readyzLimiter 限制 /readyz 端点请求频率，防止 DoS 攻击。
+// 每秒 10 个请求，桶大小 10（允许短暂突发）。
+var readyzLimiter = rate.NewLimiter(rate.Every(time.Second/10), 10)
 
 // Handler HTTP 处理器
 type Handler struct {
@@ -33,7 +39,14 @@ func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
 
 // Readyz 就绪检查端点（就绪探针）
 // 检查 DB、Redis、Centrifuge 等依赖是否可用。用于 K8s readinessProbe。
+// 包含限流保护，防止频繁检查导致下游依赖过载。
 func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
+	// Rate limiting: reject excessive requests to prevent DoS
+	if !readyzLimiter.Allow() {
+		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 

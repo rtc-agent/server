@@ -121,7 +121,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	redisStore := provideStateStore(universalClient)
 	client := provideOAuth2ProviderClient(cfg)
 	oAuth2Handler := provideOAuth2Handler(serviceContext, jwtSigner, redisStore, client, cfg)
-	interruptHandler := provideInterruptHandler(universalClient, cfg)
+	interruptHandler := provideInterruptHandler(universalClient, cfg, serviceContext, jwtSigner)
 	memoriesHandler := provideMemoriesHandler(serviceContext, jwtSigner)
 	agent, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics)
 	if err != nil {
@@ -444,8 +444,10 @@ func provideOAuth2Handler(
 func provideInterruptHandler(
 	redisClient redis.UniversalClient,
 	cfg *config.Config,
+	svcCtx *svc.ServiceContext,
+	jwtSigner *auth.JWTSigner,
 ) *httphandler.InterruptHandler {
-	return httphandler.NewInterruptHandler(redisClient, cfg.Worker)
+	return httphandler.NewInterruptHandler(redisClient, cfg.Worker, svcCtx.SessionRepo, jwtSigner)
 }
 
 func provideMemoriesHandler(

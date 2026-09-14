@@ -24,6 +24,15 @@ type Config struct {
 	API       APIConfig       `mapstructure:"api"`
 	Tracing   TracingConfig   `mapstructure:"tracing"`
 	Asynq     AsynqConfig     `mapstructure:"asynq"`
+	Metrics   MetricsConfig   `mapstructure:"metrics"`
+}
+
+// MetricsConfig Prometheus /metrics 端点认证配置
+type MetricsConfig struct {
+	// User 基本认证用户名。为空时不启用认证（仅开发环境）
+	User string `mapstructure:"user"`
+	// Password 基本认证密码
+	Password string `mapstructure:"password"`
 }
 
 // AsynqConfig asynq 任务调度配置

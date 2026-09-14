@@ -155,7 +155,7 @@ func (r *userMemoryRepo) SearchByKeyword(ctx context.Context, userID uuid.UUID, 
 	if limit <= 0 {
 		limit = 20
 	}
-	likeQuery := "%" + query + "%"
+	likeQuery := "%" + escapeLikePattern(query) + "%"
 
 	var memories []*model.UserMemory
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).

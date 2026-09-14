@@ -372,8 +372,10 @@ func provideOAuth2Handler(
 func provideInterruptHandler(
 	redisClient redis.UniversalClient,
 	cfg *config.Config,
+	svcCtx *svc.ServiceContext,
+	jwtSigner *auth.JWTSigner,
 ) *httphandler.InterruptHandler {
-	return httphandler.NewInterruptHandler(redisClient, cfg.Worker)
+	return httphandler.NewInterruptHandler(redisClient, cfg.Worker, svcCtx.SessionRepo, jwtSigner)
 }
 
 func provideMemoriesHandler(

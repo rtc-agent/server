@@ -241,9 +241,11 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 // parseRequestBody 解析请求体，支持 application/json 和 form-urlencoded。
 // JSON 直接解码到 target；form 先 ParseForm 再调用 formFiller 填充 target。
+// 对 JSON body 添加 1MB 大小限制，防止恶意客户端消耗过多内存。
 func parseRequestBody(r *http.Request, target any, formFiller func(r *http.Request)) error {
 	contentType := r.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "application/json") {
+		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20) // 1MB limit
 		return json.NewDecoder(r.Body).Decode(target)
 	}
 	if err := r.ParseForm(); err != nil {

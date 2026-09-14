@@ -155,7 +155,7 @@ func (r *memoryRepo) Search(ctx context.Context, scope memory.ScopeType, scopeID
 	if limit <= 0 {
 		limit = 20
 	}
-	likeQuery := "%" + query + "%"
+	likeQuery := "%" + escapeLikePattern(query) + "%"
 
 	var memories []*memory.Memory
 	db := DBFromContext(ctx, r.db).WithContext(ctx).
@@ -281,7 +281,7 @@ func applyTagsFilter(query *gorm.DB, tags []string) *gorm.DB {
 	}
 	// SQLite fallback: JSONB 存储为文本，使用 LIKE 子串匹配
 	for _, tag := range tags {
-		query = query.Where(`tags LIKE ?`, `%"`+tag+`"%`)
+		query = query.Where(`tags LIKE ?`, `%"`+escapeLikePattern(tag)+`"%`)
 	}
 	return query
 }
