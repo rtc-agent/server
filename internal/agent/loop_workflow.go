@@ -91,7 +91,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 
 	loop, err := l.helpers.deps.LoopRepo.FindActive(ctx, ctx.SessionID)
 	if err != nil {
-		l.helpers.logIfEnabled(ctx, "loopWorkflow.find_active_failed", map[string]any{
+		l.helpers.logger.Info(ctx, "loopWorkflow.find_active_failed", map[string]any{
 			"session_id": ctx.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -117,13 +117,13 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 			})
 		})
 		if err != nil {
-			l.helpers.logIfEnabled(ctx, "loopWorkflow.update_exhausted_failed", map[string]any{
+			l.helpers.logger.Info(ctx, "loopWorkflow.update_exhausted_failed", map[string]any{
 				"loop_id": loop.ID.String(),
 				"error":   err.Error(),
 			})
 			return err
 		}
-		l.helpers.logIfEnabled(ctx, "loopWorkflow.loop_exhausted", map[string]any{
+		l.helpers.logger.Info(ctx, "loopWorkflow.loop_exhausted", map[string]any{
 			"loop_id":         loop.ID.String(),
 			"session_id":      ctx.SessionID.String(),
 			"completed_turns": newTurns,
@@ -146,7 +146,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 		})
 	})
 	if err != nil {
-		l.helpers.logIfEnabled(ctx, "loopWorkflow.update_loop_failed", map[string]any{
+		l.helpers.logger.Info(ctx, "loopWorkflow.update_loop_failed", map[string]any{
 			"loop_id": loop.ID.String(),
 			"error":   err.Error(),
 		})
@@ -167,7 +167,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					l.helpers.logIfEnabled(context.Background(), "loopWorkflow.schedule_panic", map[string]any{
+					l.helpers.logger.Info(context.Background(), "loopWorkflow.schedule_panic", map[string]any{
 						"loop_id":    loopID.String(),
 						"session_id": sessionID.String(),
 						"panic":      fmt.Sprintf("%v", r),
@@ -178,7 +178,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 		}()
 	}
 
-	l.helpers.logIfEnabled(ctx, "loopWorkflow.loop_extended", map[string]any{
+	l.helpers.logger.Info(ctx, "loopWorkflow.loop_extended", map[string]any{
 		"loop_id":         loop.ID.String(),
 		"session_id":      ctx.SessionID.String(),
 		"completed_turns": newTurns,
@@ -198,7 +198,7 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 		"session_id": loop.SessionID.String(),
 	})
 	if marshalErr != nil {
-		l.helpers.logIfEnabled(ctx, "loopWorkflow.marshal_failed", map[string]any{
+		l.helpers.logger.Info(ctx, "loopWorkflow.marshal_failed", map[string]any{
 			"loop_id": loop.ID.String(),
 			"error":   marshalErr.Error(),
 		})
@@ -208,7 +208,7 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 	delay := time.Duration(loop.IntervalSeconds) * time.Second
 	taskID, err := l.helpers.deps.TaskScheduler.ScheduleDelayed(ctx, "loop_turn", payload, delay)
 	if err != nil {
-		l.helpers.logIfEnabled(ctx, "loopWorkflow.schedule_failed", map[string]any{
+		l.helpers.logger.Info(ctx, "loopWorkflow.schedule_failed", map[string]any{
 			"loop_id":    loop.ID.String(),
 			"session_id": loop.SessionID.String(),
 			"error":      err.Error(),
@@ -220,13 +220,13 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 	if updateErr := l.helpers.deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
 		"asynq_task_id": taskID,
 	}); updateErr != nil {
-		l.helpers.logIfEnabled(ctx, "loopWorkflow.update_task_id_failed", map[string]any{
+		l.helpers.logger.Info(ctx, "loopWorkflow.update_task_id_failed", map[string]any{
 			"loop_id": loop.ID.String(),
 			"error":   updateErr.Error(),
 		})
 	}
 
-	l.helpers.logIfEnabled(ctx, "loopWorkflow.scheduled_next", map[string]any{
+	l.helpers.logger.Info(ctx, "loopWorkflow.scheduled_next", map[string]any{
 		"loop_id":    loop.ID.String(),
 		"session_id": loop.SessionID.String(),
 		"task_id":    taskID,

@@ -94,7 +94,7 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 		return "", fmt.Errorf("save memory: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "save_session_memory.success", map[string]any{
+	t.helpers.logger.Info(ctx, "save_session_memory.success", map[string]any{
 		"session_id":  sessionID.String(),
 		"memory_id":   memory.ID.String(),
 		"category":    args.Category,

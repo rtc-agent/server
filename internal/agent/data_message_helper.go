@@ -79,7 +79,7 @@ func (h *helpers) createAndPublishMessage(
 	})
 	if err != nil {
 		if errors.Is(err, updates.ErrPushAfterCommit) {
-			h.logIfEnabled(ctx, "createAndPublishMessage.push_after_commit", map[string]any{"error": err.Error()})
+			h.logger.Info(ctx, "createAndPublishMessage.push_after_commit", map[string]any{"error": err.Error()})
 		} else {
 			return nil, err
 		}
@@ -163,7 +163,7 @@ func (h *helpers) appendStreamChunk(
 	streamStore := h.getStreamStore()
 	if streamStore != nil {
 		if _, appendErr := streamStore.AppendChunk(msgIDStr, chunkContent); appendErr != nil {
-			h.logIfEnabled(ctx, "appendStreamChunk.redis_append_failed", map[string]any{
+			h.logger.Info(ctx, "appendStreamChunk.redis_append_failed", map[string]any{
 				"message_id": msgIDStr,
 				"error":      appendErr.Error(),
 			})
@@ -178,7 +178,7 @@ func (h *helpers) appendStreamChunk(
 				{Entity: protocol.EntityMessage, Action: protocol.ActionUpdated, EntityId: protocol.UUID(msgIDStr)},
 			},
 		}); pubErr != nil {
-			h.logIfEnabled(ctx, "appendStreamChunk.live_publish_failed", map[string]any{
+			h.logger.Info(ctx, "appendStreamChunk.live_publish_failed", map[string]any{
 				"message_id": msgIDStr,
 				"error":      pubErr.Error(),
 			})
@@ -197,7 +197,7 @@ func (h *helpers) appendStreamChunk(
 		fullContent = strings.Join(chunks, "")
 
 		// Debug logging: record chunk count and final content for troubleshooting.
-		h.logIfEnabled(ctx, "appendStreamChunk.finalize", map[string]any{
+		h.logger.Info(ctx, "appendStreamChunk.finalize", map[string]any{
 			"message_id":         msgIDStr,
 			"kind":               kind,
 			"chunk_count":        len(chunks),
@@ -210,14 +210,14 @@ func (h *helpers) appendStreamChunk(
 		// If we have very few chunks but the message was streaming for a while,
 		// log a warning for monitoring and debugging.
 		if len(chunks) == 0 {
-			h.logIfEnabled(ctx, "appendStreamChunk.no_chunks_in_redis", map[string]any{
+			h.logger.Info(ctx, "appendStreamChunk.no_chunks_in_redis", map[string]any{
 				"message_id": msgIDStr,
 				"kind":       kind,
 				"hint":       "possible TTL expiration or Redis connectivity issue",
 			})
 		} else if len(chunks) <= 2 && !isFirst {
 			// Only 1-2 chunks but this is not the first chunk (meaning more chunks were expected)
-			h.logIfEnabled(ctx, "appendStreamChunk.few_chunks_detected", map[string]any{
+			h.logger.Info(ctx, "appendStreamChunk.few_chunks_detected", map[string]any{
 				"message_id":  msgIDStr,
 				"kind":        kind,
 				"chunk_count": len(chunks),
@@ -263,7 +263,7 @@ func (h *helpers) appendStreamChunk(
 		}}, nil
 	}); pubErr != nil {
 		if errors.Is(pubErr, updates.ErrPushAfterCommit) {
-			h.logIfEnabled(ctx, "appendStreamChunk.push_after_commit", map[string]any{"error": pubErr.Error()})
+			h.logger.Info(ctx, "appendStreamChunk.push_after_commit", map[string]any{"error": pubErr.Error()})
 		} else {
 			return fmt.Errorf("appendStreamChunk: run and publish: %w", pubErr)
 		}
@@ -272,7 +272,7 @@ func (h *helpers) appendStreamChunk(
 	// 4. Delete Redis chunks.
 	if streamStore != nil {
 		if delErr := streamStore.DeleteChunks(msgIDStr); delErr != nil {
-			h.logIfEnabled(ctx, "appendStreamChunk.redis_delete_failed", map[string]any{
+			h.logger.Info(ctx, "appendStreamChunk.redis_delete_failed", map[string]any{
 				"message_id": msgIDStr,
 				"error":      delErr.Error(),
 			})

@@ -41,11 +41,3 @@ func mapToFields(m map[string]any) []zap.Field {
 	}
 	return fields
 }
-
-// logIfEnabled logs a message using the configured logger, if available.
-// This is a convenience wrapper to avoid nil-checking the logger at every call site.
-func (h *helpers) logIfEnabled(ctx context.Context, msg string, fields map[string]any) {
-	if h.logger != nil {
-		h.logger.Info(ctx, msg, fields)
-	}
-}

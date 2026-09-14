@@ -133,7 +133,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		// Build attachments
 		attachmentMsgs, err := h.attachmentManager.BuildAttachments(ctx, sid, userID)
 		if err != nil {
-			h.logIfEnabled(ctx, "loadMessages.build_attachments_failed", map[string]any{
+			h.logger.Info(ctx, "loadMessages.build_attachments_failed", map[string]any{
 				"session_id": sid.String(),
 				"error":      err.Error(),
 			})
@@ -175,7 +175,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 			}
 			preview = append(preview, fmt.Sprintf("[%d]%s:%s", i, msg.Role, content))
 		}
-		h.logIfEnabled(ctx, "loadMessages.all_messages", map[string]any{
+		h.logger.Info(ctx, "loadMessages.all_messages", map[string]any{
 			"session_id":    sid.String(),
 			"message_count": len(messages),
 			"messages":      preview,
@@ -540,7 +540,7 @@ func (h *helpers) injectCommandPrompts(goCtx context.Context, sessionID uuid.UUI
 }
 
 func wrapWithTag(name, content string) string {
-	return "<command name=\"" + name + "\">\n" + content + "\n</command>"
+	return "<command name=\"" + escapeXMLAttr(name) + "\">\n" + escapeXMLContent(content) + "\n</command>"
 }
 
 // injectScenarioPrompts 注入场景内容作为系统提示词

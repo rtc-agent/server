@@ -32,7 +32,7 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 		return fmt.Errorf("compact: invalid session ID %q: %w", sessionID, err)
 	}
 
-	h.logIfEnabled(ctx, "compact.start", map[string]any{
+	h.logger.Info(ctx, "compact.start", map[string]any{
 		"session_id":           sessionID,
 		"has_custom_instruction": customInstruction != nil,
 	})
@@ -60,7 +60,7 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 
 	schemaMsgs := turnagent.MessagesToEino(agentMsgs)
 	if len(schemaMsgs) == 0 {
-		h.logIfEnabled(ctx, "compact.no_messages", map[string]any{
+		h.logger.Info(ctx, "compact.no_messages", map[string]any{
 			"session_id": sessionID,
 		})
 		return nil
@@ -94,7 +94,7 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 		if err := h.deps.SessionRepo.Update(compactCtx, sid, map[string]any{
 			"current_context_tokens": tokensAfter,
 		}); err != nil {
-			h.logIfEnabled(ctx, "compact.update_context_tokens_failed", map[string]any{
+			h.logger.Info(ctx, "compact.update_context_tokens_failed", map[string]any{
 				"session_id": sessionID,
 				"error":      err.Error(),
 			})
@@ -108,12 +108,12 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 	if h.tokenEstimator != nil {
 		estimate, estimateErr := h.tokenEstimator.ReestimateAfterCompact(compactCtx, sid, prevEWMA, tokensBefore, tokensAfter)
 		if estimateErr != nil {
-			h.logIfEnabled(ctx, "compact.reestimate_failed", map[string]any{
+			h.logger.Info(ctx, "compact.reestimate_failed", map[string]any{
 				"session_id": sessionID,
 				"error":      estimateErr.Error(),
 			})
 		} else if estimate != nil {
-			h.logIfEnabled(ctx, "compact.reestimate", map[string]any{
+			h.logger.Info(ctx, "compact.reestimate", map[string]any{
 				"session_id":              sessionID,
 				"current_tokens":          estimate.CurrentTokens,
 				"estimated_next_round":    estimate.EstimatedNextRound,
@@ -134,7 +134,7 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 		ratio = float64(tokensAfter) / float64(tokensBefore)
 	}
 
-	h.logIfEnabled(ctx, "compact.completed", map[string]any{
+	h.logger.Info(ctx, "compact.completed", map[string]any{
 		"session_id":    sessionID,
 		"tokens_before": tokensBefore,
 		"tokens_after":  tokensAfter,

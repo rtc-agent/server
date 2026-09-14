@@ -56,7 +56,7 @@ func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	// Cancel the scheduled task if TaskScheduler is available.
 	if t.helpers.deps.TaskScheduler != nil && loop.AsynqTaskID != "" {
 		if cancelErr := t.helpers.deps.TaskScheduler.Cancel(ctx, loop.AsynqTaskID); cancelErr != nil {
-			t.helpers.logIfEnabled(ctx, "pauseLoop.cancel_task_failed", map[string]any{
+			t.helpers.logger.Info(ctx, "pauseLoop.cancel_task_failed", map[string]any{
 				"loop_id": loop.ID.String(),
 				"task_id": loop.AsynqTaskID,
 				"error":   cancelErr.Error(),
@@ -82,7 +82,7 @@ func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		return "", fmt.Errorf("pause_loop: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "pauseLoop.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "pauseLoop.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"loop_id":    loop.ID.String(),
 	})

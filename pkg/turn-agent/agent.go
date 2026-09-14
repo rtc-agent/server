@@ -28,14 +28,16 @@ func New(cfg Config, queue *rtcqueue.Queue, workerID string) (*Agent, error) {
 			return "turnagent:session:" + sessionID
 		}
 	}
+	if cfg.Logger == nil {
+		cfg.Logger = noopLogger{}
+	}
 	a := &Agent{
 		cfg:      cfg,
 		queue:    queue,
 		workerID: workerID,
 		registry: NewSessionManagerRegistry(),
 	}
-	a.logIfEnabled(context.Background(), LogLevelDebug, "agent.new", map[string]any{
-		"has_logger":         cfg.Logger != nil,
+	a.log(context.Background(), LogLevelDebug, "agent.new", map[string]any{
 		"has_tracer":         cfg.Tracer != nil,
 		"has_metrics":        cfg.Metrics != nil,
 		"enable_llm_logging": cfg.EnableLLMLogging,

@@ -33,7 +33,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	state := h.streamState.getOrCreate(turnID.String())
 
 	// Debug logging: record stream chunk content for troubleshooting.
-	h.logIfEnabled(ctx, "handleStreamChunk.debug", map[string]any{
+	h.logger.Info(ctx, "handleStreamChunk.debug", map[string]any{
 		"session_id":           sessionID.String(),
 		"turn_id":              turnID.String(),
 		"content_len":          len(event.Content),
@@ -116,7 +116,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turnID uuid.UUID, event *turnagent.Event) error {
 	state := h.streamState.getOrCreate(turnID.String())
 
-	h.logIfEnabled(ctx, "handleStreamEnd.start", map[string]any{
+	h.logger.Info(ctx, "handleStreamEnd.start", map[string]any{
 		"session_id":            sessionID.String(),
 		"turn_id":               turnID.String(),
 		"role":                  event.Role,
@@ -169,7 +169,7 @@ func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turn
 	// Also covers thinking-only messages (intermediate ChatModel calls) that were
 	// just finalized above — UpdateTokenUsage is idempotent, so a redundant call is safe.
 	if tokenTargetID != uuid.Nil && event.TokenUsage != nil {
-		h.logIfEnabled(ctx, "handleStreamEnd.update_token_usage", map[string]any{
+		h.logger.Info(ctx, "handleStreamEnd.update_token_usage", map[string]any{
 			"session_id":       sessionID.String(),
 			"turn_id":          turnID.String(),
 			"target_kind":      tokenTargetKind,
@@ -187,7 +187,7 @@ func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turn
 			CachedTokens:    event.TokenUsage.CachedTokens,
 			ReasoningTokens: event.TokenUsage.ReasoningTokens,
 		}); err != nil {
-			h.logIfEnabled(ctx, "handleStreamEnd.update_token_usage_failed", map[string]any{
+			h.logger.Info(ctx, "handleStreamEnd.update_token_usage_failed", map[string]any{
 				"target_kind": tokenTargetKind,
 				"message_id":  tokenTargetID.String(),
 				"error":       err.Error(),
@@ -286,7 +286,7 @@ func (h *helpers) handleMessage(ctx context.Context, sessionID uuid.UUID, turnID
 	})
 	if err != nil {
 		if errors.Is(err, updates.ErrPushAfterCommit) {
-			h.logIfEnabled(ctx, "handleMessage.push_after_commit", map[string]any{"error": err.Error()})
+			h.logger.Info(ctx, "handleMessage.push_after_commit", map[string]any{"error": err.Error()})
 		} else {
 			return fmt.Errorf("handleMessage: %w", err)
 		}
@@ -305,7 +305,7 @@ func (h *helpers) handleEventError(ctx context.Context, sessionID uuid.UUID, tur
 	if event.Err != nil {
 		errMsg = event.Err.Error()
 	}
-	h.logIfEnabled(ctx, "handleEventError", map[string]any{
+	h.logger.Info(ctx, "handleEventError", map[string]any{
 		"session_id": sessionID.String(),
 		"turn_id":    turnID.String(),
 		"error":      errMsg,

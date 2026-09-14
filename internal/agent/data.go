@@ -190,7 +190,7 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 		wrappedTools[i] = utils.WrapToolWithErrorHandler(t, errorHandler)
 	}
 
-	h.logIfEnabled(ctx, "createTools.done", map[string]any{
+	h.logger.Info(ctx, "createTools.done", map[string]any{
 		"session_id": sessionID,
 		"turn_id":    turnID,
 		"tool_count": len(wrappedTools),
@@ -211,7 +211,7 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 // This is necessary because the middleware does not receive sessionID
 // natively — it only sees the context passed through the agent execution.
 func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID string, tools []tool.BaseTool) (adk.Agent, error) {
-	h.logIfEnabled(ctx, "createAgent.start", map[string]any{
+	h.logger.Info(ctx, "createAgent.start", map[string]any{
 		"session_id": sessionID,
 		"turn_id":    turnID,
 		"tool_count": len(tools),
@@ -292,7 +292,7 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		},
 	})
 	if err != nil {
-		h.logIfEnabled(ctx, "createAgent.failed", map[string]any{
+		h.logger.Info(ctx, "createAgent.failed", map[string]any{
 			"session_id": sessionID,
 			"turn_id":    turnID,
 			"error":      err.Error(),
@@ -300,7 +300,7 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		return nil, fmt.Errorf("createAgent: create chat model agent: %w", err)
 	}
 
-	h.logIfEnabled(ctx, "createAgent.done", map[string]any{
+	h.logger.Info(ctx, "createAgent.done", map[string]any{
 		"session_id": sessionID,
 		"turn_id":    turnID,
 	})
@@ -340,7 +340,7 @@ func (h *helpers) publishEvent(ctx context.Context, sessionID string, turnID str
 	case turnagent.EventKindError:
 		return h.handleEventError(ctx, sid, tid, event)
 	default:
-		h.logIfEnabled(ctx, "publishEvent.unknown_kind", map[string]any{
+		h.logger.Info(ctx, "publishEvent.unknown_kind", map[string]any{
 			"session_id": sessionID,
 			"turn_id":    turnID,
 			"kind":       string(event.Kind),

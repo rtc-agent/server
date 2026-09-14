@@ -50,7 +50,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	if p.SessionID == "" {
 		return fmt.Errorf("turnagent: work payload missing session_id")
 	}
-	a.logIfEnabled(ctx, LogLevelInfo, "agent.process", map[string]any{
+	a.log(ctx, LogLevelInfo, "agent.process", map[string]any{
 		"p.SessionID": p.SessionID,
 		"p.Kind":      p.Kind,
 		"work_id":     work.ID,
@@ -59,7 +59,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// 1.5. Fast path: compact work bypasses the turn loop entirely.
 	if p.Kind == WorkKindCompact {
 		if a.cfg.CompactContext == nil {
-			a.logIfEnabled(ctx, LogLevelWarn, "agent.compact_no_handler", map[string]any{
+			a.log(ctx, LogLevelWarn, "agent.compact_no_handler", map[string]any{
 				"p.SessionID": p.SessionID,
 			})
 			return nil
@@ -82,7 +82,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		turnID, err = a.cfg.LookupTurn(ctx, p.SessionID, work.ID)
 		if err != nil {
 			if errors.Is(err, ErrNoActiveTurn) {
-				a.logIfEnabled(ctx, LogLevelInfo, "resume.no_active_turn", map[string]any{
+				a.log(ctx, LogLevelInfo, "resume.no_active_turn", map[string]any{
 					"session_id": p.SessionID,
 					"work_id":    work.ID,
 					"message":    "turn was cancelled/completed before resume",
@@ -108,7 +108,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		attribute.String("turn.work_kind", string(p.Kind)),
 	)
 	turnStart := time.Now()
-	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.start", map[string]any{
+	a.log(turnCtx, LogLevelInfo, "turn.start", map[string]any{
 		"session_id": p.SessionID,
 		"turn_id":    turnID,
 		"work_kind":  string(p.Kind),
@@ -128,7 +128,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		default:
 			pErr = fmt.Errorf("turnagent: panic in callback: %v", v)
 		}
-		a.logIfEnabled(turnCtx, LogLevelError, "turn.panicked", map[string]any{
+		a.log(turnCtx, LogLevelError, "turn.panicked", map[string]any{
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
 			"error":      pErr.Error(),
@@ -147,7 +147,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 
 	// 4. Get or create a SessionTurnManager.
 	logFn := func(ctx context.Context, level LogLevel, msg string, fields map[string]any) {
-		a.logIfEnabled(ctx, level, msg, fields)
+		a.log(ctx, level, msg, fields)
 	}
 
 	mgr, isNew, err := a.registry.GetOrCreate(
@@ -157,7 +157,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	if err != nil {
 		// Claim failed. This could mean the session is locked by another worker
 		// or the queue is empty. Return the error so rtc-queue can handle it.
-		a.logIfEnabled(turnCtx, LogLevelWarn, "turn.get_or_create_failed", map[string]any{
+		a.log(turnCtx, LogLevelWarn, "turn.get_or_create_failed", map[string]any{
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
 			"error":      err.Error(),
@@ -175,7 +175,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	pushed, _ := mgr.Loop().Push(workItem)
 	if !pushed {
 		// Loop stopped. Try to replace the manager.
-		a.logIfEnabled(turnCtx, LogLevelInfo, "turn.push_failed_replacing", map[string]any{
+		a.log(turnCtx, LogLevelInfo, "turn.push_failed_replacing", map[string]any{
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
 		})
@@ -207,7 +207,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		case WorkKindSubmit:
 			if err := a.cfg.BeginTurn(turnCtx, turnID); err != nil {
 				turnSpan.SetAttributes(attribute.String("turn.status", "error"))
-				a.logIfEnabled(turnCtx, LogLevelError, "turn.begin_failed", map[string]any{
+				a.log(turnCtx, LogLevelError, "turn.begin_failed", map[string]any{
 					"session_id": p.SessionID,
 					"turn_id":    turnID,
 					"error":      err.Error(),
@@ -217,7 +217,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		case WorkKindResume:
 			if err := a.cfg.ResumeTurn(turnCtx, turnID); err != nil {
 				turnSpan.SetAttributes(attribute.String("turn.status", "error"))
-				a.logIfEnabled(turnCtx, LogLevelError, "turn.resume_failed", map[string]any{
+				a.log(turnCtx, LogLevelError, "turn.resume_failed", map[string]any{
 					"session_id": p.SessionID,
 					"turn_id":    turnID,
 					"error":      err.Error(),
@@ -252,7 +252,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// 7. Register work with tracker and wait for completion.
 	completionCh := mgr.Tracker().Register(work.ID)
 
-	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.waiting_completion", map[string]any{
+	a.log(turnCtx, LogLevelInfo, "turn.waiting_completion", map[string]any{
 		"session_id": p.SessionID,
 		"turn_id":    turnID,
 		"work_id":    work.ID,
@@ -263,13 +263,13 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// - The context to be cancelled (worker shutdown)
 	select {
 	case <-completionCh:
-		a.logIfEnabled(turnCtx, LogLevelInfo, "turn.work_completed", map[string]any{
+		a.log(turnCtx, LogLevelInfo, "turn.work_completed", map[string]any{
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
 			"work_id":    work.ID,
 		})
 	case <-innerCtx.Done():
-		a.logIfEnabled(turnCtx, LogLevelInfo, "turn.ctx_done_waiting", map[string]any{
+		a.log(turnCtx, LogLevelInfo, "turn.ctx_done_waiting", map[string]any{
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
 			"work_id":    work.ID,
@@ -295,7 +295,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			// Work was actually completed — the innerCtx.Done() path was a
 			// false alarm (e.g., CompleteAll closed the channel at the same
 			// time the cancel listener called innerCancel).
-			a.logIfEnabled(turnCtx, LogLevelInfo, "turn.work_completed_deferred", map[string]any{
+			a.log(turnCtx, LogLevelInfo, "turn.work_completed_deferred", map[string]any{
 				"session_id": p.SessionID,
 				"turn_id":    turnID,
 				"work_id":    work.ID,
@@ -316,7 +316,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		select {
 		case <-completionCh:
 			// Work completed during the wait — not abandoned.
-			a.logIfEnabled(turnCtx, LogLevelInfo, "turn.work_completed_during_wait", map[string]any{
+			a.log(turnCtx, LogLevelInfo, "turn.work_completed_during_wait", map[string]any{
 				"session_id": p.SessionID,
 				"turn_id":    turnID,
 				"work_id":    work.ID,
@@ -331,7 +331,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		// shutdown). When abandoned, the work is still in "processing" status
 		// in Redis — requeue it so another worker can pick it up.
 		if mgr.Tracker().IsAbandoned(work.ID) {
-			a.logIfEnabled(turnCtx, LogLevelWarn, "turn.work_abandoned", map[string]any{
+			a.log(turnCtx, LogLevelWarn, "turn.work_abandoned", map[string]any{
 				"session_id": p.SessionID,
 				"turn_id":    turnID,
 				"work_id":    work.ID,
@@ -340,7 +340,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			// Use context.Background() to ensure requeue succeeds even if
 			// the worker context is being cancelled.
 			if reErr := a.queue.RequeueWork(context.Background(), work.ID); reErr != nil {
-				a.logIfEnabled(turnCtx, LogLevelWarn, "turn.requeue_abandoned_failed", map[string]any{
+				a.log(turnCtx, LogLevelWarn, "turn.requeue_abandoned_failed", map[string]any{
 					"work_id": work.ID,
 					"error":   reErr.Error(),
 				})
@@ -363,21 +363,21 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// The work is still in "processing" state in Redis — requeue it so another
 	// worker can pick it up.
 	if mgr.Tracker().IsAbandoned(work.ID) {
-		a.logIfEnabled(turnCtx, LogLevelWarn, "turn.owner_work_abandoned", map[string]any{
+		a.log(turnCtx, LogLevelWarn, "turn.owner_work_abandoned", map[string]any{
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
 			"work_id":    work.ID,
 			"message":    "owner's work was not processed before loop exited, requeuing",
 		})
 		if reErr := a.queue.RequeueWork(context.Background(), work.ID); reErr != nil {
-			a.logIfEnabled(turnCtx, LogLevelWarn, "turn.requeue_owner_failed", map[string]any{
+			a.log(turnCtx, LogLevelWarn, "turn.requeue_owner_failed", map[string]any{
 				"work_id": work.ID,
 				"error":   reErr.Error(),
 			})
 		}
 	}
 
-	a.logIfEnabled(turnCtx, LogLevelInfo, "turn.loop_exited", map[string]any{
+	a.log(turnCtx, LogLevelInfo, "turn.loop_exited", map[string]any{
 		"session_id":  p.SessionID,
 		"turn_id":     turnID,
 		"work_kind":   string(p.Kind),
@@ -399,7 +399,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		if err != nil {
 			turnSpan.RecordError(err)
 		}
-		a.logIfEnabled(turnCtx, LogLevelInfo, "turn.end", map[string]any{
+		a.log(turnCtx, LogLevelInfo, "turn.end", map[string]any{
 			"session_id":  p.SessionID,
 			"turn_id":     turnID,
 			"work_kind":   string(p.Kind),
@@ -431,14 +431,14 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 
 	switch {
 	case exitReason == nil:
-		a.logIfEnabled(turnCtx, LogLevelInfo, "turn.clean_exit", map[string]any{
+		a.log(turnCtx, LogLevelInfo, "turn.clean_exit", map[string]any{
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
 			"message":    "calling CompleteTurn",
 		})
 		recordEnd("success", nil)
 		if err := a.cfg.CompleteTurn(turnCtx, p.SessionID, turnID, mgr.LastMessage()); err != nil {
-			a.logIfEnabled(turnCtx, LogLevelError, "turn.complete_callback_failed", map[string]any{
+			a.log(turnCtx, LogLevelError, "turn.complete_callback_failed", map[string]any{
 				"session_id": p.SessionID,
 				"turn_id":    turnID,
 				"error":      err.Error(),
@@ -453,7 +453,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		if root == nil {
 			recordEnd("fail", exitReason)
 			if err := a.cfg.FailTurn(turnCtx, turnID, exitReason); err != nil {
-				a.logIfEnabled(turnCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{
+				a.log(turnCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{
 					"session_id": p.SessionID,
 					"turn_id":    turnID,
 					"error":      err.Error(),
@@ -471,7 +471,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			})
 		}
 
-		a.logIfEnabled(turnCtx, LogLevelInfo, "interrupt", map[string]any{
+		a.log(turnCtx, LogLevelInfo, "interrupt", map[string]any{
 			"session_id":     p.SessionID,
 			"turn_id":        turnID,
 			"interrupt_id":   root.ID,
@@ -495,7 +495,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		})
 		recordEnd("interrupt", nil)
 		if err := a.cfg.InterruptTurn(turnCtx, turnID, root.ID, root.Info, allContexts); err != nil {
-			a.logIfEnabled(turnCtx, LogLevelError, "turn.interrupt_callback_failed", map[string]any{
+			a.log(turnCtx, LogLevelError, "turn.interrupt_callback_failed", map[string]any{
 				"session_id":   p.SessionID,
 				"turn_id":      turnID,
 				"interrupt_id": root.ID,
@@ -507,7 +507,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	default:
 		recordEnd("fail", exitReason)
 		if err := a.cfg.FailTurn(turnCtx, turnID, exitReason); err != nil {
-			a.logIfEnabled(turnCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{
+			a.log(turnCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{
 				"session_id": p.SessionID,
 				"turn_id":    turnID,
 				"error":      err.Error(),

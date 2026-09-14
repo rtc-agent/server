@@ -108,7 +108,7 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		return "", fmt.Errorf("list_loops: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "listLoops.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "listLoops.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"count":      len(summaries),
 	})

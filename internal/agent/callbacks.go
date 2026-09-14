@@ -50,7 +50,7 @@ func (h *helpers) createTurn(ctx context.Context, sessionID string, workID strin
 		return "", fmt.Errorf("createTurn: find existing turn by client_id %q: %w", workID, err)
 	}
 	if existing != nil {
-		h.logIfEnabled(ctx, "createTurn.idempotent_hit", map[string]any{
+		h.logger.Info(ctx, "createTurn.idempotent_hit", map[string]any{
 			"session_id": sessionID,
 			"work_id":    workID,
 			"turn_id":    existing.ID.String(),
@@ -68,7 +68,7 @@ func (h *helpers) createTurn(ctx context.Context, sessionID string, workID strin
 		return "", fmt.Errorf("createTurn: create turn: %w", err)
 	}
 
-	h.logIfEnabled(ctx, "createTurn.created", map[string]any{
+	h.logger.Info(ctx, "createTurn.created", map[string]any{
 		"session_id": sessionID,
 		"work_id":    workID,
 		"turn_id":    turn.ID.String(),
@@ -83,7 +83,7 @@ func (h *helpers) createTurn(ctx context.Context, sessionID string, workID strin
 	if h.deps.UpdatePublisher != nil {
 		session, sessErr := h.deps.SessionRepo.GetByID(ctx, sid)
 		if sessErr != nil {
-			h.logIfEnabled(ctx, "createTurn.load_session_failed", map[string]any{
+			h.logger.Info(ctx, "createTurn.load_session_failed", map[string]any{
 				"session_id": sessionID,
 				"error":      sessErr.Error(),
 			})
@@ -91,7 +91,7 @@ func (h *helpers) createTurn(ctx context.Context, sessionID string, workID strin
 			updates := primitives.BuildTurnCreatedUpdates(session, turn.ID)
 			if len(updates) > 0 {
 				if _, err := h.deps.UpdatePublisher.Publish(ctx, updates...); err != nil {
-					h.logIfEnabled(ctx, "createTurn.publish_failed", map[string]any{
+					h.logger.Info(ctx, "createTurn.publish_failed", map[string]any{
 						"session_id": sessionID,
 						"turn_id":    turn.ID.String(),
 						"error":      err.Error(),
@@ -133,7 +133,7 @@ func (h *helpers) lookupTurn(ctx context.Context, sessionID string, workID strin
 	// last element is the most recent.
 	turn := active[len(active)-1]
 
-	h.logIfEnabled(ctx, "lookupTurn.found", map[string]any{
+	h.logger.Info(ctx, "lookupTurn.found", map[string]any{
 		"session_id": sessionID,
 		"work_id":    workID,
 		"turn_id":    turn.ID.String(),
@@ -180,7 +180,7 @@ func (h *helpers) beginTurn(ctx context.Context, turnID string) error {
 	// when it reacts to the event), then publish both events together.
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		h.logIfEnabled(ctx, "beginTurn.load_turn_failed", map[string]any{
+		h.logger.Info(ctx, "beginTurn.load_turn_failed", map[string]any{
 			"turn_id": turnID,
 			"error":   lookupErr.Error(),
 		})
@@ -189,7 +189,7 @@ func (h *helpers) beginTurn(ctx context.Context, turnID string) error {
 
 	// DB update session status before publishing events.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, turn.SessionID, protocol.SessionStatusActive); err != nil {
-		h.logIfEnabled(ctx, "beginTurn.update_session_status_failed", map[string]any{
+		h.logger.Info(ctx, "beginTurn.update_session_status_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -197,7 +197,7 @@ func (h *helpers) beginTurn(ctx context.Context, turnID string) error {
 
 	h.batchLifecyclePublish(ctx, tid, turn.SessionID, "begin")
 
-	h.logIfEnabled(ctx, "beginTurn.done", map[string]any{
+	h.logger.Info(ctx, "beginTurn.done", map[string]any{
 		"turn_id": turnID,
 	})
 
@@ -240,7 +240,7 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 	// Load session to check Sub Agent hierarchy and publish events.
 	session, sessionErr := h.deps.SessionRepo.GetByID(ctx, sid)
 	if sessionErr != nil {
-		h.logIfEnabled(ctx, "completeTurn.load_session_failed", map[string]any{
+		h.logger.Info(ctx, "completeTurn.load_session_failed", map[string]any{
 			"session_id": sessionID,
 			"error":      sessionErr.Error(),
 		})
@@ -249,7 +249,7 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 
 	// DB update session status before publishing events.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusIdle); err != nil {
-		h.logIfEnabled(ctx, "completeTurn.update_session_status_failed", map[string]any{
+		h.logger.Info(ctx, "completeTurn.update_session_status_failed", map[string]any{
 			"session_id": sessionID,
 			"error":      err.Error(),
 		})
@@ -258,7 +258,7 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 	// Batch publish: turn.updated + session.updated in one centrifuge call.
 	h.batchLifecyclePublish(ctx, tid, sid, "complete")
 
-	h.logIfEnabled(ctx, "completeTurn.done", map[string]any{"turn_id": turnID, "session_id": sessionID})
+	h.logger.Info(ctx, "completeTurn.done", map[string]any{"turn_id": turnID, "session_id": sessionID})
 
 	// Sub Agent support: if this is a sub session, notify the parent.
 	if session != nil && session.ParentServerSessionID != uuid.Nil {
@@ -290,7 +290,7 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 		}
 		if errs := h.deps.CommandRegistry.OnTurnComplete(cmdCtx); len(errs) > 0 {
 			for _, e := range errs {
-				h.logIfEnabled(ctx, "completeTurn.command_hook_failed", map[string]any{
+				h.logger.Info(ctx, "completeTurn.command_hook_failed", map[string]any{
 					"session_id": sessionID,
 					"turn_id":    turnID,
 					"error":      e.Error(),
@@ -314,7 +314,7 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 	// Load the toolcall_input message.
 	inputMsg, err := h.deps.MessageRepo.GetByID(ctx, messageID)
 	if err != nil {
-		h.logIfEnabled(ctx, "resumeParentAfterSubAgentNewToolCallOutput.load_input_failed", map[string]any{
+		h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.load_input_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -324,7 +324,7 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 	// Parse the toolcall_input content.
 	inputContentData, err := primitives.ParseContentData(inputMsg.Content)
 	if err != nil {
-		h.logIfEnabled(ctx, "resumeParentAfterSubAgentNewToolCallOutput.parse_input_failed", map[string]any{
+		h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.parse_input_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -333,7 +333,7 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 
 	inputToolCall, err := primitives.ParseContentDataToolCall(inputContentData.Data)
 	if err != nil {
-		h.logIfEnabled(ctx, "resumeParentAfterSubAgentNewToolCallOutput.parse_toolcall_failed", map[string]any{
+		h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.parse_toolcall_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -379,7 +379,7 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 		// Load session for event publishing.
 		session, sessErr := h.deps.SessionRepo.GetByID(txCtx, inputMsg.SessionID)
 		if sessErr != nil {
-			h.logIfEnabled(ctx, "resumeParentAfterSubAgentNewToolCallOutput.load_session_failed", map[string]any{
+			h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.load_session_failed", map[string]any{
 				"session_id": inputMsg.SessionID.String(),
 				"error":      sessErr.Error(),
 			})
@@ -402,14 +402,14 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 		return items, nil
 	})
 	if err != nil {
-		h.logIfEnabled(ctx, "resumeParentAfterSubAgentNewToolCallOutput.publish_failed", map[string]any{
+		h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.publish_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
 		return
 	}
 
-	h.logIfEnabled(ctx, "resumeParentAfterSubAgentNewToolCallOutput.done", map[string]any{
+	h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.done", map[string]any{
 		"input_message_id":  messageID.String(),
 		"status":            status,
 		"has_result":        result != nil,
@@ -433,7 +433,7 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 	ctx := context.WithoutCancel(callerCtx)
 
 	if h.queue == nil {
-		h.logIfEnabled(ctx, "resumeParentAfterSubAgent.queue_nil", map[string]any{
+		h.logger.Info(ctx, "resumeParentAfterSubAgent.queue_nil", map[string]any{
 			"sub_session_id": subSession.ID.String(),
 		})
 		return
@@ -441,7 +441,7 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 
 	parentSessionID := subSession.ParentServerSessionID.String()
 
-	h.logIfEnabled(ctx, "resumeParentAfterSubAgent.start", map[string]any{
+	h.logger.Info(ctx, "resumeParentAfterSubAgent.start", map[string]any{
 		"sub_session_id":    subSession.ID.String(),
 		"parent_session_id": parentSessionID,
 	})
@@ -475,7 +475,7 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 		InterruptResult: subAgentResult, // Sub agent result is the interrupt resolution
 	})
 	if marshalErr != nil {
-		h.logIfEnabled(ctx, "resumeParentAfterSubAgent.marshal_failed", map[string]any{
+		h.logger.Info(ctx, "resumeParentAfterSubAgent.marshal_failed", map[string]any{
 			"parent_session_id": parentSessionID,
 			"error":             marshalErr.Error(),
 		})
@@ -486,14 +486,14 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 	// Submit items, so the parent's checkpoint is still intact.
 	const resumePriority int64 = 100
 	if _, err := h.queue.Publish(ctx, parentSessionID, string(payload), resumePriority); err != nil {
-		h.logIfEnabled(ctx, "resumeParentAfterSubAgent.publish_failed", map[string]any{
+		h.logger.Info(ctx, "resumeParentAfterSubAgent.publish_failed", map[string]any{
 			"parent_session_id": parentSessionID,
 			"error":             err.Error(),
 		})
 		return
 	}
 
-	h.logIfEnabled(ctx, "resumeParentAfterSubAgent.done", map[string]any{
+	h.logger.Info(ctx, "resumeParentAfterSubAgent.done", map[string]any{
 		"sub_session_id":    subSession.ID.String(),
 		"parent_session_id": parentSessionID,
 		"has_result":        lastMessage != nil,
@@ -520,7 +520,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 	ctx := context.WithoutCancel(callerCtx)
 
 	if h.queue == nil {
-		h.logIfEnabled(ctx, "notifyParentAfterAsyncSubAgent.queue_nil", map[string]any{
+		h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.queue_nil", map[string]any{
 			"sub_session_id": subSession.ID.String(),
 		})
 		return
@@ -528,7 +528,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 
 	parentSessionID := subSession.ParentServerSessionID
 
-	h.logIfEnabled(ctx, "notifyParentAfterAsyncSubAgent.start", map[string]any{
+	h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.start", map[string]any{
 		"sub_session_id":    subSession.ID.String(),
 		"parent_session_id": parentSessionID.String(),
 		"status":            status,
@@ -615,7 +615,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 		}, nil
 	})
 	if err != nil {
-		h.logIfEnabled(ctx, "notifyParentAfterAsyncSubAgent.publish_failed", map[string]any{
+		h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.publish_failed", map[string]any{
 			"sub_session_id":    subSession.ID.String(),
 			"parent_session_id": parentSessionID.String(),
 			"error":             err.Error(),
@@ -629,7 +629,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 		SessionID: parentSessionID.String(),
 	})
 	if marshalErr != nil {
-		h.logIfEnabled(ctx, "notifyParentAfterAsyncSubAgent.marshal_failed", map[string]any{
+		h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.marshal_failed", map[string]any{
 			"parent_session_id": parentSessionID.String(),
 			"error":             marshalErr.Error(),
 		})
@@ -637,14 +637,14 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 	}
 
 	if _, err := h.queue.Publish(ctx, parentSessionID.String(), string(payload), 0); err != nil {
-		h.logIfEnabled(ctx, "notifyParentAfterAsyncSubAgent.submit_failed", map[string]any{
+		h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.submit_failed", map[string]any{
 			"parent_session_id": parentSessionID.String(),
 			"error":             err.Error(),
 		})
 		return
 	}
 
-	h.logIfEnabled(ctx, "notifyParentAfterAsyncSubAgent.done", map[string]any{
+	h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.done", map[string]any{
 		"sub_session_id":    subSession.ID.String(),
 		"parent_session_id": parentSessionID.String(),
 		"status":            status,
@@ -659,7 +659,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 	// Load the message.
 	msg, err := h.deps.MessageRepo.GetByID(ctx, messageID)
 	if err != nil {
-		h.logIfEnabled(ctx, "updateSubAgentInvocationStatus.load_failed", map[string]any{
+		h.logger.Info(ctx, "updateSubAgentInvocationStatus.load_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -669,7 +669,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 	// Parse the content.
 	var content protocol.ContentData
 	if err := json.Unmarshal([]byte(msg.Content), &content); err != nil {
-		h.logIfEnabled(ctx, "updateSubAgentInvocationStatus.parse_failed", map[string]any{
+		h.logger.Info(ctx, "updateSubAgentInvocationStatus.parse_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -680,7 +680,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 	if data, ok := content.Data.(map[string]any); ok {
 		data["status"] = status
 	} else {
-		h.logIfEnabled(ctx, "updateSubAgentInvocationStatus.invalid_data_type", map[string]any{
+		h.logger.Info(ctx, "updateSubAgentInvocationStatus.invalid_data_type", map[string]any{
 			"message_id": messageID.String(),
 		})
 		return
@@ -689,7 +689,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 	// Serialize the updated content.
 	updatedContent, err := json.Marshal(content)
 	if err != nil {
-		h.logIfEnabled(ctx, "updateSubAgentInvocationStatus.serialize_failed", map[string]any{
+		h.logger.Info(ctx, "updateSubAgentInvocationStatus.serialize_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -698,7 +698,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 
 	// Update the message in DB.
 	if err := h.deps.MessageRepo.UpdateStreamingStatus(ctx, messageID, protocol.MessageStreamingCompleted, string(updatedContent)); err != nil {
-		h.logIfEnabled(ctx, "updateSubAgentInvocationStatus.update_failed", map[string]any{
+		h.logger.Info(ctx, "updateSubAgentInvocationStatus.update_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -721,14 +721,14 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 			},
 		}
 		if _, err := h.deps.UpdatePublisher.Publish(ctx, updates...); err != nil {
-			h.logIfEnabled(ctx, "updateSubAgentInvocationStatus.publish_failed", map[string]any{
+			h.logger.Info(ctx, "updateSubAgentInvocationStatus.publish_failed", map[string]any{
 				"message_id": messageID.String(),
 				"error":      err.Error(),
 			})
 		}
 	}
 
-	h.logIfEnabled(ctx, "updateSubAgentInvocationStatus.done", map[string]any{
+	h.logger.Info(ctx, "updateSubAgentInvocationStatus.done", map[string]any{
 		"message_id": messageID.String(),
 		"status":     status,
 	})
@@ -778,7 +778,7 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 				}
 			}
 			h.deps.Redis.Expire(ctx, interruptMapKey, 10*time.Minute)
-			h.logIfEnabled(ctx, "interruptTurn.batch_interrupt_mapping_stored", map[string]any{
+			h.logger.Info(ctx, "interruptTurn.batch_interrupt_mapping_stored", map[string]any{
 				"turn_id":         turnID,
 				"interrupt_count": len(allInterruptContexts),
 			})
@@ -787,7 +787,7 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		h.logIfEnabled(ctx, "interruptTurn.load_turn_failed", map[string]any{
+		h.logger.Info(ctx, "interruptTurn.load_turn_failed", map[string]any{
 			"turn_id": turnID,
 			"error":   lookupErr.Error(),
 		})
@@ -796,7 +796,7 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 
 	// Set session status to "idle" — turn is paused waiting for external input.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, turn.SessionID, protocol.SessionStatusIdle); err != nil {
-		h.logIfEnabled(ctx, "interruptTurn.update_session_status_failed", map[string]any{
+		h.logger.Info(ctx, "interruptTurn.update_session_status_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -805,7 +805,7 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 	// Batch publish: turn.updated + session.updated in one centrifuge call.
 	h.batchLifecyclePublish(ctx, tid, turn.SessionID, "interrupt")
 
-	h.logIfEnabled(ctx, "interruptTurn.done", map[string]any{
+	h.logger.Info(ctx, "interruptTurn.done", map[string]any{
 		"turn_id":      turnID,
 		"interrupt_id": interruptID,
 		"info_type":    fmt.Sprintf("%T", interruptInfo),
@@ -833,7 +833,7 @@ func (h *helpers) resumeTurn(ctx context.Context, turnID string) error {
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		h.logIfEnabled(ctx, "resumeTurn.load_turn_failed", map[string]any{
+		h.logger.Info(ctx, "resumeTurn.load_turn_failed", map[string]any{
 			"turn_id": turnID,
 			"error":   lookupErr.Error(),
 		})
@@ -842,7 +842,7 @@ func (h *helpers) resumeTurn(ctx context.Context, turnID string) error {
 
 	// Set session status back to "active" — a turn is executing again.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, turn.SessionID, protocol.SessionStatusActive); err != nil {
-		h.logIfEnabled(ctx, "resumeTurn.update_session_status_failed", map[string]any{
+		h.logger.Info(ctx, "resumeTurn.update_session_status_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -851,7 +851,7 @@ func (h *helpers) resumeTurn(ctx context.Context, turnID string) error {
 	// Batch publish: turn.updated + session.updated in one centrifuge call.
 	h.batchLifecyclePublish(ctx, tid, turn.SessionID, "resume")
 
-	h.logIfEnabled(ctx, "resumeTurn.done", map[string]any{"turn_id": turnID})
+	h.logger.Info(ctx, "resumeTurn.done", map[string]any{"turn_id": turnID})
 
 	return nil
 }
@@ -877,7 +877,7 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		h.logIfEnabled(ctx, "failTurn.load_turn_failed", map[string]any{
+		h.logger.Info(ctx, "failTurn.load_turn_failed", map[string]any{
 			"turn_id": turnID,
 			"error":   lookupErr.Error(),
 		})
@@ -886,7 +886,7 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 
 	// Set session status to "idle" — turn ended due to an error.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, turn.SessionID, protocol.SessionStatusIdle); err != nil {
-		h.logIfEnabled(ctx, "failTurn.update_session_status_failed", map[string]any{
+		h.logger.Info(ctx, "failTurn.update_session_status_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -895,7 +895,7 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 	// Batch publish: turn.updated + session.updated in one centrifuge call.
 	h.batchLifecyclePublish(ctx, tid, turn.SessionID, "fail")
 
-	h.logIfEnabled(ctx, "failTurn.done", map[string]any{
+	h.logger.Info(ctx, "failTurn.done", map[string]any{
 		"turn_id": turnID,
 		"error":   errMsg,
 	})
@@ -935,7 +935,7 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		h.logIfEnabled(ctx, "cancelTurn.load_turn_failed", map[string]any{
+		h.logger.Info(ctx, "cancelTurn.load_turn_failed", map[string]any{
 			"turn_id": turnID,
 			"error":   lookupErr.Error(),
 		})
@@ -944,7 +944,7 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 
 	// Set session status to "idle" — turn was cancelled.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, turn.SessionID, protocol.SessionStatusIdle); err != nil {
-		h.logIfEnabled(ctx, "cancelTurn.update_session_status_failed", map[string]any{
+		h.logger.Info(ctx, "cancelTurn.update_session_status_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -953,7 +953,7 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 	// Batch publish: turn.updated + session.updated in one centrifuge call.
 	h.batchLifecyclePublish(ctx, tid, turn.SessionID, "cancel")
 
-	h.logIfEnabled(ctx, "cancelTurn.done", map[string]any{
+	h.logger.Info(ctx, "cancelTurn.done", map[string]any{
 		"turn_id": turnID,
 		"reason":  reason,
 	})

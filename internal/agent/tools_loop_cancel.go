@@ -71,7 +71,7 @@ func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	// Cancel the scheduled task if TaskScheduler is available.
 	if t.helpers.deps.TaskScheduler != nil && loop.AsynqTaskID != "" {
 		if cancelErr := t.helpers.deps.TaskScheduler.Cancel(ctx, loop.AsynqTaskID); cancelErr != nil {
-			t.helpers.logIfEnabled(ctx, "cancelLoop.cancel_task_failed", map[string]any{
+			t.helpers.logger.Info(ctx, "cancelLoop.cancel_task_failed", map[string]any{
 				"loop_id": loop.ID.String(),
 				"task_id": loop.AsynqTaskID,
 				"error":   cancelErr.Error(),
@@ -97,7 +97,7 @@ func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return "", fmt.Errorf("cancel_loop: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "cancelLoop.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "cancelLoop.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"loop_id":    loop.ID.String(),
 		"reason":     args.Reason,
@@ -167,7 +167,7 @@ func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	// Cancel the scheduled task if TaskScheduler is available.
 	if t.helpers.deps.TaskScheduler != nil && loop.AsynqTaskID != "" {
 		if cancelErr := t.helpers.deps.TaskScheduler.Cancel(ctx, loop.AsynqTaskID); cancelErr != nil {
-			t.helpers.logIfEnabled(ctx, "completeLoop.cancel_task_failed", map[string]any{
+			t.helpers.logger.Info(ctx, "completeLoop.cancel_task_failed", map[string]any{
 				"loop_id": loop.ID.String(),
 				"task_id": loop.AsynqTaskID,
 				"error":   cancelErr.Error(),
@@ -193,7 +193,7 @@ func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		return "", fmt.Errorf("complete_loop: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "completeLoop.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "completeLoop.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"loop_id":    loop.ID.String(),
 		"reason":     args.Reason,

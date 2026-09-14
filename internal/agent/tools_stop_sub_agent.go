@@ -145,14 +145,14 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 			}
 			// Delete session memories (physical delete; they have served their purpose).
 			if err := t.helpers.deps.SessionMemoryRepo.DeleteBySession(txCtx, s.ID); err != nil {
-				t.helpers.logIfEnabled(ctx, "stopSubAgent.delete_memories_failed", map[string]any{
+				t.helpers.logger.Info(ctx, "stopSubAgent.delete_memories_failed", map[string]any{
 					"session_id": s.ID.String(),
 					"error":      err.Error(),
 				})
 			}
 			return primitives.BuildSessionCloseUpdates(s), nil
 		}); pubErr != nil {
-			t.helpers.logIfEnabled(ctx, "stopSubAgent.close_session_failed", map[string]any{
+			t.helpers.logger.Info(ctx, "stopSubAgent.close_session_failed", map[string]any{
 				"session_id": s.ID.String(),
 				"error":      pubErr.Error(),
 			})
@@ -163,7 +163,7 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 			Title:        s.Title,
 		})
 
-		t.helpers.logIfEnabled(ctx, "stopSubAgent.stopped", map[string]any{
+		t.helpers.logger.Info(ctx, "stopSubAgent.stopped", map[string]any{
 			"session_id": s.ID.String(),
 			"title":      s.Title,
 		})
@@ -275,7 +275,7 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		return "", fmt.Errorf("stop_sub_agent: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "stopSubAgent.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "stopSubAgent.completed", map[string]any{
 		"session_id":     t.session.ID.String(),
 		"target_session": subSessionID.String(),
 		"total_stopped":  len(stopped),

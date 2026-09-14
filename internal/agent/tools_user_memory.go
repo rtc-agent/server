@@ -158,7 +158,7 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		return "", fmt.Errorf("save user memory: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "save_user_memory.success", map[string]any{
+	t.helpers.logger.Info(ctx, "save_user_memory.success", map[string]any{
 		"user_id":    userID.String(),
 		"memory_id":  memory.ID.String(),
 		"category":   args.Category,

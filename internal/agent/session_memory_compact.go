@@ -28,7 +28,7 @@ func (h *helpers) compressContextWithSessionMemory(
 	// Query session memories
 	memories, err := h.deps.SessionMemoryRepo.ListBySession(ctx, sessionID, 20)
 	if err != nil {
-		h.logIfEnabled(ctx, "compressContextWithSessionMemory.query_error", map[string]any{
+		h.logger.Info(ctx, "compressContextWithSessionMemory.query_error", map[string]any{
 			"session_id": sessionID.String(),
 			"error":      err.Error(),
 		})
@@ -42,7 +42,7 @@ func (h *helpers) compressContextWithSessionMemory(
 	// Build summary from memories
 	summary := buildSummaryFromMemories(memories)
 
-	h.logIfEnabled(ctx, "compressContextWithSessionMemory.success", map[string]any{
+	h.logger.Info(ctx, "compressContextWithSessionMemory.success", map[string]any{
 		"session_id":  sessionID.String(),
 		"memory_count": len(memories),
 	})

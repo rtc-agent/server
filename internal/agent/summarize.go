@@ -56,14 +56,14 @@ func (h *helpers) buildSummarizationMiddleware() (adk.ChatModelAgentMiddleware, 
 		// Fallback to 80% of contextTokensLimit when configuration is invalid
 		// This prevents threshold=1 which would cause compression on every turn
 		actualTriggerThreshold = int(float64(h.contextTokensLimit) * 0.8)
-		h.logIfEnabled(context.Background(), "summarize.threshold_fallback", map[string]any{
+		h.logger.Info(context.Background(), "summarize.threshold_fallback", map[string]any{
 			"context_tokens_limit":     h.contextTokensLimit,
 			"auto_compact_buffer":      h.autoCompactBufferTokens,
 			"actual_trigger_threshold": actualTriggerThreshold,
 		})
 	}
 
-	h.logIfEnabled(context.Background(), "summarize.middleware_config", map[string]any{
+	h.logger.Info(context.Background(), "summarize.middleware_config", map[string]any{
 		"context_tokens_limit":     h.contextTokensLimit,
 		"auto_compact_buffer":      h.autoCompactBufferTokens,
 		"actual_trigger_threshold": actualTriggerThreshold,
@@ -279,7 +279,7 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, c
 		if err := h.persistCompressedMessages(ctx, []*schema.Message{
 			{Role: schema.User, Content: formatCompactUserMessage(formatCompactSummary(summary))},
 		}); err != nil {
-			h.logIfEnabled(ctx, "compress.fallback_persist_error", map[string]any{
+			h.logger.Info(ctx, "compress.fallback_persist_error", map[string]any{
 				"error": err.Error(),
 			})
 		}
@@ -326,7 +326,7 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, c
 	compressDuration := time.Since(compressStart)
 	tokensAfter := estimateTokensAfterCompact(msgs, retentionIndex, summary)
 
-	h.logIfEnabled(ctx, "compress.completed", map[string]any{
+	h.logger.Info(ctx, "compress.completed", map[string]any{
 		"session_id":          sessionID.String(),
 		"summary_msg_id":      summaryMsgID.String(),
 		"tokens_before":       tokensBefore,
@@ -438,7 +438,7 @@ func (h *helpers) summarizeMessagesStreaming(
 		if onChunk != nil && msg.Content != "" {
 			if cbErr := onChunk(msg.Content); cbErr != nil {
 				// Log but don't fail the stream
-				h.logIfEnabled(ctx, "summarize.on_chunk_error", map[string]any{"error": cbErr.Error()})
+				h.logger.Info(ctx, "summarize.on_chunk_error", map[string]any{"error": cbErr.Error()})
 			}
 		}
 	}
@@ -573,7 +573,7 @@ func (h *helpers) logSummarizeTokenUsage(ctx context.Context, resp *schema.Messa
 	sessionID := turnagent.SessionIDFromContext(ctx)
 	turnID := turnagent.TurnIDFromContext(ctx)
 
-	h.logIfEnabled(ctx, "summarize.llm_complete", map[string]any{
+	h.logger.Info(ctx, "summarize.llm_complete", map[string]any{
 		"session_id":    sessionID,
 		"turn_id":       turnID,
 		"input_tokens":  usage.PromptTokens,
@@ -615,7 +615,7 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 		}
 	}
 	if sessionID == uuid.Nil {
-		h.logIfEnabled(ctx, "persistCompressedMessages.skip_no_session_id", map[string]any{
+		h.logger.Info(ctx, "persistCompressedMessages.skip_no_session_id", map[string]any{
 			"compressed_count": len(compressed),
 		})
 		return nil
@@ -624,7 +624,7 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 	// Check if we've already persisted the summary message in compressContext
 	// (streaming flow). If so, skip to prevent double persistence.
 	if _, loaded := h.persistedSummaryMsgIDs.LoadAndDelete(sessionID.String()); loaded {
-		h.logIfEnabled(ctx, "persistCompressedMessages.skip_already_persisted", map[string]any{
+		h.logger.Info(ctx, "persistCompressedMessages.skip_already_persisted", map[string]any{
 			"session_id": sessionID.String(),
 		})
 		return nil
@@ -662,7 +662,7 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 		return fmt.Errorf("create summary message: %w", err)
 	}
 
-	h.logIfEnabled(ctx, "persistCompressedMessages.done", map[string]any{
+	h.logger.Info(ctx, "persistCompressedMessages.done", map[string]any{
 		"session_id": sessionID.String(),
 	})
 
@@ -672,7 +672,7 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 		if err := h.deps.SessionRepo.Update(ctx, sessionID, map[string]any{
 			"current_context_tokens": tokensAfter,
 		}); err != nil {
-			h.logIfEnabled(ctx, "persistCompressedMessages.update_context_tokens_failed", map[string]any{
+			h.logger.Info(ctx, "persistCompressedMessages.update_context_tokens_failed", map[string]any{
 				"session_id": sessionID.String(),
 				"error":      err.Error(),
 			})

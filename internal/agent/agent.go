@@ -39,6 +39,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/pkg/logger"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
@@ -157,11 +158,15 @@ func New(cfg Config) (*turnagent.Agent, error) {
 	// Build a helpers struct that holds all shared state for the callbacks.
 	// The helpers struct provides methods that match the turnagent callback
 	// signatures, closing over the Config's dependencies.
+	loggerImpl := cfg.Logger
+	if loggerImpl == nil {
+		loggerImpl = logger.NoopLogger{}
+	}
 	h := &helpers{
 		deps:                      cfg.Deps,
 		rdb:                       cfg.Redis,
 		queue:                     cfg.Queue,
-		logger:                    cfg.Logger,
+		logger:                    loggerImpl,
 		tracer:                    cfg.Tracer,
 		metrics:                   cfg.Metrics,
 		contextTokensLimit:        cfg.ContextTokensLimit,

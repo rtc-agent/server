@@ -39,7 +39,7 @@ import (
 //     dropping an intermediate assistant or tool message).
 //  4. Validate the final sequence for structural correctness.
 //
-// Anomalies are logged via h.logIfEnabled for observability.
+// Anomalies are logged via h.logger.Info for observability.
 // Returns an error only for unrecoverable structural issues.
 func (h *helpers) normalizeMessagesForLLM(
 	ctx context.Context,
@@ -74,7 +74,7 @@ func (h *helpers) normalizeMessagesForLLM(
 	// If repair+merge succeeded, validation should pass. Errors here indicate
 	// a structural issue that repair could not fix — a bug worth investigating.
 	if err := validateMessageSequence(messages); err != nil {
-		h.logIfEnabled(ctx, "normalizeMessagesForLLM.sequence_invalid", map[string]any{
+		h.logger.Info(ctx, "normalizeMessagesForLLM.sequence_invalid", map[string]any{
 			"error": err.Error(),
 		})
 		return nil, fmt.Errorf("normalizeMessagesForLLM: %w", err)
@@ -83,7 +83,7 @@ func (h *helpers) normalizeMessagesForLLM(
 	// Log normalization summary for observability. Only log when changes
 	// were actually made to avoid noise in the common (no-op) case.
 	if len(messages) != originalLen {
-		h.logIfEnabled(ctx, "normalizeMessagesForLLM.applied", map[string]any{
+		h.logger.Info(ctx, "normalizeMessagesForLLM.applied", map[string]any{
 			"before": originalLen,
 			"after":  len(messages),
 		})

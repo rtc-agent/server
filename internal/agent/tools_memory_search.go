@@ -82,7 +82,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if args.MemoryType == "all" || args.MemoryType == "session" {
 		sessionResults, err := t.searchSessionMemories(ctx, args.Query, args.Category, args.Limit)
 		if err != nil {
-			t.helpers.logIfEnabled(ctx, "search_memory.session_error", map[string]any{
+			t.helpers.logger.Info(ctx, "search_memory.session_error", map[string]any{
 				"error": err.Error(),
 			})
 			// Continue with other searches even if session memory fails
@@ -95,7 +95,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if args.MemoryType == "all" || args.MemoryType == "user" {
 		userResults, err := t.searchUserMemories(ctx, args.Query, args.Category, args.Limit)
 		if err != nil {
-			t.helpers.logIfEnabled(ctx, "search_memory.user_error", map[string]any{
+			t.helpers.logger.Info(ctx, "search_memory.user_error", map[string]any{
 				"error": err.Error(),
 			})
 			// Continue with other searches even if user memory fails
@@ -205,7 +205,7 @@ func (t *searchMemoryTool) searchUserMemories(
 	// 关键词搜索
 	keywordResults, err := t.helpers.deps.UserMemoryRepo.SearchByKeyword(ctx, userID, query, limit*2)
 	if err != nil {
-		t.helpers.logIfEnabled(ctx, "search_memory.user_keyword_error", map[string]any{
+		t.helpers.logger.Info(ctx, "search_memory.user_keyword_error", map[string]any{
 			"error": err.Error(),
 		})
 		return nil, nil

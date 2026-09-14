@@ -148,7 +148,7 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return "", fmt.Errorf("create_loop: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "createLoop.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "createLoop.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"loop_id":    loop.ID.String(),
 		"prompt":     loop.Prompt,

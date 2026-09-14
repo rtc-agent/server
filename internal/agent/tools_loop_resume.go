@@ -93,7 +93,7 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return "", fmt.Errorf("resume_loop: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "resumeLoop.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "resumeLoop.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"loop_id":    pausedLoop.ID.String(),
 	})

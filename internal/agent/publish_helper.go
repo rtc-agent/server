@@ -29,7 +29,7 @@ func (h *helpers) batchLifecyclePublish(ctx context.Context, turnID uuid.UUID, s
 
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionID)
 	if err != nil {
-		h.logIfEnabled(ctx, "batchLifecyclePublish.load_session_failed", map[string]any{
+		h.logger.Info(ctx, "batchLifecyclePublish.load_session_failed", map[string]any{
 			"turn_id":    turnID.String(),
 			"session_id": sessionID.String(),
 			"action":     action,
@@ -67,7 +67,7 @@ func (h *helpers) batchLifecyclePublish(ctx context.Context, turnID uuid.UUID, s
 
 	merged := []updates.UpdatePublishItem{{Channel: ch, Items: allItems}}
 	if _, err := h.deps.UpdatePublisher.Publish(ctx, merged...); err != nil {
-		h.logIfEnabled(ctx, "batchLifecyclePublish.publish_failed", map[string]any{
+		h.logger.Info(ctx, "batchLifecyclePublish.publish_failed", map[string]any{
 			"turn_id":    turnID.String(),
 			"session_id": sessionID.String(),
 			"action":     action,
@@ -90,7 +90,7 @@ func (h *helpers) publishSessionUpdate(ctx context.Context, session *model.Sessi
 	doPublish := func() {
 		updates := primitives.BuildSessionUpdateUpdates(session)
 		if _, err := h.deps.UpdatePublisher.Publish(ctx, updates...); err != nil {
-			h.logIfEnabled(ctx, "publishSessionUpdate.failed", map[string]any{
+			h.logger.Info(ctx, "publishSessionUpdate.failed", map[string]any{
 				"session_id": session.ID,
 				"error":      err.Error(),
 			})

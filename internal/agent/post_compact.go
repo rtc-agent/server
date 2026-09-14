@@ -210,7 +210,7 @@ func appendPostCompactAttachments(
 
 	if h.enableLLMLogging {
 		sessionID := getSessionIDFromContext(ctx)
-		h.logIfEnabled(ctx, "postCompact.attachments", map[string]any{
+		h.logger.Info(ctx, "postCompact.attachments", map[string]any{
 			"session_id":       sessionID.String(),
 			"attachment_count": len(attachments),
 		})

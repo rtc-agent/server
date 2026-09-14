@@ -108,7 +108,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 
 		subSession, dbErr := t.helpers.deps.SessionRepo.GetByID(ctx, subSessionID)
 		if dbErr != nil {
-			t.helpers.logIfEnabled(ctx, "subAgent.resume.db_error", map[string]any{
+			t.helpers.logger.Info(ctx, "subAgent.resume.db_error", map[string]any{
 				"sub_session_id": subSessionID.String(),
 				"error":          dbErr.Error(),
 			})
@@ -142,7 +142,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		// mechanism.
 		recentMsgs, msgErr := t.helpers.deps.MessageRepo.ListRecentBySession(ctx, subSessionID, 50)
 		if msgErr != nil {
-			t.helpers.logIfEnabled(ctx, "subAgent.resume.get_last_message_failed", map[string]any{
+			t.helpers.logger.Info(ctx, "subAgent.resume.get_last_message_failed", map[string]any{
 				"sub_session_id": subSessionID.String(),
 				"error":          msgErr.Error(),
 			})
@@ -164,7 +164,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		// Deserialize the message content.
 		var content protocol.ContentData
 		if err := json.Unmarshal([]byte(lastMsg.Content), &content); err != nil {
-			t.helpers.logIfEnabled(ctx, "subAgent.resume.deserialize_content_failed", map[string]any{
+			t.helpers.logger.Info(ctx, "subAgent.resume.deserialize_content_failed", map[string]any{
 				"sub_session_id": subSessionID.String(),
 				"error":          err.Error(),
 			})
@@ -178,7 +178,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 			resultText = formatSubAgentNoOutput()
 		}
 
-		t.helpers.logIfEnabled(ctx, "subAgent.resume.completed", map[string]any{
+		t.helpers.logger.Info(ctx, "subAgent.resume.completed", map[string]any{
 			"sub_session_id":    subSessionID.String(),
 			"result_length":     len(resultText),
 			"parent_message_id": state.ParentMessageID,
@@ -365,7 +365,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		return "", fmt.Errorf("create sub agent: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "subAgent.created", map[string]any{
+	t.helpers.logger.Info(ctx, "subAgent.created", map[string]any{
 		"sub_session_id":     subSessionID.String(),
 		"parent_message_id":  parentMessageID.String(),
 		"sub_first_msg_id":   subSessionMsgID.String(),
@@ -387,7 +387,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		return "", fmt.Errorf("publish work item to sub session: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "subAgent.work_submitted", map[string]any{
+	t.helpers.logger.Info(ctx, "subAgent.work_submitted", map[string]any{
 		"sub_session_id": subSessionID.String(),
 		"mode":           mode,
 	})
@@ -442,7 +442,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 			return "", fmt.Errorf("publish async toolcall_output: %w", publishErr)
 		}
 
-		t.helpers.logIfEnabled(ctx, "subAgent.async.returned_immediately", map[string]any{
+		t.helpers.logger.Info(ctx, "subAgent.async.returned_immediately", map[string]any{
 			"sub_session_id":    subSessionID.String(),
 			"parent_message_id": parentMessageID.String(),
 		})

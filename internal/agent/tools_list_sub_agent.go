@@ -173,7 +173,7 @@ func (t *listSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		return "", fmt.Errorf("list_sub_agent: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "listSubAgent.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "listSubAgent.completed", map[string]any{
 		"session_id":    t.session.ID.String(),
 		"root_session":  rootSessionID.String(),
 		"count":         len(items),

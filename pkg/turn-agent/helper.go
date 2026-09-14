@@ -22,19 +22,17 @@ func init() {
 	_, cachedNoopSpan = nooptrace.NewTracerProvider().Tracer("turnagent").Start(context.Background(), "noop")
 }
 
-// logIfEnabled calls the logger if it is not nil.
-func (a *Agent) logIfEnabled(ctx context.Context, level LogLevel, msg string, fields map[string]any) {
-	if a.cfg.Logger != nil {
-		switch level {
-		case LogLevelDebug:
-			a.cfg.Logger.Debug(ctx, msg, fields)
-		case LogLevelInfo:
-			a.cfg.Logger.Info(ctx, msg, fields)
-		case LogLevelWarn:
-			a.cfg.Logger.Warn(ctx, msg, fields)
-		case LogLevelError:
-			a.cfg.Logger.Error(ctx, msg, fields)
-		}
+// log dispatches a log message to the appropriate logger method based on level.
+func (a *Agent) log(ctx context.Context, level LogLevel, msg string, fields map[string]any) {
+	switch level {
+	case LogLevelDebug:
+		a.cfg.Logger.Debug(ctx, msg, fields)
+	case LogLevelInfo:
+		a.cfg.Logger.Info(ctx, msg, fields)
+	case LogLevelWarn:
+		a.cfg.Logger.Warn(ctx, msg, fields)
+	case LogLevelError:
+		a.cfg.Logger.Error(ctx, msg, fields)
 	}
 }
 

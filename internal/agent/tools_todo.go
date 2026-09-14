@@ -100,7 +100,7 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	})
 	if err != nil {
 		// 日志记录但不返回错误（\t\o\d\o 已更新成功）
-		t.helper.logIfEnabled(ctx, "todoWriteTool.publish_update", map[string]any{
+		t.helper.logger.Info(ctx, "todoWriteTool.publish_update", map[string]any{
 			"session_id": t.session.ID.String(),
 			"error":      err.Error(),
 		})

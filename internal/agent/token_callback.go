@@ -61,7 +61,7 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 		// ===============================================================
 		session, sessErr := h.deps.SessionRepo.GetByID(ctx, sessionID)
 		if sessErr != nil {
-			h.logIfEnabled(ctx, "token_callback.get_session_failed", map[string]any{
+			h.logger.Info(ctx, "token_callback.get_session_failed", map[string]any{
 				"session_id": sessionID,
 				"error":      sessErr.Error(),
 			})
@@ -119,7 +119,7 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 		}
 
 		if err := h.deps.SessionRepo.AtomicAddTokenUsage(ctx, sessionID, delta); err != nil {
-			h.logIfEnabled(ctx, "token_callback.atomic_update_failed", map[string]any{
+			h.logger.Info(ctx, "token_callback.atomic_update_failed", map[string]any{
 				"session_id": sessionID,
 				"error":      err.Error(),
 			})
@@ -152,7 +152,7 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 
 			// Compression warning: alert when approaching threshold
 			if estimate != nil && estimate.RoundsUntilCompression >= 0 && estimate.RoundsUntilCompression <= 2 {
-				h.logIfEnabled(ctx, "token_callback.compression_approaching", map[string]any{
+				h.logger.Info(ctx, "token_callback.compression_approaching", map[string]any{
 					"session_id":            sessionID,
 					"current_tokens":        estimate.CurrentTokens,
 					"threshold":             estimate.CompressionThreshold,

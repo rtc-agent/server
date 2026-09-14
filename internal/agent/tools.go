@@ -169,7 +169,7 @@ func (t *scriptTool) InvokableRun(ctx context.Context, argumentsInJSON string, o
 //     context because the tool was created once per session; the new code
 //     creates tools per-turn so turnID is known at construction time.
 //   - r.manager.deps -> r.helpers.deps (the integration struct is helpers, not Manager)
-//   - Logger calls use h.logIfEnabled instead of logger.Debug/Info directly.
+//   - Logger calls use h.logger.Info instead of logger.Debug/Info directly.
 func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumentsInJSON string, _ ...tool.Option) (string, error) {
 	// === Resume path ===
 	wasInterrupted, hasState, state := tool.GetInterruptState[rtcInterruptState](ctx)
@@ -188,7 +188,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		if dbErr != nil {
 			// DB query failed: degrade to re-interrupt and wait for client to
 			// re-submit. This matches the old code's fallback behavior.
-			r.helpers.logIfEnabled(ctx, "rtcToolBase.resume.db_error", map[string]any{
+			r.helpers.logger.Info(ctx, "rtcToolBase.resume.db_error", map[string]any{
 				"rtc_id": rtcID.String(),
 				"error":  dbErr.Error(),
 			})
@@ -322,13 +322,13 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	})
 	if err != nil {
 		if errors.Is(err, updates.ErrPushAfterCommit) {
-			r.helpers.logIfEnabled(ctx, "rtcToolBase.push_after_commit", map[string]any{"error": err.Error()})
+			r.helpers.logger.Info(ctx, "rtcToolBase.push_after_commit", map[string]any{"error": err.Error()})
 		} else {
 			return "", fmt.Errorf("create rtc and message: %w", err)
 		}
 	}
 
-	r.helpers.logIfEnabled(ctx, "rtcToolBase.rtc_created", map[string]any{
+	r.helpers.logger.Info(ctx, "rtcToolBase.rtc_created", map[string]any{
 		"tool_name":  toolName,
 		"rtc_id":     rtcID.String(),
 		"message_id": msgID.String(),
@@ -361,7 +361,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	if r.helpers.deps.Redis != nil {
 		batchKey := cache.RtcBatchPending(turnUUID.String())
 		if err := r.helpers.deps.Redis.SAdd(ctx, batchKey, rtcID.String()).Err(); err != nil {
-			r.helpers.logIfEnabled(ctx, "rtcToolBase.batch_register_failed", map[string]any{
+			r.helpers.logger.Info(ctx, "rtcToolBase.batch_register_failed", map[string]any{
 				"rtc_id":  rtcID.String(),
 				"turn_id": turnUUID.String(),
 				"error":   err.Error(),
@@ -413,7 +413,7 @@ func parseToolArgs(ctx context.Context, h *helpers, toolName string, argumentsIn
 		if len(argPreview) > maxPreviewLen {
 			argPreview = argPreview[:maxPreviewLen] + "...(truncated)"
 		}
-		h.logIfEnabled(ctx, "tool.parse_arguments_failed", map[string]any{
+		h.logger.Info(ctx, "tool.parse_arguments_failed", map[string]any{
 			"tool_name":   toolName,
 			"error":       err.Error(),
 			"raw_length":  len(argumentsInJSON),

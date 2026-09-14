@@ -27,7 +27,7 @@ func (h *helpers) recoverFromPromptTooLong(ctx context.Context, sessionID string
 		return fmt.Errorf("reactive compact: invalid session ID %q: %w", sessionID, err)
 	}
 
-	h.logIfEnabled(ctx, "reactive_compact.start", map[string]any{
+	h.logger.Info(ctx, "reactive_compact.start", map[string]any{
 		"session_id": sessionID,
 		"attempt":    attempt,
 	})
@@ -140,7 +140,7 @@ func (h *helpers) reactiveCompactLevel3(ctx context.Context, sessionID uuid.UUID
 		return fmt.Errorf("reactive compact L3: soft-delete messages: %w", err)
 	}
 
-	h.logIfEnabled(ctx, "reactive_compact.L3.deleted", map[string]any{
+	h.logger.Info(ctx, "reactive_compact.L3.deleted", map[string]any{
 		"session_id":  sessionID.String(),
 		"deleted":     len(idsToDelete),
 		"remaining":   len(liveMsgs) - len(idsToDelete),

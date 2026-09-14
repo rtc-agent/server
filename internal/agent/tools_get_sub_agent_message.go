@@ -231,7 +231,7 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 		return "", fmt.Errorf("get_sub_agent_message: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "getSubAgentMessage.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "getSubAgentMessage.completed", map[string]any{
 		"session_id":     t.session.ID.String(),
 		"target_session": subSessionID.String(),
 		"has_message":    result.MessageID != nil,

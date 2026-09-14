@@ -115,7 +115,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return "", fmt.Errorf("create_goal: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "createGoal.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "createGoal.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"goal_id":    goal.ID.String(),
 		"condition":  goal.Condition,
@@ -197,7 +197,7 @@ func (t *completeGoalTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		return "", fmt.Errorf("complete_goal: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "completeGoal.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "completeGoal.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"goal_id":    goal.ID.String(),
 		"reason":     args.Reason,
@@ -279,7 +279,7 @@ func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return "", fmt.Errorf("cancel_goal: publish messages: %w", err)
 	}
 
-	t.helpers.logIfEnabled(ctx, "cancelGoal.completed", map[string]any{
+	t.helpers.logger.Info(ctx, "cancelGoal.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"goal_id":    goal.ID.String(),
 		"reason":     args.Reason,
