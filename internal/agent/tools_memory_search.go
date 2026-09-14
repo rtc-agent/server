@@ -28,7 +28,7 @@ func (t *searchMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 		Name: "search_memory",
 		Desc: "Search across session memories and user memories. " +
 			"Use this to find relevant information from past conversations or general knowledge. " +
-			"User memories support both keyword and semantic (embedding-based) search.",
+			"User memories support keyword-based search.",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"query": {
 				Type:     schema.String,
@@ -138,8 +138,6 @@ type searchResult struct {
 }
 
 // searchSessionMemories 搜索 session memories（简单的关键词匹配）
-// 注意：这是一个简单的实现，使用 category 过滤。
-// 未来可以升级为使用 embedding 进行语义搜索。
 func (t *searchMemoryTool) searchSessionMemories(
 	ctx context.Context,
 	query string,
@@ -191,7 +189,7 @@ func (t *searchMemoryTool) searchSessionMemories(
 }
 
 // searchUserMemories 搜索 user memories
-// 使用 embedding 语义搜索 + 关键词搜索，通过 RRF 融合结果
+// 使用关键词搜索，通过重要性加权排序
 func (t *searchMemoryTool) searchUserMemories(
 	ctx context.Context,
 	query string,
@@ -203,77 +201,29 @@ func (t *searchMemoryTool) searchUserMemories(
 		return nil, err
 	}
 
-	// 收集两组结果，然后用 RRF 融合
+	// 关键词搜索
 	keywordResults, err := t.helpers.deps.UserMemoryRepo.SearchByKeyword(ctx, userID, query, limit*2)
 	if err != nil {
 		t.helpers.logIfEnabled(ctx, "search_memory.user_keyword_error", map[string]any{
 			"error": err.Error(),
 		})
-	}
-
-	var embeddingResults []*model.UserMemory
-	if t.helpers.deps.EmbeddingService != nil && t.helpers.deps.EmbeddingService.Dimension() > 0 {
-		vec, embedErr := t.helpers.deps.EmbeddingService.GenerateEmbedding(ctx, query)
-		if embedErr == nil {
-			embeddingResults, err = t.helpers.deps.UserMemoryRepo.SearchByEmbedding(ctx, userID, vec, limit*2)
-			if err != nil {
-				t.helpers.logIfEnabled(ctx, "search_memory.user_embedding_error", map[string]any{
-					"error": err.Error(),
-				})
-			}
-		} else {
-			t.helpers.logIfEnabled(ctx, "search_memory.embedding_gen_error", map[string]any{
-				"error": embedErr.Error(),
-			})
-		}
-	}
-
-	// RRF 融合: score = sum(1 / (k + rank_i)) * importance_weight
-	// k = 60 (标准 RRF 参数)
-	const rrfK = 60.0
-	type rrfEntry struct {
-		memory *model.UserMemory
-		score  float64
-	}
-	scoreMap := make(map[string]*rrfEntry)
-
-	// 关键词结果
-	for rank, mem := range keywordResults {
-		if category != "" && mem.Category != category {
-			continue
-		}
-		key := mem.ID.String()
-		if entry, ok := scoreMap[key]; ok {
-			entry.score += 1.0 / (rrfK + float64(rank+1))
-		} else {
-			scoreMap[key] = &rrfEntry{
-				memory: mem,
-				score:  1.0 / (rrfK + float64(rank+1)),
-			}
-		}
-	}
-
-	// 向量结果
-	for rank, mem := range embeddingResults {
-		if category != "" && mem.Category != category {
-			continue
-		}
-		key := mem.ID.String()
-		if entry, ok := scoreMap[key]; ok {
-			entry.score += 1.0 / (rrfK + float64(rank+1))
-		} else {
-			scoreMap[key] = &rrfEntry{
-				memory: mem,
-				score:  1.0 / (rrfK + float64(rank+1)),
-			}
-		}
+		return nil, nil
 	}
 
 	// 应用重要性权重并排序
-	entries := make([]*rrfEntry, 0, len(scoreMap))
-	for _, entry := range scoreMap {
-		entry.score *= model.ImportanceWeight(entry.memory.Importance)
-		entries = append(entries, entry)
+	type scoredEntry struct {
+		memory *model.UserMemory
+		score  float64
+	}
+	var entries []scoredEntry
+	for _, mem := range keywordResults {
+		if category != "" && mem.Category != category {
+			continue
+		}
+		entries = append(entries, scoredEntry{
+			memory: mem,
+			score:  model.ImportanceWeight(mem.Importance),
+		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].score > entries[j].score

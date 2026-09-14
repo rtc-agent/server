@@ -57,7 +57,9 @@ func (r *memoryRepo) ListByScope(ctx context.Context, scope memory.ScopeType, sc
 		Where("scope = ? AND scope_id = ?", scope, scopeID)
 
 	// 应用过滤选项
-	if opts.Type != "" {
+	if len(opts.Types) > 0 {
+		query = query.Where("type IN ?", opts.Types)
+	} else if opts.Type != "" {
 		query = query.Where("type = ?", opts.Type)
 	}
 	if len(opts.Tags) > 0 {

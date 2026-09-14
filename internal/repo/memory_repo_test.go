@@ -221,6 +221,49 @@ func TestMemoryRepo_ListByScope_FilterByType(t *testing.T) {
 	}
 }
 
+func TestMemoryRepo_ListByScope_FilterByTypes(t *testing.T) {
+	t.Parallel()
+	db := setupMemoryTestDB(t)
+	repo := newTestMemoryRepo(db)
+	ctx := context.Background()
+
+	sessionID := uuid.New()
+	require.NoError(t, repo.Create(ctx, newTestMemoryRecord(t, memory.ScopeSession, sessionID, "context")))
+	require.NoError(t, repo.Create(ctx, newTestMemoryRecord(t, memory.ScopeSession, sessionID, "decision")))
+	require.NoError(t, repo.Create(ctx, newTestMemoryRecord(t, memory.ScopeSession, sessionID, "progress")))
+	require.NoError(t, repo.Create(ctx, newTestMemoryRecord(t, memory.ScopeSession, sessionID, "context")))
+
+	// Filter by multiple types: context + progress
+	results, err := repo.ListByScope(ctx, memory.ScopeSession, sessionID, memory.ListOptions{Types: []string{"context", "progress"}})
+	require.NoError(t, err)
+	assert.Len(t, results, 3)
+	for _, m := range results {
+		assert.Contains(t, []string{"context", "progress"}, m.Type)
+	}
+
+	// Filter by single type using Types field
+	results, err = repo.ListByScope(ctx, memory.ScopeSession, sessionID, memory.ListOptions{Types: []string{"decision"}})
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "decision", results[0].Type)
+
+	// Empty Types slice should not filter
+	results, err = repo.ListByScope(ctx, memory.ScopeSession, sessionID, memory.ListOptions{Types: []string{}})
+	require.NoError(t, err)
+	assert.Len(t, results, 4)
+
+	// Types takes precedence over Type
+	results, err = repo.ListByScope(ctx, memory.ScopeSession, sessionID, memory.ListOptions{
+		Type:  "decision",
+		Types: []string{"context", "progress"},
+	})
+	require.NoError(t, err)
+	assert.Len(t, results, 3)
+	for _, m := range results {
+		assert.Contains(t, []string{"context", "progress"}, m.Type)
+	}
+}
+
 func TestMemoryRepo_ListByScope_FilterByTags(t *testing.T) {
 	t.Parallel()
 	db := setupMemoryTestDB(t)

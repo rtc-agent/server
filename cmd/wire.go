@@ -26,7 +26,6 @@ import (
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/server"
-	"github.com/rtc-agent/server/internal/service/embedding"
 	"github.com/rtc-agent/server/internal/svc"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -62,7 +61,6 @@ var ServiceSet = wire.NewSet(
 	provideJWTSigner,
 	provideCentrifugeNode,
 	provideDualBroker,
-	provideEmbeddingService,
 )
 
 // UsecaseSet provides usecase layer dependencies.
@@ -171,16 +169,6 @@ func provideDualBroker(
 	return svc.AssembleDualBroker(node, cfg, updatePublisher, jwtSigner)
 }
 
-func provideEmbeddingService(cfg *config.Config) (embedding.Service, error) {
-	return embedding.NewService(embedding.Config{
-		Enabled:   cfg.Embedding.Enabled,
-		BaseURL:   cfg.Embedding.BaseURL,
-		APIKey:    cfg.Embedding.APIKey,
-		Model:     cfg.Embedding.Model,
-		Dimension: cfg.Embedding.Dimension,
-	})
-}
-
 // chatModelResult wraps the optional ChatModel to handle Wire's error semantics.
 type chatModelResult struct {
 	model model.ToolCallingChatModel
@@ -216,7 +204,6 @@ func provideUsecaseDependencies(
 		GoalRepo:          svcCtx.GoalRepo,
 		SessionMemoryRepo: svcCtx.SessionMemoryRepo,
 		UserMemoryRepo:    svcCtx.UserMemoryRepo,
-		EmbeddingService:  svcCtx.EmbeddingService,
 		UpdatePublisher:   svcCtx.UpdatePublisher,
 		ChatModel:         chatModelResult.model,
 		LLMConfig:         cfg.LLM,

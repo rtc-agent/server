@@ -36,9 +36,6 @@ type UserMemoryRepo interface {
 	// SearchByKeyword 关键词搜索（tags + title + content）
 	SearchByKeyword(ctx context.Context, userID uuid.UUID, query string, limit int) ([]*model.UserMemory, error)
 
-	// SearchByEmbedding 向量相似度搜索
-	SearchByEmbedding(ctx context.Context, userID uuid.UUID, embedding []float32, limit int) ([]*model.UserMemory, error)
-
 	// CountByUser 统计用户的记忆数量
 	CountByUser(ctx context.Context, userID uuid.UUID) (int, error)
 }
@@ -173,36 +170,6 @@ func (r *userMemoryRepo) SearchByKeyword(ctx context.Context, userID uuid.UUID, 
 	return memories, nil
 }
 
-// SearchByEmbedding 向量相似度搜索
-// 使用 pgvector 的余弦距离进行检索
-// 注意：需要 pgvector 扩展支持
-func (r *userMemoryRepo) SearchByEmbedding(ctx context.Context, userID uuid.UUID, embedding []float32, limit int) ([]*model.UserMemory, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-
-	// 将 embedding 转换为 pgvector 格式字符串
-	embeddingStr := vectorToString(embedding)
-
-	var memories []*model.UserMemory
-	// 使用余弦距离排序（<=> 是 pgvector 的余弦距离操作符）
-	// 注意：这里使用原生 SQL 因为 GORM 不直接支持 pgvector 操作符
-	query := `
-		SELECT *, (embedding <=> ?) as distance
-		FROM user_memories
-		WHERE user_id = ? AND deleted_at IS NULL AND embedding IS NOT NULL
-		ORDER BY embedding <=> ?
-		LIMIT ?
-	`
-
-	if err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Raw(query, embeddingStr, userID, embeddingStr, limit).
-		Find(&memories).Error; err != nil {
-		return nil, fmt.Errorf("search user memories by embedding: %w", err)
-	}
-	return memories, nil
-}
-
 func (r *userMemoryRepo) CountByUser(ctx context.Context, userID uuid.UUID) (int, error) {
 	var count int64
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
@@ -213,21 +180,4 @@ func (r *userMemoryRepo) CountByUser(ctx context.Context, userID uuid.UUID) (int
 		return 0, fmt.Errorf("count user memories by user %s: %w", userID, err)
 	}
 	return int(count), nil
-}
-
-// vectorToString 将 float32 数组转换为 pgvector 格式字符串
-// 例如: [1.0, 2.0, 3.0] -> "[1.0,2.0,3.0]"
-func vectorToString(vec []float32) string {
-	if len(vec) == 0 {
-		return "[]"
-	}
-	result := "["
-	for i, v := range vec {
-		if i > 0 {
-			result += ","
-		}
-		result += fmt.Sprintf("%f", v)
-	}
-	result += "]"
-	return result
 }

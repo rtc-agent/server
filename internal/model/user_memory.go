@@ -1,9 +1,6 @@
 package model
 
 import (
-	"database/sql/driver"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,9 +22,8 @@ type UserMemory struct {
 	Content     string  `gorm:"type:text;not null" json:"content"`
 	Description *string `gorm:"size:500" json:"description,omitempty"` // 一行描述（用于检索）
 
-	// 标签和向量
+	// 标签
 	Tags      StringArray  `gorm:"type:text[]" json:"tags,omitempty"` // 标签（用于关键词匹配）
-	Embedding VectorArray  `gorm:"type:vector(1536)" json:"-"`        // Embedding 向量（不序列化到 JSON）
 
 	// 元数据
 	Metadata        JSONB[any]  `gorm:"type:jsonb;default:'{}'" json:"metadata"`
@@ -122,67 +118,3 @@ func ImportanceWeight(importance string) float64 {
 	}
 }
 
-// VectorArray 是 []float32 的自定义类型，用于 GORM 的 vector 类型（pgvector）
-type VectorArray []float32
-
-// Value 实现 driver.Valuer，将 VectorArray 转换为 pgvector 格式字符串
-// 例如: [1.0, 2.0, 3.0] -> "[1.0,2.0,3.0]"
-func (v VectorArray) Value() (driver.Value, error) {
-	if v == nil {
-		return nil, nil
-	}
-	if len(v) == 0 {
-		return "[]", nil
-	}
-	var sb strings.Builder
-	sb.WriteByte('[')
-	for i, f := range v {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-		fmt.Fprintf(&sb, "%g", f)
-	}
-	sb.WriteByte(']')
-	return sb.String(), nil
-}
-
-// Scan 实现 sql.Scanner，从 pgvector 格式字符串解析为 VectorArray
-// 输入格式: "[1.0,2.0,3.0]" 或 "[1,2,3]"
-func (v *VectorArray) Scan(src any) error {
-	if src == nil {
-		*v = nil
-		return nil
-	}
-	var s string
-	switch val := src.(type) {
-	case string:
-		s = val
-	case []byte:
-		s = string(val)
-	default:
-		return fmt.Errorf("VectorArray.Scan: unsupported type %T", src)
-	}
-
-	// 去除方括号
-	s = strings.TrimSpace(s)
-	if len(s) < 2 || s[0] != '[' || s[len(s)-1] != ']' {
-		return fmt.Errorf("VectorArray.Scan: invalid format: %q", s)
-	}
-	inner := s[1 : len(s)-1]
-	if inner == "" {
-		*v = VectorArray{}
-		return nil
-	}
-
-	parts := strings.Split(inner, ",")
-	result := make(VectorArray, len(parts))
-	for i, p := range parts {
-		var f float64
-		if _, err := fmt.Sscanf(strings.TrimSpace(p), "%g", &f); err != nil {
-			return fmt.Errorf("VectorArray.Scan: parse element %d: %w", i, err)
-		}
-		result[i] = float32(f)
-	}
-	*v = result
-	return nil
-}

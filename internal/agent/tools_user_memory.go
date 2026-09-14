@@ -144,27 +144,6 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	// Get session ID for source tracking
 	sessionID := getSessionIDFromContext(ctx)
 
-	// Generate embedding if service is available
-	var embedding model.VectorArray
-	if t.helpers.deps.EmbeddingService != nil && t.helpers.deps.EmbeddingService.Dimension() > 0 {
-		// Build embedding text: title + description + content
-		embedText := args.Title
-		if args.Description != nil {
-			embedText += " " + *args.Description
-		}
-		embedText += " " + args.Content
-
-		vec, embedErr := t.helpers.deps.EmbeddingService.GenerateEmbedding(ctx, embedText)
-		if embedErr != nil {
-			t.helpers.logIfEnabled(ctx, "save_user_memory.embedding_error", map[string]any{
-				"error": embedErr.Error(),
-			})
-			// Continue without embedding - keyword search still works
-		} else {
-			embedding = model.VectorArray(vec)
-		}
-	}
-
 	// Create memory
 	memory := &model.UserMemory{
 		UserID:          userID,
@@ -174,7 +153,6 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		Content:         args.Content,
 		Description:     args.Description,
 		Tags:            model.StringArray(args.Tags),
-		Embedding:       embedding,
 		Metadata:        args.Metadata,
 		SourceSessionID: &sessionID,
 	}
@@ -184,11 +162,10 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	}
 
 	t.helpers.logIfEnabled(ctx, "save_user_memory.success", map[string]any{
-		"user_id":     userID.String(),
-		"memory_id":   memory.ID.String(),
-		"category":    args.Category,
-		"importance":  args.Importance,
-		"has_embedding": len(embedding) > 0,
+		"user_id":    userID.String(),
+		"memory_id":  memory.ID.String(),
+		"category":   args.Category,
+		"importance": args.Importance,
 	})
 
 	return fmt.Sprintf("User memory saved successfully (ID: %s, Category: %s, Importance: %s, Title: %s)",
@@ -349,41 +326,6 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 
 	if len(fields) == 0 {
 		return "No fields to update.", nil
-	}
-
-	// Re-generate embedding if content/description/title changed
-	if args.Content != nil || args.Description != nil || args.Title != nil {
-		if t.helpers.deps.EmbeddingService != nil && t.helpers.deps.EmbeddingService.Dimension() > 0 {
-			title := existing.Title
-			if args.Title != nil {
-				title = *args.Title
-			}
-			description := ""
-			if existing.Description != nil {
-				description = *existing.Description
-			}
-			if args.Description != nil {
-				description = *args.Description
-			}
-			content := existing.Content
-			if args.Content != nil {
-				content = *args.Content
-			}
-
-			embedText := title
-			if description != "" {
-				embedText += " " + description
-			}
-			embedText += " " + content
-
-			if vec, embedErr := t.helpers.deps.EmbeddingService.GenerateEmbedding(ctx, embedText); embedErr == nil {
-				fields["embedding"] = model.VectorArray(vec)
-			} else {
-				t.helpers.logIfEnabled(ctx, "update_user_memory.embedding_error", map[string]any{
-					"error": embedErr.Error(),
-				})
-			}
-		}
 	}
 
 	if err := t.helpers.deps.UserMemoryRepo.Update(ctx, memoryID, fields); err != nil {

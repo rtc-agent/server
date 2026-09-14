@@ -23,7 +23,6 @@ type Config struct {
 	LLM       LLMConfig       `mapstructure:"llm"`
 	API       APIConfig       `mapstructure:"api"`
 	Tracing   TracingConfig   `mapstructure:"tracing"`
-	Embedding EmbeddingConfig `mapstructure:"embedding"`
 }
 
 // ServerConfig HTTP/WebSocket 服务器监听地址配置。
@@ -253,30 +252,6 @@ type APIConfig struct {
 
 	// QueryMaxLimit 分页查询最大每页条数，默认 100
 	QueryMaxLimit int `mapstructure:"query_max_limit"`
-}
-
-// EmbeddingConfig Embedding 服务配置（用于 User Memory 向量检索）
-type EmbeddingConfig struct {
-	// Enabled 是否启用 Embedding 服务
-	Enabled bool `mapstructure:"enabled"`
-
-	// BaseURL Embedding API 端点（LM Studio 兼容 OpenAI API）
-	// 例如: "http://localhost:1234/v1"
-	BaseURL string `mapstructure:"base_url"`
-
-	// APIKey API 密钥（可选，LM Studio 本地部署时可为空）
-	APIKey string `mapstructure:"api_key"`
-
-	// Model 模型名称
-	// 例如: "text-embedding-3-small", "all-MiniLM-L6-v2"
-	Model string `mapstructure:"model"`
-
-	// Dimension 向量维度
-	// 例如: 1536 (text-embedding-3-small), 384 (all-MiniLM-L6-v2)
-	Dimension int `mapstructure:"dimension"`
-
-	// Timeout API 请求超时时间
-	Timeout time.Duration `mapstructure:"timeout"`
 }
 
 // TracingConfig OpenTelemetry 分布式追踪配置

@@ -37,7 +37,8 @@ type Repository interface {
 
 // ListOptions 查询选项
 type ListOptions struct {
-	Type           string    // 按类型过滤
+	Type           string    // 按类型过滤（向后兼容）
+	Types          []string  // 按多个类型过滤（新增）
 	Tags           []string  // 按标签过滤（OR 逻辑）
 	ScopeID        uuid.UUID // 按 ScopeID 过滤（可选，覆盖方法参数）
 	CreatedAfter   time.Time // 创建时间下限

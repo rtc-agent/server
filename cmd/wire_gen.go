@@ -22,7 +22,6 @@ import (
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/server"
-	"github.com/rtc-agent/server/internal/service/embedding"
 	"github.com/rtc-agent/server/internal/svc"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -52,10 +51,6 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	userMemoryRepo := repo.NewUserMemoryRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	memoryRepo := repo.NewMemoryRepo(db)
-	service, err := provideEmbeddingService(cfg)
-	if err != nil {
-		return nil, err
-	}
 	updatePublisher := provideUpdatePublisher(db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo)
 	node, err := provideCentrifugeNode()
 	if err != nil {
@@ -69,7 +64,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, memoryRepo, service, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, memoryRepo, updatePublisher, node, dualBroker, jwtSigner)
 	return serviceContext, nil
 }
 
@@ -88,10 +83,6 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	userMemoryRepo := repo.NewUserMemoryRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	memoryRepo := repo.NewMemoryRepo(db)
-	service, err := provideEmbeddingService(cfg)
-	if err != nil {
-		return nil, err
-	}
 	updatePublisher := provideUpdatePublisher(db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo)
 	node, err := provideCentrifugeNode()
 	if err != nil {
@@ -105,7 +96,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, memoryRepo, service, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, memoryRepo, updatePublisher, node, dualBroker, jwtSigner)
 	prometheusMetrics := provideMetrics()
 	cmdChatModelResult, err := provideChatModel(cfg, prometheusMetrics)
 	if err != nil {
@@ -142,7 +133,6 @@ var ServiceSet = wire.NewSet(
 	provideJWTSigner,
 	provideCentrifugeNode,
 	provideDualBroker,
-	provideEmbeddingService,
 )
 
 // UsecaseSet provides usecase layer dependencies.
@@ -244,16 +234,6 @@ func provideDualBroker(
 	return svc.AssembleDualBroker(node, cfg, updatePublisher, jwtSigner)
 }
 
-func provideEmbeddingService(cfg *config.Config) (embedding.Service, error) {
-	return embedding.NewService(embedding.Config{
-		Enabled:   cfg.Embedding.Enabled,
-		BaseURL:   cfg.Embedding.BaseURL,
-		APIKey:    cfg.Embedding.APIKey,
-		Model:     cfg.Embedding.Model,
-		Dimension: cfg.Embedding.Dimension,
-	})
-}
-
 // chatModelResult wraps the optional ChatModel to handle Wire's error semantics.
 type chatModelResult struct {
 	model model.ToolCallingChatModel
@@ -288,7 +268,6 @@ func provideUsecaseDependencies(
 		GoalRepo:          svcCtx.GoalRepo,
 		SessionMemoryRepo: svcCtx.SessionMemoryRepo,
 		UserMemoryRepo:    svcCtx.UserMemoryRepo,
-		EmbeddingService:  svcCtx.EmbeddingService,
 		UpdatePublisher:   svcCtx.UpdatePublisher,
 		ChatModel:         chatModelResult2.model,
 		LLMConfig:         cfg.LLM,

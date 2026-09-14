@@ -200,33 +200,18 @@ func (e *Exporter) writeBundle(ctx context.Context, tw *tar.Writer, bundleName s
 
 // loadMemories fetches memories from the repo based on export options
 func (e *Exporter) loadMemories(ctx context.Context, opts ExportOptions) ([]*Memory, error) {
-	if len(opts.Types) == 0 {
-		// No type filter - fetch all and filter by tags in-memory if needed
-		listOpts := ListOptions{}
-		memories, err := e.repo.ListByScope(ctx, opts.Scope, opts.ScopeID, listOpts)
-		if err != nil {
-			return nil, err
-		}
-		return filterByTags(memories, opts.Tags), nil
+	listOpts := ListOptions{}
+
+	if len(opts.Types) > 0 {
+		// Use batch IN query instead of N+1 queries
+		listOpts.Types = opts.Types
 	}
 
-	// Multiple types: call ListByScope once per type and merge
-	seen := make(map[uuid.UUID]bool)
-	var result []*Memory
-	for _, typ := range opts.Types {
-		listOpts := ListOptions{Type: typ}
-		memories, err := e.repo.ListByScope(ctx, opts.Scope, opts.ScopeID, listOpts)
-		if err != nil {
-			return nil, err
-		}
-		for _, m := range memories {
-			if !seen[m.ID] {
-				seen[m.ID] = true
-				result = append(result, m)
-			}
-		}
+	memories, err := e.repo.ListByScope(ctx, opts.Scope, opts.ScopeID, listOpts)
+	if err != nil {
+		return nil, err
 	}
-	return filterByTags(result, opts.Tags), nil
+	return filterByTags(memories, opts.Tags), nil
 }
 
 // filterByTags filters memories that have at least one of the given tags
@@ -318,7 +303,11 @@ func (e *Exporter) generateLog(memories []*Memory) string {
 		mems := byDate[date]
 		fmt.Fprintf(&b, "## %s\n\n", date)
 		for _, m := range mems {
-			fmt.Fprintf(&b, "- **[%s]** %s\n", m.Type, m.Title)
+			dir := typeToDirectory(m.Type)
+			filename := fmt.Sprintf("%s-%s.md", uuidShort(m.ID), slugify(m.Title))
+			// Use forward slashes for bundle-relative paths (portable across platforms).
+			path := fmt.Sprintf("/%s/%s", dir, filename)
+			fmt.Fprintf(&b, "- **Created** [%s](%s)\n", m.Title, path)
 		}
 		b.WriteString("\n")
 	}

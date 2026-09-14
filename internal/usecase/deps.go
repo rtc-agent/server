@@ -11,7 +11,6 @@ import (
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
-	"github.com/rtc-agent/server/internal/service/embedding"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/pkg/protocol"
 
@@ -43,7 +42,6 @@ type Dependencies struct {
 	GoalRepo        repo.GoalRepo
 	SessionMemoryRepo repo.SessionMemoryRepo
 	UserMemoryRepo  repo.UserMemoryRepo
-	EmbeddingService embedding.Service
 	UpdatePublisher Publisher
 
 	// ChatModel is the eino ChatModel for LLM interactions.
