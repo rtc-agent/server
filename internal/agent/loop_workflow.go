@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/repo"
 	"gorm.io/gorm"
 )
 
@@ -108,7 +109,9 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 
 	if newTurns > loop.MaxTurns {
 		err = l.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
-			return l.helpers.deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
+			// Inject transaction into context so LoopRepo.Update uses it
+			txCtx := repo.WithTx(ctx, tx)
+			return l.helpers.deps.LoopRepo.Update(txCtx, loop.ID, map[string]any{
 				"status":          string(model.LoopStatusExhausted),
 				"completed_turns": newTurns,
 			})
@@ -134,7 +137,9 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 	// The asynq_task_id is cleared before scheduling the next task to avoid
 	// stale references. The new task ID will be set by the scheduler.
 	err = l.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
-		return l.helpers.deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
+		// Inject transaction into context so LoopRepo.Update uses it
+		txCtx := repo.WithTx(ctx, tx)
+		return l.helpers.deps.LoopRepo.Update(txCtx, loop.ID, map[string]any{
 			"completed_turns": newTurns,
 			"asynq_task_id":   "",
 			"last_run_at":     time.Now(),
