@@ -1,3 +1,9 @@
+// Package memory 定义统一 Memory 模型的领域层。
+//
+// Memory 是 OKF (Open Knowledge Format) 兼容的知识单元，通过 Scope 字段区分作用域：
+// session（会话级）、user（用户级）、global（全局级）。
+// 本包包含领域模型、验证逻辑、Repository 接口定义和格式化器，
+// 不依赖具体存储实现，可由 agent、API、CLI 等多方消费。
 package memory
 
 import (
@@ -100,13 +106,13 @@ func (m *Memory) Validate() error {
 		return fmt.Errorf("%w: %q", ErrInvalidType, m.Type)
 	}
 	if m.Title == "" {
-		return fmt.Errorf("title is required")
+		return fmt.Errorf("title: %w", ErrRequiredField)
 	}
 	if m.Content == "" {
-		return fmt.Errorf("content is required")
+		return fmt.Errorf("content: %w", ErrRequiredField)
 	}
 	if m.Timestamp.IsZero() {
-		return fmt.Errorf("timestamp is required")
+		return fmt.Errorf("timestamp: %w", ErrRequiredField)
 	}
 	// ScopeID 要求：session 和 user scope 必须有 ScopeID
 	if (m.Scope == ScopeSession || m.Scope == ScopeUser) && m.ScopeID == uuid.Nil {

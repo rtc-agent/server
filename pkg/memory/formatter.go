@@ -85,7 +85,8 @@ func (f *Formatter) FormatForSummary(memories []*Memory) string {
 	sb.WriteString("# Session Memory\n\n")
 	sb.WriteString("This is a summary of the current session, extracted from the conversation history.\n\n")
 
-	// Type order and display names
+	// Type order and display names — covers all ValidMemoryTypes.
+	// Unknown types (future extensions) are collected under "Other".
 	types := []struct {
 		key         string
 		displayName string
@@ -95,6 +96,26 @@ func (f *Formatter) FormatForSummary(memories []*Memory) string {
 		{"decision", "Decisions"},
 		{"issue", "Issues & Solutions"},
 		{"learnings", "Learnings"},
+		{"user", "About User"},
+		{"feedback", "Feedback & Preferences"},
+		{"project", "Project Info"},
+		{"reference", "References"},
+	}
+
+	// Collect unknown types not covered by the explicit list above.
+	knownTypes := make(map[string]bool, len(types))
+	for _, t := range types {
+		knownTypes[t.key] = true
+	}
+	var unknownItems []*Memory
+	for _, item := range grouped[""] {
+		// This won't trigger; empty-key items shouldn't exist after validation.
+		_ = item
+	}
+	for memType, items := range grouped {
+		if !knownTypes[memType] {
+			unknownItems = append(unknownItems, items...)
+		}
 	}
 
 	for _, t := range types {
@@ -105,6 +126,16 @@ func (f *Formatter) FormatForSummary(memories []*Memory) string {
 
 		fmt.Fprintf(&sb, "## %s\n\n", t.displayName)
 		for _, item := range items {
+			fmt.Fprintf(&sb, "### %s\n\n", item.Title)
+			sb.WriteString(item.Content)
+			sb.WriteString("\n\n")
+		}
+	}
+
+	// Render unknown types under a catch-all heading.
+	if len(unknownItems) > 0 {
+		sb.WriteString("## Other\n\n")
+		for _, item := range unknownItems {
 			fmt.Fprintf(&sb, "### %s\n\n", item.Title)
 			sb.WriteString(item.Content)
 			sb.WriteString("\n\n")
@@ -125,10 +156,10 @@ func (f *Formatter) FormatForExport(m *Memory) string {
 	sb.WriteString("---\n")
 	fmt.Fprintf(&sb, "type: %s\n", m.Type)
 	if m.Title != "" {
-		fmt.Fprintf(&sb, "title: %s\n", m.Title)
+		fmt.Fprintf(&sb, "title: %s\n", yamlQuote(m.Title))
 	}
 	if m.Description != "" {
-		fmt.Fprintf(&sb, "description: %s\n", m.Description)
+		fmt.Fprintf(&sb, "description: %s\n", yamlQuote(m.Description))
 	}
 	if len(m.Tags) > 0 {
 		sb.WriteString("tags:\n")
@@ -155,4 +186,24 @@ func (f *Formatter) FormatForExport(m *Memory) string {
 	sb.WriteString("\n")
 
 	return sb.String()
+}
+
+// yamlQuote 对 YAML 标量值进行安全引用。
+// 当值包含 YAML 特殊字符（冒号、引号、#等）时，用双引号包裹并转义内部引号；
+// 否则原样返回，保持 frontmatter 的可读性。
+func yamlQuote(s string) string {
+	needsQuote := false
+	for _, c := range s {
+		switch c {
+		case ':', '#', '"', '\'', '{', '}', '[', ']', ',', '&', '*', '?', '|', '-', '<', '>', '=', '!', '%', '@', '`':
+			needsQuote = true
+		}
+	}
+	if !needsQuote {
+		return s
+	}
+	// 双引号包裹，转义内部双引号和反斜杠
+	escaped := strings.ReplaceAll(s, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
 }

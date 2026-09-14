@@ -140,7 +140,7 @@ func TestMemory_Validate(t *testing.T) {
 				Content:   "Test content.",
 				Timestamp: now,
 			},
-			wantErr: "title is required",
+			wantErr: "required field missing",
 		},
 		{
 			name: "empty content",
@@ -152,7 +152,7 @@ func TestMemory_Validate(t *testing.T) {
 				Content:   "",
 				Timestamp: now,
 			},
-			wantErr: "content is required",
+			wantErr: "required field missing",
 		},
 		{
 			name: "zero timestamp",
@@ -164,7 +164,7 @@ func TestMemory_Validate(t *testing.T) {
 				Content:   "Test content.",
 				Timestamp: time.Time{},
 			},
-			wantErr: "timestamp is required",
+			wantErr: "required field missing",
 		},
 		{
 			name: "session scope without ScopeID",
@@ -493,4 +493,82 @@ func TestFormatter_FormatForExport_EmptyTags(t *testing.T) {
 
 	result := f.FormatForExport(m)
 	assert.NotContains(t, result, "tags:")
+}
+
+func TestFormatter_FormatForSummary_AllTypes(t *testing.T) {
+	f := NewFormatter()
+	memories := []*Memory{
+		newTestMemory("context", "Current task", "Building memory system"),
+		newTestMemory("progress", "Done", "Finished implementation"),
+		newTestMemory("decision", "Use GORM", "For database access"),
+		newTestMemory("issue", "Bug found", "Fixed null pointer"),
+		newTestMemory("learnings", "Cache helps", "Redis is fast"),
+		newTestMemory("user", "Engineer", "Backend developer"),
+		newTestMemory("feedback", "Be terse", "Short answers please"),
+		newTestMemory("project", "RTC-Agent", "AI assistant project"),
+		newTestMemory("reference", "Go docs", "https://go.dev"),
+	}
+
+	result := f.FormatForSummary(memories)
+
+	// All 9 types should appear
+	assert.Contains(t, result, "## Current Context")
+	assert.Contains(t, result, "## Progress")
+	assert.Contains(t, result, "## Decisions")
+	assert.Contains(t, result, "## Issues & Solutions")
+	assert.Contains(t, result, "## Learnings")
+	assert.Contains(t, result, "## About User")
+	assert.Contains(t, result, "## Feedback & Preferences")
+	assert.Contains(t, result, "## Project Info")
+	assert.Contains(t, result, "## References")
+}
+
+func TestFormatter_FormatForSummary_UnknownType(t *testing.T) {
+	f := NewFormatter()
+	memories := []*Memory{
+		newTestMemory("context", "Known", "Known content"),
+		newTestMemory("future_type", "Unknown", "Unknown content"),
+	}
+
+	result := f.FormatForSummary(memories)
+
+	assert.Contains(t, result, "## Current Context")
+	assert.Contains(t, result, "## Other")
+	assert.Contains(t, result, "### Unknown")
+}
+
+func TestFormatter_FormatForExport_YAMLSpecialChars(t *testing.T) {
+	f := NewFormatter()
+	now := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	m := &Memory{
+		Type:        "decision",
+		Title:       "Use DB: PostgreSQL",
+		Description: "A \"great\" choice #1",
+		Content:     "Content body",
+		Timestamp:   now,
+		CreatedAt:   now,
+	}
+
+	result := f.FormatForExport(m)
+
+	// Title and Description should be YAML-quoted to handle special chars
+	assert.Contains(t, result, `title: "Use DB: PostgreSQL"`)
+	assert.Contains(t, result, `description: "A \"great\" choice #1"`)
+}
+
+func TestFormatter_FormatForExport_YAMLPlainValue(t *testing.T) {
+	f := NewFormatter()
+	now := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	m := &Memory{
+		Type:      "context",
+		Title:     "Simple title without special chars",
+		Content:   "Content body",
+		Timestamp: now,
+		CreatedAt: now,
+	}
+
+	result := f.FormatForExport(m)
+
+	// Plain title should NOT be quoted
+	assert.Contains(t, result, "title: Simple title without special chars\n")
 }
