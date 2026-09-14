@@ -83,7 +83,19 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 			existing.ID.String(), existing.Condition), nil
 	}
 
-	// 2. Create the goal.
+	// 2. Check for existing active loop (mutual exclusion).
+	if t.helpers.deps.LoopRepo != nil {
+		activeLoop, err := t.helpers.deps.LoopRepo.FindActive(ctx, t.session.ID)
+		if err != nil {
+			return "", fmt.Errorf("create_goal: find active loop: %w", err)
+		}
+		if activeLoop != nil {
+			return fmt.Sprintf("Error: an active loop exists (id=%s). Goal and loop cannot be active simultaneously. Complete or cancel the loop first.",
+				activeLoop.ID.String()), nil
+		}
+	}
+
+	// 3. Create the goal.
 	goal := &model.Goal{
 		SessionID:      t.session.ID,
 		Condition:      args.Condition,

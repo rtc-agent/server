@@ -39,6 +39,9 @@ var (
 	// Goal
 	ErrGoalNotFound = errors.New("goal not found")
 
+	// Loop
+	ErrLoopNotFound = errors.New("loop not found")
+
 	// ScriptExecution
 	ErrScriptExecutionNotFound = errors.New("script execution not found")
 
@@ -57,5 +60,6 @@ func IsNotFound(err error) bool {
 		errors.Is(err, ErrDeviceNotFound) ||
 		errors.Is(err, ErrRefreshTokenNotFound) ||
 		errors.Is(err, ErrGoalNotFound) ||
+		errors.Is(err, ErrLoopNotFound) ||
 		errors.Is(err, ErrScriptExecutionNotFound)
 }

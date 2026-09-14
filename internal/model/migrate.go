@@ -20,6 +20,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&SessionMemory{},
 		&UserMemory{},
 		&Goal{},
+		&Loop{},
 		&ScriptExecution{},
 		// Phase 2: 统一 Memory 模型
 		&memory.Memory{},

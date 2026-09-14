@@ -206,6 +206,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 	// Register built-in slash commands into the command registry.
 	// GoalWorkflow closes over helpers (for DB/queue access and tool construction).
 	registerGoalCommand(cfg.Deps.CommandRegistry, h)
+	registerLoopCommand(cfg.Deps.CommandRegistry, h)
 	if cfg.Deps.CommandRegistry != nil {
 		for _, cmd := range builtinCommands() {
 			cfg.Deps.CommandRegistry.Register(cmd)

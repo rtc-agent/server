@@ -6,6 +6,7 @@ package usecase
 
 import (
 	"context"
+	"time"
 
 	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/infra/config"
@@ -14,8 +15,8 @@ import (
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/pkg/protocol"
 
-	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/callbacks"
+	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -33,16 +34,17 @@ type Publisher interface {
 // 仅持有 repos 和基础设施，不包含业务逻辑。
 // 由 server 层在启动时构造并注入。
 type Dependencies struct {
-	DB              *gorm.DB
-	Redis           redis.UniversalClient
-	SessionRepo     repo.SessionRepo
-	MessageRepo     repo.MessageRepo
-	TurnRepo        repo.TurnRepo
-	RtcRepo         repo.RtcRepo
-	GoalRepo        repo.GoalRepo
+	DB                *gorm.DB
+	Redis             redis.UniversalClient
+	SessionRepo       repo.SessionRepo
+	MessageRepo       repo.MessageRepo
+	TurnRepo          repo.TurnRepo
+	RtcRepo           repo.RtcRepo
+	GoalRepo          repo.GoalRepo
+	LoopRepo          repo.LoopRepo
 	SessionMemoryRepo repo.SessionMemoryRepo
-	UserMemoryRepo  repo.UserMemoryRepo
-	UpdatePublisher Publisher
+	UserMemoryRepo    repo.UserMemoryRepo
+	UpdatePublisher   Publisher
 
 	// ChatModel is the eino ChatModel for LLM interactions.
 	// Required for agent execution in turn-loop sessions.
@@ -68,4 +70,22 @@ type Dependencies struct {
 	// (title summarization, memory extraction) inject this into their context
 	// via callbacks.InitCallbacks so token consumption is tracked to Session.TotalTokens.
 	TokenCallbackHandler callbacks.Handler
+
+	// TaskScheduler provides delayed task scheduling for Loop command.
+	// Used by LoopWorkflow.OnTurnComplete to enqueue the next loop turn.
+	// Actual implementation is provided in batch 3; nil checks are used
+	// in batch 2 for graceful degradation.
+	TaskScheduler TaskScheduler
+}
+
+// TaskScheduler 延迟任务调度接口
+//
+// 用于 Loop 命令的定时触发。具体实现在批次三提供（基于 asynq）。
+// 批次二通过 nil 检查实现优雅降级。
+type TaskScheduler interface {
+	// ScheduleDelayed 调度一个延迟任务，返回任务 ID
+	ScheduleDelayed(ctx context.Context, taskType string, payload []byte, delay time.Duration) (taskID string, err error)
+
+	// Cancel 取消一个已调度的任务
+	Cancel(ctx context.Context, taskID string) error
 }
