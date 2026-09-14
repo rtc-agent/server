@@ -14,9 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
-	"github.com/rtc-agent/server/pkg/logger"
+	loggerpkg "github.com/rtc-agent/server/pkg/logger"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
-	"go.uber.org/zap"
 )
 
 //go:embed prompts/session-memory-extract.md
@@ -56,6 +55,9 @@ func NewSessionMemoryExtractor(
 	noThinkingOptions []einomodel.Option,
 	tokenCallbackHandler callbacks.Handler,
 ) *SessionMemoryExtractor {
+	if logger == nil {
+		logger = loggerpkg.NoopLogger{}
+	}
 	return &SessionMemoryExtractor{
 		chatModel:            chatModel,
 		memoryRepo:           memoryRepo,
@@ -477,16 +479,7 @@ func estimateMemoryTokens(s string) int {
 }
 
 func (e *SessionMemoryExtractor) log(ctx context.Context, event string, fields map[string]any) {
-	if e.logger != nil {
-		e.logger.Info(ctx, "[session_memory_extractor] "+event, fields)
-		return
-	}
-	// 转换为 zap fields
-	zapFields := make([]zap.Field, 0, len(fields))
-	for k, v := range fields {
-		zapFields = append(zapFields, zap.Any(k, v))
-	}
-	logger.Info(ctx, "[session_memory_extractor] "+event, zapFields...)
+	e.logger.Info(ctx, "[session_memory_extractor] "+event, fields)
 }
 
 // triggerSessionMemoryExtraction triggers background session memory extraction.

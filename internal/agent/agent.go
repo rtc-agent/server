@@ -230,7 +230,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 			NewUserMemoryAttachment(h),
 		},
 		cfg.Metrics,
-		cfg.Logger,
+		h.logger,
 		AttachmentManagerConfig{
 			MaxTokensPerAttachment: 5000,
 			TotalBudget:            15000,

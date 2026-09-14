@@ -197,20 +197,18 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 			})
 		}
 
-		if h.logger != nil {
-			h.logger.Info(ctx, "llm.complete", map[string]any{
-				"session_id":          sessionIDStr,
-				"turn_id":             turnIDStr,
-				"model":               modelName,
-				"input_tokens":        fullUsage.InputTokens,
-				"output_tokens":       fullUsage.OutputTokens,
-				"total_tokens":        fullUsage.TotalTokens,
-				"cached_read_tokens":  fullUsage.CachedReadTokens,
-				"cached_write_tokens": fullUsage.CachedWriteTokens,
-				"reasoning_tokens":    fullUsage.ReasoningTokens,
-				"cost_micros":         costMicros,
-			})
-		}
+		h.logger.Info(ctx, "llm.complete", map[string]any{
+			"session_id":          sessionIDStr,
+			"turn_id":             turnIDStr,
+			"model":               modelName,
+			"input_tokens":        fullUsage.InputTokens,
+			"output_tokens":       fullUsage.OutputTokens,
+			"total_tokens":        fullUsage.TotalTokens,
+			"cached_read_tokens":  fullUsage.CachedReadTokens,
+			"cached_write_tokens": fullUsage.CachedWriteTokens,
+			"reasoning_tokens":    fullUsage.ReasoningTokens,
+			"cost_micros":         costMicros,
+		})
 	}
 
 	// estimateClaudeReasoningTokens estimates reasoning tokens for Claude.

@@ -227,25 +227,19 @@ func (m *AttachmentManager) recordMetrics(
 	})
 }
 
-// logDebug logs a debug message if the logger is available.
+// logDebug logs a debug message.
 func (m *AttachmentManager) logDebug(ctx context.Context, msg string, fields map[string]any) {
-	if m.logger != nil {
-		m.logger.Debug(ctx, msg, fields)
-	}
+	m.logger.Debug(ctx, msg, fields)
 }
 
-// logWarn logs a warning message if the logger is available.
+// logWarn logs a warning message.
 func (m *AttachmentManager) logWarn(ctx context.Context, msg string, fields map[string]any) {
-	if m.logger != nil {
-		m.logger.Warn(ctx, msg, fields)
-	}
+	m.logger.Warn(ctx, msg, fields)
 }
 
-// logError logs an error message if the logger is available.
+// logError logs an error message.
 func (m *AttachmentManager) logError(ctx context.Context, msg string, fields map[string]any) {
-	if m.logger != nil {
-		m.logger.Error(ctx, msg, fields)
-	}
+	m.logger.Error(ctx, msg, fields)
 }
 
 // estimateStringTokens estimates the number of tokens in a string.
