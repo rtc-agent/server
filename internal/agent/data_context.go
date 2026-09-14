@@ -145,6 +145,15 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		}
 	}
 
+	// Normalize messages for LLM: extract system messages to the front,
+	// repair tool call/result pairing, merge consecutive same-role messages,
+	// and validate structural compliance with the Anthropic Messages API.
+	// This is the final defensive pass before messages reach the LLM.
+	messages, err = h.normalizeMessagesForLLM(ctx, messages)
+	if err != nil {
+		return nil, fmt.Errorf("loadMessages: normalize: %w", err)
+	}
+
 	// Trigger background Session Memory extraction (async, non-blocking).
 	// The extractor checks whether extraction is needed based on token growth
 	// and tool call count.
