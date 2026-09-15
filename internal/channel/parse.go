@@ -87,5 +87,9 @@ func ParseUser(ch string) (userID string, ok bool) {
 	if after == "" {
 		return "", false
 	}
+	// Reject userID containing separators to prevent channel name injection
+	if strings.ContainsAny(after, ":=") {
+		return "", false
+	}
 	return after, true
 }

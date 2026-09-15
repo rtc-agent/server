@@ -499,12 +499,24 @@ func provideRecoveryCancel(
 		interval = 1 * time.Minute
 	}
 
+	staleThreshold := cfg.Asynq.StaleThreshold
+	if staleThreshold <= 0 {
+		staleThreshold = 5 * time.Minute
+	}
+
+	retryMax := cfg.Asynq.RetryMax
+	if retryMax < 0 {
+		retryMax = 3
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	go loop.RunRecovery(ctx, loop.RecoveryDeps{
-		LoopRepo:  loopRepo,
-		Client:    cp.Client(),
-		Inspector: cp.Inspector(),
-		Interval:  interval,
+		LoopRepo:       loopRepo,
+		Client:         cp.Client(),
+		Inspector:      cp.Inspector(),
+		Interval:       interval,
+		StaleThreshold: staleThreshold,
+		RetryMax:       retryMax,
 	})
 	return cancel
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -49,6 +50,23 @@ type AsynqConfig struct {
 	Queue string `mapstructure:"queue"`
 	// RecoveryInterval recovery 扫描间隔
 	RecoveryInterval time.Duration `mapstructure:"recovery_interval"`
+
+	// StaleThreshold 判定 loop 为 stale 的时间阈值。
+	// 活跃 loop 若在此时间内未产生 asynq task，则视为 stale 并重新入队。
+	// 默认 5 分钟。
+	StaleThreshold time.Duration `mapstructure:"stale_threshold"`
+
+	// RetryMax 任务失败时的最大重试次数。
+	// 默认 3。
+	RetryMax int `mapstructure:"retry_max"`
+
+	// RetryTimeout 任务执行超时时间。
+	// 默认 30 秒。
+	RetryTimeout time.Duration `mapstructure:"retry_timeout"`
+
+	// HealthCheckInterval 健康检查间隔。
+	// 默认 30 秒。
+	HealthCheckInterval time.Duration `mapstructure:"health_check_interval"`
 }
 
 // ServerConfig HTTP/WebSocket 服务器监听地址配置。
@@ -103,6 +121,9 @@ type AuthConfig struct {
 	AccessTokenTTLSeconds int           `mapstructure:"access_token_ttl_seconds"`
 	RefreshTokenTTL       time.Duration `mapstructure:"refresh_token_ttl"` // 默认 30 天
 	OAuth2StateTTL        time.Duration `mapstructure:"oauth2_state_ttl"`  // 默认 10 分钟
+	// AllowedRedirectURIs OAuth2 redirect_uri 白名单。
+	// 为空时不限制（仅用于开发环境），生产环境必须显式配置。
+	AllowedRedirectURIs []string `mapstructure:"allowed_redirect_uris"`
 }
 
 // ProvidersConfig OAuth2 Provider 配置集合
@@ -320,6 +341,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("auth.access_token_ttl_seconds", 3600)
 	v.SetDefault("auth.refresh_token_ttl", 30*24*time.Hour)
 	v.SetDefault("auth.oauth2_state_ttl", 10*time.Minute)
+	v.SetDefault("auth.allowed_redirect_uris", []string{})
 	v.SetDefault("providers.mock.enabled", true)
 	v.SetDefault("providers.mock.url", "http://localhost:10060")
 	v.SetDefault("providers.mock.client_id", "test-client")
@@ -371,6 +393,10 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("asynq.concurrency", 10)
 	v.SetDefault("asynq.queue", "loop")
 	v.SetDefault("asynq.recovery_interval", 1*time.Minute)
+	v.SetDefault("asynq.stale_threshold", 5*time.Minute)
+	v.SetDefault("asynq.retry_max", 3)
+	v.SetDefault("asynq.retry_timeout", 30*time.Second)
+	v.SetDefault("asynq.health_check_interval", 30*time.Second)
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, err
@@ -394,11 +420,38 @@ func Load(cfgFile string) (*Config, error) {
 		return nil, err
 	}
 
-	// 展开 llm.api_key 中的环境变量引用（${VAR_NAME} 形式）。
-	// 仅对 APIKey 生效，避免其他配置项误用环境变量引入安全隐患。
-	cfg.LLM.APIKey = expandEnvRef(cfg.LLM.APIKey)
+	// 展开敏感配置项中的环境变量引用（${VAR_NAME} 形式）。
+	// 仅对敏感字段生效，避免其他配置项误用环境变量引入安全隐患。
+	expandEnvVars(&cfg)
 
 	return &cfg, nil
+}
+
+// expandEnvVars 展开配置中的敏感字段的环境变量引用。
+// 仅对包含敏感信息的字段（密码、密钥、DSN）生效。
+func expandEnvVars(cfg *Config) {
+	// 数据库连接字符串（可能包含密码）
+	cfg.Database.DSN = expandEnvRef(cfg.Database.DSN)
+
+	// Redis 密码
+	cfg.Redis.Password = expandEnvRef(cfg.Redis.Password)
+
+	// Asynq Redis 密码
+	cfg.Asynq.RedisPassword = expandEnvRef(cfg.Asynq.RedisPassword)
+
+	// LLM API 密钥
+	cfg.LLM.APIKey = expandEnvRef(cfg.LLM.APIKey)
+
+	// OAuth2 Provider 密钥
+	cfg.Providers.Mock.ClientSecret = expandEnvRef(cfg.Providers.Mock.ClientSecret)
+	cfg.Providers.GitHub.ClientSecret = expandEnvRef(cfg.Providers.GitHub.ClientSecret)
+	cfg.Providers.Google.ClientSecret = expandEnvRef(cfg.Providers.Google.ClientSecret)
+
+	// Auth 密钥
+	cfg.Auth.JWTSecret = expandEnvRef(cfg.Auth.JWTSecret)
+
+	// Metrics 密码
+	cfg.Metrics.Password = expandEnvRef(cfg.Metrics.Password)
 }
 
 // envRefPattern 匹配 ${VAR_NAME} 形式的环境变量引用。
@@ -424,16 +477,73 @@ func ExpandEnvRef(s string) string {
 
 // Validate 校验必填配置项，返回第一个发现的错误。
 func (c *Config) Validate() error {
+	// 校验数据库配置
+	if c.Database.DSN == "" {
+		return fmt.Errorf("database.dsn is required")
+	}
+
+	// 校验服务器端口范围
+	if c.Server.Port < 1 || c.Server.Port > 65535 {
+		return fmt.Errorf("server.port must be 1-65535, got %d", c.Server.Port)
+	}
+
+	// 校验 LLM 配置
 	if c.LLM.APIKey == "" {
 		return fmt.Errorf("llm.api_key is required: set it directly or via ${LLM_API_KEY} environment variable")
 	}
+
 	// 校验至少启用了一个 OAuth Provider
 	if !c.Providers.Mock.Enabled && !c.Providers.GitHub.Enabled && !c.Providers.Google.Enabled {
 		return fmt.Errorf("at least one OAuth provider must be enabled (mock, github, or google)")
 	}
+
+	// 校验 OAuth2 Provider URL 格式
+	if c.Providers.Mock.Enabled && c.Providers.Mock.URL != "" {
+		if _, err := url.Parse(c.Providers.Mock.URL); err != nil {
+			return fmt.Errorf("providers.mock.url is invalid: %w", err)
+		}
+	}
+
+	// 校验 Auth 配置
+	if c.Auth.JWTSecret == "" {
+		return fmt.Errorf("auth.jwt_secret is required")
+	}
+	if c.Auth.AccessTokenTTLSeconds <= 0 {
+		return fmt.Errorf("auth.access_token_ttl_seconds must be positive, got %d", c.Auth.AccessTokenTTLSeconds)
+	}
+
 	// 校验 Worker 压缩阈值配置
 	if err := c.Worker.Validate(); err != nil {
 		return err
+	}
+
+	// 校验 Asynq 配置
+	if err := c.Asynq.Validate(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Validate 校验 AsynqConfig 配置。
+func (c *AsynqConfig) Validate() error {
+	if c.Concurrency < 0 {
+		return fmt.Errorf("asynq.concurrency must be non-negative, got %d", c.Concurrency)
+	}
+	if c.RecoveryInterval < 0 {
+		return fmt.Errorf("asynq.recovery_interval must be non-negative, got %v", c.RecoveryInterval)
+	}
+	if c.StaleThreshold < 0 {
+		return fmt.Errorf("asynq.stale_threshold must be non-negative, got %v", c.StaleThreshold)
+	}
+	if c.RetryMax < 0 {
+		return fmt.Errorf("asynq.retry_max must be non-negative, got %d", c.RetryMax)
+	}
+	if c.RetryTimeout < 0 {
+		return fmt.Errorf("asynq.retry_timeout must be non-negative, got %v", c.RetryTimeout)
+	}
+	if c.HealthCheckInterval < 0 {
+		return fmt.Errorf("asynq.health_check_interval must be non-negative, got %v", c.HealthCheckInterval)
 	}
 	return nil
 }

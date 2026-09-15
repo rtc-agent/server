@@ -38,6 +38,12 @@ func runServe(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Validate required config fields
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid config: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Init logger
 	logger.Init(cfg.Log.Level, cfg.Log.ServerLogFile)
 	defer logger.Sync()

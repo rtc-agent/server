@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -73,6 +74,20 @@ func (h *OAuth2Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /oauth2/providers", h.handleProviders)
 }
 
+// isAllowedRedirectURI checks if a redirect URI is in the allowed list.
+// An empty allowed list means all URIs are permitted (development mode).
+func (h *OAuth2Handler) isAllowedRedirectURI(uri string) bool {
+	if len(h.authConfig.AllowedRedirectURIs) == 0 {
+		return true // no restriction (development mode)
+	}
+	for _, allowed := range h.authConfig.AllowedRedirectURIs {
+		if uri == allowed {
+			return true
+		}
+	}
+	return false
+}
+
 // handleProviders 处理 GET /oauth2/providers
 // 返回当前已启用的 provider 列表
 func (h *OAuth2Handler) handleProviders(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +106,19 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	redirectURI := r.URL.Query().Get("redirect_uri")
+
+	// Validate redirect_uri to prevent Open Redirect attacks
+	if redirectURI != "" {
+		parsed, err := url.Parse(redirectURI)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			httputil.WriteError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri must be a valid absolute URL")
+			return
+		}
+		if !h.isAllowedRedirectURI(redirectURI) {
+			httputil.WriteError(w, http.StatusBadRequest, "disallowed_redirect_uri", "redirect_uri is not in the allowed list")
+			return
+		}
+	}
 
 	// 生成随机 state
 	state, err := generateState()
@@ -241,11 +269,11 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 // parseRequestBody 解析请求体，支持 application/json 和 form-urlencoded。
 // JSON 直接解码到 target；form 先 ParseForm 再调用 formFiller 填充 target。
-// 对 JSON body 添加 1MB 大小限制，防止恶意客户端消耗过多内存。
+// 对请求体添加 1MB 大小限制，防止恶意客户端消耗过多内存。
 func parseRequestBody(w http.ResponseWriter, r *http.Request, target any, formFiller func(r *http.Request)) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit for all content types
 	contentType := r.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "application/json") {
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 		return json.NewDecoder(r.Body).Decode(target)
 	}
 	if err := r.ParseForm(); err != nil {

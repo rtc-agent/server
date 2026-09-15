@@ -17,22 +17,22 @@ func TestWorkerConfig_Validate_ValidConfig(t *testing.T) {
 
 func TestWorkerConfig_Validate_InvalidConfig(t *testing.T) {
 	tests := []struct {
-		name                    string
-		contextLimit            int
-		compactBuffer           int
-		wantErrContains         string
+		name            string
+		contextLimit    int
+		compactBuffer   int
+		wantErrContains string
 	}{
 		{
-			name:                    "buffer greater than limit",
-			contextLimit:            100,
-			compactBuffer:           200,
-			wantErrContains:         "worker.context_tokens_limit (100) must be > worker.auto_compact_buffer_tokens (200)",
+			name:            "buffer greater than limit",
+			contextLimit:    100,
+			compactBuffer:   200,
+			wantErrContains: "worker.context_tokens_limit (100) must be > worker.auto_compact_buffer_tokens (200)",
 		},
 		{
-			name:                    "buffer equals limit",
-			contextLimit:            1000,
-			compactBuffer:           1000,
-			wantErrContains:         "worker.context_tokens_limit (1000) must be > worker.auto_compact_buffer_tokens (1000)",
+			name:            "buffer equals limit",
+			contextLimit:    1000,
+			compactBuffer:   1000,
+			wantErrContains: "worker.context_tokens_limit (1000) must be > worker.auto_compact_buffer_tokens (1000)",
 		},
 	}
 
@@ -107,6 +107,16 @@ func TestWorkerConfig_Validate_ZeroValues(t *testing.T) {
 
 func TestConfig_Validate_WithInvalidWorkerConfig(t *testing.T) {
 	cfg := &Config{
+		Database: DatabaseConfig{
+			DSN: "postgres://test",
+		},
+		Server: ServerConfig{
+			Port: 8080,
+		},
+		Auth: AuthConfig{
+			JWTSecret:             "test-secret",
+			AccessTokenTTLSeconds: 3600,
+		},
 		LLM: LLMConfig{
 			APIKey: "test-key",
 		},

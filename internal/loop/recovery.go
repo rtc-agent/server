@@ -16,10 +16,12 @@ import (
 
 // RecoveryDeps holds the dependencies for the Loop Recovery goroutine.
 type RecoveryDeps struct {
-	LoopRepo  repo.LoopRepo
-	Client    *hibikenasynq.Client
-	Inspector *hibikenasynq.Inspector
-	Interval  time.Duration
+	LoopRepo       repo.LoopRepo
+	Client         *hibikenasynq.Client
+	Inspector      *hibikenasynq.Inspector
+	Interval       time.Duration
+	StaleThreshold time.Duration
+	RetryMax       int
 }
 
 // RunRecovery starts the loop recovery goroutine.
@@ -31,7 +33,8 @@ func RunRecovery(ctx context.Context, deps RecoveryDeps) {
 	defer ticker.Stop()
 
 	logger.Info(ctx, "[loop.Recovery] started",
-		zap.Duration("interval", deps.Interval))
+		zap.Duration("interval", deps.Interval),
+		zap.Duration("stale_threshold", deps.StaleThreshold))
 
 	for {
 		select {
@@ -86,14 +89,20 @@ func recoverExpired(ctx context.Context, deps RecoveryDeps) {
 	}
 }
 
-// staleLoopThreshold is the duration used to determine if a loop is stale.
+// staleLoopThreshold is the default duration used to determine if a loop is stale.
 // An active loop that has not produced an asynq task within this window is
 // considered stale and will be re-enqueued.
+// Deprecated: Use RecoveryDeps.StaleThreshold instead.
 const staleLoopThreshold = 5 * time.Minute
 
 // recoverStale re-enqueues loops that are stale (active but missing asynq task).
 func recoverStale(ctx context.Context, deps RecoveryDeps) {
-	staleThreshold := time.Now().Add(-staleLoopThreshold)
+	// Use configured StaleThreshold, fallback to default if not set
+	threshold := deps.StaleThreshold
+	if threshold <= 0 {
+		threshold = staleLoopThreshold
+	}
+	staleThreshold := time.Now().Add(-threshold)
 
 	stale, err := deps.LoopRepo.FindStaleLoops(ctx, staleThreshold)
 	if err != nil {
@@ -125,10 +134,16 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 
 	delay := time.Duration(loop.IntervalSeconds) * time.Second
 	task := hibikenasynq.NewTask(LoopTaskType, payload)
+
+	retryMax := deps.RetryMax
+	if retryMax < 0 {
+		retryMax = 3
+	}
+
 	info, err := deps.Client.EnqueueContext(ctx, task,
 		hibikenasynq.ProcessIn(delay),
 		hibikenasynq.Queue(taskscheduler.LoopQueue),
-		hibikenasynq.MaxRetry(3),
+		hibikenasynq.MaxRetry(retryMax),
 	)
 	if err != nil {
 		logger.Error(ctx, "[loop.Recovery] reenqueue failed",

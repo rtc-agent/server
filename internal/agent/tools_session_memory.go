@@ -156,6 +156,10 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 	var memories []*model.SessionMemory
 	var err error
 	if args.Category != "" {
+		if !model.IsValidCategory(args.Category) {
+			return fmt.Sprintf("Error: invalid category %q. Valid categories: %v",
+				args.Category, model.ValidSessionMemoryCategories), nil
+		}
 		memories, err = t.helpers.deps.SessionMemoryRepo.ListByCategory(ctx, sessionID, args.Category, args.Limit)
 	} else {
 		memories, err = t.helpers.deps.SessionMemoryRepo.ListBySession(ctx, sessionID, args.Limit)

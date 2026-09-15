@@ -12,8 +12,8 @@ import (
 	"github.com/google/uuid"
 	hibikenasynq "github.com/hibiken/asynq"
 	"github.com/rtc-agent/server/internal/repo"
-	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // Worker processes loop asynq tasks.

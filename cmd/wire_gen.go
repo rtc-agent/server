@@ -107,29 +107,30 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	dependencies := provideUsecaseDependencies(serviceContext, cmdChatModelResult, cfg)
-	// Initialize TaskScheduler for Loop command
 	taskScheduler, err := provideTaskScheduler(cfg)
 	if err != nil {
 		return nil, err
 	}
-	dependencies.TaskScheduler = taskScheduler
-	dependencies.LoopRepo = serviceContext.LoopRepo
+	dependencies := provideUsecaseDependencies(serviceContext, cmdChatModelResult, cfg, taskScheduler)
 	queue := provideQueue(rdb)
-	handler := provideRPCHandler(serviceContext, dependencies, sessionRepo, queue, cfg, prometheusMetrics)
+	asynqServer := provideAsynqServer(cfg)
+	asynqMux := provideAsynqMux(queue, loopRepo)
+	inspector := provideAsynqInspector(cfg)
+	recoveryCancel := provideRecoveryCancel(cfg, loopRepo, taskScheduler, inspector)
+	handler := provideRPCHandler(serviceContext, dependencies, sessionRepo, queue, cfg, prometheusMetrics, inspector)
 	httphandlerHandler := provideHTTPHandler(serviceContext)
 	redisStore := provideStateStore(universalClient)
 	client := provideOAuth2ProviderClient(cfg)
 	oAuth2Handler := provideOAuth2Handler(serviceContext, jwtSigner, redisStore, client, cfg)
 	interruptHandler := provideInterruptHandler(universalClient, cfg, serviceContext, jwtSigner)
 	memoriesHandler := provideMemoriesHandler(serviceContext, jwtSigner)
-	agent, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics)
+	agentInstance, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics)
 	if err != nil {
 		return nil, err
 	}
-	worker := provideQueueWorker(queue, agent, cfg)
+	queueWorker := provideQueueWorker(queue, agentInstance, cfg)
 	streamStore := provideStreamStore(universalClient, cfg)
-	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, memoriesHandler, worker, queue, streamStore, dependencies)
+	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, memoriesHandler, queueWorker, queue, streamStore, asynqServer, asynqMux, recoveryCancel)
 	return serverServer, nil
 }
 
@@ -151,7 +152,16 @@ var ServiceSet = wire.NewSet(
 var UsecaseSet = wire.NewSet(
 	provideMetrics,
 	provideChatModel,
+	provideTaskScheduler,
 	provideUsecaseDependencies,
+)
+
+// AsynqSet provides asynq components for loop task scheduling.
+var AsynqSet = wire.NewSet(
+	provideAsynqServer,
+	provideAsynqMux,
+	provideAsynqInspector,
+	provideRecoveryCancel,
 )
 
 // QueueSet provides rtc-queue components.
@@ -269,6 +279,7 @@ func provideChatModel(cfg *config.Config, metrics *turnagent.PrometheusMetrics) 
 func provideUsecaseDependencies(
 	svcCtx *svc.ServiceContext, chatModelResult2 *chatModelResult,
 	cfg *config.Config,
+	taskScheduler usecase.TaskScheduler,
 ) *usecase.Dependencies {
 	return &usecase.Dependencies{
 		DB:                svcCtx.DB,
@@ -278,6 +289,7 @@ func provideUsecaseDependencies(
 		TurnRepo:          svcCtx.TurnRepo,
 		RtcRepo:           svcCtx.RtcRepo,
 		GoalRepo:          svcCtx.GoalRepo,
+		LoopRepo:          svcCtx.LoopRepo,
 		SessionMemoryRepo: svcCtx.SessionMemoryRepo,
 		UserMemoryRepo:    svcCtx.UserMemoryRepo,
 		UpdatePublisher:   svcCtx.UpdatePublisher,
@@ -286,6 +298,7 @@ func provideUsecaseDependencies(
 		SystemPrompt:      cfg.Worker.SystemPrompt,
 		WorkerConfig:      cfg.Worker,
 		CommandRegistry:   command.NewCommandRegistry(),
+		TaskScheduler:     taskScheduler,
 	}
 }
 
@@ -387,12 +400,11 @@ func provideStateStore(redisClient redis.UniversalClient) *oauth.RedisStore {
 }
 
 func provideTaskScheduler(cfg *config.Config) (usecase.TaskScheduler, error) {
-	// TaskScheduler is optional - if Redis address is not configured, return nil
-	// Loop command will gracefully degrade
-	if cfg.Redis.Addr == "" {
-		return nil, nil
+	addr := cfg.Asynq.RedisAddr
+	if addr == "" {
+		addr = cfg.Redis.Addr
 	}
-	return taskscheduler.NewTaskScheduler(cfg.Redis.Addr)
+	return taskscheduler.NewTaskScheduler(addr)
 }
 
 func provideOAuth2ProviderClient(cfg *config.Config) *oauth.Client {
@@ -407,13 +419,8 @@ func provideRPCHandler(
 	queue *rtcqueue.Queue,
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
+	inspector *hibikenasynq.Inspector,
 ) *rpchandler.Handler {
-	var inspector *hibikenasynq.Inspector
-	if deps.TaskScheduler != nil {
-		if schedulerImpl, ok := deps.TaskScheduler.(*taskscheduler.Impl); ok {
-			inspector = schedulerImpl.Inspector()
-		}
-	}
 	handler := rpchandler.NewHandler(&rpchandler.Dependencies{
 		Deps:                deps,
 		SessionRepo:         sessionRepo,
@@ -468,54 +475,12 @@ func provideServer(
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
 	streamStore *agent.StreamStore,
-	deps *usecase.Dependencies,
+	asynqServer *hibikenasynq.Server,
+	asynqMux *hibikenasynq.ServeMux,
+	recoveryCancel context.CancelFunc,
 ) *server.Server {
-
+	// Inject stream store into UpdatePublisher
 	svcCtx.UpdatePublisher.SetStreamStore(streamStore)
-
-	// Create asynq server and mux for loop worker
-	var asynqSrv *hibikenasynq.Server
-	var asynqMux *hibikenasynq.ServeMux
-	var recoveryCancel context.CancelFunc
-
-	if deps.TaskScheduler != nil && svcCtx.LoopRepo != nil {
-		// Get the asynq client and inspector from TaskScheduler
-		schedulerImpl, ok := deps.TaskScheduler.(*taskscheduler.Impl)
-		if ok && schedulerImpl != nil {
-			client := schedulerImpl.Client()
-			_ = client // client is available if needed
-
-			// Create loop worker
-			loopWorker := loop.NewWorker(queue, svcCtx.LoopRepo)
-
-			// Create asynq server
-			asynqSrv = hibikenasynq.NewServer(
-				hibikenasynq.RedisClientOpt{Addr: cfg.Redis.Addr},
-				hibikenasynq.Config{
-					Concurrency: 10,
-					Queues: map[string]int{
-						taskscheduler.LoopQueue: 6,
-						"default":               3,
-					},
-				},
-			)
-
-			// Create mux and register handlers
-			asynqMux = hibikenasynq.NewServeMux()
-			loopWorker.RegisterHandlers(asynqMux)
-
-			// Create and start recovery goroutine
-			recoveryCtx, recoveryCancelFn := context.WithCancel(context.Background())
-			recoveryCancel = recoveryCancelFn
-			recoveryDeps := loop.RecoveryDeps{
-				LoopRepo:  svcCtx.LoopRepo,
-				Client:    schedulerImpl.Client(),
-				Inspector: schedulerImpl.Inspector(),
-				Interval:  1 * time.Minute,
-			}
-			go loop.RunRecovery(recoveryCtx, recoveryDeps)
-		}
-	}
 
 	return server.NewWithDeps(
 		cfg,
@@ -527,8 +492,100 @@ func provideServer(
 		memoriesHandler,
 		queueWorker,
 		queue,
-		asynqSrv,
+		asynqServer,
 		asynqMux,
 		recoveryCancel,
 	)
+}
+
+// =============================================================================
+// Asynq provider functions
+// =============================================================================
+
+// provideAsynqServer creates the asynq Server for processing loop tasks.
+func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
+	addr := cfg.Asynq.RedisAddr
+	if addr == "" {
+		addr = cfg.Redis.Addr
+	}
+	concurrency := cfg.Asynq.Concurrency
+	if concurrency <= 0 {
+		concurrency = 10
+	}
+	queueName := cfg.Asynq.Queue
+	if queueName == "" {
+		queueName = "loop"
+	}
+	return hibikenasynq.NewServer(
+		hibikenasynq.RedisClientOpt{Addr: addr},
+		hibikenasynq.Config{
+			Concurrency: concurrency,
+			Queues: map[string]int{
+				queueName: 6,
+				"default": 3,
+			},
+		},
+	)
+}
+
+// provideAsynqMux creates the asynq ServeMux with loop task handlers registered.
+func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo) *hibikenasynq.ServeMux {
+	worker := loop.NewWorker(queue, loopRepo)
+	mux := hibikenasynq.NewServeMux()
+	worker.RegisterHandlers(mux)
+	return mux
+}
+
+// provideAsynqInspector creates the asynq Inspector for task management.
+func provideAsynqInspector(cfg *config.Config) *hibikenasynq.Inspector {
+	addr := cfg.Asynq.RedisAddr
+	if addr == "" {
+		addr = cfg.Redis.Addr
+	}
+	return hibikenasynq.NewInspector(hibikenasynq.RedisClientOpt{Addr: addr})
+}
+
+// provideRecoveryCancel creates the recovery goroutine and returns its cancel function.
+func provideRecoveryCancel(
+	cfg *config.Config,
+	loopRepo repo.LoopRepo,
+	scheduler usecase.TaskScheduler,
+	inspector *hibikenasynq.Inspector,
+) context.CancelFunc {
+	// Recovery needs direct access to asynq client.
+	// Extract it from the concrete scheduler type.
+	type clientProvider interface {
+		Client() *hibikenasynq.Client
+	}
+	cp, ok := scheduler.(clientProvider)
+	if !ok || cp == nil {
+		// TaskScheduler not available or wrong type; return no-op cancel.
+		return func() {}
+	}
+
+	interval := cfg.Asynq.RecoveryInterval
+	if interval <= 0 {
+		interval = 1 * time.Minute
+	}
+
+	staleThreshold := cfg.Asynq.StaleThreshold
+	if staleThreshold <= 0 {
+		staleThreshold = 5 * time.Minute
+	}
+
+	retryMax := cfg.Asynq.RetryMax
+	if retryMax < 0 {
+		retryMax = 3
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go loop.RunRecovery(ctx, loop.RecoveryDeps{
+		LoopRepo:       loopRepo,
+		Client:         cp.Client(),
+		Inspector:      inspector,
+		Interval:       interval,
+		StaleThreshold: staleThreshold,
+		RetryMax:       retryMax,
+	})
+	return cancel
 }
