@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/loop"
@@ -92,7 +93,9 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	// If synchronous behavior is needed in the future, this can be changed
 	// to block until Queue.CancelSession completes. The trade-off is higher
 	// API latency vs. stronger consistency guarantees on close.
-	detachedCtx := context.WithoutCancel(ctx)
+	// 添加超时防止下游操作挂起导致 goroutine 泄漏
+	detachedCtx, detachedCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer detachedCancel()
 	logger.SafeGo("stop-active-turns", func() {
 		h.stopActiveTurns(detachedCtx, session.ID)
 	})

@@ -3,6 +3,7 @@ package rpchandler
 
 import (
 	"context"
+	"time"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -39,7 +40,9 @@ func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (
 	// This mirrors CloseSession's approach: detaching from the RPC context
 	// ensures multi-step cleanup (DB queries, Redis publish) is not aborted
 	// by an early context cancellation (e.g. rpc_timeout).
-	detachedCtx := context.WithoutCancel(ctx)
+	// 添加超时防止下游操作挂起导致 goroutine 泄漏
+	detachedCtx, detachedCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer detachedCancel()
 	logger.SafeGo("stop-active-turns", func() {
 		h.stopActiveTurns(detachedCtx, sessionUUID)
 	})

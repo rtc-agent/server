@@ -239,7 +239,9 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	// === Script Execution 记录（异步，不影响主流程）===
 	if rtc.ToolName == "script" {
 		// 使用 context.WithoutCancel 解耦 RPC handler 生命周期
-		recorderCtx := context.WithoutCancel(ctx)
+		// 添加超时防止下游操作挂起导致 goroutine 泄漏
+		recorderCtx, recorderCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer recorderCancel()
 		h.recorder.submit(recorderCtx, rtc, req)
 	}
 
@@ -279,14 +281,16 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 	// Detach from the RPC handler's context. The RTC result is already
 	// persisted; the resume is fire-and-forget and must not be aborted
 	// by the RPC context timeout/cancellation.
-	ctx := context.WithoutCancel(callerCtx)
+	// 添加超时防止下游操作挂起导致 goroutine 泄漏
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(callerCtx), 30*time.Second)
+	defer cancel()
 	if h.deps.Queue == nil {
 		logger.Warn(ctx, "[resumeTurnAfterRtc] Queue is nil, cannot resume",
 			zap.String("rtc", rtc.ID.String()))
 		return
 	}
 
-	if logger.DebugMode {
+	if logger.IsDebugMode() {
 		logger.Debug(ctx, "[resumeTurnAfterRtc] entry",
 			zap.String("rtc", rtc.ID.String()),
 			zap.String("session", rtc.SessionID.String()))
