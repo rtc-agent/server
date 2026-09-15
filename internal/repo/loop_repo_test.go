@@ -4,34 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/model"
 )
 
-var loopTestDBCounter atomic.Int64
-
 // setupLoopTestDB creates a SQLite in-memory database with Loop table.
 func setupLoopTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	n := loopTestDBCounter.Add(1)
-	dsn := fmt.Sprintf("file:looptest%d?mode=memory&cache=shared", n)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := db.AutoMigrate(&model.Loop{}); err != nil {
-		t.Fatalf("auto migrate: %v", err)
-	}
-	return db
+	return setupTestDBWithModels(t, "looptest", &model.Loop{})
 }
 
 func newTestLoop(t *testing.T, sessionID uuid.UUID) *model.Loop {
