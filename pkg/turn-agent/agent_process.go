@@ -313,6 +313,73 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		return a.handleInterruptExit(turnCtx, turnSpan, exitReason, p.SessionID, turnID)
 
 	default:
+		// Reactive compact: prompt-too-long retry logic.
+		if IsPromptTooLongError(exitReason) && a.cfg.RecoverFromPromptTooLong != nil {
+			maxAttempts := a.cfg.MaxReactiveCompactAttempts
+			recoveryPublished := false
+			for attempt := 1; attempt <= maxAttempts && !recoveryPublished; attempt++ {
+				a.log(turnCtx, LogLevelWarn, "turn.prompt_too_long_recovering", map[string]any{
+					"session_id": p.SessionID,
+					"turn_id":    turnID,
+					"attempt":    attempt,
+					"max":        maxAttempts,
+				})
+
+				// Step 1: call reactive compact callback to compress context.
+				if recoverErr := a.cfg.RecoverFromPromptTooLong(turnCtx, p.SessionID, attempt); recoverErr != nil {
+					a.log(turnCtx, LogLevelError, "turn.reactive_compact_failed", map[string]any{
+						"error": recoverErr.Error(),
+					})
+					break // compression failed, fall through to FailTurn
+				}
+
+				// Step 2: insert "compressing" feedback message.
+				if a.cfg.InsertFeedbackMessage != nil {
+					_ = a.cfg.InsertFeedbackMessage(turnCtx, p.SessionID, turnID,
+						"context",
+						"上下文超出限制",
+						"对话内容太长，系统正在自动压缩后重试。请稍等片刻。",
+						true, "")
+				}
+
+				// Step 3: end current Turn (FailTurn must be before Publish).
+				// Use WithSkipErrorMessage to prevent failTurn callback from
+				// inserting a duplicate error message.
+				a.recordTurnEnd(turnCtx, turnSpan, p.SessionID, turnID, string(p.Kind), turnDuration, "failed", fmt.Errorf("prompt_too_long_recovering"))
+				skipCtx := WithSkipErrorMessage(turnCtx)
+				if err := a.cfg.FailTurn(skipCtx, turnID, exitReason); err != nil {
+					// NOTE: Unlike the normal FailTurn path (below), we log but do NOT
+					// propagate this error. The reactive compact path has already compressed
+					// the context and is about to publish a new work item; stopping here
+					// would waste the compression work and leave the user stuck. The new
+					// Process will create a fresh turn regardless of the old turn's DB state.
+					a.log(turnCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{
+						"error": err.Error(),
+					})
+				}
+
+				// Step 4: publish submit work item to trigger a new Process lifecycle.
+				// Use context.Background() because turnCtx may be cancelled.
+				payload := string(MarshalSubmitPayload(p.SessionID, attempt))
+				if _, err := a.queue.Publish(context.Background(), p.SessionID, payload, 100); err != nil {
+					a.log(turnCtx, LogLevelError, "turn.submit_publish_failed", map[string]any{
+						"error":   err.Error(),
+						"attempt": attempt,
+					})
+					break
+				}
+
+				// Recovery published successfully — set flag so loop condition exits.
+				recoveryPublished = true
+			}
+			if recoveryPublished {
+				// Return nil so rtc-queue marks this work complete; the new Process
+				// (triggered by the published submit work item) handles the retried turn.
+				return nil
+			}
+		}
+
+		// Attempts exhausted or non-prompt-too-long: execute original FailTurn logic.
 		a.recordTurnEnd(turnCtx, turnSpan, p.SessionID, turnID, string(p.Kind), turnDuration, "fail", exitReason)
 		if err := a.cfg.FailTurn(turnCtx, turnID, exitReason); err != nil {
 			a.log(turnCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{

@@ -31,6 +31,11 @@ func New(cfg Config, queue *rtcqueue.Queue, workerID string) (*Agent, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = noopLogger{}
 	}
+	// Default: 3 reactive compact attempts when recovery is enabled but the
+	// caller did not set an explicit limit.
+	if cfg.RecoverFromPromptTooLong != nil && cfg.MaxReactiveCompactAttempts <= 0 {
+		cfg.MaxReactiveCompactAttempts = 3
+	}
 	a := &Agent{
 		cfg:      cfg,
 		queue:    queue,
