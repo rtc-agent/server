@@ -103,8 +103,17 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		Loops:   summaries,
 		HasMore: hasMore,
 	}
+	resultJSON := mustMarshalJSON(result)
 
-	if err := publishLoopToolMessages(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "list_loops", argumentsInJSON, result); err != nil {
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "list_loops",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
 		return "", fmt.Errorf("list_loops: publish messages: %w", err)
 	}
 
@@ -113,5 +122,5 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		"count":      len(summaries),
 	})
 
-	return mustMarshalJSON(result), nil
+	return resultJSON, nil
 }

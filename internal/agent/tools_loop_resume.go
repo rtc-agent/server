@@ -30,8 +30,8 @@ type resumeLoopResult struct {
 
 func (t *resumeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "resume_loop",
-		Desc: resumeLoopDesc,
+		Name:        "resume_loop",
+		Desc:        resumeLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{}),
 	}, nil
 }
@@ -64,15 +64,10 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	}
 
 	// Check for active goal (mutual exclusion).
-	if t.helpers.deps.GoalRepo != nil {
-		activeGoal, err := t.helpers.deps.GoalRepo.FindActive(ctx, t.session.ID)
-		if err != nil {
-			return "", fmt.Errorf("resume_loop: find active goal: %w", err)
-		}
-		if activeGoal != nil {
-			return fmt.Sprintf("Error: an active goal exists (id=%s). Loop and goal cannot be active simultaneously. Complete or cancel the goal first.",
-				activeGoal.ID.String()), nil
-		}
+	if conflictMsg, err := checkGoalLoopMutualExclusion(ctx, t.helpers.deps, t.session.ID, "loop"); err != nil {
+		return "", fmt.Errorf("resume_loop: %w", err)
+	} else if conflictMsg != "" {
+		return conflictMsg, nil
 	}
 
 	if err := t.helpers.deps.LoopRepo.Update(ctx, pausedLoop.ID, map[string]any{
@@ -88,8 +83,17 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		CompletedTurns: pausedLoop.CompletedTurns,
 		MaxTurns:       pausedLoop.MaxTurns,
 	}
+	resultJSON := mustMarshalJSON(result)
 
-	if err := publishLoopToolMessages(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "resume_loop", argumentsInJSON, result); err != nil {
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "resume_loop",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
 		return "", fmt.Errorf("resume_loop: publish messages: %w", err)
 	}
 
@@ -98,5 +102,5 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		"loop_id":    pausedLoop.ID.String(),
 	})
 
-	return mustMarshalJSON(result), nil
+	return resultJSON, nil
 }

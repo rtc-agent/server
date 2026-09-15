@@ -2,17 +2,13 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
-	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
 )
@@ -174,104 +170,18 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		StoppedSessions: stopped,
 		TotalStopped:    len(stopped),
 	}
-	resultJSON, err := json.Marshal(result)
-	if err != nil {
-		return "", fmt.Errorf("stop_sub_agent: marshal result: %w", err)
-	}
-	resultStr := string(resultJSON)
+	resultJSON := mustMarshalJSON(result)
 
-	// 10. Get tool_call_id.
-	callID := compose.GetToolCallID(ctx)
-	if callID == "" {
-		return "", fmt.Errorf("stop_sub_agent: tool_call_id not set in context")
-	}
-
-	turnUUID := t.turnID
-	if turnUUID == uuid.Nil {
-		return "", fmt.Errorf("stop_sub_agent: turn UUID is nil")
-	}
-
-	// 11. Create toolcall_input + toolcall_output messages and publish.
-	toolCallData := protocol.ToolCall{
-		Id:       protocol.UUID(callID),
-		ToolName: "stop_sub_agent",
-		Input:    argumentsInJSON,
-	}
-	inputContent := protocol.ContentData{
-		Type: protocol.ContentTypeToolCallInput,
-		Data: toolCallData,
-	}
-
-	completedStatus := "completed"
-	outputToolCall := protocol.ToolCall{
-		Id:       protocol.UUID(callID),
-		ToolName: "stop_sub_agent",
-		Input:    argumentsInJSON,
-		Output:   &resultStr,
-		Status:   &completedStatus,
-	}
-	outputContent := protocol.ContentData{
-		Type: protocol.ContentTypeToolCallOutput,
-		Data: outputToolCall,
-	}
-
-	var inputMsgID, outputMsgID uuid.UUID
-
-	_, err = t.helpers.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
-		// Create toolcall_input message.
-		inputMsg, createErr := primitives.CreateMessage(
-			txCtx, t.helpers.deps,
-			t.session.ID, &turnUUID,
-			protocol.MessageRoleTool,
-			usecase.SystemCreator{},
-			inputContent,
-			protocol.MessageStreamingCompleted,
-			"",  // system-generated
-			nil, // no parent
-		)
-		if createErr != nil {
-			return nil, fmt.Errorf("create toolcall_input: %w", createErr)
-		}
-		inputMsgID = inputMsg.ID
-
-		// Create toolcall_output message (parent = toolcall_input).
-		outputMsg, createErr := primitives.CreateMessage(
-			txCtx, t.helpers.deps,
-			t.session.ID, &turnUUID,
-			protocol.MessageRoleTool,
-			usecase.SystemCreator{},
-			outputContent,
-			protocol.MessageStreamingCompleted,
-			"",          // system-generated
-			&inputMsgID, // parent points to toolcall_input
-		)
-		if createErr != nil {
-			return nil, fmt.Errorf("create toolcall_output: %w", createErr)
-		}
-		outputMsgID = outputMsg.ID
-
-		// Build publish items.
-		ch := channel.UserTopic(t.session.OwnerRefID)
-		updateItems := []updates.UpdatePublishItem{
-			{
-				Channel: ch,
-				Items: []protocol.UpdateItem{
-					{
-						Entity:   protocol.EntityMessage,
-						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(inputMsgID.String()),
-					},
-					{
-						Entity:   protocol.EntityMessage,
-						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(outputMsgID.String()),
-					},
-				},
-			},
-		}
-		return updateItems, nil
-	})
-	if err != nil {
+	// 10. Publish toolcall_input + toolcall_output messages.
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "stop_sub_agent",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
 		return "", fmt.Errorf("stop_sub_agent: publish messages: %w", err)
 	}
 
@@ -279,9 +189,7 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		"session_id":     t.session.ID.String(),
 		"target_session": subSessionID.String(),
 		"total_stopped":  len(stopped),
-		"input_msg_id":   inputMsgID.String(),
-		"output_msg_id":  outputMsgID.String(),
 	})
 
-	return resultStr, nil
+	return resultJSON, nil
 }

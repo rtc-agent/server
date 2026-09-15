@@ -2,19 +2,12 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/updates"
-	"github.com/rtc-agent/server/internal/usecase"
-	"github.com/rtc-agent/server/internal/usecase/primitives"
-	"github.com/rtc-agent/server/pkg/protocol"
 )
 
 // defaultGoalMaxTurns is the fixed max_turns for create_goal.
@@ -78,15 +71,10 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	}
 
 	// 2. Check for existing active loop (mutual exclusion).
-	if t.helpers.deps.LoopRepo != nil {
-		activeLoop, err := t.helpers.deps.LoopRepo.FindActive(ctx, t.session.ID)
-		if err != nil {
-			return "", fmt.Errorf("create_goal: find active loop: %w", err)
-		}
-		if activeLoop != nil {
-			return fmt.Sprintf("Error: an active loop exists (id=%s). Goal and loop cannot be active simultaneously. Complete or cancel the loop first.",
-				activeLoop.ID.String()), nil
-		}
+	if conflictMsg, err := checkGoalLoopMutualExclusion(ctx, t.helpers.deps, t.session.ID, "goal"); err != nil {
+		return "", fmt.Errorf("create_goal: %w", err)
+	} else if conflictMsg != "" {
+		return conflictMsg, nil
 	}
 
 	// 3. Create the goal.
@@ -102,7 +90,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return "", fmt.Errorf("create_goal: create: %w", err)
 	}
 
-	// 3. Build result + publish two messages (toolcall_input + toolcall_output).
+	// 4. Build result + publish two messages (toolcall_input + toolcall_output).
 	result := createGoalResult{
 		ID:             goal.ID.String(),
 		Condition:      goal.Condition,
@@ -110,8 +98,17 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		MaxTurns:       goal.MaxTurns,
 		CompletedTurns: goal.CompletedTurns,
 	}
+	resultJSON := mustMarshalJSON(result)
 
-	if err := publishGoalToolMessages(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "create_goal", argumentsInJSON, result); err != nil {
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "create_goal",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
 		return "", fmt.Errorf("create_goal: publish messages: %w", err)
 	}
 
@@ -121,7 +118,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		"condition":  goal.Condition,
 	})
 
-	return mustMarshalJSON(result), nil
+	return resultJSON, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -192,8 +189,17 @@ func (t *completeGoalTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		Reason:         args.Reason,
 		CompletedTurns: goal.CompletedTurns,
 	}
+	resultJSON := mustMarshalJSON(result)
 
-	if err := publishGoalToolMessages(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "complete_goal", argumentsInJSON, result); err != nil {
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "complete_goal",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
 		return "", fmt.Errorf("complete_goal: publish messages: %w", err)
 	}
 
@@ -203,7 +209,7 @@ func (t *completeGoalTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		"reason":     args.Reason,
 	})
 
-	return mustMarshalJSON(result), nil
+	return resultJSON, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -274,8 +280,17 @@ func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		Reason:         args.Reason,
 		CompletedTurns: goal.CompletedTurns,
 	}
+	resultJSON := mustMarshalJSON(result)
 
-	if err := publishGoalToolMessages(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "cancel_goal", argumentsInJSON, result); err != nil {
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "cancel_goal",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
 		return "", fmt.Errorf("cancel_goal: publish messages: %w", err)
 	}
 
@@ -285,120 +300,5 @@ func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		"reason":     args.Reason,
 	})
 
-	return mustMarshalJSON(result), nil
-}
-
-// ---------------------------------------------------------------------------
-// shared helpers
-// ---------------------------------------------------------------------------
-
-// publishGoalToolMessages creates the toolcall_input + toolcall_output messages
-// for a goal tool invocation and publishes them (with EntityMessage.created events)
-// in a single transaction. Mirrors the pattern in stopSubAgentTool.
-//
-// ownerRefID is the session owner's reference ID, used to build the Centrifuge
-// user topic for the publish events.
-func publishGoalToolMessages(
-	ctx context.Context,
-	h *helpers,
-	sessionID uuid.UUID,
-	ownerRefID string,
-	turnID uuid.UUID,
-	toolName string,
-	argumentsInJSON string,
-	result any,
-) error {
-	resultJSON := mustMarshalJSON(result)
-	completedStatus := "completed"
-
-	callID := compose.GetToolCallID(ctx)
-	if callID == "" {
-		return fmt.Errorf("%s: tool_call_id not set in context", toolName)
-	}
-	if turnID == uuid.Nil {
-		return fmt.Errorf("%s: turn UUID is nil", toolName)
-	}
-
-	inputToolCall := protocol.ToolCall{
-		Id:       protocol.UUID(callID),
-		ToolName: toolName,
-		Input:    argumentsInJSON,
-	}
-	inputContent := protocol.ContentData{
-		Type: protocol.ContentTypeToolCallInput,
-		Data: inputToolCall,
-	}
-
-	outputToolCall := protocol.ToolCall{
-		Id:       protocol.UUID(callID),
-		ToolName: toolName,
-		Input:    argumentsInJSON,
-		Output:   &resultJSON,
-		Status:   &completedStatus,
-	}
-	outputContent := protocol.ContentData{
-		Type: protocol.ContentTypeToolCallOutput,
-		Data: outputToolCall,
-	}
-
-	_, err := h.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
-		inputMsg, createErr := primitives.CreateMessage(
-			txCtx, h.deps,
-			sessionID, &turnID,
-			protocol.MessageRoleTool,
-			usecase.SystemCreator{},
-			inputContent,
-			protocol.MessageStreamingCompleted,
-			"",  // system-generated
-			nil, // no parent
-		)
-		if createErr != nil {
-			return nil, fmt.Errorf("create toolcall_input: %w", createErr)
-		}
-		inputMsgID := inputMsg.ID
-
-		outputMsg, createErr := primitives.CreateMessage(
-			txCtx, h.deps,
-			sessionID, &turnID,
-			protocol.MessageRoleTool,
-			usecase.SystemCreator{},
-			outputContent,
-			protocol.MessageStreamingCompleted,
-			"",          // system-generated
-			&inputMsgID, // parent = toolcall_input
-		)
-		if createErr != nil {
-			return nil, fmt.Errorf("create toolcall_output: %w", createErr)
-		}
-
-		ch := channel.UserTopic(ownerRefID)
-		updateItems := []updates.UpdatePublishItem{
-			{
-				Channel: ch,
-				Items: []protocol.UpdateItem{
-					{
-						Entity:   protocol.EntityMessage,
-						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(inputMsgID.String()),
-					},
-					{
-						Entity:   protocol.EntityMessage,
-						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(outputMsg.ID.String()),
-					},
-				},
-			},
-		}
-		return updateItems, nil
-	})
-	return err
-}
-
-// mustMarshalJSON marshals v to JSON, panicking on error (programmer error).
-func mustMarshalJSON(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(fmt.Errorf("marshal json: %w", err))
-	}
-	return string(b)
+	return resultJSON, nil
 }

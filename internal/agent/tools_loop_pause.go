@@ -30,8 +30,8 @@ type pauseLoopResult struct {
 
 func (t *pauseLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "pause_loop",
-		Desc: pauseLoopDesc,
+		Name:        "pause_loop",
+		Desc:        pauseLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{}),
 	}, nil
 }
@@ -54,17 +54,7 @@ func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	}
 
 	// Cancel the scheduled task if TaskScheduler is available.
-	if t.helpers.deps.TaskScheduler != nil && loop.AsynqTaskID != "" {
-		if cancelErr := t.helpers.deps.TaskScheduler.Cancel(ctx, loop.AsynqTaskID); cancelErr != nil {
-			t.helpers.logger.Info(ctx, "pauseLoop.cancel_task_failed", map[string]any{
-				"loop_id": loop.ID.String(),
-				"task_id": loop.AsynqTaskID,
-				"error":   cancelErr.Error(),
-			})
-			// Continue with pause even if task cancellation fails.
-		}
-		updateFields["asynq_task_id"] = ""
-	}
+	cancelLoopAsynqTask(ctx, t.helpers.deps, t.helpers.logger, loop, updateFields)
 
 	if err := t.helpers.deps.LoopRepo.Update(ctx, loop.ID, updateFields); err != nil {
 		return "", fmt.Errorf("pause_loop: update: %w", err)
@@ -77,8 +67,17 @@ func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		CompletedTurns: loop.CompletedTurns,
 		MaxTurns:       loop.MaxTurns,
 	}
+	resultJSON := mustMarshalJSON(result)
 
-	if err := publishLoopToolMessages(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "pause_loop", argumentsInJSON, result); err != nil {
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "pause_loop",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
 		return "", fmt.Errorf("pause_loop: publish messages: %w", err)
 	}
 
@@ -87,5 +86,5 @@ func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		"loop_id":    loop.ID.String(),
 	})
 
-	return mustMarshalJSON(result), nil
+	return resultJSON, nil
 }

@@ -69,17 +69,7 @@ func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	}
 
 	// Cancel the scheduled task if TaskScheduler is available.
-	if t.helpers.deps.TaskScheduler != nil && loop.AsynqTaskID != "" {
-		if cancelErr := t.helpers.deps.TaskScheduler.Cancel(ctx, loop.AsynqTaskID); cancelErr != nil {
-			t.helpers.logger.Info(ctx, "cancelLoop.cancel_task_failed", map[string]any{
-				"loop_id": loop.ID.String(),
-				"task_id": loop.AsynqTaskID,
-				"error":   cancelErr.Error(),
-			})
-			// Continue with cancellation even if task cancellation fails.
-		}
-		updateFields["asynq_task_id"] = ""
-	}
+	cancelLoopAsynqTask(ctx, t.helpers.deps, t.helpers.logger, loop, updateFields)
 
 	if err := t.helpers.deps.LoopRepo.Update(ctx, loop.ID, updateFields); err != nil {
 		return "", fmt.Errorf("cancel_loop: update: %w", err)
@@ -92,8 +82,17 @@ func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		Reason:         args.Reason,
 		CompletedTurns: loop.CompletedTurns,
 	}
+	resultJSON := mustMarshalJSON(result)
 
-	if err := publishLoopToolMessages(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "cancel_loop", argumentsInJSON, result); err != nil {
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "cancel_loop",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
 		return "", fmt.Errorf("cancel_loop: publish messages: %w", err)
 	}
 
@@ -103,7 +102,7 @@ func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		"reason":     args.Reason,
 	})
 
-	return mustMarshalJSON(result), nil
+	return resultJSON, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -165,17 +164,7 @@ func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	}
 
 	// Cancel the scheduled task if TaskScheduler is available.
-	if t.helpers.deps.TaskScheduler != nil && loop.AsynqTaskID != "" {
-		if cancelErr := t.helpers.deps.TaskScheduler.Cancel(ctx, loop.AsynqTaskID); cancelErr != nil {
-			t.helpers.logger.Info(ctx, "completeLoop.cancel_task_failed", map[string]any{
-				"loop_id": loop.ID.String(),
-				"task_id": loop.AsynqTaskID,
-				"error":   cancelErr.Error(),
-			})
-			// Continue with completion even if task cancellation fails.
-		}
-		updateFields["asynq_task_id"] = ""
-	}
+	cancelLoopAsynqTask(ctx, t.helpers.deps, t.helpers.logger, loop, updateFields)
 
 	if err := t.helpers.deps.LoopRepo.Update(ctx, loop.ID, updateFields); err != nil {
 		return "", fmt.Errorf("complete_loop: update: %w", err)
@@ -188,8 +177,17 @@ func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		Reason:         args.Reason,
 		CompletedTurns: loop.CompletedTurns,
 	}
+	resultJSON := mustMarshalJSON(result)
 
-	if err := publishLoopToolMessages(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "complete_loop", argumentsInJSON, result); err != nil {
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "complete_loop",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
 		return "", fmt.Errorf("complete_loop: publish messages: %w", err)
 	}
 
@@ -199,5 +197,5 @@ func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		"reason":     args.Reason,
 	})
 
-	return mustMarshalJSON(result), nil
+	return resultJSON, nil
 }
