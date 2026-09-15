@@ -132,6 +132,63 @@ groups:
           summary: "Script 执行延迟过高"
           description: "Script 执行 P95 延迟超过 30 秒，当前值: {{ $value }}s"
 
+  - name: error-feedback-alerts
+    rules:
+      # Stale turn 恢复触发
+      - alert: StaleTurnRecoveryActive
+        expr: rate(rtc_recovery_stale_turns_recovered_total{job="rtc-agent-server"}[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stale turn 自动恢复已触发"
+          description: "过去 15 分钟内有 stale turn 被自动恢复，当前速率: {{ $value | humanize }}/s"
+
+      # Stale turn 恢复速率异常（可能存在大量 turn 卡死）
+      - alert: StaleTurnRecoveryHighRate
+        expr: rate(rtc_recovery_stale_turns_recovered_total{job="rtc-agent-server"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stale turn 恢复速率异常 (>6/分钟)"
+          description: "过去 5 分钟内平均每秒恢复超过 0.1 个 stale turn，可能存在系统性问题"
+
+      # 错误消息创建速率突增（依赖 error_feedback metrics，待 Phase 2 实现后生效）
+      - alert: ErrorMessageRateSpike
+        expr: rate(rtc_error_messages_created_total{job="rtc-agent-server"}[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "错误消息创建速率异常 (>30/小时)"
+          description: "过去 5 分钟内错误消息创建速率超过 0.5/秒，可能存在大量错误"
+
+      # Reactive compact 3 级全部失败（依赖 error_feedback metrics，待实现后生效）
+      - alert: ReactiveCompactExhausted
+        expr: |
+          (rate(rtc_reactive_compact_operations_total{job="rtc-agent-server",level="3",status="failed"}[10m]) > 0)
+          or (rate(rtc_error_messages_created_total{job="rtc-agent-server",category="context"}[10m]) > 0.1)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Reactive compact 3 级压缩全部失败或上下文错误频繁"
+          description: "Reactive compact level-3 失败，或上下文类错误消息速率 > 0.1/s，系统可能无法自动恢复上下文溢出"
+
+      # 错误反馈 SLA 违反（依赖 error_feedback metrics，待实现后生效）
+      - alert: ErrorFeedbackSLABreach
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (rate(rtc_error_message_display_latency_seconds_bucket{job="rtc-agent-server"}[5m]))
+          ) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "错误反馈 P99 延迟超过 10 秒 SLA"
+          description: "从错误发生到用户可见的延迟过高，当前 P99: {{ $value | humanizeDuration }}"
+
   - name: infra-alerts
     rules:
       - alert: PostgresDown

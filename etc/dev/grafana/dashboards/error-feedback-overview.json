@@ -1,0 +1,107 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "错误消息概览",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "title": "错误消息创建速率 (by category)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "stacking": { "mode": "normal" } },
+      "targets": [{
+        "expr": "rate(rtc_error_messages_created_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{category}}"
+      }]
+    },
+    {
+      "title": "错误消息总数 (24h)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "increase(rtc_error_messages_created_total{job=\"rtc-agent-server\"}[24h])",
+        "legendFormat": "{{category}}"
+      }]
+    },
+    {
+      "title": "按分类的错误分布 (24h)",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "sum by (category) (increase(rtc_error_messages_created_total{job=\"rtc-agent-server\"}[24h]))",
+        "legendFormat": "{{category}}"
+      }]
+    },
+    {
+      "title": "错误反馈 P99 延迟",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "p99" }, "properties": [{ "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 10 }] } }] }
+      ] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(rtc_error_message_display_latency_seconds_bucket{job=\"rtc-agent-server\"}[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(rtc_error_message_display_latency_seconds_bucket{job=\"rtc-agent-server\"}[5m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(rtc_error_message_display_latency_seconds_bucket{job=\"rtc-agent-server\"}[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Reactive Compact",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "collapsed": false
+    },
+    {
+      "title": "Reactive Compact 操作速率 (by level, status)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [
+        { "matcher": { "id": "byRegexp", "options": ".*failed.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+      ] },
+      "targets": [{
+        "expr": "rate(rtc_reactive_compact_operations_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "level={{level}} {{status}}"
+      }]
+    },
+    {
+      "title": "上下文错误速率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "context" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
+      ] },
+      "targets": [{
+        "expr": "rate(rtc_error_messages_created_total{job=\"rtc-agent-server\",category=\"context\"}[5m])",
+        "legendFormat": "context errors"
+      }]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["rtc-agent", "error-feedback"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Error Feedback Overview",
+  "uid": "error-feedback-overview",
+  "version": 1
+}

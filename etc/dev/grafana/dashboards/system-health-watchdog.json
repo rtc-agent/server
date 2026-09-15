@@ -1,0 +1,109 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Watchdog 监控",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "title": "Stale Turn 恢复速率 (by status)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "stacking": { "mode": "normal" } },
+      "targets": [{
+        "expr": "rate(rtc_recovery_stale_turns_recovered_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{status}}"
+      }]
+    },
+    {
+      "title": "Stale Turn 累计恢复数",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "sum by (status) (rtc_recovery_stale_turns_recovered_total{job=\"rtc-agent-server\"})",
+        "legendFormat": "{{status}}"
+      }]
+    },
+    {
+      "type": "row",
+      "title": "Interrupted Turns",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false
+    },
+    {
+      "title": "Interrupt 事件速率 (by reason)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(rtc_interrupt_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{reason}}"
+      }]
+    },
+    {
+      "title": "Interrupt 累计次数",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "sum by (reason) (rtc_interrupt_total{job=\"rtc-agent-server\"})",
+        "legendFormat": "{{reason}}"
+      }]
+    },
+    {
+      "type": "row",
+      "title": "Checkpoint 健康度",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "collapsed": false
+    },
+    {
+      "title": "Checkpoint 失败速率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "save error" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+        { "matcher": { "id": "byName", "options": "load error" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
+      ] },
+      "targets": [{
+        "expr": "rate(rtc_checkpoint_operations_total{job=\"rtc-agent-server\",status=\"error\"}[5m])",
+        "legendFormat": "{{operation}} error"
+      }]
+    },
+    {
+      "title": "Checkpoint 成功率",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 90 }, { "color": "green", "value": 99 }] } }, "overrides": [] },
+      "targets": [{
+        "expr": "sum(rate(rtc_checkpoint_operations_total{job=\"rtc-agent-server\",status=\"success\"}[5m])) / sum(rate(rtc_checkpoint_operations_total{job=\"rtc-agent-server\"}[5m])) * 100",
+        "legendFormat": "success rate"
+      }]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["rtc-agent", "watchdog", "health"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "System Health Watchdog",
+  "uid": "system-health-watchdog",
+  "version": 1
+}
