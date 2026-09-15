@@ -3,33 +3,19 @@ package repo
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/model"
 )
 
-var testDBCounter atomic.Int64
-
 // setupTestDB creates a SQLite in-memory database with ScriptExecution table.
 // Each call uses a unique DB name so parallel tests don't collide.
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	n := testDBCounter.Add(1)
-	dsn := fmt.Sprintf("file:test%d?mode=memory&cache=shared", n)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := db.AutoMigrate(&model.ScriptExecution{}); err != nil {
-		t.Fatalf("auto migrate: %v", err)
-	}
-	return db
+	return setupTestDBWithModels(t, "test", &model.ScriptExecution{})
 }
 
 func newTestScriptExecution(t *testing.T) *model.ScriptExecution {

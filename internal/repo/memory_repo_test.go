@@ -4,34 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/pkg/memory"
 )
 
-var memoryTestDBCounter atomic.Int64
-
 // setupMemoryTestDB creates a SQLite in-memory database with Memory + MemoryLink tables.
 func setupMemoryTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	n := memoryTestDBCounter.Add(1)
-	dsn := fmt.Sprintf("file:memtest%d?mode=memory&cache=shared", n)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := db.AutoMigrate(&memory.Memory{}, &memory.MemoryLink{}); err != nil {
-		t.Fatalf("auto migrate: %v", err)
-	}
-	return db
+	return setupTestDBWithModels(t, "memtest", &memory.Memory{}, &memory.MemoryLink{})
 }
 
 func newTestMemoryRecord(t *testing.T, scope memory.ScopeType, scopeID uuid.UUID, memType string) *memory.Memory {

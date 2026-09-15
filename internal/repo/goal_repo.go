@@ -65,15 +65,7 @@ func (r *goalRepo) FindActive(ctx context.Context, sessionID uuid.UUID) (*model.
 }
 
 func (r *goalRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]any) error {
-	// 终态时自动填充 completed_at
-	if _, ok := fields["status"]; ok {
-		status, _ := fields["status"].(string)
-		if (status == string(model.GoalStatusCompleted) ||
-			status == string(model.GoalStatusCancelled) ||
-			status == string(model.GoalStatusExhausted)) && fields["completed_at"] == nil {
-			fields["completed_at"] = gorm.Expr("NOW()")
-		}
-	}
+	autoFillCompletedAt(fields, goalTerminalStatuses)
 	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Goal{}).Where("id = ?", id).Updates(fields)
 	if result.Error != nil {
 		return fmt.Errorf("update goal %s: %w", id, result.Error)

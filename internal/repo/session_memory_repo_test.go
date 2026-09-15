@@ -3,35 +3,21 @@ package repo
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/model"
 )
 
-var sessionMemoryTestDBCounter atomic.Int64
-
 // setupSessionMemoryTestDB creates a SQLite in-memory database with SessionMemory table.
 // Each call uses a unique DB name so parallel tests don't collide.
 func setupSessionMemoryTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	n := sessionMemoryTestDBCounter.Add(1)
-	dsn := fmt.Sprintf("file:smtest%d?mode=memory&cache=shared", n)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := db.AutoMigrate(&model.SessionMemory{}); err != nil {
-		t.Fatalf("auto migrate: %v", err)
-	}
-	return db
+	return setupTestDBWithModels(t, "smtest", &model.SessionMemory{})
 }
 
 func newTestSessionMemoryRepo(db *gorm.DB) SessionMemoryRepo {

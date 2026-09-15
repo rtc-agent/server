@@ -72,15 +72,7 @@ func (r *loopRepo) FindActive(ctx context.Context, sessionID uuid.UUID) (*model.
 }
 
 func (r *loopRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]any) error {
-	// 终态时自动填充 completed_at
-	if _, ok := fields["status"]; ok {
-		status, _ := fields["status"].(string)
-		if (status == string(model.LoopStatusCompleted) ||
-			status == string(model.LoopStatusCancelled) ||
-			status == string(model.LoopStatusExhausted)) && fields["completed_at"] == nil {
-			fields["completed_at"] = gorm.Expr("NOW()")
-		}
-	}
+	autoFillCompletedAt(fields, loopTerminalStatuses)
 	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Loop{}).Where("id = ?", id).Updates(fields)
 	if result.Error != nil {
 		return fmt.Errorf("update loop %s: %w", id, result.Error)

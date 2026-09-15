@@ -61,13 +61,13 @@ func ToProtocolRtc(r *Rtc) protocol.Rtc {
 	}
 	result := protocol.Rtc{
 		Id:           protocol.UUID(r.ID.String()),
-		ClientId:     strPtr(r.ClientID),
+		ClientId:     StrPtr(r.ClientID),
 		SessionId:    protocol.UUID(r.SessionID.String()),
 		TurnId:       protocol.UUID(r.TurnID.String()),
 		Offset:       r.Offset,
 		ToolName:     r.ToolName,
 		Status:       protocol.RtcStatus(r.Status),
-		ErrorMessage: strPtr(r.ErrorMessage),
+		ErrorMessage: StrPtr(r.ErrorMessage),
 		CreatedAt:    r.CreatedAt,
 		UpdatedAt:    r.UpdatedAt,
 		CompletedAt:  r.CompletedAt,

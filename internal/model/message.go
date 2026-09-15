@@ -84,7 +84,7 @@ func ToProtocolMessage(m *Message) protocol.Message {
 	}
 	result := protocol.Message{
 		Id:              protocol.UUID(m.ID.String()),
-		ClientId:        strPtr(m.ClientID),
+		ClientId:        StrPtr(m.ClientID),
 		SessionId:       protocol.UUID(m.SessionID.String()),
 		GlobalOffset:    m.GlobalOffset,
 		TurnOffset:      m.TurnOffset,

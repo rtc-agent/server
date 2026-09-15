@@ -174,13 +174,13 @@ func ToProtocolSession(m *Session) protocol.Session {
 	}
 	return protocol.Session{
 		Id:                      protocol.UUID(m.ID.String()),
-		ClientId:                strPtr(m.ClientID),
+		ClientId:                StrPtr(m.ClientID),
 		OwnerKind:               m.OwnerKind,
 		OwnerRefId:              m.OwnerRefID,
-		DeviceId:                strPtr(m.DeviceID),
-		Title:                   strPtr(m.Title),
+		DeviceId:                StrPtr(m.DeviceID),
+		Title:                   StrPtr(m.Title),
 		Status:                  protocol.SessionStatus(m.Status),
-		AgentPrompt:             strPtr(m.AgentPrompt),
+		AgentPrompt:             StrPtr(m.AgentPrompt),
 		TodoList:                todoList,
 		ParentClientSessionId:   parentClientSessionID,
 		ParentServerSessionId:   parentServerSessionID,

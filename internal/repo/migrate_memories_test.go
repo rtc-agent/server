@@ -2,47 +2,27 @@ package repo
 
 import (
 	"context"
-	"fmt"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/memory"
 )
 
-var migrateTestDBCounter atomic.Int64
-
 // setupMigrateTestDB creates a SQLite in-memory database with both old and new tables.
 func setupMigrateTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	n := migrateTestDBCounter.Add(1)
-	dsn := fmt.Sprintf("file:migratetest%d?mode=memory&cache=shared", n)
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	// Migrate old tables
-	if err := db.AutoMigrate(
+	return setupTestDBWithModels(t, "migratetest",
 		&model.SessionMemory{},
 		&model.UserMemory{},
-	); err != nil {
-		t.Fatalf("migrate old tables: %v", err)
-	}
-	// Migrate new tables
-	if err := db.AutoMigrate(
 		&memory.Memory{},
 		&memory.MemoryLink{},
-	); err != nil {
-		t.Fatalf("migrate new tables: %v", err)
-	}
-	return db
+	)
 }
 
 func TestMigrateToUnifiedMemory_SessionMemories(t *testing.T) {

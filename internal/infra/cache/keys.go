@@ -51,6 +51,11 @@ const (
 	PrefixSessionRtcOffset = "session:rtc_offset:"
 
 	// ========== Worker 管理相关前缀 ==========
+	//
+	// 注意：以下 5 个 Worker 前缀常量的值均为 "worker:"，它们共享同一根前缀。
+	// 区分不同数据类型（info / sessions / queue / background / bg_last_id）
+	// 依赖于构造函数中拼接的后缀（如 ":sessions"、":queue" 等）。
+	// 这些常量作为公共根前缀存在，主要用于文档化和全局检索。
 
 	// PrefixWorkerInfo Worker 信息 Hash 前缀
 	// 完整 key: worker:{workerID}
