@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/felixge/httpsnoop"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -53,27 +54,20 @@ var (
 	)
 )
 
-// metricsResponseWriter 包装 http.ResponseWriter 以捕获状态码和写入字节数。
-type metricsResponseWriter struct {
-	http.ResponseWriter
-	code    int
-	written int
-}
-
-func (w *metricsResponseWriter) WriteHeader(code int) {
-	w.code = code
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w *metricsResponseWriter) Write(b []byte) (int, error) {
-	n, err := w.ResponseWriter.Write(b)
-	w.written += n
-	return n, err
-}
-
 // HTTPMetrics 返回一个 Prometheus HTTP 指标中间件。
-// 自定义实现（不依赖 promhttp.InstrumentHandler*），避免 label 校验限制。
-// 指标名与 grafana/dashboards/http-server.json 面板对齐。
+//
+// 使用 github.com/felixge/httpsnoop 透明包装 http.ResponseWriter，
+// 确保所有 ResponseWriter 接口（http.Hijacker、http.Flusher、http.Pusher 等）
+// 都被正确保留，避免 WebSocket 升级或流式响应因接口断言失败。
+//
+// 捕获的指标：
+//   - http_requests_total        请求计数（按 method/handler/code 分组）
+//   - http_request_duration_seconds 请求延迟分布
+//   - http_request_size_bytes    请求体大小分布
+//   - http_response_size_bytes   响应体大小分布
+//   - http_in_flight_requests    并发请求数
+//
+// 跳过 /healthz、/metrics 和 WebSocket 升级请求，避免噪音。
 func HTTPMetrics() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -99,23 +93,26 @@ func HTTPMetrics() func(http.Handler) http.Handler {
 			}
 
 			start := time.Now()
-			rw := &metricsResponseWriter{ResponseWriter: w, code: http.StatusOK}
 
-			next.ServeHTTP(rw, r)
+			// 使用 httpsnoop 透明包装 ResponseWriter，
+			// 保留 Hijacker/Flusher/Pusher 等所有接口。
+			wrapped := httpsnoop.CaptureMetrics(next, w, r)
 
+			code := wrapped.Code
+			written := wrapped.Written
 			duration := time.Since(start).Seconds()
 			handler := r.URL.Path
-			code := strconv.Itoa(rw.code)
+			codeStr := strconv.Itoa(code)
 
 			// 请求计数
-			httpRequestsTotal.WithLabelValues(r.Method, handler, code).Inc()
+			httpRequestsTotal.WithLabelValues(r.Method, handler, codeStr).Inc()
 
 			// 延迟
 			httpRequestDuration.WithLabelValues(handler).Observe(duration)
 
 			// 响应大小
-			if rw.written > 0 {
-				httpResponseSize.Observe(float64(rw.written))
+			if written > 0 {
+				httpResponseSize.Observe(float64(written))
 			}
 		})
 	}

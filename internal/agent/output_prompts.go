@@ -6,7 +6,7 @@
 //
 // Convention:
 //   - .md        — static text, no template variables (rendered via renderStatic)
-//   - .md.tmpl   — contains {{.Field}} placeholders (rendered via mustRenderTemplate)
+//   - .md.tmpl   — contains {{.Field}} placeholders (rendered via templateutil.MustRender)
 //
 // Naming convention:
 //   - Variables: <name>Tmpl (e.g. toolErrorTmpl, askUserResultTmpl)
@@ -114,23 +114,8 @@ var searchResultsListTmpl string
 // Rendering helpers
 // =============================================================================
 
-// mustRenderTemplate parses and executes a text/template string with the given
-// data. On error, it logs the failure and returns a descriptive fallback
-// string instead of panicking — templates are embedded at compile time so a
-// failure here indicates a programmer error, but we degrade gracefully rather
-// than crash the process.
-//
-// This is the shared render core used by output, workflow, and attachment
-// template accessors. Callers that need custom template functions (e.g. the
-// attachment "trunc" helper) should use renderAttachmentTemplate instead.
-//
-// Delegates to templateutil.MustRender for the actual rendering.
-func mustRenderTemplate(name, tmplStr string, data any) string {
-	return templateutil.MustRender(name, tmplStr, data)
-}
-
 // renderStatic returns a static template string as-is. It exists for symmetry
-// with mustRenderTemplate and to make call sites self-documenting.
+// with templateutil.MustRender and to make call sites self-documenting.
 func renderStatic(tmplStr string) string {
 	return tmplStr
 }
@@ -142,26 +127,26 @@ func renderStatic(tmplStr string) string {
 // --- formatToolCallOutput helpers ---
 
 func formatToolError(toolName, output string) string {
-	return mustRenderTemplate("tool-error", toolErrorTmpl, map[string]any{
+	return templateutil.MustRender("tool-error", toolErrorTmpl, map[string]any{
 		"ToolName": toolName,
 		"Output":   output,
 	})
 }
 
 func formatToolTimeout(toolName string) string {
-	return mustRenderTemplate("tool-timeout", toolTimeoutTmpl, map[string]any{
+	return templateutil.MustRender("tool-timeout", toolTimeoutTmpl, map[string]any{
 		"ToolName": toolName,
 	})
 }
 
 func formatToolRejected(toolName string) string {
-	return mustRenderTemplate("tool-rejected", toolRejectedTmpl, map[string]any{
+	return templateutil.MustRender("tool-rejected", toolRejectedTmpl, map[string]any{
 		"ToolName": toolName,
 	})
 }
 
 func formatToolPending(toolName, status string) string {
-	return mustRenderTemplate("tool-pending", toolPendingTmpl, map[string]any{
+	return templateutil.MustRender("tool-pending", toolPendingTmpl, map[string]any{
 		"ToolName": toolName,
 		"Status":   status,
 	})
@@ -170,19 +155,19 @@ func formatToolPending(toolName, status string) string {
 // --- Error / system ---
 
 func formatUnknownTool(toolName string) string {
-	return mustRenderTemplate("unknown-tool", unknownToolTmpl, map[string]any{
+	return templateutil.MustRender("unknown-tool", unknownToolTmpl, map[string]any{
 		"ToolName": toolName,
 	})
 }
 
 func formatErrorWrapper(errMsg string) string {
-	return mustRenderTemplate("error-wrapper", errorWrapperTmpl, map[string]any{
+	return templateutil.MustRender("error-wrapper", errorWrapperTmpl, map[string]any{
 		"Error": errMsg,
 	})
 }
 
 func formatParseError(errMsg, preview string) string {
-	return mustRenderTemplate("parse-error", parseErrorTmpl, map[string]any{
+	return templateutil.MustRender("parse-error", parseErrorTmpl, map[string]any{
 		"Error":   errMsg,
 		"Preview": preview,
 	})
@@ -197,7 +182,7 @@ func formatTodoNotification() string {
 // --- Ask user ---
 
 func formatAskUserResultText(answers string) string {
-	return mustRenderTemplate("ask-user-result", askUserResultTmpl, map[string]any{
+	return templateutil.MustRender("ask-user-result", askUserResultTmpl, map[string]any{
 		"Answers": answers,
 	})
 }
@@ -209,7 +194,7 @@ func formatAskUserNoAnswers() string {
 // --- Sub agent ---
 
 func formatSubAgentAsyncResult(sessionID, title string) string {
-	return mustRenderTemplate("sub-agent-async-result", subAgentAsyncResultTmpl, map[string]any{
+	return templateutil.MustRender("sub-agent-async-result", subAgentAsyncResultTmpl, map[string]any{
 		"SessionID": sessionID,
 		"Title":     title,
 	})
@@ -234,7 +219,7 @@ func formatSubAgentNoOutput() string {
 // --- Session memory ---
 
 func formatSessionMemorySaved(id, category, title string) string {
-	return mustRenderTemplate("session-memory-saved", sessionMemorySavedTmpl, map[string]any{
+	return templateutil.MustRender("session-memory-saved", sessionMemorySavedTmpl, map[string]any{
 		"ID":       id,
 		"Category": category,
 		"Title":    title,
@@ -254,7 +239,7 @@ type sessionMemoryItem struct {
 }
 
 func formatSessionMemoriesList(count int, memories []sessionMemoryItem) string {
-	return mustRenderTemplate("session-memories-list", sessionMemoriesListTmpl, map[string]any{
+	return templateutil.MustRender("session-memories-list", sessionMemoriesListTmpl, map[string]any{
 		"Count":    count,
 		"Memories": memories,
 	})
@@ -263,7 +248,7 @@ func formatSessionMemoriesList(count int, memories []sessionMemoryItem) string {
 // --- User memory ---
 
 func formatUserMemorySaved(id, category, importance, title string) string {
-	return mustRenderTemplate("user-memory-saved", userMemorySavedTmpl, map[string]any{
+	return templateutil.MustRender("user-memory-saved", userMemorySavedTmpl, map[string]any{
 		"ID":         id,
 		"Category":   category,
 		"Importance": importance,
@@ -272,13 +257,13 @@ func formatUserMemorySaved(id, category, importance, title string) string {
 }
 
 func formatUserMemoryUpdated(memoryID string) string {
-	return mustRenderTemplate("user-memory-updated", userMemoryUpdatedTmpl, map[string]any{
+	return templateutil.MustRender("user-memory-updated", userMemoryUpdatedTmpl, map[string]any{
 		"MemoryID": memoryID,
 	})
 }
 
 func formatUserMemoryDeleted(memoryID string) string {
-	return mustRenderTemplate("user-memory-deleted", userMemoryDeletedTmpl, map[string]any{
+	return templateutil.MustRender("user-memory-deleted", userMemoryDeletedTmpl, map[string]any{
 		"MemoryID": memoryID,
 	})
 }
@@ -299,7 +284,7 @@ type userMemoryItem struct {
 }
 
 func formatUserMemoriesList(count int, memories []userMemoryItem) string {
-	return mustRenderTemplate("user-memories-list", userMemoriesListTmpl, map[string]any{
+	return templateutil.MustRender("user-memories-list", userMemoriesListTmpl, map[string]any{
 		"Count":    count,
 		"Memories": memories,
 	})
@@ -321,7 +306,7 @@ type searchResultItem struct {
 }
 
 func formatSearchResultsList(count int, memories []searchResultItem) string {
-	return mustRenderTemplate("search-results-list", searchResultsListTmpl, map[string]any{
+	return templateutil.MustRender("search-results-list", searchResultsListTmpl, map[string]any{
 		"Count":    count,
 		"Memories": memories,
 	})

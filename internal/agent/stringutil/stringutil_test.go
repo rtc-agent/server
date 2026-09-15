@@ -40,13 +40,24 @@ func TestTruncateByByte_ZeroLimit(t *testing.T) {
 }
 
 func TestTruncateByByte_MultiByteCharacters(t *testing.T) {
-	// "你好" is 6 bytes in UTF-8 (3 bytes each)
+	// "你好" is 6 bytes in UTF-8 (3 bytes each).
+	// Truncating at byte 4 (mid-character) should back up to byte 3 (start of
+	// second character) to avoid splitting the multi-byte rune.
 	s := "你好"
 	got := TruncateByByte(s, 4)
-	// Should truncate to 4 bytes + "...", which splits the second character
-	want := s[:4] + "..."
+	want := "你..."
 	if got != want {
 		t.Errorf("TruncateByByte(%q, 4) = %q, want %q", s, got, want)
+	}
+}
+
+func TestTruncateByByte_MultiByteExactBoundary(t *testing.T) {
+	// Truncating at byte 3 (exact character boundary) should not lose a char.
+	s := "你好世界"
+	got := TruncateByByte(s, 3)
+	want := "你..."
+	if got != want {
+		t.Errorf("TruncateByByte(%q, 3) = %q, want %q", s, got, want)
 	}
 }
 

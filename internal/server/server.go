@@ -41,6 +41,7 @@ type Server struct {
 	asynqServer      *hibikenasynq.Server // asynq worker for loop tasks
 	asynqMux         *hibikenasynq.ServeMux
 	recoveryCancel   context.CancelFunc // cancels the recovery goroutine
+	goroutineCancel  func()             // cancels the goroutine metrics collector
 }
 
 // BuildProviderClients 根据配置构造 Provider 列表
@@ -88,6 +89,11 @@ func BuildProviderClients(cfg *config.Config) []*oauth.ProviderConfig {
 
 // Start 启动服务器
 func (s *Server) Start() error {
+	// 启动 goroutine 指标采集（每 10s 采样 goroutine 数量与状态分布）
+	if s.cfg.Debug.Enabled {
+		s.goroutineCancel = middleware.StartGoroutineCollector(s.cfg.Debug.GoroutineLeakThreshold)
+	}
+
 	// Recover stale turns from previous crash/restart BEFORE starting worker.
 	// This ensures that turns left in running/pending state are marked as
 	// interrupted and have resume work items published.
@@ -188,6 +194,11 @@ func (s *Server) Stop() {
 		s.recoveryCancel()
 	}
 
+	// Stop goroutine metrics collector
+	if s.goroutineCancel != nil {
+		s.goroutineCancel()
+	}
+
 	// 关闭 RPC Handler（停止 recorder worker）
 	if s.rpcHandler != nil {
 		s.rpcHandler.Close()
@@ -216,6 +227,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		logger.Warn(context.Background(), "metrics endpoint without authentication - configure metrics.user and metrics.password")
 	}
 	mux.Handle("GET /metrics", metricsHandler)
+
+	// Debug 端点：pprof + goroutine 监控（可选 basic auth）
+	if s.cfg.Debug.Enabled {
+		s.registerDebugRoutes(mux)
+	}
 
 	// OAuth2 端点
 	s.oauth2Handler.RegisterRoutes(mux)
@@ -258,6 +274,36 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		},
 	})
 	mux.Handle("/connection/websocket", wsHandler)
+}
+
+// registerDebugRoutes 注册 /debug/* 路由（pprof + goroutines）。
+// 生产环境应配置 debug.user/password 启用 basic auth 保护。
+func (s *Server) registerDebugRoutes(mux *http.ServeMux) {
+	hasAuth := s.cfg.Debug.User != "" && s.cfg.Debug.Password != ""
+
+	// goroutines 端点
+	goroutinesHandler := middleware.GoroutinesHandler()
+	if hasAuth {
+		mux.Handle("GET /debug/goroutines", middleware.BasicAuth(goroutinesHandler, s.cfg.Debug.User, s.cfg.Debug.Password))
+	} else {
+		mux.Handle("GET /debug/goroutines", goroutinesHandler)
+	}
+
+	// pprof 端点
+	if hasAuth {
+		mux.Handle("/debug/pprof/", middleware.PprofHandler(s.cfg.Debug.User, s.cfg.Debug.Password))
+		logger.Info(context.Background(), "[Server] debug endpoints protected with basic auth")
+	} else {
+		middleware.RegisterPprofRoutes(mux)
+		if s.cfg.Server.Env != "development" {
+			logger.Warn(context.Background(), "debug endpoints without authentication - configure debug.user and debug.password")
+		}
+	}
+
+	logger.Info(context.Background(), "[Server] debug endpoints registered",
+		zap.Bool("auth_enabled", hasAuth),
+		zap.Int("goroutine_leak_threshold", s.cfg.Debug.GoroutineLeakThreshold),
+	)
 }
 
 // NewWithDeps 创建服务器（Wire 兼容版本）。

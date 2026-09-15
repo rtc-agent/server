@@ -371,7 +371,7 @@ func (e *SessionMemoryExtractor) buildExtractPrompt(
 		sb.WriteString("# Existing Session Memories\n\n")
 		sb.WriteString("The following memories have already been extracted. Do NOT duplicate them, only extract NEW information:\n\n")
 		for _, mem := range existingMemories {
-			fmt.Fprintf(&sb, "- **[%s]** %s: %s\n", mem.Category, mem.Title, truncateString(mem.Content, 200))
+			fmt.Fprintf(&sb, "- **[%s]** %s: %s\n", mem.Category, mem.Title, stringutil.TruncateByRune(mem.Content, 200))
 		}
 		sb.WriteString("\n")
 	}
@@ -464,12 +464,6 @@ func formatMessagesForMemoryExtract(messages []*schema.Message) string {
 	}
 
 	return sb.String()
-}
-
-// truncateString 截断字符串（按 rune 截断，避免在多字节字符中间截断）
-// Delegates to stringutil.TruncateByRune.
-func truncateString(s string, maxLen int) string {
-	return stringutil.TruncateByRune(s, maxLen)
 }
 
 // estimateMemoryTokens 估算 token 数（使用全局 TokenCounter）

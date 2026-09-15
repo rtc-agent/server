@@ -4,7 +4,7 @@ import "context"
 
 // noopLogger implements Logger with no-op operations.
 // Used as a default when no logger is provided in Config, eliminating
-// nil checks at every call site (the logIfEnabled anti-pattern).
+// nil checks at every call site.
 type noopLogger struct{}
 
 func (noopLogger) Debug(_ context.Context, _ string, _ map[string]any) {}

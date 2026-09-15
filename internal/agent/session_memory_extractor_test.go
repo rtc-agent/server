@@ -266,36 +266,6 @@ func TestCountToolCalls(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// truncateString
-// ---------------------------------------------------------------------------
-
-func TestTruncateString(t *testing.T) {
-	tests := []struct {
-		name   string
-		s      string
-		maxLen int
-		want   string
-	}{
-		{name: "short string unchanged", s: "hello", maxLen: 10, want: "hello"},
-		{name: "exact length unchanged", s: "hello", maxLen: 5, want: "hello"},
-		{name: "long string truncated", s: "hello world", maxLen: 5, want: "hello..."},
-		{name: "empty string", s: "", maxLen: 5, want: ""},
-		{name: "CJK runes truncate by rune not byte", s: "你好世界啊", maxLen: 3, want: "你好世..."},
-		{name: "CJK within limit", s: "你好", maxLen: 5, want: "你好"},
-		{name: "maxLen zero", s: "abc", maxLen: 0, want: "..."},
-		{name: "mixed runes within limit", s: "a你好", maxLen: 3, want: "a你好"},
-		{name: "mixed runes truncated", s: "a你好b", maxLen: 2, want: "a你..."},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := truncateString(tc.s, tc.maxLen)
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // ExtractIfNeeded
 // ---------------------------------------------------------------------------
 

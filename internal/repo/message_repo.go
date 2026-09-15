@@ -35,7 +35,7 @@ type MessageRepo interface {
 	GetNextGlobalOffset(ctx context.Context, sessionID uuid.UUID) (uint32, error)
 	// UpdateStreamingStatus 更新消息流式状态及内容
 	UpdateStreamingStatus(ctx context.Context, id uuid.UUID, status protocol.MessageStreamingStatus, content string) error
-	// DeleteByIDs soft-deletes messages by their IDs.
+	// DeleteByIDs hard-deletes messages by their IDs.
 	DeleteByIDs(ctx context.Context, ids []uuid.UUID) error
 	// GetByIDs 批量查询消息，返回 map[id]*Message。未找到的 ID 不会出现在 map 中。
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Message, error)
@@ -165,7 +165,7 @@ func (r *messageRepo) ListRecentBySession(ctx context.Context, sessionID uuid.UU
 	return messages, nil
 }
 
-// DeleteByIDs soft-deletes messages by their IDs using GORM's soft delete.
+// DeleteByIDs hard-deletes messages by their IDs.
 func (r *messageRepo) DeleteByIDs(ctx context.Context, ids []uuid.UUID) error {
 	if len(ids) == 0 {
 		return nil

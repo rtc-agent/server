@@ -8,6 +8,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
@@ -467,7 +468,7 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 			Category:    mem.Category,
 			Importance:  mem.Importance,
 			Title:       mem.Title,
-			Content:     truncateString(mem.Content, 200),
+			Content:     stringutil.TruncateByRune(mem.Content, 200),
 			ID:          mem.ID.String(),
 			CreatedAt:   mem.CreatedAt.Format("2006-01-02"),
 			AccessCount: mem.AccessCount,

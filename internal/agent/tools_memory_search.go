@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
 )
 
@@ -120,7 +121,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 			MemoryType: result.MemoryType,
 			Category:   result.Category,
 			Title:      result.Title,
-			Content:    truncateString(result.Content, 300),
+			Content:    stringutil.TruncateByRune(result.Content, 300),
 			CreatedAt:  createdAt,
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
 )
 
@@ -183,7 +184,7 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 			Index:     i + 1,
 			Category:  mem.Category,
 			Title:     mem.Title,
-			Content:   truncateString(mem.Content, 200),
+			Content:   stringutil.TruncateByRune(mem.Content, 200),
 			CreatedAt: createdAt,
 		}
 	}

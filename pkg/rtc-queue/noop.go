@@ -2,7 +2,7 @@ package rtcqueue
 
 // noopWorkerLogger implements WorkerLogger with no-op operations.
 // Used as a default when no logger is provided, eliminating nil checks
-// at every call site (the logIfEnabled anti-pattern).
+// at every call site.
 type noopWorkerLogger struct{}
 
 func (noopWorkerLogger) Info(_ string, _ ...any)  {}

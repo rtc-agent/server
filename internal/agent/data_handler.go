@@ -38,9 +38,9 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 		"session_id":           sessionID.String(),
 		"turn_id":              turnID.String(),
 		"content_len":          len(event.Content),
-		"content_preview":      truncateForLog(event.Content, 100),
+		"content_preview":      stringutil.TruncateByByte(event.Content, 100),
 		"reasoning_len":        len(event.ReasoningContent),
-		"reasoning_preview":    truncateForLog(event.ReasoningContent, 100),
+		"reasoning_preview":    stringutil.TruncateByByte(event.ReasoningContent, 100),
 		"finish_reason":        event.FinishReason,
 		"thinking_msg_id":      state.thinkingMsgID.String(),
 		"thinking_finalized":   state.thinkingFinalized,
@@ -327,14 +327,5 @@ func eventToTokenUsageUpdate(tu *turnagent.TokenUsage) *model.TokenUsageUpdate {
 		CachedTokens:    tu.CachedTokens,
 		ReasoningTokens: tu.ReasoningTokens,
 	}
-}
-
-// truncateForLog truncates a string to maxLen for logging purposes.
-// If the string is longer than maxLen, it returns the first maxLen characters
-// followed by "...". This is useful for logging stream content without
-// overwhelming the log output.
-// Delegates to stringutil.TruncateByByte.
-func truncateForLog(s string, maxLen int) string {
-	return stringutil.TruncateByByte(s, maxLen)
 }
 

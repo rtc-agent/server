@@ -71,31 +71,17 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	}
 
 	// 2. Obtain the turnID.
-	var (
-		turnID string
-		err    error
-	)
-	switch p.Kind {
-	case WorkKindSubmit:
-		turnID, err = a.cfg.CreateTurn(ctx, p.SessionID, work.ID)
-		if err != nil {
-			return fmt.Errorf("turnagent: CreateTurn: %w", err)
+	turnID, err := a.resolveTurnID(ctx, p.SessionID, work.ID, p.Kind)
+	if err != nil {
+		if p.Kind == WorkKindResume && errors.Is(err, ErrNoActiveTurn) {
+			a.log(ctx, LogLevelInfo, "resume.no_active_turn", map[string]any{
+				"session_id": p.SessionID,
+				"work_id":    work.ID,
+				"message":    "turn was cancelled/completed before resume",
+			})
+			return nil
 		}
-	case WorkKindResume:
-		turnID, err = a.cfg.LookupTurn(ctx, p.SessionID, work.ID)
-		if err != nil {
-			if errors.Is(err, ErrNoActiveTurn) {
-				a.log(ctx, LogLevelInfo, "resume.no_active_turn", map[string]any{
-					"session_id": p.SessionID,
-					"work_id":    work.ID,
-					"message":    "turn was cancelled/completed before resume",
-				})
-				return nil
-			}
-			return fmt.Errorf("turnagent: LookupTurn: %w", err)
-		}
-	default:
-		return fmt.Errorf("turnagent: unknown work kind: %q", p.Kind)
+		return fmt.Errorf("turnagent: resolveTurnID: %w", err)
 	}
 
 	// 2.5. Observability: start a turn span.
@@ -206,27 +192,8 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 
 	// If this is a new manager, begin the turn.
 	if isNew {
-		switch p.Kind {
-		case WorkKindSubmit:
-			if err := a.cfg.BeginTurn(turnCtx, turnID); err != nil {
-				turnSpan.SetAttributes(attribute.String("turn.status", "error"))
-				a.log(turnCtx, LogLevelError, "turn.begin_failed", map[string]any{
-					"session_id": p.SessionID,
-					"turn_id":    turnID,
-					"error":      err.Error(),
-				})
-				return fmt.Errorf("turnagent: BeginTurn: %w", err)
-			}
-		case WorkKindResume:
-			if err := a.cfg.ResumeTurn(turnCtx, turnID); err != nil {
-				turnSpan.SetAttributes(attribute.String("turn.status", "error"))
-				a.log(turnCtx, LogLevelError, "turn.resume_failed", map[string]any{
-					"session_id": p.SessionID,
-					"turn_id":    turnID,
-					"error":      err.Error(),
-				})
-				return fmt.Errorf("turnagent: ResumeTurn: %w", err)
-			}
+		if err := a.beginTurn(turnCtx, turnSpan, p.SessionID, turnID, p.Kind); err != nil {
+			return err
 		}
 	}
 
@@ -236,29 +203,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 
 	done := make(chan struct{})
 	defer close(done)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				zap.L().Error("agent_process.cancel_listener_panic",
-					zap.Any("recover", r),
-					zap.String("stack", string(debug.Stack())),
-				)
-			}
-		}()
-		select {
-		case cm := <-cancel:
-			mgr.SetCancelledByQueue(cm.Reason)
-			if a.cfg.Cancel.GracePeriod > 0 {
-				mgr.Loop().Stop(adk.WithGracefulTimeout(a.cfg.Cancel.GracePeriod))
-			} else {
-				mgr.Loop().Stop(adk.WithImmediate())
-			}
-			innerCancel()
-			turnCancel() // Also cancel turnCtx to stop the LLM call in mgr.Run
-		case <-done:
-			return
-		}
-	}()
+	a.startCancelListener(cancel, mgr, done, innerCancel, turnCancel)
 
 	// 7. Register work with tracker and wait for completion.
 	completionCh := mgr.Tracker().Register(work.ID)
@@ -337,12 +282,8 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// 9. Turn lifecycle: end.
 	turnDuration := time.Since(turnStart)
 
-	recordEnd := func(status string, err error) {
-		a.recordTurnEnd(turnCtx, turnSpan, p.SessionID, turnID, string(p.Kind), turnDuration, status, err)
-	}
-
 	if mgr.IsCancelledByQueue() {
-		recordEnd("cancel", nil)
+		a.recordTurnEnd(turnCtx, turnSpan, p.SessionID, turnID, string(p.Kind), turnDuration, "cancel", nil)
 		_ = a.cfg.CancelTurn(turnCtx, turnID, mgr.CancelReason())
 		return nil
 	}
@@ -358,7 +299,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			"turn_id":    turnID,
 			"message":    "calling CompleteTurn",
 		})
-		recordEnd("success", nil)
+		a.recordTurnEnd(turnCtx, turnSpan, p.SessionID, turnID, string(p.Kind), turnDuration, "success", nil)
 		if err := a.cfg.CompleteTurn(turnCtx, p.SessionID, turnID, mgr.LastMessage()); err != nil {
 			a.log(turnCtx, LogLevelError, "turn.complete_callback_failed", map[string]any{
 				"session_id": p.SessionID,
@@ -372,7 +313,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		return a.handleInterruptExit(turnCtx, turnSpan, exitReason, p.SessionID, turnID)
 
 	default:
-		recordEnd("fail", exitReason)
+		a.recordTurnEnd(turnCtx, turnSpan, p.SessionID, turnID, string(p.Kind), turnDuration, "fail", exitReason)
 		if err := a.cfg.FailTurn(turnCtx, turnID, exitReason); err != nil {
 			a.log(turnCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{
 				"session_id": p.SessionID,
@@ -558,4 +499,93 @@ func (a *Agent) handleInterruptExit(
 		})
 	}
 	return nil
+}
+
+// resolveTurnID obtains a turnID for the given work item based on its kind.
+// For WorkKindSubmit it creates a new turn; for WorkKindResume it looks up the
+// existing turn. Returns ErrNoActiveTurn (unwrapped) when a resume target is
+// no longer active, so callers can distinguish transient from permanent errors.
+func (a *Agent) resolveTurnID(ctx context.Context, sessionID, workID string, kind WorkKind) (string, error) {
+	switch kind {
+	case WorkKindSubmit:
+		turnID, err := a.cfg.CreateTurn(ctx, sessionID, workID)
+		if err != nil {
+			return "", fmt.Errorf("CreateTurn: %w", err)
+		}
+		return turnID, nil
+	case WorkKindResume:
+		turnID, err := a.cfg.LookupTurn(ctx, sessionID, workID)
+		if err != nil {
+			return "", fmt.Errorf("LookupTurn: %w", err)
+		}
+		return turnID, nil
+	default:
+		return "", fmt.Errorf("unknown work kind: %q", kind)
+	}
+}
+
+// beginTurn invokes the appropriate Begin/Resume callback when the caller is
+// the owner of a new session manager (isNew=true). It records a tracing
+// attribute and an error log on failure so the caller can simply propagate the
+// returned error.
+func (a *Agent) beginTurn(ctx context.Context, span trace.Span, sessionID, turnID string, kind WorkKind) error {
+	switch kind {
+	case WorkKindSubmit:
+		if err := a.cfg.BeginTurn(ctx, turnID); err != nil {
+			span.SetAttributes(attribute.String("turn.status", "error"))
+			a.log(ctx, LogLevelError, "turn.begin_failed", map[string]any{
+				"session_id": sessionID,
+				"turn_id":    turnID,
+				"error":      err.Error(),
+			})
+			return fmt.Errorf("turnagent: BeginTurn: %w", err)
+		}
+	case WorkKindResume:
+		if err := a.cfg.ResumeTurn(ctx, turnID); err != nil {
+			span.SetAttributes(attribute.String("turn.status", "error"))
+			a.log(ctx, LogLevelError, "turn.resume_failed", map[string]any{
+				"session_id": sessionID,
+				"turn_id":    turnID,
+				"error":      err.Error(),
+			})
+			return fmt.Errorf("turnagent: ResumeTurn: %w", err)
+		}
+	}
+	return nil
+}
+
+// startCancelListener runs a goroutine that watches the queue's cancel channel
+// and, on cancellation, stops the session turn loop and propagates the
+// cancellation to both the inner work context and the turn-level context (which
+// also cancels the in-flight LLM call running in mgr.Run).
+func (a *Agent) startCancelListener(
+	cancel <-chan rtcqueue.CancelMessage,
+	mgr *SessionTurnManager,
+	done <-chan struct{},
+	innerCancel context.CancelFunc,
+	turnCancel context.CancelFunc,
+) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				zap.L().Error("agent_process.cancel_listener_panic",
+					zap.Any("recover", r),
+					zap.String("stack", string(debug.Stack())),
+				)
+			}
+		}()
+		select {
+		case cm := <-cancel:
+			mgr.SetCancelledByQueue(cm.Reason)
+			if a.cfg.Cancel.GracePeriod > 0 {
+				mgr.Loop().Stop(adk.WithGracefulTimeout(a.cfg.Cancel.GracePeriod))
+			} else {
+				mgr.Loop().Stop(adk.WithImmediate())
+			}
+			innerCancel()
+			turnCancel()
+		case <-done:
+			return
+		}
+	}()
 }

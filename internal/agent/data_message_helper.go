@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
@@ -202,7 +203,7 @@ func (h *helpers) appendStreamChunk(
 			"kind":               kind,
 			"chunk_count":        len(chunks),
 			"full_content_len":   len(fullContent),
-			"full_content_preview": truncateForLog(fullContent, 200),
+			"full_content_preview": stringutil.TruncateByByte(fullContent, 200),
 			"is_first":           isFirst,
 		})
 

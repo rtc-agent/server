@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/rtc-agent/server/internal/agent/stringutil"
+	"github.com/rtc-agent/server/internal/agent/templateutil"
 	"github.com/rtc-agent/server/internal/model"
 )
 
@@ -37,15 +38,6 @@ var userMemoryPreambleEn string
 //go:embed prompts/attachments/user-memory-preamble-zh.md
 var userMemoryPreambleZh string
 
-// renderAttachmentTemplate renders a named attachment template with the given
-// data. It delegates to the shared mustRenderTemplate helper.
-//
-// Note: content truncation is performed in Go (via truncContent) before passing
-// data to templates, rather than via a template FuncMap.
-func renderAttachmentTemplate(name, tmplStr string, data any) string {
-	return mustRenderTemplate(name, tmplStr, data)
-}
-
 // formatTodoList renders the todo list as a Markdown section grouped by status.
 //
 // Tasks are grouped into In Progress (bold), Pending (plain), and Completed
@@ -62,7 +54,7 @@ func formatTodoList(todos []model.TodoItem) string {
 			completed = append(completed, t)
 		}
 	}
-	return renderAttachmentTemplate("todo-list", todoListTmpl, map[string]any{
+	return templateutil.MustRender("todo-list", todoListTmpl, map[string]any{
 		"InProgress": inProgress,
 		"Pending":    pending,
 		"Completed":  completed,
@@ -124,7 +116,7 @@ func formatSessionMemoryInjection(memories []*model.SessionMemory) string {
 			items = append(items, injectionItem{
 				Category: cat,
 				Title:    mems[i].Title,
-				Content:  truncContent(mems[i].Content, 200),
+				Content:  stringutil.TruncateByByte(mems[i].Content, 200),
 			})
 		}
 	}
@@ -133,7 +125,7 @@ func formatSessionMemoryInjection(memories []*model.SessionMemory) string {
 		return ""
 	}
 
-	return renderAttachmentTemplate("session-memory-injection", sessionMemoryInjectionTmpl, map[string]any{
+	return templateutil.MustRender("session-memory-injection", sessionMemoryInjectionTmpl, map[string]any{
 		"Items": items,
 	})
 }
@@ -183,7 +175,7 @@ func buildSummaryFromMemoriesTmpl(memories []*model.SessionMemory) string {
 		return ""
 	}
 
-	return renderAttachmentTemplate("session-memory-summary", sessionMemorySummaryTmpl, map[string]any{
+	return templateutil.MustRender("session-memory-summary", sessionMemorySummaryTmpl, map[string]any{
 		"Categories": cats,
 	})
 }
@@ -196,7 +188,7 @@ func buildSummaryFromMemoriesTmpl(memories []*model.SessionMemory) string {
 func formatUserMemoryWrapper(lang string, categories []userMemoryCategory) string {
 	preamble := userMemoryPreambleText(lang)
 	content := buildUserMemoryContent(preamble, categories)
-	return renderAttachmentTemplate("user-memory-wrapper", userMemoryWrapperTmpl, map[string]any{
+	return templateutil.MustRender("user-memory-wrapper", userMemoryWrapperTmpl, map[string]any{
 		"Content": content,
 	})
 }
@@ -262,12 +254,6 @@ func userMemoryLabels(lang string) map[string]string {
 			model.UserMemoryCategoryReference: "References",
 		}
 	}
-}
-
-// truncContent truncates s to at most n bytes, appending "..." when truncated.
-// Delegates to stringutil.TruncateByByte.
-func truncContent(s string, n int) string {
-	return stringutil.TruncateByByte(s, n)
 }
 
 // sortByCreatedAtDesc sorts session memories by created_at in descending order

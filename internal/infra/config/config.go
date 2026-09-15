@@ -26,6 +26,7 @@ type Config struct {
 	Tracing   TracingConfig   `mapstructure:"tracing"`
 	Asynq     AsynqConfig     `mapstructure:"asynq"`
 	Metrics   MetricsConfig   `mapstructure:"metrics"`
+	Debug     DebugConfig     `mapstructure:"debug"`
 }
 
 // MetricsConfig Prometheus /metrics 端点认证配置
@@ -34,6 +35,21 @@ type MetricsConfig struct {
 	User string `mapstructure:"user"`
 	// Password 基本认证密码
 	Password string `mapstructure:"password"`
+}
+
+// DebugConfig /debug/pprof 与 /debug/goroutines 端点配置。
+// 这些端点暴露进程内部状态，生产环境必须配置认证。
+type DebugConfig struct {
+	// Enabled 是否启用 debug 端点，默认 true。
+	// 设为 false 可完全关闭 /debug/* 路由。
+	Enabled bool `mapstructure:"enabled"`
+	// User 基本认证用户名。为空时不启用认证（仅开发环境安全）
+	User string `mapstructure:"user"`
+	// Password 基本认证密码
+	Password string `mapstructure:"password"`
+	// GoroutineLeakThreshold goroutine 数量超过此阈值时记录告警日志。
+	// 默认 1000。设为 0 禁用告警。
+	GoroutineLeakThreshold int `mapstructure:"goroutine_leak_threshold"`
 }
 
 // AsynqConfig asynq 任务调度配置
@@ -357,6 +373,8 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("providers.http_timeout", 10*time.Second)
 	v.SetDefault("cors.allow_origins", []string{})
 	v.SetDefault("server.shutdown_timeout", 10*time.Second)
+	v.SetDefault("debug.enabled", true)
+	v.SetDefault("debug.goroutine_leak_threshold", 1000)
 	v.SetDefault("server.rpc_timeout", 10*time.Second)
 	v.SetDefault("worker.heartbeat_sec", 10)
 	v.SetDefault("worker.ttl_sec", 60)
@@ -452,6 +470,7 @@ func expandEnvVars(cfg *Config) {
 
 	// Metrics 密码
 	cfg.Metrics.Password = expandEnvRef(cfg.Metrics.Password)
+	cfg.Debug.Password = expandEnvRef(cfg.Debug.Password)
 }
 
 // envRefPattern 匹配 ${VAR_NAME} 形式的环境变量引用。

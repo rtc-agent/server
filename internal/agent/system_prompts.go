@@ -128,7 +128,7 @@ func (b *SystemPromptBuilder) PrependSection(section string) *SystemPromptBuilde
 func (b *SystemPromptBuilder) Build() (string, error) {
 	var parts []string
 	for _, section := range b.sections {
-		rendered, err := renderSection(section, b.data)
+		rendered, err := templateutil.Render("section", section, b.data)
 		if err != nil {
 			return "", err
 		}
@@ -153,10 +153,4 @@ func (b *SystemPromptBuilder) BuildOrDefault() string {
 // This is the canonical default used when worker.system_prompt is not configured.
 func BuildDefaultSystemPrompt() (string, error) {
 	return NewSystemPromptBuilder().Build()
-}
-
-// renderSection renders a single section as a text/template.
-// Delegates to templateutil.Render for the actual rendering.
-func renderSection(section string, data map[string]any) (string, error) {
-	return templateutil.Render("section", section, data)
 }

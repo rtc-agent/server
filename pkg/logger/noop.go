@@ -7,7 +7,7 @@ import (
 )
 
 // NoopLogger implements turnagent.Logger with no-op operations.
-// Use this instead of nil checks to eliminate the logIfEnabled anti-pattern.
+// Use this instead of nil checks to eliminate verbose logging guards at call sites.
 type NoopLogger struct{}
 
 func (NoopLogger) Debug(_ context.Context, _ string, _ map[string]any) {}

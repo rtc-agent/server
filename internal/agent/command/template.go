@@ -33,7 +33,7 @@ func (t *templateCommand) Prefix() string { return t.cfg.Prefix }
 func (t *templateCommand) Scope() Scope   { return t.cfg.TriggerScope }
 
 func (t *templateCommand) TriggerPrompt(ctx Context, args string) (*PromptContribution, error) {
-	content, err := renderTemplate(t.cfg.Name+"_trigger", t.cfg.TriggerTemplate, templateData(ctx, args))
+	content, err := templateutil.Render(t.cfg.Name+"_trigger", t.cfg.TriggerTemplate, templateData(ctx, args))
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func (t *templateCommand) SustainPrompt(ctx Context, args string) (*PromptContri
 	if t.cfg.SustainTemplate == "" {
 		return nil, nil
 	}
-	content, err := renderTemplate(t.cfg.Name+"_sustain", t.cfg.SustainTemplate, templateData(ctx, args))
+	content, err := templateutil.Render(t.cfg.Name+"_sustain", t.cfg.SustainTemplate, templateData(ctx, args))
 	if err != nil {
 		return nil, err
 	}
@@ -61,10 +61,4 @@ func templateData(ctx Context, args string) templateDataT {
 		Args:      args,
 		SessionID: ctx.SessionID.String(),
 	}
-}
-
-// renderTemplate renders a named text/template with the given data.
-// Delegates to templateutil.Render for the actual rendering.
-func renderTemplate(name, text string, data any) (string, error) {
-	return templateutil.Render(name, text, data)
 }

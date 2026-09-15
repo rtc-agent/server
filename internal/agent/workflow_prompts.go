@@ -6,7 +6,7 @@
 // Two categories:
 //   - Static prompts (goal-creation.md, loop-creation.md): used as-is.
 //   - Dynamic templates (goal-management.md.tmpl, loop-management.md.tmpl):
-//     rendered with runtime data via mustRenderTemplate.
+//     rendered with runtime data via templateutil.MustRender.
 //
 // Naming convention:
 //   - Static variables: <name>Prompt (e.g. goalCreationPrompt)
@@ -17,6 +17,7 @@ package agent
 import (
 	_ "embed"
 
+	"github.com/rtc-agent/server/internal/agent/templateutil"
 	"github.com/rtc-agent/server/internal/model"
 )
 
@@ -35,11 +36,11 @@ var loopManagementTmpl string
 // buildGoalManagementPrompt builds the goal management prompt for runtime injection.
 // Consumed by GoalWorkflow.SustainPrompt (see goal_workflow.go).
 func buildGoalManagementPrompt(goal *model.Goal) string {
-	return mustRenderTemplate("goal_management", goalManagementTmpl, goal)
+	return templateutil.MustRender("goal_management", goalManagementTmpl, goal)
 }
 
 // buildLoopManagementPrompt builds the loop management prompt for runtime injection.
 // Consumed by LoopWorkflow.SustainPrompt (see loop_workflow.go).
 func buildLoopManagementPrompt(loop *model.Loop) string {
-	return mustRenderTemplate("loop_management", loopManagementTmpl, loop)
+	return templateutil.MustRender("loop_management", loopManagementTmpl, loop)
 }
