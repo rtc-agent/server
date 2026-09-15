@@ -421,6 +421,11 @@ type Config struct {
 	// before giving up and calling FailTurn. Default: 3.
 	MaxReactiveCompactAttempts int
 
+	// InsertFeedbackMessage inserts a feedback message into the conversation
+	// (cross-package bridge, used by the reactive compact path).
+	// Parameters: ctx, sessionID, turnID, category, title, message string, retryable bool, rawError string.
+	InsertFeedbackMessage func(ctx context.Context, sessionID, turnID, category, title, message string, retryable bool, rawError string) error
+
 	// ----- Explicit compact (optional) -----
 
 	// CompactContext is called when an explicit compact work item

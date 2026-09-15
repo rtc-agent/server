@@ -9,6 +9,7 @@ import (
 
 // Defines values for ContentType.
 const (
+	ContentTypeError          ContentType = "error"
 	ContentTypeMarkdown       ContentType = "markdown"
 	ContentTypeSummary        ContentType = "summary"
 	ContentTypeText           ContentType = "text"
@@ -21,6 +22,8 @@ const (
 // Valid indicates whether the value is a known member of the ContentType enum.
 func (e ContentType) Valid() bool {
 	switch e {
+	case ContentTypeError:
+		return true
 	case ContentTypeMarkdown:
 		return true
 	case ContentTypeSummary:
@@ -34,6 +37,42 @@ func (e ContentType) Valid() bool {
 	case ContentTypeToolCallOutput:
 		return true
 	case ContentTypeUserMessage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ErrorCategory.
+const (
+	ErrorCategoryAPI        ErrorCategory = "api"
+	ErrorCategoryContext    ErrorCategory = "context"
+	ErrorCategoryNetwork    ErrorCategory = "network"
+	ErrorCategoryPermission ErrorCategory = "permission"
+	ErrorCategoryStream     ErrorCategory = "stream"
+	ErrorCategorySystem     ErrorCategory = "system"
+	ErrorCategoryTimeout    ErrorCategory = "timeout"
+	ErrorCategoryTool       ErrorCategory = "tool"
+)
+
+// Valid indicates whether the value is a known member of the ErrorCategory enum.
+func (e ErrorCategory) Valid() bool {
+	switch e {
+	case ErrorCategoryAPI:
+		return true
+	case ErrorCategoryContext:
+		return true
+	case ErrorCategoryNetwork:
+		return true
+	case ErrorCategoryPermission:
+		return true
+	case ErrorCategoryStream:
+		return true
+	case ErrorCategorySystem:
+		return true
+	case ErrorCategoryTimeout:
+		return true
+	case ErrorCategoryTool:
 		return true
 	default:
 		return false
@@ -367,6 +406,7 @@ type CompactSessionResult struct {
 // - `toolcall_input`: Data 为 ToolCall 对象
 // - `toolcall_output`: Data 为 ToolCall 对象
 // - `user_message`: Data 为 UserMessageContent 对象
+// - `error`: Data 为 ErrorContent 对象
 type ContentData struct {
 	// Data 具体内容（结构由 type 决定），类型取决于 type 字段
 	Data interface{} `json:"data"`
@@ -375,6 +415,29 @@ type ContentData struct {
 
 // ContentType defines model for ContentType.
 type ContentType string
+
+// ErrorCategory defines model for ErrorCategory.
+type ErrorCategory string
+
+// ErrorContent defines model for ErrorContent.
+type ErrorContent struct {
+	Category ErrorCategory `json:"category"`
+
+	// Message 详细描述（可包含建议操作）
+	Message string `json:"message"`
+
+	// RawError 原始错误信息（仅当 show_raw_error 为 true 时前端展示）
+	RawError *string `json:"raw_error,omitempty"`
+
+	// Retryable 是否可重试
+	Retryable bool `json:"retryable"`
+
+	// ShowRawError 服务端控制的 RawError 可见性标志（debug 模式下为 true）
+	ShowRawError *bool `json:"show_raw_error,omitempty"`
+
+	// Title 简短错误标题
+	Title string `json:"title"`
+}
 
 // FileAttachment 文件附件（预留）
 type FileAttachment struct {
@@ -398,6 +461,7 @@ type ForkSessionRequest struct {
 	// - `toolcall_input`: Data 为 ToolCall 对象
 	// - `toolcall_output`: Data 为 ToolCall 对象
 	// - `user_message`: Data 为 UserMessageContent 对象
+	// - `error`: Data 为 ErrorContent 对象
 	ContentData ContentData `json:"content_data"`
 
 	// Limit Fork 多少条消息？默认200；最多1000条；
@@ -740,6 +804,7 @@ type SendMessageRequest struct {
 	// - `toolcall_input`: Data 为 ToolCall 对象
 	// - `toolcall_output`: Data 为 ToolCall 对象
 	// - `user_message`: Data 为 UserMessageContent 对象
+	// - `error`: Data 为 ErrorContent 对象
 	ContentData ContentData `json:"content_data"`
 
 	// ServerSessionId protocol 内 UUID 类型，JSON 线上为字符串

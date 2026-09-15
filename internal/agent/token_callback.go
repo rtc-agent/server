@@ -24,6 +24,7 @@ package agent
 
 import (
 	"context"
+	"time"
 
 	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
 	"github.com/cloudwego/eino/callbacks"
@@ -65,8 +66,18 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 			// Per-call state (maxUsage, modelName, lastMessage, thinkingContent,
 			// cachedWriteTokens) is captured in this closure so concurrent streams
 			// do not interfere with each other.
+			//
+			// Use WithoutCancel to decouple from the parent context lifecycle:
+			// the goroutine must complete stream draining and token reporting
+			// even if the eino framework cancels ctx after callback returns.
+			// WithTimeout (60s) prevents the goroutine from hanging indefinitely
+			// if the stream stalls.
 			OnEndWithStreamOutput: func(ctx context.Context, info *callbacks.RunInfo, output *schema.StreamReader[*model.CallbackOutput]) context.Context {
-				go h.drainStreamAndReport(ctx, output)
+				bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
+				go func() {
+					defer cancel()
+					h.drainStreamAndReport(bgCtx, output)
+				}()
 				return ctx
 			},
 		}).

@@ -242,3 +242,20 @@ func TestConvertDBMessage_UnknownType(t *testing.T) {
 		t.Errorf("expected nil for unknown type, got %v", result)
 	}
 }
+
+func TestConvertDBMessage_SkipsErrorType(t *testing.T) {
+	// Error content type must be skipped by convertDBMessage — error messages
+	// are stored for UI display but never sent to the LLM context.
+	// See error_feedback.go: "The message does NOT enter the LLM context
+	// (convertDBMessage's default branch skips error content type)."
+	errorContent := `{"category":"system","title":"系统错误","message":"发生未知错误","retryable":false}`
+	content := `{"type":"error","data":` + errorContent + `}`
+	msg := &model.Message{
+		Content: content,
+		Role:    "assistant",
+	}
+	result := convertDBMessage(msg)
+	if result != nil {
+		t.Errorf("expected nil for error content type (must not enter LLM context), got %d messages", len(result))
+	}
+}

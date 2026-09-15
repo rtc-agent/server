@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ErrNoActiveTurn is returned by LookupTurn when no active turn is found
@@ -44,4 +45,22 @@ var promptTooLongPatterns = []string{
 	"reduce your prompt",     // Claude
 	"context_length_exceeded", // OpenAI
 	"maximum context length", // OpenAI
+}
+
+// StreamIdleTimeoutError 表示流式读取超时（consumeStream 3分钟无数据）
+type StreamIdleTimeoutError struct {
+	SessionID string
+	TurnID    string
+	Timeout   time.Duration
+}
+
+func (e *StreamIdleTimeoutError) Error() string {
+	return fmt.Sprintf("stream idle timeout after %v (session=%s, turn=%s)",
+		e.Timeout, e.SessionID, e.TurnID)
+}
+
+// IsStreamIdleTimeout 判断是否为流空闲超时错误
+func IsStreamIdleTimeout(err error) bool {
+	var target *StreamIdleTimeoutError
+	return errors.As(err, &target)
 }

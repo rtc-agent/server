@@ -32,6 +32,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -40,6 +41,7 @@ import (
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
+	"github.com/rtc-agent/server/pkg/protocol"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
@@ -144,6 +146,12 @@ type Config struct {
 	// ModelPricing 模型定价配置（可选，用于成本计算）
 	// 未配置时使用默认价格（Claude 3.5 Sonnet）
 	ModelPricing *ModelPricingConfig
+
+	// ShowRawErrors controls whether RawError content is visible in error messages.
+	// Typically derived from infraCfg.Debug.Enabled && infraCfg.Debug.ShowRawErrors.
+	// When false (default), error messages still store sanitized RawError but the
+	// frontend is instructed not to render it.
+	ShowRawErrors bool
 }
 
 // New constructs a *turnagent.Agent with all callbacks wired to the
@@ -191,6 +199,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		microcompactKeepRecent:          cfg.MicrocompactKeepRecent,
 		toolResultBudgetMaxTokens:       cfg.ToolResultBudgetMaxTokens,
 		enableStrategicCacheBreakpoints: cfg.EnableStrategicCacheBreakpoints,
+		showRawErrors:                   cfg.ShowRawErrors,
 	}
 
 	if h.contextTokensLimit <= 0 {
@@ -330,6 +339,15 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		RecoverFromPromptTooLong:   h.recoverFromPromptTooLong,
 		MaxReactiveCompactAttempts: 3,
 
+		// InsertFeedbackMessage bridges the reactive compact path to the
+		// application's error message insertion (insertErrorMessage uses
+		// uuid.UUID parameters, so we wrap it here).
+		InsertFeedbackMessage: func(ctx context.Context, sessionID, turnID, category, title, message string, retryable bool, rawError string) error {
+			sid, _ := uuid.Parse(sessionID)
+			tid, _ := uuid.Parse(turnID)
+			return h.insertErrorMessage(ctx, sid, &tid, protocol.ErrorCategory(category), title, message, retryable, rawError)
+		},
+
 		// Explicit compact — process compact work items
 		CompactContext: h.processCompactWorker,
 	}
@@ -400,6 +418,13 @@ type helpers struct {
 	// usage. Stored on helpers so it can be reused by the compact flow (which
 	// bypasses the turn loop and must initialize callbacks itself).
 	tokenCallbackHandler callbacks.Handler
+
+	// showRawErrors controls whether RawError content is visible in error messages.
+	// Derived from Config.ShowRawErrors at construction time. Typically true only
+	// in debug environments (cfg.Debug.Enabled && cfg.Debug.ShowRawErrors).
+	// When false (default), sanitized RawError is still stored but the frontend
+	// is instructed not to render it.
+	showRawErrors bool
 }
 
 // defaultCheckpointTTL returns the configured checkpoint TTL, defaulting to 24h.

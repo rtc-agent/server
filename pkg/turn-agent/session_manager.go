@@ -711,6 +711,48 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 			}
 			defer completeWork()
 
+			// Idle warning watcher (方案 C: warning-only, no exit).
+			// AsyncIterator does not support Close()/Cancel(), so we only
+			// log a warning when no events arrive for a prolonged period.
+			// The main loop signals activityReceived each time it processes
+			// an event, which resets the watcher's timer.
+			activityReceived := make(chan struct{}, 1)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						mgr.log(context.Background(), LogLevelError, "on_agent_events.idle_watcher_panic", map[string]any{
+							"session_id": mgr.sessionID,
+							"turn_id":    turnID,
+							"panic":      fmt.Sprintf("%v", r),
+						})
+					}
+				}()
+				timer := time.NewTimer(eventIdleWarningTimeout)
+				defer timer.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-activityReceived:
+						if !timer.Stop() {
+							select {
+							case <-timer.C:
+							default:
+							}
+						}
+						timer.Reset(eventIdleWarningTimeout)
+					case <-timer.C:
+						mgr.log(ctx, LogLevelError, "on_agent_events.idle_warning", map[string]any{
+							"session_id": mgr.sessionID,
+							"turn_id":    turnID,
+							"timeout":    eventIdleWarningTimeout.String(),
+							"action":     "warning_only_no_exit",
+						})
+						// Timer fired; it will be reset on next activity signal.
+					}
+				}
+			}()
+
 			for {
 				ctxErr := ctx.Err()
 				mgr.log(ctx, LogLevelDebug, "on_agent_events.waiting_next", map[string]any{
@@ -726,6 +768,11 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 					})
 					// CompleteWork will be called by defer
 					return nil
+				}
+				// Signal the idle watcher that we received an event.
+				select {
+				case activityReceived <- struct{}{}:
+				default:
 				}
 				if err := mgr.dispatchEvents(ctx, turnID, ev); err != nil {
 					var interruptErr *adk.InterruptError
@@ -805,6 +852,17 @@ func (mgr *SessionTurnManager) dispatchEvents(ctx context.Context, turnID string
 	})
 }
 
+// StreamIdleTimeout is the maximum duration a stream can remain idle
+// (no data received) before it is considered stalled and closed.
+// This prevents turns from getting stuck indefinitely when the LLM
+// stream stops mid-response.
+const StreamIdleTimeout = 3 * time.Minute
+
+// eventIdleWarningTimeout is the duration after which an idle warning is
+// logged if no events are received from the AsyncIterator. AsyncIterator
+// does not support Close()/Cancel(), so this is warning-only (方案 C).
+const eventIdleWarningTimeout = 10 * time.Minute
+
 // consumeStream drives a stream reader to completion.
 func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentName, role, toolName string, stream *schema.StreamReader[*schema.Message]) error {
 	mgr.log(ctx, LogLevelDebug, "stream.consume_start", map[string]any{
@@ -864,8 +922,11 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 			ch <- recvResult{msg, err}
 		}()
 
+		idleTimer := time.NewTimer(StreamIdleTimeout)
+
 		select {
 		case <-ctx.Done():
+			idleTimer.Stop()
 			mgr.log(ctx, LogLevelInfo, "stream.ctx_cancelled", map[string]any{
 				"session_id": mgr.sessionID,
 				"turn_id":    turnID,
@@ -873,7 +934,21 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 			stream.Close()
 			return ctx.Err()
 
+		case <-idleTimer.C:
+			stream.Close()
+			mgr.log(ctx, LogLevelError, "stream.idle_timeout", map[string]any{
+				"session_id": mgr.sessionID,
+				"turn_id":    turnID,
+				"timeout":    StreamIdleTimeout.String(),
+			})
+			return &StreamIdleTimeoutError{
+				SessionID: mgr.sessionID,
+				TurnID:    turnID,
+				Timeout:   StreamIdleTimeout,
+			}
+
 		case res := <-ch:
+			idleTimer.Stop()
 			if errors.Is(res.err, io.EOF) {
 				stream.Close()
 				// For assistant messages, set lastMessage from accumulated content

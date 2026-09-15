@@ -163,6 +163,14 @@ const (
 
 	// ========== Token 预估相关前缀 ==========
 	// 注：Token 预估数据已迁移至 Session 表持久化，不再使用 Redis 缓存。
+
+	// ========== 错误消息速率限制前缀 ==========
+
+	// PrefixErrorMessageRateLimit 错误消息速率限制计数器前缀
+	// 完整 key: error_msg_rate:{sessionID}:{hour}
+	// value: 当前小时内的错误消息计数（uint64）；TTL: 1 小时
+	// 用途：防止 Worker 故障导致的错误消息风暴（每 Session 每小时最多 20 条）
+	PrefixErrorMessageRateLimit = "error_msg_rate:"
 )
 
 // ========== 构造函数 ==========
@@ -297,3 +305,10 @@ func RtcBatchInterruptMap(turnID string) string {
 // ========== Token 预估 ==========
 // 注：Token 预估数据已迁移至 Session 表持久化，不再使用 Redis 缓存。
 // 原 TokenEstimate() 函数已删除。
+
+// ========== 错误消息速率限制 ==========
+
+// ErrorMessageRateLimit 返回错误消息速率限制计数器的 Redis key
+func ErrorMessageRateLimit(sessionID, hour string) string {
+	return PrefixErrorMessageRateLimit + sessionID + ":" + hour
+}

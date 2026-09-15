@@ -50,6 +50,11 @@ type DebugConfig struct {
 	// GoroutineLeakThreshold goroutine 数量超过此阈值时记录告警日志。
 	// 默认 1000。设为 0 禁用告警。
 	GoroutineLeakThreshold int `mapstructure:"goroutine_leak_threshold"`
+	// ShowRawErrors 是否在错误消息中展示 RawError 原始错误内容。
+	// 独立于 Enabled，默认 false。即使 debug 端点启用（用于 pprof 调试），
+	// RawError 也不会自动暴露给终端用户，必须显式开启。
+	// 生产部署必须保持 false 或显式设为 false。
+	ShowRawErrors bool `mapstructure:"show_raw_errors"`
 }
 
 // AsynqConfig asynq 任务调度配置

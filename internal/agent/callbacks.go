@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -903,6 +904,26 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 		"turn_id": turnID,
 		"error":   errMsg,
 	})
+
+	// Insert error feedback message for the user.
+	// Skipped when:
+	//   - turnErr is nil (nothing to report)
+	//   - error is context.Canceled (normal cancellation, not an error)
+	//   - context carries the skip flag (caller already inserted a message)
+	if turnErr != nil &&
+		!errors.Is(turnErr, context.Canceled) &&
+		!turnagent.ShouldSkipErrorMessage(ctx) {
+		category, title, message, retryable := classifyError(turnErr)
+		if err := h.insertErrorMessage(ctx, turn.SessionID, &tid,
+			category, title, message, retryable, turnErr.Error()); err != nil {
+			h.logger.Info(ctx, "failTurn.insertErrorMessage_failed", map[string]any{
+				"turn_id":    turnID,
+				"session_id": turn.SessionID.String(),
+				"error":      err.Error(),
+			})
+			// Do not block failTurn flow on error message insertion failure.
+		}
+	}
 
 	// Sub Agent support: if this is a sub session, notify the parent.
 	session, sessErr := h.deps.SessionRepo.GetByID(ctx, turn.SessionID)
