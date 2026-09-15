@@ -125,7 +125,10 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 		result.Content = "No messages found in this session."
 	}
 
-	resultJSON := mustMarshalJSON(result)
+	resultJSON, err := mustMarshalJSON(result)
+	if err != nil {
+		return "", fmt.Errorf("get_sub_agent_message: marshal result: %w", err)
+	}
 
 	// 6. Publish toolcall_input + toolcall_output messages.
 	if err := publishToolMessages(ctx, publishToolMessagesInput{

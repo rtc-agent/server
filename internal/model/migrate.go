@@ -1,6 +1,8 @@
 package model
 
 import (
+	"fmt"
+
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/pkg/memory"
@@ -30,7 +32,9 @@ func AutoMigrate(db *gorm.DB) error {
 	}
 
 	// 为 memory_links 添加复合索引，优化按 from_id + relation 查询
-	db.Exec("CREATE INDEX IF NOT EXISTS idx_memory_links_from_relation ON memory_links(from_id, relation)")
+	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_memory_links_from_relation ON memory_links(from_id, relation)").Error; err != nil {
+		return fmt.Errorf("create index idx_memory_links_from_relation: %w", err)
+	}
 
 	return nil
 }

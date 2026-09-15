@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -44,7 +45,7 @@ func (r *memoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*memory.Memory,
 	var m memory.Memory
 	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&m, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, memory.ErrNotFound
 		}
 		return nil, fmt.Errorf("get memory %s: %w", id, err)

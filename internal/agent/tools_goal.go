@@ -98,7 +98,10 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		MaxTurns:       goal.MaxTurns,
 		CompletedTurns: goal.CompletedTurns,
 	}
-	resultJSON := mustMarshalJSON(result)
+	resultJSON, err := mustMarshalJSON(result)
+	if err != nil {
+		return "", fmt.Errorf("create_goal: marshal result: %w", err)
+	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,
@@ -189,7 +192,10 @@ func (t *completeGoalTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		Reason:         args.Reason,
 		CompletedTurns: goal.CompletedTurns,
 	}
-	resultJSON := mustMarshalJSON(result)
+	resultJSON, err := mustMarshalJSON(result)
+	if err != nil {
+		return "", fmt.Errorf("complete_goal: marshal result: %w", err)
+	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,
@@ -280,7 +286,10 @@ func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		Reason:         args.Reason,
 		CompletedTurns: goal.CompletedTurns,
 	}
-	resultJSON := mustMarshalJSON(result)
+	resultJSON, err := mustMarshalJSON(result)
+	if err != nil {
+		return "", fmt.Errorf("cancel_goal: marshal result: %w", err)
+	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,

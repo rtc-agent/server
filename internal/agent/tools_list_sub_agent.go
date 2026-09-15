@@ -66,7 +66,10 @@ func (t *listSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 			UpdatedAt:    s.UpdatedAt.Format(time.RFC3339),
 		})
 	}
-	resultJSON := mustMarshalJSON(items)
+	resultJSON, err := mustMarshalJSON(items)
+	if err != nil {
+		return "", fmt.Errorf("list_sub_agent: marshal result: %w", err)
+	}
 
 	// 4. Publish toolcall_input + toolcall_output messages.
 	if err := publishToolMessages(ctx, publishToolMessagesInput{

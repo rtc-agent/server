@@ -13,9 +13,13 @@ import (
 
 // ScriptExecutionRepo 提供 script_executions 表的 CRUD 操作。
 type ScriptExecutionRepo interface {
+	// Create 创建新脚本执行记录
 	Create(ctx context.Context, exec *model.ScriptExecution) error
+	// GetByRtcID 根据 RTC ID 查询脚本执行记录
 	GetByRtcID(ctx context.Context, rtcID uuid.UUID) (*model.ScriptExecution, error)
+	// ListBySession 按 session 分页查询脚本执行列表
 	ListBySession(ctx context.Context, sessionID uuid.UUID, limit, offset int) ([]*model.ScriptExecution, int64, error)
+	// ListByUser 按用户分页查询脚本执行列表
 	ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*model.ScriptExecution, int64, error)
 }
 

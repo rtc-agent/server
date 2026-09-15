@@ -82,7 +82,10 @@ func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		Reason:         args.Reason,
 		CompletedTurns: loop.CompletedTurns,
 	}
-	resultJSON := mustMarshalJSON(result)
+	resultJSON, err := mustMarshalJSON(result)
+	if err != nil {
+		return "", fmt.Errorf("cancel_loop: marshal result: %w", err)
+	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,
@@ -177,7 +180,10 @@ func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		Reason:         args.Reason,
 		CompletedTurns: loop.CompletedTurns,
 	}
-	resultJSON := mustMarshalJSON(result)
+	resultJSON, err := mustMarshalJSON(result)
+	if err != nil {
+		return "", fmt.Errorf("complete_loop: marshal result: %w", err)
+	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,

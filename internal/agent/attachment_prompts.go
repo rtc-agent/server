@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
 )
 
@@ -264,11 +265,9 @@ func userMemoryLabels(lang string) map[string]string {
 }
 
 // truncContent truncates s to at most n bytes, appending "..." when truncated.
+// Delegates to stringutil.TruncateByByte.
 func truncContent(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
+	return stringutil.TruncateByByte(s, n)
 }
 
 // sortByCreatedAtDesc sorts session memories by created_at in descending order

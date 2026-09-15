@@ -61,10 +61,10 @@ func TestMicrocompactMessages_IdleUser_ClearsOld(t *testing.T) {
 	got := microcompactMessages(msgs, cfg)
 
 	// tc1 and tc2 should be cleared, tc3 kept
-	if got[1].Content != TIME_BASED_MC_CLEARED_MESSAGE {
+	if got[1].Content != TimeBasedMCClearedMessage {
 		t.Errorf("tc1 should be cleared, got %q", got[1].Content)
 	}
-	if got[3].Content != TIME_BASED_MC_CLEARED_MESSAGE {
+	if got[3].Content != TimeBasedMCClearedMessage {
 		t.Errorf("tc2 should be cleared, got %q", got[3].Content)
 	}
 	if got[5].Content != "recent result" {
@@ -73,7 +73,7 @@ func TestMicrocompactMessages_IdleUser_ClearsOld(t *testing.T) {
 }
 
 func TestMicrocompactMessages_NonCompactableTool(t *testing.T) {
-	// ls is not in COMPACTABLE_TOOLS -> should not be cleared
+	// ls is not in CompactableTools -> should not be cleared
 	now := time.Now()
 	msgs := []*turnagent.Message{
 		{Role: turnagent.RoleAssistant, Content: "call",

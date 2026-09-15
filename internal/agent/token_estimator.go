@@ -193,11 +193,15 @@ func (e *TokenEstimator) ReestimateAfterCompact(
 	}, nil
 }
 
+// roundsUnknown is the sentinel value returned when the estimated rounds
+// until compression is effectively unknown (EWMA <= 0).
+const roundsUnknown = 999
+
 // calcRounds calculates the estimated rounds until compression threshold is reached.
 // Note: When ewma is very small (e.g., after multiple rounds with roundDelta=0),
 // the EWMA naturally decays. This is normal EWMA behavior, not a bug.
 // The explicit guard (if ewma > 0) prevents division by zero; when ewma <= 0
-// we return 999 as a sentinel meaning "effectively unknown / very large".
+// we return roundsUnknown as a sentinel meaning "effectively unknown / very large".
 func calcRounds(currentTokens, threshold int64, ewma float64) int {
 	if currentTokens >= threshold {
 		return -1
@@ -206,5 +210,5 @@ func calcRounds(currentTokens, threshold int64, ewma float64) int {
 		remaining := threshold - currentTokens
 		return int(float64(remaining) / ewma)
 	}
-	return 999
+	return roundsUnknown
 }

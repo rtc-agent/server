@@ -239,6 +239,16 @@ func (r *CommandRegistry) Deactivate(sessionID uuid.UUID, name string) {
 	}
 }
 
+// CleanupSession removes all activated command entries for a session.
+// This should be called when a session is closed to prevent memory leaks
+// in the activated map, which is keyed by sessionID and never cleaned up
+// by the per-turn lifecycle (OnTurnComplete only removes OneShot commands).
+func (r *CommandRegistry) CleanupSession(sessionID uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.activated, sessionID)
+}
+
 // Active returns the names of commands currently active for a session, in
 // activation order.
 func (r *CommandRegistry) Active(sessionID uuid.UUID) []string {

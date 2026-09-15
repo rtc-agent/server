@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/pkoukk/tiktoken-go"
@@ -177,19 +178,31 @@ func (t *TiktokenTokenCounter) CountMessageTokens(msg *schema.Message) int {
 // Global TokenCounter
 // =============================================================================
 
-var globalTokenCounter TokenCounter = &HeuristicTokenCounter{}
+// tokenCounterHolder wraps a TokenCounter so atomic.Value always stores the
+// same concrete type (*tokenCounterHolder), regardless of which TokenCounter
+// implementation is active. Without this wrapper, switching between
+// *HeuristicTokenCounter and *TiktokenTokenCounter would panic.
+type tokenCounterHolder struct {
+	tc TokenCounter
+}
+
+var globalTokenCounter atomic.Value // stores *tokenCounterHolder
+
+func init() {
+	globalTokenCounter.Store(&tokenCounterHolder{tc: &HeuristicTokenCounter{}})
+}
 
 // SetGlobalTokenCounter sets the global token counter instance.
 // Call this once at startup based on configuration.
 func SetGlobalTokenCounter(tc TokenCounter) {
 	if tc != nil {
-		globalTokenCounter = tc
+		globalTokenCounter.Store(&tokenCounterHolder{tc: tc})
 	}
 }
 
 // GetGlobalTokenCounter returns the global token counter instance.
 func GetGlobalTokenCounter() TokenCounter {
-	return globalTokenCounter
+	return globalTokenCounter.Load().(*tokenCounterHolder).tc
 }
 
 // NewTokenCounter creates a TokenCounter based on the mode.
@@ -217,12 +230,12 @@ func NewTokenCounter(mode string) TokenCounter {
 //   - ToolCalls (function name, arguments, and ID)
 //   - Tool result metadata (ToolCallID, ToolName)
 func EstimateMessageTokensPrecise(msg *schema.Message) int {
-	return globalTokenCounter.CountMessageTokens(msg)
+	return GetGlobalTokenCounter().CountMessageTokens(msg)
 }
 
 // CountStringTokens counts the number of tokens in a string using the global TokenCounter.
 func CountStringTokens(text string) int {
-	return globalTokenCounter.CountTokens(text)
+	return GetGlobalTokenCounter().CountTokens(text)
 }
 
 // CumulativeTokenCounter estimates the total token count across all messages.

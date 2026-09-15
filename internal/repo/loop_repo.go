@@ -14,10 +14,15 @@ import (
 
 // LoopRepo Loop 仓储接口
 type LoopRepo interface {
+	// Create 创建新 Loop 记录
 	Create(ctx context.Context, loop *model.Loop) error
+	// GetByID 根据 ID 查询 Loop
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Loop, error)
+	// FindActive 查找指定 session 的 active loop
 	FindActive(ctx context.Context, sessionID uuid.UUID) (*model.Loop, error)
+	// Update 更新 Loop 的指定字段
 	Update(ctx context.Context, id uuid.UUID, fields map[string]any) error
+	// ListBySession 按 session 分页查询 Loop 列表
 	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Loop, error)
 	// FindStaleLoops 查找 stale loops（active 且需要 recovery 的）
 	// Stale 条件：status='active' AND (asynq_task_id IS NULL OR asynq_task_id='') AND last_run_at IS NOT NULL AND last_run_at < staleThreshold

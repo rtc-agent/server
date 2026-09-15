@@ -3,13 +3,13 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/pkg/logger"
 	"gorm.io/gorm"
 )
 
@@ -162,20 +162,12 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 	// scheduling survives request teardown. Panic recovery is required
 	// because this goroutine is outside any recover boundary.
 	if l.helpers.deps.TaskScheduler != nil {
-		loopID := loop.ID
-		sessionID := ctx.SessionID
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					l.helpers.logger.Info(context.Background(), "loopWorkflow.schedule_panic", map[string]any{
-						"loop_id":    loopID.String(),
-						"session_id": sessionID.String(),
-						"panic":      fmt.Sprintf("%v", r),
-					})
-				}
-			}()
-			l.scheduleNextLoop(context.Background(), loop)
-		}()
+		logger.SafeGo("loopWorkflow.scheduleNext", func() {
+			// 使用带超时的 context 防止 asynq 调用挂起导致 goroutine 泄漏
+			schedCtx, schedCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer schedCancel()
+			l.scheduleNextLoop(schedCtx, loop)
+		})
 	}
 
 	l.helpers.logger.Info(ctx, "loopWorkflow.loop_extended", map[string]any{

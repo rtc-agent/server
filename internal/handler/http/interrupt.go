@@ -119,7 +119,7 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if logger.DebugMode {
+	if logger.IsDebugMode() {
 		logger.Debug(ctx, "[interrupt.HTTP] entry",
 			zap.String("session", sessionID.String()),
 			zap.String("interrupt", interruptID),
@@ -145,7 +145,7 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if logger.DebugMode {
+	if logger.IsDebugMode() {
 		logger.Debug(ctx, "[interrupt.HTTP] SET+PUBLISH answer",
 			zap.String("session", sessionID.String()),
 			zap.String("interrupt", interruptID),

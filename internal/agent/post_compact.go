@@ -133,7 +133,7 @@ func (h *helpers) createPostCompactAttachments(
 			continue
 		}
 		// Skip microcompacted / cleared content.
-		if content == TIME_BASED_MC_CLEARED_MESSAGE {
+		if content == TimeBasedMCClearedMessage {
 			continue
 		}
 

@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -60,7 +61,7 @@ func (r *userMemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.User
 	var memory model.UserMemory
 	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&memory, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, fmt.Errorf("user memory %s: %w", id, ErrNotFound)
 		}
 		return nil, fmt.Errorf("get user memory %s: %w", id, err)

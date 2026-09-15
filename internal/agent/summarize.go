@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -371,7 +372,7 @@ func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message,
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return "", fmt.Errorf("stream recv: %w", err)

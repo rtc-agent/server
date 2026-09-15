@@ -184,7 +184,7 @@ func aggressiveMicrocompact(messages []*turnagent.Message, keepRecent int) []*tu
 			if _, kept := keepSet[msg.ToolCallID]; !kept {
 				result[i] = &turnagent.Message{
 					Role:       msg.Role,
-					Content:    TIME_BASED_MC_CLEARED_MESSAGE,
+					Content:    TimeBasedMCClearedMessage,
 					ToolName:   msg.ToolName,
 					ToolCallID: msg.ToolCallID,
 					CreatedAt:  msg.CreatedAt,

@@ -14,10 +14,9 @@
 package agent
 
 import (
-	"bytes"
 	_ "embed"
-	"fmt"
-	"text/template"
+
+	"github.com/rtc-agent/server/internal/agent/templateutil"
 )
 
 // --- formatToolCallOutput status templates ---
@@ -116,22 +115,18 @@ var searchResultsListTmpl string
 // =============================================================================
 
 // mustRenderTemplate parses and executes a text/template string with the given
-// data. It panics on error because templates are embedded at compile time — a
-// failure here is a programmer error that should surface immediately.
+// data. On error, it logs the failure and returns a descriptive fallback
+// string instead of panicking — templates are embedded at compile time so a
+// failure here indicates a programmer error, but we degrade gracefully rather
+// than crash the process.
 //
 // This is the shared render core used by output, workflow, and attachment
 // template accessors. Callers that need custom template functions (e.g. the
 // attachment "trunc" helper) should use renderAttachmentTemplate instead.
+//
+// Delegates to templateutil.MustRender for the actual rendering.
 func mustRenderTemplate(name, tmplStr string, data any) string {
-	t, err := template.New(name).Parse(tmplStr)
-	if err != nil {
-		panic(fmt.Sprintf("template parse error (%s): %v", name, err))
-	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
-		panic(fmt.Sprintf("template execute error (%s): %v", name, err))
-	}
-	return buf.String()
+	return templateutil.MustRender(name, tmplStr, data)
 }
 
 // renderStatic returns a static template string as-is. It exists for symmetry

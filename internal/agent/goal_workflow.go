@@ -143,6 +143,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	}
 
 	// Re-queue a submit work item to trigger the next turn.
+	// 使用 log+degrade 模式：re-queue 失败不应中断主流程，仅记录日志。
 	if g.helpers.queue != nil {
 		payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 			Kind:      turnagent.WorkKindSubmit,
@@ -153,7 +154,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 				"goal_id": goal.ID.String(),
 				"error":   marshalErr.Error(),
 			})
-			return marshalErr
+			return nil // degrade: 记录日志但不中断主流程
 		}
 		const submitPriority int64 = 0
 		if _, err := g.helpers.queue.Publish(ctx, ctx.SessionID.String(), string(payload), submitPriority); err != nil {
@@ -162,7 +163,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 				"session_id": ctx.SessionID.String(),
 				"error":      err.Error(),
 			})
-			return err
+			return nil // degrade: 记录日志但不中断主流程
 		}
 	}
 

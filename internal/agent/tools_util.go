@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -22,6 +23,10 @@ func extractTextFromContent(content protocol.ContentData) string {
 			return umc.Text
 		}
 	}
-	dataBytes, _ := json.Marshal(content.Data)
+	dataBytes, err := json.Marshal(content.Data)
+	if err != nil {
+		// JSON 序列化失败时降级为 fmt.Sprintf，避免丢失调试信息
+		return fmt.Sprintf("%v", content.Data)
+	}
 	return string(dataBytes)
 }

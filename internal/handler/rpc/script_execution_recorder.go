@@ -120,7 +120,11 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 		Code   string `json:"code"`
 	}
 	if rtc.Parameters != "" {
-		_ = json.Unmarshal([]byte(rtc.Parameters), &params)
+		if err := json.Unmarshal([]byte(rtc.Parameters), &params); err != nil {
+			logger.Warn(ctx, "[scriptExecutionRecorder] unmarshal parameters failed",
+				zap.String("rtc", rtc.ID.String()),
+				zap.Error(err))
+		}
 	}
 	if params.Action == "" {
 		params.Action = "eval" // 默认 action
@@ -132,7 +136,12 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 	var logsList, warningsList, errorsList model.StringArray
 
 	if req.Result != nil {
-		resultBytes, _ := json.Marshal(req.Result)
+		resultBytes, err := json.Marshal(req.Result)
+		if err != nil {
+			logger.Warn(ctx, "[scriptExecutionRecorder] marshal result failed",
+				zap.String("rtc", rtc.ID.String()),
+				zap.Error(err))
+		}
 		resultSize = int64(len(resultBytes))
 
 		var resultData struct {
@@ -141,7 +150,11 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 			Warnings   []string `json:"warnings"`
 			Errors     []string `json:"errors"`
 		}
-		_ = json.Unmarshal(resultBytes, &resultData)
+		if err := json.Unmarshal(resultBytes, &resultData); err != nil {
+			logger.Warn(ctx, "[scriptExecutionRecorder] unmarshal result failed",
+				zap.String("rtc", rtc.ID.String()),
+				zap.Error(err))
+		}
 		durationMs = resultData.DurationMs
 		logsList = resultData.Logs
 		warningsList = resultData.Warnings

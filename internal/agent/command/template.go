@@ -1,8 +1,7 @@
 package command
 
 import (
-	"bytes"
-	"text/template"
+	"github.com/rtc-agent/server/internal/agent/templateutil"
 )
 
 // TemplateConfig declares a simple command that only contributes prompts.
@@ -64,14 +63,8 @@ func templateData(ctx Context, args string) templateDataT {
 	}
 }
 
+// renderTemplate renders a named text/template with the given data.
+// Delegates to templateutil.Render for the actual rendering.
 func renderTemplate(name, text string, data any) (string, error) {
-	t, err := template.New(name).Parse(text)
-	if err != nil {
-		return "", err
-	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
+	return templateutil.Render(name, text, data)
 }

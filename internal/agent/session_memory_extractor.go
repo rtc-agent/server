@@ -12,10 +12,12 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	loggerpkg "github.com/rtc-agent/server/pkg/logger"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
+	"time"
 )
 
 //go:embed prompts/session-memory-extract.md
@@ -465,12 +467,9 @@ func formatMessagesForMemoryExtract(messages []*schema.Message) string {
 }
 
 // truncateString 截断字符串（按 rune 截断，避免在多字节字符中间截断）
+// Delegates to stringutil.TruncateByRune.
 func truncateString(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen]) + "..."
+	return stringutil.TruncateByRune(s, maxLen)
 }
 
 // estimateMemoryTokens 估算 token 数（使用全局 TokenCounter）
@@ -548,6 +547,9 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 		}()
 
 		bgCtx := context.WithoutCancel(ctx)
+		// 添加超时防止提取操作挂起导致 goroutine 泄漏
+		bgCtx, bgTimeoutCancel := context.WithTimeout(bgCtx, 60*time.Second)
+		defer bgTimeoutCancel()
 		extracted, newState, err := extractor.ExtractIfNeeded(bgCtx, sessionID, schemaMessages, state)
 		if err != nil {
 			h.logger.Error(bgCtx, "[triggerSessionMemoryExtraction] error", map[string]any{

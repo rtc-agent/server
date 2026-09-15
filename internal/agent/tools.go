@@ -21,6 +21,21 @@ import (
 	"go.uber.org/zap"
 )
 
+// Error Handling Conventions
+//
+// All tool execution functions in this package follow these error handling rules:
+//
+//  1. NEVER use panic for expected error conditions — return error instead.
+//  2. NEVER silently ignore errors — at minimum, log with logger.Error/Logger.Warn.
+//  3. Use errors.Is() for error comparison, not direct == (supports wrapped errors).
+//  4. For non-critical operations, use log+degrade pattern:
+//     log the error and continue with degraded functionality.
+//  5. For goroutines, use logger.SafeGo() or add defer/recover to prevent
+//     a single goroutine panic from crashing the process.
+//  6. JSON marshal/unmarshal errors must always be checked.
+//  7. Template rendering errors must be returned, not swallowed.
+//  8. uuid.Parse and similar parsing errors must be checked and returned.
+
 // Each tool's Info returns the tool metadata; InvokableRun delegates to
 // rtcToolBase.InvokableRun which implements the full RTC tool logic
 // (create Message + RTC record, publish updates, stateful interrupt).
@@ -341,7 +356,12 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 			Action string `json:"action"`
 			Name   string `json:"name"`
 		}
-		_ = json.Unmarshal([]byte(argumentsInJSON), &scriptArgs)
+		if err := json.Unmarshal([]byte(argumentsInJSON), &scriptArgs); err != nil {
+			logger.Warn(ctx, "script.parse_args_failed",
+				zap.String("rtc_id", rtcID.String()),
+				zap.Error(err),
+			)
+		}
 		logger.Info(ctx, "script.execution_started",
 			zap.String("rtc_id", rtcID.String()),
 			zap.String("session_id", r.session.ID.String()),

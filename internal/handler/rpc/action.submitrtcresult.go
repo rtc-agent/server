@@ -429,9 +429,18 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 			}
 
 			if interruptedTurnID != uuid.Nil {
-				// Retry a few times, waiting for interruptTurn to persist InterruptID
-				for attempt := 0; attempt < 10; attempt++ {
-					time.Sleep(50 * time.Millisecond)
+				// Retry with exponential backoff, waiting for interruptTurn to persist InterruptID.
+				const (
+					interruptPollMaxAttempts = 10
+					interruptPollInitDelay   = 20 * time.Millisecond
+					interruptPollMaxDelay    = 200 * time.Millisecond
+				)
+				for attempt := 0; attempt < interruptPollMaxAttempts; attempt++ {
+					delay := interruptPollInitDelay * time.Duration(1<<min(attempt, 4))
+					if delay > interruptPollMaxDelay {
+						delay = interruptPollMaxDelay
+					}
+					time.Sleep(delay)
 					updatedTurn, err := h.deps.Deps.TurnRepo.GetByID(ctx, interruptedTurnID)
 					if err != nil {
 						break

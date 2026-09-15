@@ -414,3 +414,11 @@ func (h *helpers) toolResultBudgetConfig() ToolResultBudgetConfig {
 		MaxTokens: h.toolResultBudgetMaxTokens,
 	}
 }
+
+// Close releases resources held by helpers.
+// Should be called when the agent is being shut down.
+func (h *helpers) Close() {
+	if h.tokenUpdateThrottle != nil {
+		h.tokenUpdateThrottle.Stop()
+	}
+}

@@ -312,7 +312,7 @@ func provideAgent(
 		AutoCompactBufferTokens:   cfg.Worker.AutoCompactBufferTokens,
 		CacheHitRateWarnThreshold: cfg.Worker.CacheHitRateWarnThreshold,
 		MaxOutputTokensForSummary: cfg.Worker.MaxOutputTokensForSummary,
-		EnableLLMLogging:          logger.DebugMode,
+		EnableLLMLogging:          logger.IsDebugMode(),
 		CheckpointTTL:             cfg.Worker.CheckpointTTL,
 		StreamChunkTTL:            cfg.Worker.StreamChunkTTL,
 		Logger:                    agent.NewLogger(),

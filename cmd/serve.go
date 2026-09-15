@@ -50,7 +50,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	defer logger.SyncLLMPayload()
 
 	logger.Info(context.Background(), "Starting RTC Agent server...")
-	if logger.DebugMode {
+	if logger.IsDebugMode() {
 		logger.Info(context.Background(), "DEBUG mode enabled — extra logs writing to logs/debug.log")
 	}
 	if cfg.Log.LLMPayload {

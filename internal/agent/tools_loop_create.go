@@ -132,7 +132,10 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		MaxTurns:        loop.MaxTurns,
 		CompletedTurns:  loop.CompletedTurns,
 	}
-	resultJSON := mustMarshalJSON(result)
+	resultJSON, err := mustMarshalJSON(result)
+	if err != nil {
+		return "", fmt.Errorf("create_loop: marshal result: %w", err)
+	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,

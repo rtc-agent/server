@@ -98,6 +98,15 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	defer detachedCancel()
 	logger.SafeGo("stop-active-turns", func() {
 		h.stopActiveTurns(detachedCtx, session.ID)
+
+		// Cleanup CommandRegistry activated entries for this session.
+		// The CommandRegistry is a process-level singleton; its activated map
+		// tracks per-session command state that would otherwise leak memory.
+		// Only done on session close (not on StopTurn) since the session is
+		// ending and no further turns will use the activated commands.
+		if h.deps.Deps.CommandRegistry != nil {
+			h.deps.Deps.CommandRegistry.CleanupSession(session.ID)
+		}
 	})
 
 	return &protocol.CloseSessionResponse{

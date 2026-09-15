@@ -124,7 +124,7 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 // handleToken 处理 POST /oauth2/token
 // 支持 JSON 和 application/x-www-form-urlencoded 两种 Content-Type
 func (h *OAuth2Handler) handleToken(w http.ResponseWriter, r *http.Request) {
-	req, err := parseTokenExchangeRequest(r)
+	req, err := parseTokenExchangeRequest(w, r)
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "请求解析失败")
 		return
@@ -186,7 +186,7 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 
 // handleRefresh 处理 POST /oauth2/refresh
 func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	req, err := parseRefreshRequest(r)
+	req, err := parseRefreshRequest(w, r)
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "请求体解析失败")
 		return
@@ -242,10 +242,10 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 // parseRequestBody 解析请求体，支持 application/json 和 form-urlencoded。
 // JSON 直接解码到 target；form 先 ParseForm 再调用 formFiller 填充 target。
 // 对 JSON body 添加 1MB 大小限制，防止恶意客户端消耗过多内存。
-func parseRequestBody(r *http.Request, target any, formFiller func(r *http.Request)) error {
+func parseRequestBody(w http.ResponseWriter, r *http.Request, target any, formFiller func(r *http.Request)) error {
 	contentType := r.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "application/json") {
-		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20) // 1MB limit
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 		return json.NewDecoder(r.Body).Decode(target)
 	}
 	if err := r.ParseForm(); err != nil {
@@ -256,9 +256,9 @@ func parseRequestBody(r *http.Request, target any, formFiller func(r *http.Reque
 }
 
 // parseTokenExchangeRequest 解析 token 交换请求（支持 JSON 和 form）
-func parseTokenExchangeRequest(r *http.Request) (*protocol.OAuth2TokenExchangeRequest, error) {
+func parseTokenExchangeRequest(w http.ResponseWriter, r *http.Request) (*protocol.OAuth2TokenExchangeRequest, error) {
 	var req protocol.OAuth2TokenExchangeRequest
-	if err := parseRequestBody(r, &req, func(r *http.Request) {
+	if err := parseRequestBody(w, r, &req, func(r *http.Request) {
 		req.Code = r.FormValue("code")
 		req.RedirectUri = r.FormValue("redirect_uri")
 		req.State = r.FormValue("state")
@@ -272,9 +272,9 @@ func parseTokenExchangeRequest(r *http.Request) (*protocol.OAuth2TokenExchangeRe
 }
 
 // parseRefreshRequest 解析 refresh_token 请求（支持 JSON 和 form）
-func parseRefreshRequest(r *http.Request) (*protocol.OAuth2TokenRefreshRequest, error) {
+func parseRefreshRequest(w http.ResponseWriter, r *http.Request) (*protocol.OAuth2TokenRefreshRequest, error) {
 	var req protocol.OAuth2TokenRefreshRequest
-	if err := parseRequestBody(r, &req, func(r *http.Request) {
+	if err := parseRequestBody(w, r, &req, func(r *http.Request) {
 		req.RefreshToken = r.FormValue("refresh_token")
 	}); err != nil {
 		return nil, err

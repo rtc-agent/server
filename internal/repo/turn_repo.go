@@ -14,15 +14,20 @@ import (
 
 // TurnRepo Turn 仓储接口
 type TurnRepo interface {
+	// Create 创建新 Turn 记录
 	Create(ctx context.Context, turn *model.Turn) error
+	// GetByID 根据 ID 查询 Turn
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Turn, error)
+	// FindByClientID 根据 clientID 查询 Turn
 	FindByClientID(ctx context.Context, clientID string) (*model.Turn, error)
+	// ListBySession 按 session 分页查询 Turn 列表
 	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Turn, error)
 	FindActiveBySession(ctx context.Context, sessionID uuid.UUID) ([]*model.Turn, error)
 	// FindStaleTurns finds all turns in the given statuses that are "stale"
 	// (i.e., left over from a previous server crash or restart). Used for
 	// crash recovery on startup.
 	FindStaleTurns(ctx context.Context, statuses []string) ([]*model.Turn, error)
+	// UpdateStatus 更新 Turn 状态及错误信息
 	UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, errMsg string) error
 	// UpdateStatusBySession batch-updates all turns for a session that are in
 	// any of the given statuses to the target status. Returns the number of

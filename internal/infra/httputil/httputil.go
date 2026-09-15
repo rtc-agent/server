@@ -4,18 +4,26 @@
 package httputil
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+
+	"go.uber.org/zap"
+
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // WriteJSON 写入 JSON 响应。
 //
 // 设置 Content-Type 为 application/json，写入状态码，编码 data 到响应体。
-// 编码失败时静默忽略（响应头已发送，无法改变状态码）。
+// 编码失败时记录错误日志（响应头已发送，无法改变状态码）。
 func WriteJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		logger.Error(context.Background(), "WriteJSON: failed to encode response",
+			zap.Int("status", status), zap.Error(err))
+	}
 }
 
 // WriteError 写入结构化错误响应。
@@ -33,5 +41,8 @@ func WriteError(w http.ResponseWriter, status int, errCode, description string) 
 	if description != "" {
 		resp["error_description"] = description
 	}
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		logger.Error(context.Background(), "WriteError: failed to encode response",
+			zap.Int("status", status), zap.String("err_code", errCode), zap.Error(err))
+	}
 }

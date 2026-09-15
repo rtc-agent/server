@@ -2,8 +2,12 @@
 package updates
 
 import (
+	"context"
 	"encoding/json"
 
+	"go.uber.org/zap"
+
+	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"github.com/centrifugal/centrifuge"
@@ -44,10 +48,16 @@ func makeGapPublication(from uint32) *centrifuge.Publication {
 		Type string                 `json:"type"`
 		Data protocol.UpdateDataGap `json:"data"`
 	}
-	data, _ := json.Marshal(gapPayload{
+	data, err := json.Marshal(gapPayload{
 		Type: string(protocol.UpdateTypeGap),
 		Data: protocol.UpdateDataGap{},
 	})
+	if err != nil {
+		// gapPayload 仅含 string + 空 struct，marshal 理论上不会失败；
+		// 记录日志便于排查万一出现的异常。
+		logger.Error(context.Background(), "makeGapPublication: failed to marshal gap payload", zap.Error(err))
+		data = []byte(`{"type":"gap","data":{}}`)
+	}
 	return &centrifuge.Publication{
 		Data:   data,
 		Offset: uint64(from),

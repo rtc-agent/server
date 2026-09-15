@@ -74,3 +74,31 @@ func (t *Throttle) Do(key string, fn func()) {
 		}
 	})
 }
+
+// Stop cancels all pending timers and releases references to pending functions.
+// This should be called when the owning agent/session is being shut down to
+// prevent timer leaks and allow GC of captured closures.
+//
+// After Stop, the Throttle must not be used (Do calls may panic or behave
+// unpredictably).
+func (t *Throttle) Stop() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Cancel all pending timers to prevent them from firing after shutdown.
+	for key, timer := range t.timers {
+		timer.Stop()
+		delete(t.timers, key)
+	}
+
+	// Clear pending functions to release references held by closures,
+	// allowing the GC to reclaim captured objects (e.g. agent, session).
+	for key := range t.pendingFn {
+		delete(t.pendingFn, key)
+	}
+
+	// Clear lastCall to fully reset state.
+	for key := range t.lastCall {
+		delete(t.lastCall, key)
+	}
+}

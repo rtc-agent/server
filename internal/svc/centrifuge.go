@@ -74,11 +74,16 @@ type clientInfo struct {
 }
 
 // parseClientInfo 从 client.Info() JSON 解析出 clientInfo。
-// 解析失败或为空时返回零值（不报错），保证 OnConnect 不因 info 损坏而 panic。
+// 解析失败时记录警告日志并返回零值，保证 OnConnect 不因 info 损坏而 panic。
 func parseClientInfo(info []byte) *clientInfo {
 	ci := &clientInfo{}
 	if len(info) > 0 {
-		_ = json.Unmarshal(info, ci)
+		if err := json.Unmarshal(info, ci); err != nil {
+			logger.Warn(stdcontext.Background(), "[Centrifuge] failed to parse client info, using zero value",
+				zap.Error(err),
+				zap.String("info_preview", previewToken(string(info))),
+			)
+		}
 	}
 	return ci
 }

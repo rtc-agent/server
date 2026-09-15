@@ -13,9 +13,13 @@ import (
 
 // OAuth2UserRepo OAuth2 用户仓储接口
 type OAuth2UserRepo interface {
+	// Create 创建新 OAuth2 用户记录
 	Create(ctx context.Context, user *model.OAuth2User) error
+	// FindByID 根据 ID 查询 OAuth2 用户
 	FindByID(ctx context.Context, id uuid.UUID) (*model.OAuth2User, error)
+	// FindByProvider 按提供商和 sub 查询 OAuth2 用户
 	FindByProvider(ctx context.Context, provider, sub string) (*model.OAuth2User, error)
+	// Update 更新 OAuth2 用户记录
 	Update(ctx context.Context, user *model.OAuth2User) error
 }
 

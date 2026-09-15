@@ -195,14 +195,14 @@ func publishOutputOnly(ctx context.Context, in publishOutputOnlyInput) error {
 }
 
 // ---------------------------------------------------------------------------
-// mustMarshalJSON — JSON marshalling with panic on programmer error
+// mustMarshalJSON — JSON marshalling with error propagation
 // ---------------------------------------------------------------------------
 
-// mustMarshalJSON marshals v to JSON, panicking on error (programmer error).
-func mustMarshalJSON(v any) string {
+// mustMarshalJSON marshals v to JSON, returning an error instead of panicking.
+func mustMarshalJSON(v any) (string, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
-		panic(fmt.Errorf("marshal json: %w", err))
+		return "", fmt.Errorf("marshal json: %w", err)
 	}
-	return string(b)
+	return string(b), nil
 }

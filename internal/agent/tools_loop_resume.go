@@ -83,7 +83,10 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		CompletedTurns: pausedLoop.CompletedTurns,
 		MaxTurns:       pausedLoop.MaxTurns,
 	}
-	resultJSON := mustMarshalJSON(result)
+	resultJSON, err := mustMarshalJSON(result)
+	if err != nil {
+		return "", fmt.Errorf("resume_loop: marshal result: %w", err)
+	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,

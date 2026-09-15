@@ -13,10 +13,15 @@ import (
 
 // GoalRepo Goal 仓储接口
 type GoalRepo interface {
+	// Create 创建新 Goal 记录
 	Create(ctx context.Context, goal *model.Goal) error
+	// GetByID 根据 ID 查询 Goal
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Goal, error)
+	// FindActive 查找指定 session 的 active goal
 	FindActive(ctx context.Context, sessionID uuid.UUID) (*model.Goal, error)
+	// Update 更新 Goal 的指定字段
 	Update(ctx context.Context, id uuid.UUID, fields map[string]any) error
+	// ListBySession 按 session 分页查询 Goal 列表
 	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Goal, error)
 }
 

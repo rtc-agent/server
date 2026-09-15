@@ -430,7 +430,9 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 	// Detach from the callback's context. The sub session's turn is already
 	// completed; the resume is fire-and-forget and must not be aborted by
 	// the callback context timeout/cancellation.
-	ctx := context.WithoutCancel(callerCtx)
+	// 添加超时防止下游操作挂起导致 goroutine 泄漏
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(callerCtx), 30*time.Second)
+	defer cancel()
 
 	if h.queue == nil {
 		h.logger.Info(ctx, "resumeParentAfterSubAgent.queue_nil", map[string]any{
@@ -517,7 +519,9 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 // The function detaches from the caller's context for fire-and-forget operation.
 func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subSession *model.Session, lastMessage *turnagent.Message, status string, errorMessage *string) {
 	// Detach from the callback's context — fire-and-forget.
-	ctx := context.WithoutCancel(callerCtx)
+	// 添加超时防止下游操作挂起导致 goroutine 泄漏
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(callerCtx), 30*time.Second)
+	defer cancel()
 
 	if h.queue == nil {
 		h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.queue_nil", map[string]any{

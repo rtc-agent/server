@@ -6,12 +6,12 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
-// COMPACTABLE_TOOLS lists the tools whose results can be cleared by
+// CompactableTools lists the tools whose results can be cleared by
 // Microcompact. These tools typically produce large outputs that are not
 // needed once the conversation has moved on.
 //
 // The tool names must match those registered in tools.go's createTools.
-var COMPACTABLE_TOOLS = map[string]bool{
+var CompactableTools = map[string]bool{
 	"read":   true,
 	"write":  true,
 	"grep":   true,
@@ -19,9 +19,9 @@ var COMPACTABLE_TOOLS = map[string]bool{
 	"script": true,
 }
 
-// TIME_BASED_MC_CLEARED_MESSAGE is the placeholder text that replaces the
+// TimeBasedMCClearedMessage is the placeholder text that replaces the
 // content of a cleared tool result.
-const TIME_BASED_MC_CLEARED_MESSAGE = "[Old tool result content cleared]"
+const TimeBasedMCClearedMessage = "[Old tool result content cleared]"
 
 // MicrocompactConfig controls the behavior of time-based Microcompact.
 type MicrocompactConfig struct {
@@ -54,7 +54,7 @@ func DefaultMicrocompactConfig() MicrocompactConfig {
 //     messages' ToolCalls).
 //  3. Keep the most recent KeepRecent IDs; mark the rest for clearing.
 //  4. Replace the Content of tool messages whose ToolCallID is marked with
-//     TIME_BASED_MC_CLEARED_MESSAGE.
+//     TimeBasedMCClearedMessage.
 //
 // This function operates in-memory only; it does NOT persist changes to the DB.
 // The original messages slice is NOT modified — a new slice is returned.
@@ -105,7 +105,7 @@ func microcompactMessages(messages []*turnagent.Message, cfg MicrocompactConfig)
 			if _, kept := keepSet[msg.ToolCallID]; !kept {
 				result[i] = &turnagent.Message{
 					Role:       msg.Role,
-					Content:    TIME_BASED_MC_CLEARED_MESSAGE,
+					Content:    TimeBasedMCClearedMessage,
 					ToolName:   msg.ToolName,
 					ToolCallID: msg.ToolCallID,
 					CreatedAt:  msg.CreatedAt,
@@ -131,14 +131,14 @@ func findLastAssistantTime(messages []*turnagent.Message) time.Time {
 }
 
 // collectCompactableToolCallIDs scans the messages in order and collects the
-// IDs of tool calls whose tool name is in COMPACTABLE_TOOLS. The IDs are
+// IDs of tool calls whose tool name is in CompactableTools. The IDs are
 // returned in the order they appear (earliest first).
 func collectCompactableToolCallIDs(messages []*turnagent.Message) []string {
 	var ids []string
 	for _, msg := range messages {
 		if msg.Role == turnagent.RoleAssistant {
 			for _, tc := range msg.ToolCalls {
-				if COMPACTABLE_TOOLS[tc.Name] {
+				if CompactableTools[tc.Name] {
 					ids = append(ids, tc.ID)
 				}
 			}

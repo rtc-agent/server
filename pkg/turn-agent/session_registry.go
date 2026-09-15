@@ -48,12 +48,36 @@ func (r *SessionManagerRegistry) Get(sessionID string) *SessionTurnManager {
 // Remove deletes the manager for the given session.
 // The manager is tracked in removedManagers so that GetOrCreate can wait
 // for its cleanup to complete before retrying claims.
+// A self-cleanup goroutine is launched to automatically remove the entry
+// from removedManagers once the manager's done channel is closed, preventing
+// memory leaks when no one calls waitForRemovedManagers.
 func (r *SessionManagerRegistry) Remove(sessionID string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if mgr, ok := r.managers[sessionID]; ok {
 		delete(r.managers, sessionID)
 		r.removedManagers[sessionID] = mgr
+		r.mu.Unlock()
+
+		// Self-cleanup: automatically remove from removedManagers once
+		// the manager has fully stopped, preventing memory leaks.
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					mgr.log(context.Background(), LogLevelError, "session_registry.cleanup_panic", map[string]any{
+						"session_id": mgr.sessionID,
+						"panic":      fmt.Sprintf("%v", r),
+					})
+				}
+			}()
+			<-mgr.Done()
+			r.mu.Lock()
+			if r.removedManagers[sessionID] == mgr {
+				delete(r.removedManagers, sessionID)
+			}
+			r.mu.Unlock()
+		}()
+	} else {
+		r.mu.Unlock()
 	}
 }
 
@@ -82,32 +106,15 @@ func (r *SessionManagerRegistry) GetOrCreate(
 	cfg Config,
 	logFn func(ctx context.Context, level LogLevel, msg string, fields map[string]any),
 ) (*SessionTurnManager, bool, error) {
-	r.mu.Lock()
-
+	// 1. 快速路径：读锁检查现有 manager，避免阻塞其他 session 的读写
+	r.mu.RLock()
 	existing := r.managers[sessionID]
+	r.mu.RUnlock()
 	if existing != nil {
-		r.mu.Unlock()
-		// Check if the loop is still running by trying a sentinel push.
-		// We use a zero-value item as a probe; if Push returns false, the loop stopped.
-		// However, we don't want to actually push a real item here — the caller
-		// will push the real work item. Instead, we use the loop's Wait() to check.
-		//
-		// A simpler approach: just try to check if the loop is done.
-		// Since TurnLoop doesn't expose an "IsRunning" method, we'll use a different
-		// strategy: assume the loop is running if the manager exists. The caller
-		// will attempt to push; if push fails, the caller calls GetOrCreate again.
-		//
-		// Actually, the architecture doc says: "Push returns false → GetOrCreate
-		// creates new manager." So we should return the existing manager and let
-		// the caller try Push. If Push fails, we handle it here.
-		//
-		// For now, return existing manager. The caller will try Push and if it
-		// fails, we create a new one.
 		return existing, false, nil
 	}
 
-	// No existing manager. Create a new one.
-	// Determine the credential to use for the manager.
+	// 2. 无现有 manager：需要创建新的。先确定 credential。
 	var credential string
 
 	if initialCredential != "" {
@@ -118,36 +125,33 @@ func (r *SessionManagerRegistry) GetOrCreate(
 	} else {
 		// No credential provided. This means we need to claim the lock ourselves.
 		// This path is used when GetOrCreate is called directly (not via Worker).
+		// Redis 操作在无锁状态下执行，避免阻塞其他 session
 		claim, err := queue.ClaimWithCredential(ctx, sessionID, workerID, "")
 		if err != nil {
-			r.mu.Unlock()
 			return nil, false, fmt.Errorf("turnagent: claim: %w", err)
 		}
 		if claim == nil {
 			// Claim failed. This may be because a recently removed manager's cleanup
 			// hasn't finished yet (lock still held). Wait for removed managers' done
 			// channels, then retry once (Fix 2 from architecture doc).
-			r.mu.Unlock()
 			r.waitForRemovedManagers(ctx, sessionID, claimRetryTimeout)
-			r.mu.Lock()
-
-			// Re-check: a new manager may have been created while we waited.
-			if existing := r.managers[sessionID]; existing != nil {
-				r.mu.Unlock()
-				return existing, false, nil
-			}
 
 			claim, err = queue.ClaimWithCredential(ctx, sessionID, workerID, "")
 			if err != nil {
-				r.mu.Unlock()
 				return nil, false, fmt.Errorf("turnagent: claim retry: %w", err)
 			}
 			if claim == nil {
-				r.mu.Unlock()
 				return nil, false, fmt.Errorf("turnagent: claim returned nil: session lock held by another worker or queue empty")
 			}
 		}
 		credential = claim.Credential
+	}
+
+	// 3. 写锁注册新 manager（double-check 防止并发创建）
+	r.mu.Lock()
+	if existing := r.managers[sessionID]; existing != nil {
+		r.mu.Unlock()
+		return existing, false, nil
 	}
 
 	tracker := NewWorkTracker()
@@ -162,7 +166,17 @@ func (r *SessionManagerRegistry) GetOrCreate(
 	r.mu.Unlock()
 
 	// Start the manager's loop and lock renewal.
-	go mgr.Run(ctx)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				mgr.log(ctx, LogLevelError, "session-registry-run-panic", map[string]any{
+					"session_id": mgr.sessionID,
+					"panic":      fmt.Sprintf("%v", r),
+				})
+			}
+		}()
+		mgr.Run(ctx)
+	}()
 
 	return mgr, true, nil
 }
@@ -222,9 +236,33 @@ func (r *SessionManagerRegistry) Replace(
 
 	// Remove old manager if it's still the one we expect.
 	current := r.managers[sessionID]
+	oldMgrTracked := false
 	if current == oldMgr {
 		delete(r.managers, sessionID)
 		r.removedManagers[sessionID] = oldMgr
+		oldMgrTracked = true
+	}
+
+	// Self-cleanup: automatically remove from removedManagers once
+	// the old manager has fully stopped, preventing memory leaks
+	// when no one calls waitForRemovedManagers.
+	if oldMgrTracked {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					oldMgr.log(context.Background(), LogLevelError, "session_registry.replace_cleanup_panic", map[string]any{
+						"session_id": oldMgr.sessionID,
+						"panic":      fmt.Sprintf("%v", r),
+					})
+				}
+			}()
+			<-oldMgr.Done()
+			r.mu.Lock()
+			if r.removedManagers[sessionID] == oldMgr {
+				delete(r.removedManagers, sessionID)
+			}
+			r.mu.Unlock()
+		}()
 	}
 
 	// Wait for the old manager's cleanup to complete before creating a new one.
@@ -266,6 +304,12 @@ func (r *SessionManagerRegistry) Replace(
 			// In the lockLost case, another worker holds the lock and this correctly
 			// fails.
 			r.mu.Lock()
+			// Double-check: another goroutine may have created a manager via GetOrCreate
+			// while we were waiting for oldDone (TOCTOU fix).
+			if existing := r.managers[sessionID]; existing != nil {
+				r.mu.Unlock()
+				return existing, false, nil
+			}
 			claim, err = queue.ClaimWithCredential(ctx, sessionID, workerID, "")
 			if err != nil {
 				r.mu.Unlock()
@@ -293,6 +337,12 @@ func (r *SessionManagerRegistry) Replace(
 		}
 
 		r.mu.Lock()
+		// Double-check: another goroutine may have created a manager via GetOrCreate
+		// while we were waiting for oldDone (TOCTOU fix).
+		if existing := r.managers[sessionID]; existing != nil {
+			r.mu.Unlock()
+			return existing, false, nil
+		}
 	}
 
 	tracker := NewWorkTracker()
@@ -307,7 +357,17 @@ func (r *SessionManagerRegistry) Replace(
 	r.mu.Unlock()
 
 	// Start the manager's loop and lock renewal.
-	go mgr.Run(ctx)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				mgr.log(ctx, LogLevelError, "session-registry-run-panic", map[string]any{
+					"session_id": mgr.sessionID,
+					"panic":      fmt.Sprintf("%v", r),
+				})
+			}
+		}()
+		mgr.Run(ctx)
+	}()
 
 	return mgr, true, nil
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,11 @@ import (
 // sessionRenewalInterval is how often the session lock is renewed.
 // Must be well below DefaultLockTTLSeconds (120s) to prevent expiry.
 const sessionRenewalInterval = 30 * time.Second
+
+// maxConsecutiveRenewFailures is the threshold for consecutive Redis errors
+// during lock renewal before the session is considered lost. Transient errors
+// (network blips, connection pool exhaustion) are tolerated up to this count.
+const maxConsecutiveRenewFailures = 3
 
 // SessionTurnManager manages the lifecycle of a single session's turn loop.
 //
@@ -76,6 +82,12 @@ type SessionTurnManager struct {
 	// because another worker may have already acquired a new lock at the same
 	// Redis key. Deleting it would cause a split-brain scenario.
 	lockLost atomic.Bool
+
+	// consecutiveRenewFailures counts consecutive Redis errors during lock renewal.
+	// Only when this reaches maxConsecutiveRenewFailures is lockLost set to true.
+	// Transient errors (network blips, connection pool exhaustion) are tolerated
+	// up to the threshold; only ok==false (definite lock loss) triggers immediately.
+	consecutiveRenewFailures atomic.Int64
 
 	// checkpointID is the eino checkpoint key for this session.
 	checkpointID string
@@ -194,7 +206,18 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 	mgr.loop.Stop(adk.UntilIdleFor(100 * time.Millisecond))
 
 	// Start lock renewal goroutine.
-	go mgr.runLockRenewal(renewCtx)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				mgr.log(context.Background(), LogLevelError, "session_manager.run_lock_renewal_panic", map[string]any{
+					"session_id": mgr.sessionID,
+					"panic":      fmt.Sprintf("%v", r),
+					"stack":      string(debug.Stack()),
+				})
+			}
+		}()
+		mgr.runLockRenewal(renewCtx)
+	}()
 
 	// Monitor goroutine: when the loop exits, automatically run cleanup.
 	// This ensures cleanup happens even if nobody calls Wait().
@@ -202,8 +225,20 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 	// does not prevent critical cleanup operations (ReleaseSession, requeue).
 	// Use mgr.Wait() (not mgr.loop.Wait()) so the sync.Once protection applies.
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				mgr.log(context.Background(), LogLevelError, "session_manager.monitor_panic", map[string]any{
+					"session_id": mgr.sessionID,
+					"turn_id":    mgr.turnID,
+					"panic":      fmt.Sprintf("%v", r),
+				})
+			}
+		}()
 		mgr.Wait()
-		mgr.Cleanup(context.Background())
+		// 使用带超时的 context 防止 Redis 挂起导致 goroutine 永不退出
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		mgr.Cleanup(cleanupCtx)
 	}()
 
 	// Start the TurnLoop. This blocks until the loop exits.
@@ -294,7 +329,10 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 			"message":    "lock was lost to another worker, skipping ReleaseSession to avoid deleting their lock",
 		})
 	} else {
-		if err := mgr.queue.ReleaseSession(context.Background(), mgr.sessionID); err != nil {
+		// 使用带超时的 context 防止 Redis 挂起导致 cleanup 阻塞
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer releaseCancel()
+		if err := mgr.queue.ReleaseSession(releaseCtx, mgr.sessionID); err != nil {
 			mgr.log(ctx, LogLevelWarn, "session_manager.release_session_failed", map[string]any{
 				"session_id": mgr.sessionID,
 				"error":      err.Error(),
@@ -331,12 +369,17 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 // publishes a session:new notification to wake up idle workers.
 // Called after ReleaseSession so that the notified workers can claim the lock.
 func (mgr *SessionTurnManager) notifyPendingWork(ctx context.Context) {
+	// Redis sorted set key: "queue:session:{sessionID}" — holds pending work items
+	// scored by priority/timestamp. Must match keyQueue() in pkg/rtc-queue/queue.go.
 	queueKey := "queue:session:" + mgr.sessionID
 	count, err := mgr.queue.Client().ZCard(ctx, queueKey).Result()
 	if err != nil || count == 0 {
 		return
 	}
-	// Publish notification so workers wake up and claim the pending work.
+	// Pub/Sub channel "session:new" — notifies idle workers that a session has
+	// pending work. Payload is the sessionID. Workers subscribe to this channel
+	// to wake up and attempt to claim the lock.
+	// Must match the channel constant in pkg/rtc-queue/types.go.
 	mgr.queue.Client().Publish(ctx, "session:new", mgr.sessionID)
 	mgr.log(ctx, LogLevelInfo, "session_manager.notified_pending_work", map[string]any{
 		"session_id":    mgr.sessionID,
@@ -356,15 +399,30 @@ func (mgr *SessionTurnManager) runLockRenewal(ctx context.Context) {
 		case <-ticker.C:
 			ok, err := mgr.queue.RenewLockWithCredential(ctx, mgr.sessionID, mgr.workerID, mgr.getCredential())
 			if err != nil {
-				mgr.log(ctx, LogLevelError, "session_manager.renewal_redis_error", map[string]any{
-					"session_id": mgr.sessionID,
-					"error":      err.Error(),
+				// 瞬态 Redis 错误：仅递增失败计数，不立即标记 lockLost。
+				// 连续 N 次失败才认为锁真正丢失（防止网络抖动导致 session 误判）。
+				mgr.consecutiveRenewFailures.Add(1)
+				failures := mgr.consecutiveRenewFailures.Load()
+				mgr.log(ctx, LogLevelWarn, "session_manager.renewal_redis_error_transient", map[string]any{
+					"session_id":           mgr.sessionID,
+					"consecutive_failures": failures,
+					"error":                err.Error(),
 				})
-				mgr.lockLost.Store(true)
-				mgr.loop.Stop(adk.WithSkipCheckpoint())
-				return
+				if failures >= maxConsecutiveRenewFailures {
+					mgr.log(ctx, LogLevelError, "session_manager.renewal_giving_up", map[string]any{
+						"session_id":           mgr.sessionID,
+						"consecutive_failures": failures,
+					})
+					mgr.lockLost.Store(true)
+					mgr.loop.Stop(adk.WithSkipCheckpoint())
+					return
+				}
+				continue // 继续下次 renewal 尝试
 			}
+			// Redis 成功响应，重置失败计数
+			mgr.consecutiveRenewFailures.Store(0)
 			if !ok {
+				// 明确的锁丢失（被其他 worker 抢占或 TTL 过期）
 				mgr.log(ctx, LogLevelWarn, "session_manager.lock_lost", map[string]any{
 					"session_id": mgr.sessionID,
 				})
@@ -634,7 +692,8 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 					return
 				}
 				completeWorkCalled = true
-				bgCtx := context.Background()
+				bgCtx, bgCancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer bgCancel()
 				for _, item := range tc.Consumed {
 					if item.WorkID == "" {
 						continue
@@ -792,6 +851,15 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 	for {
 		ch := make(chan recvResult, 1)
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					mgr.log(ctx, LogLevelError, "session_manager.stream_recv_panic", map[string]any{
+						"session_id": mgr.sessionID,
+						"turn_id":    turnID,
+						"panic":      fmt.Sprintf("%v", r),
+					})
+				}
+			}()
 			msg, err := stream.Recv()
 			ch <- recvResult{msg, err}
 		}()

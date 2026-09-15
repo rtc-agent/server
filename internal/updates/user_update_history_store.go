@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"go.uber.org/zap"
+
 	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/pkg/logger"
 
 	"github.com/google/uuid"
 
@@ -43,6 +47,10 @@ func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint
 	for _, update := range updates {
 		pubsForUpdate, err := u.buildPublications(ctx, update)
 		if err != nil {
+			// 单条记录转换失败不应中断整体查询；记录日志便于排查
+			logger.Error(ctx, "buildPublications failed for user_update",
+				zap.String("update_id", update.ID.String()),
+				zap.Error(err))
 			continue
 		}
 		pubs = append(pubs, pubsForUpdate...)

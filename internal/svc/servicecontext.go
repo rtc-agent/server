@@ -69,32 +69,9 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	// 创建 UpdatePublisher（需要先创建 repos）
 	updatePublisher := updates.NewUpdatePublisher(db, rdb, sessionRepo, messageRepo, turnRepo, rtcRepo)
 
-	// 设置压缩触发阈值（用于计算 Token 预估字段）
-	contextLimit := cfg.Worker.ContextTokensLimit
-	if contextLimit <= 0 {
-		contextLimit = 25000
-	}
-	compactBuffer := cfg.Worker.AutoCompactBufferTokens
-	if compactBuffer <= 0 {
-		compactBuffer = 13000
-	}
-	threshold := contextLimit - compactBuffer
-	if threshold <= 0 {
-		// Fallback to 80% of contextLimit when configuration is invalid
-		// This prevents threshold=1 which would cause compression on every turn
-		threshold = int(float64(contextLimit) * 0.8)
-		logger.Warn(context.Background(), "servicecontext.threshold_fallback",
-			zap.Int("context_limit", contextLimit),
-			zap.Int("compact_buffer", compactBuffer),
-			zap.Int("fallback_threshold", threshold))
-	}
-	updatePublisher.SetCompressionThreshold(int64(threshold))
-
-	// 初始化全局 TokenCounter（用于 token 估算）
-	tc := turnagent.NewTokenCounter(cfg.Worker.TokenCounterMode)
-	turnagent.SetGlobalTokenCounter(tc)
-	logger.Info(context.Background(), "servicecontext.token_counter_initialized",
-		zap.String("mode", cfg.Worker.TokenCounterMode))
+	// 公共初始化
+	configureUpdatePublisher(updatePublisher, cfg)
+	initTokenCounter(cfg)
 
 	jwtSigner, err := auth.NewJWTSigner(
 		cfg.Auth.JWTSecret,
@@ -171,32 +148,9 @@ func NewServiceContextWithDeps(
 	// 注入 broker 到 UpdatePublisher（解决循环依赖）
 	updatePublisher.SetBroker(broker)
 
-	// 设置压缩触发阈值（用于计算 Token 预估字段）
-	contextLimit := cfg.Worker.ContextTokensLimit
-	if contextLimit <= 0 {
-		contextLimit = 25000
-	}
-	compactBuffer := cfg.Worker.AutoCompactBufferTokens
-	if compactBuffer <= 0 {
-		compactBuffer = 13000
-	}
-	threshold := contextLimit - compactBuffer
-	if threshold <= 0 {
-		// Fallback to 80% of contextLimit when configuration is invalid
-		// This prevents threshold=1 which would cause compression on every turn
-		threshold = int(float64(contextLimit) * 0.8)
-		logger.Warn(context.Background(), "servicecontext.threshold_fallback",
-			zap.Int("context_limit", contextLimit),
-			zap.Int("compact_buffer", compactBuffer),
-			zap.Int("fallback_threshold", threshold))
-	}
-	updatePublisher.SetCompressionThreshold(int64(threshold))
-
-	// 初始化全局 TokenCounter（用于 token 估算）
-	tc := turnagent.NewTokenCounter(cfg.Worker.TokenCounterMode)
-	turnagent.SetGlobalTokenCounter(tc)
-	logger.Info(context.Background(), "servicecontext.token_counter_initialized",
-		zap.String("mode", cfg.Worker.TokenCounterMode))
+	// 公共初始化
+	configureUpdatePublisher(updatePublisher, cfg)
+	initTokenCounter(cfg)
 
 	return &ServiceContext{
 		Config:              cfg,
@@ -220,6 +174,37 @@ func NewServiceContextWithDeps(
 		Broker:              broker,
 		JWTSigner:           jwtSigner,
 	}
+}
+
+// configureUpdatePublisher 设置压缩触发阈值（含 80% fallback 保护）
+func configureUpdatePublisher(u *updates.UpdatePublisher, cfg *config.Config) {
+	contextLimit := cfg.Worker.ContextTokensLimit
+	if contextLimit <= 0 {
+		contextLimit = 25000
+	}
+	compactBuffer := cfg.Worker.AutoCompactBufferTokens
+	if compactBuffer <= 0 {
+		compactBuffer = 13000
+	}
+	threshold := contextLimit - compactBuffer
+	if threshold <= 0 {
+		// Fallback to 80% of contextLimit when configuration is invalid
+		// This prevents threshold=1 which would cause compression on every turn
+		threshold = int(float64(contextLimit) * 0.8)
+		logger.Warn(context.Background(), "servicecontext.threshold_fallback",
+			zap.Int("context_limit", contextLimit),
+			zap.Int("compact_buffer", compactBuffer),
+			zap.Int("fallback_threshold", threshold))
+	}
+	u.SetCompressionThreshold(int64(threshold))
+}
+
+// initTokenCounter 初始化全局 TokenCounter
+func initTokenCounter(cfg *config.Config) {
+	tc := turnagent.NewTokenCounter(cfg.Worker.TokenCounterMode)
+	turnagent.SetGlobalTokenCounter(tc)
+	logger.Info(context.Background(), "servicecontext.token_counter_initialized",
+		zap.String("mode", cfg.Worker.TokenCounterMode))
 }
 
 // createCentrifugeLogHandler 创建 Centrifuge 日志处理器，将日志转发到 zap logger

@@ -97,6 +97,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	}
 
 	// 7. 构造新 session
+	now := time.Now()
 	newSession := &model.Session{
 		ID:          uuid.Must(uuid.NewV7()),
 		ClientID:    string(req.NewClientSessionId),
@@ -107,8 +108,8 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		Status:      string(protocol.SessionStatusActive),
 		AgentPrompt: oldSession.AgentPrompt,
 		//TodoList:    oldSession.TodoList,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		CreatedAt: now,
+		UpdatedAt: now,
 		ClosedAt:  nil,
 		DeletedAt: nil,
 	}
@@ -133,7 +134,12 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 			}
 		} else {
 			// 复制旧消息（保留原始时间戳）
-			content, _ := primitives.ParseContentData(oldMsg.Content)
+			content, parseErr := primitives.ParseContentData(oldMsg.Content)
+			if parseErr != nil {
+				logger.Warn(ctx, "[ForkSession] ParseContentData failed",
+					zap.String("old_message", oldMessageID.String()),
+					zap.Error(parseErr))
+			}
 			tokenUsageUpdate := &model.TokenUsageUpdate{
 				InputTokens:     0,
 				OutputTokens:    0,
@@ -207,7 +213,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 			if _, err := h.deps.Queue.Publish(txCtx, newSession.ID.String(), string(payload), 0); err != nil {
 				return nil, fmt.Errorf("queue publish: %w", err)
 			}
-			if logger.DebugMode {
+			if logger.IsDebugMode() {
 				logger.Debug(txCtx, "[ForkSession] Queue.Publish success",
 					zap.String("session", newSession.ID.String()),
 					zap.String("work_id", workID))

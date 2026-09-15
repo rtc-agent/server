@@ -9,6 +9,7 @@ package rtcqueue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -75,7 +76,7 @@ func (q *Queue) Claim(ctx context.Context, sessionID, workerID string) (*ClaimRe
 		keyQueue(sessionID),
 		keyActive(sessionID),
 	}, workerID, DefaultLockTTLSeconds, now).Result()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return nil, nil
 	}
 	if err != nil {
@@ -120,7 +121,7 @@ func (q *Queue) ClaimWithCredential(ctx context.Context, sessionID, workerID, cr
 		keyQueue(sessionID),
 		keyActive(sessionID),
 	}, workerID, credential, DefaultLockTTLSeconds, now).Result()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return nil, nil
 	}
 	if err != nil {
@@ -301,7 +302,7 @@ func (q *Queue) RenewLock(ctx context.Context, sessionID, workerID string) (bool
 	n, err := renewLockScript.Run(ctx, q.rdb, []string{keyLock(sessionID)},
 		workerID, DefaultLockTTLSeconds,
 	).Int()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return false, nil
 	}
 	if err != nil {
@@ -317,7 +318,7 @@ func (q *Queue) RenewLockWithCredential(ctx context.Context, sessionID, workerID
 	n, err := renewLockWithCredentialScript.Run(ctx, q.rdb, []string{keyLock(sessionID)},
 		workerID, credential, DefaultLockTTLSeconds,
 	).Int()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return false, nil
 	}
 	if err != nil {
@@ -342,7 +343,7 @@ func (q *Queue) CompleteAndClaimNext(ctx context.Context, workID, sessionID, wor
 		keyActive(sessionID),
 		keyLock(sessionID),
 	}, now, workerID, DefaultLockTTLSeconds).Result()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return nil, nil
 	}
 	if err != nil {
@@ -394,7 +395,7 @@ func (q *Queue) CompleteWorkAndClaimNext(ctx context.Context, currentWorkID, wor
 		keyQueue(currentWork.SessionID),
 		keyActive(currentWork.SessionID),
 	}, currentWorkID, workerID, credential, now, DefaultLockTTLSeconds).Result()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return nil, nil
 	}
 	if err != nil {
@@ -446,7 +447,7 @@ func (q *Queue) RequeueGhostWork(ctx context.Context, sessionID string) (string,
 		keyActive(sessionID),
 		keyQueue(sessionID),
 	}, now).Result()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return "", nil
 	}
 	if err != nil {
@@ -495,7 +496,7 @@ func (q *Queue) RequeueGhostWorksBatch(ctx context.Context, sessionIDs []string)
 	result := make(map[string]string)
 	for i, cmd := range cmds {
 		res, err := cmd.Result()
-		if err == redis.Nil {
+		if errors.Is(err, redis.Nil) {
 			continue
 		}
 		if err != nil {

@@ -176,6 +176,9 @@ func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 限制请求体大小，防止恶意大 payload 耗尽内存
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
+
 	if err := r.ParseForm(); err != nil {
 		// 尝试 JSON 解析
 		var body struct {
@@ -256,7 +259,10 @@ func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret
 // generateCode 生成随机授权码
 func generateCode() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// rand.Read 失败意味着系统熵源耗尽，无法生成安全随机数
+		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
+	}
 	return hex.EncodeToString(b)
 }
 

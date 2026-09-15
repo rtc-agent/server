@@ -21,6 +21,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptrace"
@@ -299,7 +300,7 @@ func (orc *observabilityReadCloser) Read(p []byte) (int, error) {
 			}
 		}
 	}
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		// Extract token usage from the accumulated stream
 		usage := extractTokenUsage(orc.buf.Bytes())
 

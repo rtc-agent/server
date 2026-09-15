@@ -35,10 +35,19 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	content := ""
 	switch req.ContentData.Type {
 	case protocol.ContentTypeText:
-		content, _ = primitives.ContentDataString(req.ContentData.Data)
+		s, err := primitives.ContentDataString(req.ContentData.Data)
+		if err != nil {
+			logger.Warn(ctx, "[SendMessage] ContentDataString failed",
+				zap.Error(err))
+		} else {
+			content = s
+		}
 	case protocol.ContentTypeUserMessage:
 		if umc, err := primitives.ParseUserMessageContent(req.ContentData.Data); err == nil {
 			content = umc.Text
+		} else {
+			logger.Warn(ctx, "[SendMessage] ParseUserMessageContent failed",
+				zap.Error(err))
 		}
 	}
 
@@ -145,7 +154,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 			if _, err := h.deps.Queue.Publish(txCtx, session.ID.String(), string(payload), 0); err != nil {
 				return nil, fmt.Errorf("queue publish: %w", err)
 			}
-			if logger.DebugMode {
+			if logger.IsDebugMode() {
 				logger.Debug(txCtx, "[SendMessage] Queue.Publish success",
 					zap.String("session", session.ID.String()),
 					zap.String("message", msg.ID.String()),
@@ -179,7 +188,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		// Use a detached context so the summarization continues even if the
 		// request context is cancelled. Set a reasonable timeout.
 		detachedCtx := context.WithoutCancel(ctx)
-		go func() {
+		logger.SafeGo("sendmessage.titleSummarize", func() {
 			// Limit summarization to 30 seconds
 			summarizeCtx, cancel := context.WithTimeout(detachedCtx, 30*time.Second)
 			defer cancel()
@@ -188,12 +197,16 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 					zap.String("session", session.ID.String()),
 					zap.Error(err))
 			} else {
-				_, _ = h.UpdateSession(detachedCtx, &protocol.UpdateSessionRequest{
+				if _, err := h.UpdateSession(detachedCtx, &protocol.UpdateSessionRequest{
 					SessionId: session.ID.String(),
 					Title:     &title,
-				})
+				}); err != nil {
+					logger.Warn(detachedCtx, "[SendMessage] UpdateSession title failed",
+						zap.String("session", session.ID.String()),
+						zap.Error(err))
+				}
 			}
-		}()
+		})
 	}
 
 	return &protocol.SendMessageResponse{

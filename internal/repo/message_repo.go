@@ -14,10 +14,14 @@ import (
 
 // MessageRepo 消息仓储接口
 type MessageRepo interface {
+	// Create 创建新消息记录
 	Create(ctx context.Context, msg *model.Message) error
 	BatchCreate(ctx context.Context, messages []*model.Message) error
+	// GetByID 根据 ID 查询消息
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Message, error)
+	// FindByClientID 根据 clientID 查询消息
 	FindByClientID(ctx context.Context, clientID string) (*model.Message, error)
+	// ListBySession 按 session 分页查询消息列表
 	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *uint32, limit int) ([]*model.Message, error)
 	// ListRecentBySession returns the most recent `limit` messages for a session,
 	// ordered by global_offset ASC (oldest first within the returned set).
@@ -27,7 +31,9 @@ type MessageRepo interface {
 	// ListBySessionBeforeOffset returns the most recent `limit` messages with global_offset <= maxOffset,
 	// ordered by global_offset ASC (oldest first).
 	ListBySessionBeforeOffset(ctx context.Context, sessionID uuid.UUID, maxOffset uint32, limit int) ([]*model.Message, error)
+	// GetNextGlobalOffset 获取 session 下一个全局偏移量
 	GetNextGlobalOffset(ctx context.Context, sessionID uuid.UUID) (uint32, error)
+	// UpdateStreamingStatus 更新消息流式状态及内容
 	UpdateStreamingStatus(ctx context.Context, id uuid.UUID, status protocol.MessageStreamingStatus, content string) error
 	// DeleteByIDs soft-deletes messages by their IDs.
 	DeleteByIDs(ctx context.Context, ids []uuid.UUID) error

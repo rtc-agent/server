@@ -67,7 +67,10 @@ func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		CompletedTurns: loop.CompletedTurns,
 		MaxTurns:       loop.MaxTurns,
 	}
-	resultJSON := mustMarshalJSON(result)
+	resultJSON, err := mustMarshalJSON(result)
+	if err != nil {
+		return "", fmt.Errorf("pause_loop: marshal result: %w", err)
+	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,

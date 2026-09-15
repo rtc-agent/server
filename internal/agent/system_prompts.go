@@ -28,7 +28,8 @@ package agent
 import (
 	_ "embed"
 	"strings"
-	"text/template"
+
+	"github.com/rtc-agent/server/internal/agent/templateutil"
 )
 
 //go:embed prompts/system/identity.md
@@ -155,14 +156,7 @@ func BuildDefaultSystemPrompt() (string, error) {
 }
 
 // renderSection renders a single section as a text/template.
+// Delegates to templateutil.Render for the actual rendering.
 func renderSection(section string, data map[string]any) (string, error) {
-	tmpl, err := template.New("section").Parse(section)
-	if err != nil {
-		return "", err
-	}
-	var buf strings.Builder
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
+	return templateutil.Render("section", section, data)
 }

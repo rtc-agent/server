@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/cloudwego/eino/adk"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 )
 
 // isInterruptError checks if the error is an eino InterruptError.
@@ -234,6 +237,14 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				zap.L().Error("agent_process.cancel_listener_panic",
+					zap.Any("recover", r),
+					zap.String("stack", string(debug.Stack())),
+				)
+			}
+		}()
 		select {
 		case cm := <-cancel:
 			mgr.SetCancelledByQueue(cm.Reason)
@@ -281,74 +292,10 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// lifecycle. Subsequent Process() calls for the same session just wait
 	// for their work item completion and return.
 	if !isNew {
-		// Not the owner of this session's lifecycle.
-		if mgr.IsCancelledByQueue() {
-			return nil // CancelTurn is handled by the owning Process.
-		}
-
-		// Check if the work was actually completed. The select above may have
-		// picked innerCtx.Done() even when completionCh was also ready (Go's
-		// select is non-deterministic). Check completionCh non-blocking first
-		// to avoid falsely reporting the work as abandoned.
-		select {
-		case <-completionCh:
-			// Work was actually completed — the innerCtx.Done() path was a
-			// false alarm (e.g., CompleteAll closed the channel at the same
-			// time the cancel listener called innerCancel).
-			a.log(turnCtx, LogLevelInfo, "turn.work_completed_deferred", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-				"work_id":    work.ID,
-			})
-			return nil
-		default:
-		}
-
-		// Wait for the manager's cleanup to complete before checking IsAbandoned.
-		// CompleteAll() runs during doCleanup (before done is closed) and sets the
-		// allDone flag that IsAbandoned relies on. Without this wait, there is a
-		// race: the non-owner could check IsAbandoned before CompleteAll runs, get
-		// false (entry still in pending map), and return nil — leaving the work
-		// stuck in "processing" status in Redis (ghost work).
-		//
-		// mgr.Done() closes after doCleanup completes, which includes CompleteAll.
-		// After Done() closes, IsAbandoned gives a definitive answer.
-		select {
-		case <-completionCh:
-			// Work completed during the wait — not abandoned.
-			a.log(turnCtx, LogLevelInfo, "turn.work_completed_during_wait", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-				"work_id":    work.ID,
-			})
-			return nil
-		case <-mgr.Done():
-			// Manager cleanup complete — CompleteAll has run, IsAbandoned is definitive.
-		}
-
-		// Check if the work was actually completed (Complete was called by
-		// OnAgentEvents) vs. abandoned (CompleteAll was called during manager
-		// shutdown). When abandoned, the work is still in "processing" status
-		// in Redis — requeue it so another worker can pick it up.
-		if mgr.Tracker().IsAbandoned(work.ID) {
-			a.log(turnCtx, LogLevelWarn, "turn.work_abandoned", map[string]any{
-				"session_id": p.SessionID,
-				"turn_id":    turnID,
-				"work_id":    work.ID,
-				"message":    "manager shut down before work was processed, requeuing",
-			})
-			// Use context.Background() to ensure requeue succeeds even if
-			// the worker context is being cancelled.
-			if reErr := a.queue.RequeueWork(context.Background(), work.ID); reErr != nil {
-				a.log(turnCtx, LogLevelWarn, "turn.requeue_abandoned_failed", map[string]any{
-					"work_id": work.ID,
-					"error":   reErr.Error(),
-				})
-			}
-			return fmt.Errorf("turnagent: work %s abandoned: manager shut down before processing", work.ID)
-		}
-
-		return nil
+		return a.handleNonOwnerCompletion(
+			turnCtx, mgr, completionCh, work.ID,
+			p.SessionID, turnID,
+		)
 	}
 
 	// Wait for loop to exit.
@@ -391,32 +338,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	turnDuration := time.Since(turnStart)
 
 	recordEnd := func(status string, err error) {
-		defer func() { _ = recover() }()
-		turnSpan.SetAttributes(
-			attribute.String("turn.status", status),
-			attribute.Int64("turn.duration_ms", turnDuration.Milliseconds()),
-		)
-		if err != nil {
-			turnSpan.RecordError(err)
-		}
-		a.log(turnCtx, LogLevelInfo, "turn.end", map[string]any{
-			"session_id":  p.SessionID,
-			"turn_id":     turnID,
-			"work_kind":   string(p.Kind),
-			"status":      status,
-			"duration_ms": turnDuration.Milliseconds(),
-			"error":       fmt.Sprintf("%v", err),
-		})
-		a.recordMetricIfEnabled(turnCtx, func(m Metrics) {
-			m.RecordTurn(turnCtx, TurnMetricsAttrs{
-				SessionID:  p.SessionID,
-				TurnID:     turnID,
-				WorkKind:   string(p.Kind),
-				Status:     status,
-				DurationMs: turnDuration.Milliseconds(),
-				Error:      err,
-			})
-		})
+		a.recordTurnEnd(turnCtx, turnSpan, p.SessionID, turnID, string(p.Kind), turnDuration, status, err)
 	}
 
 	if mgr.IsCancelledByQueue() {
@@ -447,62 +369,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		return nil
 
 	case isInterruptError(exitReason):
-		var iErr *adk.InterruptError
-		_ = errors.As(exitReason, &iErr)
-		root := rootInterruptCtx(iErr.InterruptContexts)
-		if root == nil {
-			recordEnd("fail", exitReason)
-			if err := a.cfg.FailTurn(turnCtx, turnID, exitReason); err != nil {
-				a.log(turnCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{
-					"session_id": p.SessionID,
-					"turn_id":    turnID,
-					"error":      err.Error(),
-				})
-			}
-			return exitReason
-		}
-
-		// Convert eino's InterruptCtx to our InterruptContext type
-		allContexts := make([]*InterruptContext, 0, len(iErr.InterruptContexts))
-		for _, ctx := range iErr.InterruptContexts {
-			allContexts = append(allContexts, &InterruptContext{
-				ID:   ctx.ID,
-				Info: ctx.Info,
-			})
-		}
-
-		a.log(turnCtx, LogLevelInfo, "interrupt", map[string]any{
-			"session_id":     p.SessionID,
-			"turn_id":        turnID,
-			"interrupt_id":   root.ID,
-			"interrupt_count": len(allContexts),
-			"reason":         "stateful_interrupt",
-		})
-		a.addEventIfEnabled(turnCtx, "interrupt",
-			attribute.String("session.id", p.SessionID),
-			attribute.String("turn.id", turnID),
-			attribute.String("interrupt.id", root.ID),
-			attribute.Int("interrupt.count", len(allContexts)),
-			attribute.String("reason", "stateful_interrupt"),
-		)
-		a.recordMetricIfEnabled(turnCtx, func(m Metrics) {
-			m.RecordInterrupt(turnCtx, InterruptMetricsAttrs{
-				SessionID:   p.SessionID,
-				TurnID:      turnID,
-				InterruptID: root.ID,
-				Reason:      "stateful_interrupt",
-			})
-		})
-		recordEnd("interrupt", nil)
-		if err := a.cfg.InterruptTurn(turnCtx, turnID, root.ID, root.Info, allContexts); err != nil {
-			a.log(turnCtx, LogLevelError, "turn.interrupt_callback_failed", map[string]any{
-				"session_id":   p.SessionID,
-				"turn_id":      turnID,
-				"interrupt_id": root.ID,
-				"error":        err.Error(),
-			})
-		}
-		return nil
+		return a.handleInterruptExit(turnCtx, turnSpan, exitReason, p.SessionID, turnID)
 
 	default:
 		recordEnd("fail", exitReason)
@@ -515,4 +382,180 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		}
 		return exitReason
 	}
+}
+
+// handleNonOwnerCompletion handles the completion path for non-owner Process
+// calls (isNew=false). Non-owners do not manage the session's turn lifecycle;
+// they only wait for their work item to complete or be abandoned.
+func (a *Agent) handleNonOwnerCompletion(
+	ctx context.Context,
+	mgr *SessionTurnManager,
+	completionCh <-chan struct{},
+	workID, sessionID, turnID string,
+) error {
+	if mgr.IsCancelledByQueue() {
+		return nil // CancelTurn is handled by the owning Process.
+	}
+
+	// Check if the work was actually completed. The select in Process may have
+	// picked innerCtx.Done() even when completionCh was also ready (Go's
+	// select is non-deterministic). Check completionCh non-blocking first
+	// to avoid falsely reporting the work as abandoned.
+	select {
+	case <-completionCh:
+		a.log(ctx, LogLevelInfo, "turn.work_completed_deferred", map[string]any{
+			"session_id": sessionID,
+			"turn_id":    turnID,
+			"work_id":    workID,
+		})
+		return nil
+	default:
+	}
+
+	// Wait for the manager's cleanup to complete before checking IsAbandoned.
+	// CompleteAll() runs during doCleanup (before done is closed) and sets the
+	// allDone flag that IsAbandoned relies on. Without this wait, there is a
+	// race: the non-owner could check IsAbandoned before CompleteAll runs, get
+	// false (entry still in pending map), and return nil — leaving the work
+	// stuck in "processing" status in Redis (ghost work).
+	//
+	// mgr.Done() closes after doCleanup completes, which includes CompleteAll.
+	// After Done() closes, IsAbandoned gives a definitive answer.
+	select {
+	case <-completionCh:
+		a.log(ctx, LogLevelInfo, "turn.work_completed_during_wait", map[string]any{
+			"session_id": sessionID,
+			"turn_id":    turnID,
+			"work_id":    workID,
+		})
+		return nil
+	case <-mgr.Done():
+		// Manager cleanup complete — CompleteAll has run, IsAbandoned is definitive.
+	}
+
+	// Check if the work was actually completed (Complete was called by
+	// OnAgentEvents) vs. abandoned (CompleteAll was called during manager
+	// shutdown). When abandoned, the work is still in "processing" status
+	// in Redis — requeue it so another worker can pick it up.
+	if mgr.Tracker().IsAbandoned(workID) {
+		a.log(ctx, LogLevelWarn, "turn.work_abandoned", map[string]any{
+			"session_id": sessionID,
+			"turn_id":    turnID,
+			"work_id":    workID,
+			"message":    "manager shut down before work was processed, requeuing",
+		})
+		if reErr := a.queue.RequeueWork(context.Background(), workID); reErr != nil {
+			a.log(ctx, LogLevelWarn, "turn.requeue_abandoned_failed", map[string]any{
+				"work_id": workID,
+				"error":   reErr.Error(),
+			})
+		}
+		return fmt.Errorf("turnagent: work %s abandoned: manager shut down before processing", workID)
+	}
+
+	return nil
+}
+
+// recordTurnEnd records turn completion metrics, tracing, and logging.
+func (a *Agent) recordTurnEnd(
+	ctx context.Context,
+	span trace.Span,
+	sessionID, turnID, workKind string,
+	duration time.Duration,
+	status string,
+	err error,
+) {
+	defer func() { _ = recover() }()
+	span.SetAttributes(
+		attribute.String("turn.status", status),
+		attribute.Int64("turn.duration_ms", duration.Milliseconds()),
+	)
+	if err != nil {
+		span.RecordError(err)
+	}
+	a.log(ctx, LogLevelInfo, "turn.end", map[string]any{
+		"session_id":  sessionID,
+		"turn_id":     turnID,
+		"work_kind":   workKind,
+		"status":      status,
+		"duration_ms": duration.Milliseconds(),
+		"error":       fmt.Sprintf("%v", err),
+	})
+	a.recordMetricIfEnabled(ctx, func(m Metrics) {
+		m.RecordTurn(ctx, TurnMetricsAttrs{
+			SessionID:  sessionID,
+			TurnID:     turnID,
+			WorkKind:   workKind,
+			Status:     status,
+			DurationMs: duration.Milliseconds(),
+			Error:      err,
+		})
+	})
+}
+
+// handleInterruptExit handles the case where the turn loop exited due to an
+// eino interrupt. It converts the eino interrupt context to our internal type,
+// records metrics/tracing, and delegates to InterruptTurn.
+func (a *Agent) handleInterruptExit(
+	ctx context.Context,
+	span trace.Span,
+	exitReason error,
+	sessionID, turnID string,
+) error {
+	var iErr *adk.InterruptError
+	_ = errors.As(exitReason, &iErr)
+	root := rootInterruptCtx(iErr.InterruptContexts)
+	if root == nil {
+		a.recordTurnEnd(ctx, span, sessionID, turnID, "", 0, "fail", exitReason)
+		if err := a.cfg.FailTurn(ctx, turnID, exitReason); err != nil {
+			a.log(ctx, LogLevelError, "turn.fail_callback_failed", map[string]any{
+				"session_id": sessionID,
+				"turn_id":    turnID,
+				"error":      err.Error(),
+			})
+		}
+		return exitReason
+	}
+
+	// Convert eino's InterruptCtx to our InterruptContext type.
+	allContexts := make([]*InterruptContext, 0, len(iErr.InterruptContexts))
+	for _, c := range iErr.InterruptContexts {
+		allContexts = append(allContexts, &InterruptContext{
+			ID:   c.ID,
+			Info: c.Info,
+		})
+	}
+
+	a.log(ctx, LogLevelInfo, "interrupt", map[string]any{
+		"session_id":      sessionID,
+		"turn_id":         turnID,
+		"interrupt_id":    root.ID,
+		"interrupt_count": len(allContexts),
+		"reason":          "stateful_interrupt",
+	})
+	a.addEventIfEnabled(ctx, "interrupt",
+		attribute.String("session.id", sessionID),
+		attribute.String("turn.id", turnID),
+		attribute.String("interrupt.id", root.ID),
+		attribute.Int("interrupt.count", len(allContexts)),
+		attribute.String("reason", "stateful_interrupt"),
+	)
+	a.recordMetricIfEnabled(ctx, func(m Metrics) {
+		m.RecordInterrupt(ctx, InterruptMetricsAttrs{
+			SessionID:   sessionID,
+			TurnID:      turnID,
+			InterruptID: root.ID,
+			Reason:      "stateful_interrupt",
+		})
+	})
+	a.recordTurnEnd(ctx, span, sessionID, turnID, "", 0, "interrupt", nil)
+	if err := a.cfg.InterruptTurn(ctx, turnID, root.ID, root.Info, allContexts); err != nil {
+		a.log(ctx, LogLevelError, "turn.interrupt_callback_failed", map[string]any{
+			"session_id":   sessionID,
+			"turn_id":      turnID,
+			"interrupt_id": root.ID,
+			"error":        err.Error(),
+		})
+	}
+	return nil
 }

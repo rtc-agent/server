@@ -48,14 +48,16 @@ type StreamStore struct {
 // the TTL using the AppendChunk Lua script from cache.
 // This replaces the previous non-atomic RPush + Expire two-command sequence.
 //
-// Uses context.Background() because stream chunks are buffered in Redis as
-// an intermediate step; the caller's context may be cancelled mid-stream,
+// Uses context.Background() with timeout because stream chunks are buffered in
+// Redis as an intermediate step; the caller's context may be cancelled mid-stream,
 // but partial chunks already written should remain consistent.
 func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error) {
 	key := cache.MessageStream(messageID)
 	ttlSeconds := int(s.chunkTTL / time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	result, err := cache.AppendChunk.Run(
-		context.Background(), s.rdb,
+		ctx, s.rdb,
 		[]string{key},
 		ttlSeconds, chunk,
 	).Int64()
@@ -67,7 +69,9 @@ func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error)
 
 func (s *StreamStore) GetAllChunks(messageID string) ([]string, error) {
 	key := cache.MessageStream(messageID)
-	chunks, err := s.rdb.LRange(context.Background(), key, 0, -1).Result()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	chunks, err := s.rdb.LRange(ctx, key, 0, -1).Result()
 	if err != nil {
 		return nil, fmt.Errorf("get all chunks: %w", err)
 	}
@@ -76,7 +80,9 @@ func (s *StreamStore) GetAllChunks(messageID string) ([]string, error) {
 
 func (s *StreamStore) DeleteChunks(messageID string) error {
 	key := cache.MessageStream(messageID)
-	if err := s.rdb.Del(context.Background(), key).Err(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.rdb.Del(ctx, key).Err(); err != nil {
 		return fmt.Errorf("delete chunks: %w", err)
 	}
 	return nil

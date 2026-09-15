@@ -15,11 +15,17 @@ import (
 
 // SessionRepo 会话仓储接口
 type SessionRepo interface {
+	// Create 创建新 Session 记录
 	Create(ctx context.Context, session *model.Session) error
+	// GetByID 根据 ID 查询 Session
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Session, error)
+	// FindByClientID 根据 clientID 查询 Session
 	FindByClientID(ctx context.Context, clientID string) (*model.Session, error)
+	// GetByUser 按用户分页查询 Session 列表
 	GetByUser(ctx context.Context, userID uuid.UUID, cursor *string, limit int) ([]*model.Session, error)
+	// UpdateStatus 更新 Session 状态
 	UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.SessionStatus) error
+	// Update 更新 Session 的指定字段
 	Update(ctx context.Context, id uuid.UUID, fields map[string]any) error
 	// TouchActive 原子更新活跃会话的 updated_at；若会话不存在或已关闭返回错误。
 	// 用于在创建新 turn/message 时并发安全地"占位"，避免 TOCTOU 竞态。

@@ -170,7 +170,10 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		StoppedSessions: stopped,
 		TotalStopped:    len(stopped),
 	}
-	resultJSON := mustMarshalJSON(result)
+	resultJSON, err := mustMarshalJSON(result)
+	if err != nil {
+		return "", fmt.Errorf("stop_sub_agent: marshal result: %w", err)
+	}
 
 	// 10. Publish toolcall_input + toolcall_output messages.
 	if err := publishToolMessages(ctx, publishToolMessagesInput{

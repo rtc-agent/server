@@ -14,7 +14,9 @@ import (
 
 // DeviceRepo 设备仓储接口
 type DeviceRepo interface {
+	// Upsert 创建或更新设备记录
 	Upsert(ctx context.Context, device *model.Device) error
+	// FindByUserAndDeviceID 按用户 ID 和设备 ID 查询设备
 	FindByUserAndDeviceID(ctx context.Context, userID uuid.UUID, deviceID string) (*model.Device, error)
 }
 

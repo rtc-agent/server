@@ -12,8 +12,12 @@ import (
 // DualBroker implements centrifuge.Broker interface.
 // It routes messages to either RedisBroker (Live) or TopicBroker (Topic) based on channel type.
 type DualBroker struct {
-	liveBroker   *centrifuge.RedisBroker
-	topicBroker  *TopicBroker
+	liveBroker  *centrifuge.RedisBroker
+	topicBroker *TopicBroker
+	// channelTypes maps channel name to its type. Entries are added on Subscribe
+	// (including prefix-based inference) and removed on Unsubscribe.
+	// Cardinality is bounded by the number of active channels (e.g. active users),
+	// which is moderate. Unsubscribe cleans up entries; Close clears all remaining.
 	channelTypes sync.Map // map[string]ChannelType
 	tracer       trace.Tracer
 }
@@ -350,6 +354,15 @@ func (d *DualBroker) Close(ctx context.Context) error {
 	if err := d.topicBroker.Close(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("topic broker: %w", err))
 	}
+
+	// Clear channelTypes to release all references.
+	// Normal cleanup happens in Unsubscribe (per-channel Delete), but this
+	// ensures no entries survive after the broker is shut down.
+	d.channelTypes.Range(func(key, value any) bool {
+		d.channelTypes.Delete(key)
+		return true
+	})
+
 	if len(errs) > 0 {
 		return fmt.Errorf("close errors: %v", errs)
 	}

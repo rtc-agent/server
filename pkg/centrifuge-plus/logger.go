@@ -1,6 +1,15 @@
 package centrifugeplus
 
-import "log"
+import (
+	"log"
+	"os"
+)
+
+func init() {
+	// Direct the default log package to stderr so that defaultLogger output
+	// does not interleave with stdout-oriented tool output.
+	log.SetOutput(os.Stderr)
+}
 
 // Logger defines the logging interface used by AsynqBroker.
 type Logger interface {

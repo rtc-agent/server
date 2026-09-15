@@ -58,6 +58,11 @@ type TopicBroker struct {
 	pubSubCancel    func()
 	pubSubMu        sync.Mutex
 	subscribedChans map[string]bool
+
+	// closed marks the broker as shut down. Once set, ensurePubSubClient
+	// refuses to recreate the pubSubClient, preventing resource leaks
+	// when Subscribe is called after Close.
+	closed atomic.Bool
 }
 
 // NewTopicBroker creates a new TopicBroker instance.
@@ -111,7 +116,12 @@ func (b *TopicBroker) RegisterBrokerEventHandler(handler centrifuge.BrokerEventH
 
 // ensurePubSubClient creates a DedicatedClient for PUB/SUB if not already created.
 // Must be called with pubSubMu held.
+// Returns an error if the broker has been closed, preventing resource leaks
+// from recreating clients after shutdown.
 func (b *TopicBroker) ensurePubSubClient() error {
+	if b.closed.Load() {
+		return fmt.Errorf("topic broker is closed")
+	}
 	if b.pubSubClient != nil {
 		return nil
 	}
@@ -275,8 +285,8 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 			trace.WithAttributes(AttributeChannel.String(ch)),
 		)
 
+		// 锁内只做检查和保存引用，释放锁后再执行 Redis 网络操作
 		b.pubSubMu.Lock()
-
 		if err := b.ensurePubSubClient(); err != nil {
 			b.pubSubMu.Unlock()
 			cancel()
@@ -292,15 +302,19 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 			span.End()
 			continue // Already subscribed
 		}
+		client := b.pubSubClient // 保存引用，锁外使用
+		b.pubSubMu.Unlock()
 
-		if err := b.pubSubClient.Do(ctx, b.pubSubClient.B().Subscribe().Channel(pubSubKey).Build()).Error(); err != nil {
-			b.pubSubMu.Unlock()
+		// Redis 网络操作在锁外执行，避免阻塞其他 Subscribe/Unsubscribe
+		if err := client.Do(ctx, client.B().Subscribe().Channel(pubSubKey).Build()).Error(); err != nil {
 			cancel()
 			recordError(span, err)
 			span.End()
 			return fmt.Errorf("failed to subscribe to %s: %w", pubSubKey, err)
 		}
 
+		// 重新获取锁更新状态
+		b.pubSubMu.Lock()
 		b.subscribedChans[pubSubKey] = true
 		b.pubSubMu.Unlock()
 		cancel()
@@ -334,17 +348,18 @@ func (b *TopicBroker) Unsubscribe(channels ...string) error {
 			span.End()
 			continue // Not subscribed
 		}
+		client := b.pubSubClient // 保存引用，锁外使用
+		delete(b.subscribedChans, pubSubKey)
+		b.pubSubMu.Unlock()
 
-		if err := b.pubSubClient.Do(ctx, b.pubSubClient.B().Unsubscribe().Channel(pubSubKey).Build()).Error(); err != nil {
-			b.pubSubMu.Unlock()
+		// Redis 网络操作在锁外执行，避免阻塞其他 Subscribe/Unsubscribe
+		if err := client.Do(ctx, client.B().Unsubscribe().Channel(pubSubKey).Build()).Error(); err != nil {
 			cancel()
 			recordError(span, err)
 			span.End()
 			return fmt.Errorf("failed to unsubscribe from %s: %w", pubSubKey, err)
 		}
 
-		delete(b.subscribedChans, pubSubKey)
-		b.pubSubMu.Unlock()
 		cancel()
 		span.End()
 	}
@@ -391,7 +406,11 @@ func (b *TopicBroker) BatchIncrby(ctx context.Context, reqs []ChannelIncrbyReque
 	for i, req := range normalized {
 		keys[i] = b.metaKey(req.Channel)
 		args[i*2] = strconv.Itoa(req.Count)
-		args[i*2+1] = generateEpoch()
+		epoch, err := generateEpoch()
+		if err != nil {
+			return nil, fmt.Errorf("generate epoch for channel %s: %w", req.Channel, err)
+		}
+		args[i*2+1] = epoch
 	}
 
 	// Execute Lua script
@@ -538,7 +557,11 @@ func (b *TopicBroker) PublishWithUserOffset(ctx context.Context, ch string, data
 	pubSubChannel := b.pubSubKey(ch)
 	publishCommand := "publish"
 	traceparent := encodeTraceParent(span.SpanContext())
-	defaultEpoch := generateEpoch()
+	defaultEpoch, err := generateEpoch()
+	if err != nil {
+		recordError(span, err)
+		return centrifuge.PublishResult{}, fmt.Errorf("generate default epoch: %w", err)
+	}
 
 	keys := []string{epochKey, resultKey}
 	args := []string{
@@ -782,8 +805,11 @@ func (b *TopicBroker) RemoveHistory(ch string) error {
 }
 
 // Close closes the broker and releases resources.
+// After Close, ensurePubSubClient will refuse to recreate the pubSubClient,
+// preventing DedicatedClient leaks from late Subscribe calls.
 func (b *TopicBroker) Close(_ context.Context) error {
 	b.pubSubMu.Lock()
+	b.closed.Store(true) // Mark as closed before tearing down resources
 	if b.pubSubCancel != nil {
 		b.pubSubCancel()
 	}
@@ -819,12 +845,12 @@ func (b *TopicBroker) channelEpochKey(ch string) string {
 }
 
 // generateEpoch generates a unique epoch string using UUID v7 (time-ordered).
-func generateEpoch() string {
+func generateEpoch() (string, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
-		panic(err) // 仅当系统随机源耗尽时发生
+		return "", fmt.Errorf("generate epoch: %w", err)
 	}
-	return id.String()
+	return id.String(), nil
 }
 
 func (b *TopicBroker) mustMarshal(v any) []byte {

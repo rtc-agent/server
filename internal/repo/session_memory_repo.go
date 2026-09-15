@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -75,7 +76,7 @@ func (r *sessionMemoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.S
 	var memory model.SessionMemory
 	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&memory, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, fmt.Errorf("session memory %s: %w", id, ErrNotFound)
 		}
 		return nil, fmt.Errorf("get session memory %s: %w", id, err)

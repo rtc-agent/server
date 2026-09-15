@@ -103,7 +103,10 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		Loops:   summaries,
 		HasMore: hasMore,
 	}
-	resultJSON := mustMarshalJSON(result)
+	resultJSON, err := mustMarshalJSON(result)
+	if err != nil {
+		return "", fmt.Errorf("list_loops: marshal result: %w", err)
+	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,

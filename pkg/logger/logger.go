@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync/atomic"
 
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
@@ -15,13 +16,20 @@ import (
 
 var log = zap.NewNop()
 
-// DebugMode 表示是否开启了 DEBUG 日志（通过环境变量 DEBUG=true 启用）。
+// debugMode 表示是否开启了 DEBUG 日志（通过环境变量 DEBUG=true 启用）。
 // 开启后会额外输出到文件 logs/debug.log，使用人类可读的 console 编码。
-var DebugMode bool
+// 使用 atomic.Bool 保证并发安全。
+var debugMode atomic.Bool
+
+// IsDebugMode 返回当前是否处于 DEBUG 模式。
+// 替代直接读取 logger.DebugMode 变量，保证并发安全。
+func IsDebugMode() bool {
+	return debugMode.Load()
+}
 
 // Init 初始化日志。
 // 除 cfg.Level 外，还会检查环境变量 DEBUG：
-//   - DEBUG=true / DEBUG=1 → 启用 DebugMode，额外输出到 logs/debug.log（console 编码）
+//   - DEBUG=true / DEBUG=1 → 启用 debug 模式，额外输出到 logs/debug.log（console 编码）
 //   - 其他值 → 仅使用 cfg.Level 配置
 // serverLogFile 如果非空，会额外输出 JSON 格式日志到该文件（用于 promtail 采集）。
 func Init(level string, serverLogFile ...string) {
@@ -69,7 +77,7 @@ func Init(level string, serverLogFile ...string) {
 	// 检查 DEBUG 环境变量，启用额外的文件日志（人类可读格式）
 	debugEnv := strings.ToLower(os.Getenv("DEBUG"))
 	if debugEnv == "true" || debugEnv == "1" || debugEnv == "yes" {
-		DebugMode = true
+		debugMode.Store(true)
 
 		// 创建 logs 目录（忽略错误——目录已存在也无妨）
 		_ = os.MkdirAll("logs", 0o755)
@@ -103,9 +111,11 @@ func Init(level string, serverLogFile ...string) {
 	// 服务器日志文件（JSON 格式，用于 promtail 采集）
 	if len(serverLogFile) > 0 && serverLogFile[0] != "" {
 		logPath := serverLogFile[0]
-		// 确保目录存在
-		if dir := logPath[:strings.LastIndex(logPath, "/")]; dir != "" {
-			_ = os.MkdirAll(dir, 0o755)
+		// 确保目录存在（LastIndex 返回 -1 时说明路径无分隔符，跳过 MkdirAll）
+		if idx := strings.LastIndex(logPath, "/"); idx > 0 {
+			if dir := logPath[:idx]; dir != "" {
+				_ = os.MkdirAll(dir, 0o755)
+			}
 		}
 		// lumberjack 轮转 writer：100MB/文件，保留 3 个旧文件，最多 7 天，gzip 压缩
 		serverLJ := &lumberjack.Logger{

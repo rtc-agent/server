@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/infra/middleware"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/svc"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -91,7 +93,7 @@ func (s *Server) Start() error {
 	s.recoverStaleTurns(context.Background())
 
 	// 启动 rtc-queue Worker（分布式 turn 执行）
-	if logger.DebugMode {
+	if logger.IsDebugMode() {
 		logger.Debug(context.Background(), "[Server] starting rtc-queue Worker...")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -101,7 +103,7 @@ func (s *Server) Start() error {
 			logger.Error(ctx, "[Server] rtc-queue Worker exited with error", zap.Error(err))
 		}
 	})
-	if logger.DebugMode {
+	if logger.IsDebugMode() {
 		logger.Debug(ctx, "[Server] rtc-queue Worker started successfully")
 	}
 
@@ -114,7 +116,7 @@ func (s *Server) Start() error {
 				logger.Error(context.Background(), "[Server] asynq server exited with error", zap.Error(err))
 			}
 		})
-		if logger.DebugMode {
+		if logger.IsDebugMode() {
 			logger.Debug(ctx, "[Server] asynq worker started")
 		}
 	}
@@ -150,14 +152,14 @@ func (s *Server) Start() error {
 
 // Stop 停止服务器
 func (s *Server) Stop() {
-	if logger.DebugMode {
+	if logger.IsDebugMode() {
 		logger.Debug(context.Background(), "[Server] stopping...")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Server.ShutdownTimeout)
 	defer cancel()
 
 	// 停止 rtc-queue Worker
-	if logger.DebugMode {
+	if logger.IsDebugMode() {
 		logger.Debug(ctx, "[Server] stopping rtc-queue Worker...")
 	}
 	if s.workerCancel != nil {
@@ -166,14 +168,14 @@ func (s *Server) Stop() {
 	if err := s.queueWorker.Stop(ctx); err != nil {
 		logger.Error(ctx, "[Server] rtc-queue Worker stop error", zap.Error(err))
 	}
-	if logger.DebugMode {
+	if logger.IsDebugMode() {
 		logger.Debug(ctx, "[Server] rtc-queue Worker stopped")
 	}
 
 	// Stop asynq server
 	if s.asynqServer != nil {
 		s.asynqServer.Stop()
-		if logger.DebugMode {
+		if logger.IsDebugMode() {
 			logger.Debug(ctx, "[Server] asynq worker stopped")
 		}
 	}
@@ -301,7 +303,11 @@ func (s *Server) recoverStaleTurns(ctx context.Context) {
 	// Find turns in running, pending, OR interrupted state.
 	// - running/pending: server crashed while executing
 	// - interrupted: server crashed while waiting for external input (RTC)
-	staleStatuses := []string{"running", "pending", "interrupted"}
+	staleStatuses := []string{
+		string(model.TurnStatusRunning),
+		string(model.TurnStatusPending),
+		string(model.TurnStatusInterrupted),
+	}
 	staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurns(ctx, staleStatuses)
 	if err != nil {
 		logger.Error(ctx, "[Server] recoverStaleTurns: find stale turns", zap.Error(err))
@@ -323,8 +329,8 @@ func (s *Server) recoverStaleTurns(ctx context.Context) {
 		sessionIDs[sessionID] = true
 
 		// Mark as interrupted (if not already)
-		if turn.Status != "interrupted" {
-			if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, "interrupted", "server restart recovery"); err != nil {
+		if turn.Status != string(model.TurnStatusInterrupted) {
+			if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusInterrupted, "server restart recovery"); err != nil {
 				logger.Error(ctx, "[Server] recoverStaleTurns: update status",
 					zap.String("turn_id", turn.ID.String()),
 					zap.Error(err))
@@ -393,7 +399,9 @@ func (s *Server) recoverStaleTurns(ctx context.Context) {
 func basicAuth(next http.Handler, user, password string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()
-		if !ok || u != user || p != password {
+		if !ok ||
+			subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 ||
+			subtle.ConstantTimeCompare([]byte(p), []byte(password)) != 1 {
 			w.Header().Set("WWW-Authenticate", `Basic realm="metrics"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return

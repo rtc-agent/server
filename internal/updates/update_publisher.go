@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rtc-agent/server/internal/channel"
@@ -58,7 +59,7 @@ type UpdatePublisher struct {
 	broker               Broker
 	resolvers            map[string]EntityResolver
 	streamStore          StreamStoreAccessor // 可选：用于读取 streaming 状态消息的 chunks
-	compressionThreshold int64               // 压缩触发阈值，用于计算 Token 预估字段
+	compressionThreshold atomic.Int64            // 压缩触发阈值，用于计算 Token 预估字段
 }
 
 // NewUpdatePublisher 创建 UpdatePublisher
@@ -86,7 +87,7 @@ func NewUpdatePublisher(
 		for id, s := range sessions {
 			ps := toProtocolSession(s)
 			// 从 Session 持久化的 EWMA 计算 Token 预估字段
-			enrichSessionWithTokenEstimate(&ps, s, u.compressionThreshold)
+			enrichSessionWithTokenEstimate(&ps, s, u.compressionThreshold.Load())
 			result[id] = ps
 		}
 		return result, nil
@@ -225,7 +226,7 @@ func (u *UpdatePublisher) SetStreamStore(s StreamStoreAccessor) {
 // SetCompressionThreshold 设置压缩触发阈值（contextTokensLimit - autoCompactBufferTokens）。
 // 用于计算 Token 预估字段（compression_progress, rounds_until_compression, estimated_next_round_tokens）。
 func (u *UpdatePublisher) SetCompressionThreshold(threshold int64) {
-	u.compressionThreshold = threshold
+	u.compressionThreshold.Store(threshold)
 }
 
 // ResolveMessageContent 返回消息的完整内容（JSON 字符串）。

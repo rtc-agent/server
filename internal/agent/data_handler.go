@@ -7,6 +7,7 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
@@ -332,10 +333,8 @@ func eventToTokenUsageUpdate(tu *turnagent.TokenUsage) *model.TokenUsageUpdate {
 // If the string is longer than maxLen, it returns the first maxLen characters
 // followed by "...". This is useful for logging stream content without
 // overwhelming the log output.
+// Delegates to stringutil.TruncateByByte.
 func truncateForLog(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
+	return stringutil.TruncateByByte(s, maxLen)
 }
 
