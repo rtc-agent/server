@@ -74,7 +74,15 @@ func newClaudeModel(ctx context.Context, cfg *config.LLMConfig, httpClient *http
 	// HTTPClient 始终注入 observability transport（用于 metrics 统计）
 	claudeCfg.HTTPClient = httpClient
 
-	return claude.NewChatModel(ctx, claudeCfg)
+	chatModel, err := claude.NewChatModel(ctx, claudeCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap with strategic cache breakpoint support.
+	// The wrapper automatically applies cache breakpoints before each API call
+	// to protect stable content from microcompact/tool budget invalidation.
+	return &claudeChatModelWrapper{chatModel}, nil
 }
 
 // newOpenAIModel 创建 OpenAI 模型

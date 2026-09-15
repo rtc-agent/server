@@ -245,19 +245,20 @@ func provideAgent(
 	metrics *turnagent.PrometheusMetrics,
 ) (*turnagent.Agent, error) {
 	return agent.New(agent.Config{
-		Deps:                      deps,
-		Redis:                     redisClient,
-		Queue:                     queue,
-		ContextTokensLimit:        cfg.Worker.ContextTokensLimit,
-		AutoCompactBufferTokens:   cfg.Worker.AutoCompactBufferTokens,
-		CacheHitRateWarnThreshold: cfg.Worker.CacheHitRateWarnThreshold,
-		MaxOutputTokensForSummary: cfg.Worker.MaxOutputTokensForSummary,
-		EnableLLMLogging:          logger.IsDebugMode(),
-		CheckpointTTL:             cfg.Worker.CheckpointTTL,
-		StreamChunkTTL:            cfg.Worker.StreamChunkTTL,
-		Logger:                    agent.NewLogger(),
-		Metrics:                   metrics,
-		ModelPricing:              convertModelPricing(cfg.LLM.Pricing),
+		Deps:                          deps,
+		Redis:                         redisClient,
+		Queue:                         queue,
+		ContextTokensLimit:            cfg.Worker.ContextTokensLimit,
+		AutoCompactBufferTokens:       cfg.Worker.AutoCompactBufferTokens,
+		CacheHitRateWarnThreshold:     cfg.Worker.CacheHitRateWarnThreshold,
+		MaxOutputTokensForSummary:     cfg.Worker.MaxOutputTokensForSummary,
+		EnableLLMLogging:              logger.IsDebugMode(),
+		CheckpointTTL:                 cfg.Worker.CheckpointTTL,
+		StreamChunkTTL:                cfg.Worker.StreamChunkTTL,
+		Logger:                        agent.NewLogger(),
+		Metrics:                       metrics,
+		ModelPricing:                  convertModelPricing(cfg.LLM.Pricing),
+		EnableStrategicCacheBreakpoints: cfg.Worker.EnableStrategicCacheBreakpoints,
 	})
 }
 

@@ -16,6 +16,24 @@ const (
 	RoleTool      = "tool"
 )
 
+// Cache breakpoint Extra keys for strategic cache control.
+// These keys are used to pass breakpoint markers through the conversion pipeline
+// and are consumed by the provider-specific adapter (e.g., claude_adapter.go).
+const (
+	// ExtraKeyCacheBreakpoint marks a message to have a cache breakpoint set.
+	// Value: bool (true to set breakpoint).
+	ExtraKeyCacheBreakpoint = "_rtc_cache_breakpoint"
+
+	// ExtraKeyCacheBreakpointTTL specifies the TTL for the breakpoint.
+	// Value: string ("5m" or "1h"). Default: "5m".
+	ExtraKeyCacheBreakpointTTL = "_rtc_cache_breakpoint_ttl"
+
+	// ExtraKeySummaryBoundary marks the last message of a summary expansion.
+	// Used by setCacheBreakpoints to identify the summary boundary position.
+	// Value: bool (true marks the boundary).
+	ExtraKeySummaryBoundary = "_rtc_summary_boundary"
+)
+
 // Message is the pkg-level message type, independent of eino's schema.Message.
 // The upper application builds and consumes Messages without importing eino.
 //
@@ -99,6 +117,20 @@ type Message struct {
 	// Not mapped to/from eino's schema.Message — used only by application-level
 	// logic such as Microcompact's time-based trigger.
 	CreatedAt time.Time
+
+	// CacheBreakpoint marks this message to have a cache breakpoint set.
+	// Not persisted — set at runtime by setCacheBreakpoints based on the
+	// strategic cache control strategy.
+	//
+	// When true, the provider adapter (e.g., claude_adapter.go) sets a cache
+	// breakpoint on this message to protect stable content from invalidation
+	// caused by microcompact or tool result budget modifications.
+	CacheBreakpoint bool
+
+	// CacheTTL specifies the TTL for the cache breakpoint.
+	// Supports "5m" (5 minutes, default) or "1h" (1 hour).
+	// Only meaningful when CacheBreakpoint is true.
+	CacheTTL string
 }
 
 // ToolCall describes one tool invocation requested by the assistant.
@@ -181,6 +213,24 @@ func toEinoMessage(m *Message) *schema.Message {
 		if _, hasThinking := em.Extra["_eino_claude_thinking"]; !hasThinking {
 			em.Extra["_eino_claude_thinking"] = em.ReasoningContent
 		}
+	}
+
+	// Strategic cache breakpoints: convert CacheBreakpoint markers to Extra keys.
+	// The actual breakpoint setting is done by the provider-specific adapter
+	// (e.g., claude_adapter.go) which recognizes these Extra keys.
+	//
+	// Defensive copy: create a new Extra map to avoid polluting the original
+	// turnagent.Message's Extra (which may be shared across conversions).
+	if m.CacheBreakpoint {
+		newExtra := make(map[string]any, len(em.Extra)+2)
+		for k, v := range em.Extra {
+			newExtra[k] = v
+		}
+		newExtra[ExtraKeyCacheBreakpoint] = true
+		if m.CacheTTL != "" {
+			newExtra[ExtraKeyCacheBreakpointTTL] = m.CacheTTL
+		}
+		em.Extra = newExtra
 	}
 
 	return em
