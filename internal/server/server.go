@@ -10,19 +10,23 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/google/uuid"
 	hibikenasynq "github.com/hibiken/asynq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/handler/http"
 	"github.com/rtc-agent/server/internal/handler/rpc"
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/svc"
+	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // Server HTTP + WebSocket 服务器
@@ -42,6 +46,11 @@ type Server struct {
 	asynqMux         *hibikenasynq.ServeMux
 	recoveryCancel   context.CancelFunc // cancels the recovery goroutine
 	goroutineCancel  func()             // cancels the goroutine metrics collector
+
+	// Stale turn scanner
+	instanceID         string               // unique ID for distributed scanner lock
+	staleScannerCancel context.CancelFunc   // cancels the stale turn scanner goroutine
+	metrics            *turnagent.PrometheusMetrics // Prometheus metrics (may be nil)
 }
 
 // BuildProviderClients 根据配置构造 Provider 列表
@@ -98,6 +107,21 @@ func (s *Server) Start() error {
 	// This ensures that turns left in running/pending state are marked as
 	// interrupted and have resume work items published.
 	s.recoverStaleTurns(context.Background())
+
+	// Start periodic stale turn scanner goroutine.
+	// Uses a Redis distributed lock to ensure only one Server instance scans
+	// at a time (see §13.6.2).
+	if s.staleScannerCancel == nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.staleScannerCancel = cancel
+		logger.SafeGo("stale-turn-scanner", func() {
+			s.staleTurnScanner(ctx)
+		})
+		if logger.IsDebugMode() {
+			logger.Debug(ctx, "[Server] stale turn scanner started",
+				zap.String("instance_id", s.instanceID))
+		}
+	}
 
 	// 启动 rtc-queue Worker（分布式 turn 执行）
 	if logger.IsDebugMode() {
@@ -192,6 +216,11 @@ func (s *Server) Stop() {
 	// Stop recovery goroutine
 	if s.recoveryCancel != nil {
 		s.recoveryCancel()
+	}
+
+	// Stop stale turn scanner goroutine
+	if s.staleScannerCancel != nil {
+		s.staleScannerCancel()
 	}
 
 	// Stop goroutine metrics collector
@@ -321,7 +350,9 @@ func NewWithDeps(
 	asynqServer *hibikenasynq.Server,
 	asynqMux *hibikenasynq.ServeMux,
 	recoveryCancel context.CancelFunc,
+	metrics *turnagent.PrometheusMetrics,
 ) *Server {
+	instanceID := "server-" + uuid.Must(uuid.NewV7()).String()
 	return &Server{
 		cfg:              cfg,
 		svcCtx:           svcCtx,
@@ -335,6 +366,8 @@ func NewWithDeps(
 		asynqServer:      asynqServer,
 		asynqMux:         asynqMux,
 		recoveryCancel:   recoveryCancel,
+		instanceID:       instanceID,
+		metrics:          metrics,
 	}
 }
 
@@ -461,6 +494,256 @@ func (s *Server) recoverStaleTurns(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// staleTurnScanner runs periodically to recover stale turns that got stuck
+// during runtime (e.g., worker crash, network partition). Uses a Redis
+// distributed lock to ensure only one Server instance scans at a time.
+func (s *Server) staleTurnScanner(ctx context.Context) {
+	const (
+		scannerInterval = 5 * time.Minute
+		scannerLockKey  = "stale_turn_scanner_lock"
+		scannerLockTTL  = 4 * time.Minute // < 5min interval
+	)
+
+	ticker := time.NewTicker(scannerInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Redis distributed lock: only one instance scans at a time.
+			acquired, err := s.svcCtx.Redis.SetNX(ctx, scannerLockKey,
+				s.instanceID, scannerLockTTL).Result()
+			if err != nil {
+				logger.Warn(ctx, "[Server] staleTurnScanner: lock acquisition failed",
+					zap.Error(err))
+				continue // Redis failure: skip this round
+			}
+			if !acquired {
+				if logger.IsDebugMode() {
+					logger.Debug(ctx, "[Server] staleTurnScanner: lock held by another instance")
+				}
+				continue
+			}
+
+			s.periodicRecoverStaleTurns(ctx)
+		}
+	}
+}
+
+// periodicRecoverStaleTurns scans for stale turns and recovers them based on
+// time thresholds. Different from recoverStaleTurns (startup recovery) in that
+// it uses time-based thresholds and checks Worker liveness.
+func (s *Server) periodicRecoverStaleTurns(ctx context.Context) {
+	const (
+		runningThreshold     = 10 * time.Minute
+		pendingThreshold     = 2 * time.Minute
+		interruptedThreshold = 30 * time.Minute
+		scanLimit            = 100
+	)
+
+	staleStatuses := []string{
+		string(model.TurnStatusRunning),
+		string(model.TurnStatusPending),
+		string(model.TurnStatusInterrupted),
+	}
+
+	staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurnsWithLimit(ctx, staleStatuses, scanLimit)
+	if err != nil {
+		logger.Error(ctx, "[Server] periodicRecoverStaleTurns: find stale turns", zap.Error(err))
+		return
+	}
+
+	if len(staleTurns) == 0 {
+		return
+	}
+
+	logger.Info(ctx, "[Server] periodicRecoverStaleTurns: found stale turns",
+		zap.Int("count", len(staleTurns)))
+
+	now := time.Now()
+
+	for _, turn := range staleTurns {
+		sessionID := turn.SessionID.String()
+
+		// Determine age based on status:
+		// - running: use StartedAt (when it began executing)
+		// - pending/interrupted: use CreatedAt
+		var age time.Duration
+		switch turn.Status {
+		case string(model.TurnStatusRunning):
+			if turn.StartedAt != nil {
+				age = now.Sub(*turn.StartedAt)
+			} else {
+				age = now.Sub(turn.CreatedAt)
+			}
+			if age < runningThreshold {
+				continue
+			}
+			// Check if a Worker is still alive (holding the session lock).
+			// If so, the turn may still be progressing normally.
+			if s.isWorkerAliveForSession(ctx, sessionID) {
+				continue
+			}
+			// Check if checkpoint still exists. If expired, resume will fail,
+			// so mark as failed directly.
+			checkpointKey := cache.Checkpoint("session:" + sessionID)
+			exists, err := s.svcCtx.Redis.Exists(ctx, checkpointKey).Result()
+			if err != nil || exists == 0 {
+				logger.Warn(ctx, "[Server] periodicRecoverStaleTurns: checkpoint expired",
+					zap.String("turn_id", turn.ID.String()),
+					zap.String("session_id", sessionID))
+				if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusFailed, "periodic scanner: checkpoint expired"); err != nil {
+					logger.Error(ctx, "[Server] periodicRecoverStaleTurns: update failed",
+						zap.String("turn_id", turn.ID.String()), zap.Error(err))
+				} else {
+					s.syncSessionStatusAfterRecovery(ctx, turn)
+					s.recordStaleTurnRecovery("running")
+				}
+				continue
+			}
+			logger.Warn(ctx, "[Server] periodicRecoverStaleTurns: recovering stale running turn",
+				zap.String("turn_id", turn.ID.String()),
+				zap.Duration("age", age))
+			if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusInterrupted, "periodic scanner: stale running turn"); err != nil {
+				logger.Error(ctx, "[Server] periodicRecoverStaleTurns: update interrupted",
+					zap.String("turn_id", turn.ID.String()), zap.Error(err))
+				continue
+			}
+			// Publish recovery work item. If publish fails, the turn is left in
+			// interrupted state with no automatic recovery path — sync session
+			// status to idle so the frontend is not stuck showing "active".
+			if err := s.publishRecoveryWorkItem(ctx, turn); err != nil {
+				s.syncSessionStatusAfterRecovery(ctx, turn)
+			}
+			s.recordStaleTurnRecovery("running")
+
+		case string(model.TurnStatusPending):
+			age = now.Sub(turn.CreatedAt)
+			if age < pendingThreshold {
+				continue
+			}
+			logger.Warn(ctx, "[Server] periodicRecoverStaleTurns: recovering stale pending turn",
+				zap.String("turn_id", turn.ID.String()),
+				zap.Duration("age", age))
+			if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusFailed, "periodic scanner: stale pending turn"); err != nil {
+				logger.Error(ctx, "[Server] periodicRecoverStaleTurns: update failed",
+					zap.String("turn_id", turn.ID.String()), zap.Error(err))
+				continue
+			}
+			s.syncSessionStatusAfterRecovery(ctx, turn)
+			s.recordStaleTurnRecovery("pending")
+
+		case string(model.TurnStatusInterrupted):
+			age = now.Sub(turn.CreatedAt)
+			if age < interruptedThreshold {
+				continue
+			}
+			logger.Warn(ctx, "[Server] periodicRecoverStaleTurns: recovering stale interrupted turn",
+				zap.String("turn_id", turn.ID.String()),
+				zap.Duration("age", age))
+			if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusCancelled, "periodic scanner: stale interrupted turn"); err != nil {
+				logger.Error(ctx, "[Server] periodicRecoverStaleTurns: update cancelled",
+					zap.String("turn_id", turn.ID.String()), zap.Error(err))
+				continue
+			}
+			s.syncSessionStatusAfterRecovery(ctx, turn)
+			s.recordStaleTurnRecovery("interrupted")
+		}
+	}
+}
+
+// isWorkerAliveForSession checks whether a Worker is holding the session lock.
+// Uses the rtc-queue lock key format: "session:lock:<sessionID>".
+func (s *Server) isWorkerAliveForSession(ctx context.Context, sessionID string) bool {
+	lockKey := "session:lock:" + sessionID
+	ttl, err := s.svcCtx.Redis.TTL(ctx, lockKey).Result()
+	if err != nil {
+		return false
+	}
+	return ttl > 0
+}
+
+// publishRecoveryWorkItem publishes a kind="submit" work item to trigger turn
+// recovery. Uses submit (not resume) to avoid state race conditions.
+// Returns an error if the publish fails so the caller can take fallback action
+// (e.g., sync session status to idle).
+func (s *Server) publishRecoveryWorkItem(ctx context.Context, turn *model.Turn) error {
+	if s.queue == nil {
+		return nil
+	}
+	payload := string(turnagent.MarshalSubmitPayload(turn.SessionID.String(), 0))
+	if _, err := s.queue.Publish(ctx, turn.SessionID.String(), payload, 100); err != nil {
+		logger.Error(ctx, "[Server] publishRecoveryWorkItem: publish failed",
+			zap.String("turn_id", turn.ID.String()),
+			zap.Error(err))
+		return err
+	}
+	logger.Info(ctx, "[Server] publishRecoveryWorkItem: published",
+		zap.String("turn_id", turn.ID.String()),
+		zap.String("session_id", turn.SessionID.String()))
+	return nil
+}
+
+// syncSessionStatusAfterRecovery updates Session status to idle when the last
+// running turn for a session has been recovered. Also publishes a session.updated
+// event to the frontend.
+func (s *Server) syncSessionStatusAfterRecovery(ctx context.Context, turn *model.Turn) {
+	session, err := s.svcCtx.SessionRepo.GetByID(ctx, turn.SessionID)
+	if err != nil {
+		logger.Warn(ctx, "[Server] syncSessionStatusAfterRecovery: load session failed",
+			zap.String("session_id", turn.SessionID.String()), zap.Error(err))
+		return
+	}
+	if session.Status != string(model.SessionStatusActive) {
+		return
+	}
+	// Check if any other running turns exist for this session.
+	runningCount, err := s.svcCtx.TurnRepo.CountBySessionAndStatus(ctx, turn.SessionID, string(model.TurnStatusRunning))
+	if err != nil {
+		logger.Warn(ctx, "[Server] syncSessionStatusAfterRecovery: count running failed",
+			zap.String("session_id", turn.SessionID.String()), zap.Error(err))
+		return
+	}
+	if runningCount > 0 {
+		return // other turns still running
+	}
+	if err := s.svcCtx.SessionRepo.UpdateStatus(ctx, turn.SessionID, model.SessionStatusIdle); err != nil {
+		logger.Error(ctx, "[Server] syncSessionStatusAfterRecovery: update session failed",
+			zap.String("session_id", turn.SessionID.String()), zap.Error(err))
+		return
+	}
+	// Publish session.updated event to frontend.
+	s.publishSessionStatusUpdate(ctx, session)
+}
+
+// publishSessionStatusUpdate publishes a session.updated event after the
+// scanner modifies session status.
+func (s *Server) publishSessionStatusUpdate(ctx context.Context, session *model.Session) {
+	if s.svcCtx.UpdatePublisher == nil {
+		return
+	}
+	updates := primitives.BuildSessionUpdatedUpdates(session)
+	if len(updates) == 0 {
+		return
+	}
+	if _, err := s.svcCtx.UpdatePublisher.Publish(ctx, updates...); err != nil {
+		logger.Warn(ctx, "[Server] publishSessionStatusUpdate: publish failed",
+			zap.String("session_id", session.ID.String()), zap.Error(err))
+	}
+}
+
+// recordStaleTurnRecovery records a stale turn recovery metric.
+func (s *Server) recordStaleTurnRecovery(status string) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.RecordStaleTurnRecovery(context.Background(), turnagent.StaleTurnRecoveryAttrs{
+		Status: status,
+	})
 }
 
 // basicAuth HTTP Basic Authentication 中间件。

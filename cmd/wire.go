@@ -259,6 +259,7 @@ func provideAgent(
 		Metrics:                       metrics,
 		ModelPricing:                  convertModelPricing(cfg.LLM.Pricing),
 		EnableStrategicCacheBreakpoints: cfg.Worker.EnableStrategicCacheBreakpoints,
+		ShowRawErrors:                 cfg.Debug.Enabled && cfg.Debug.ShowRawErrors,
 	})
 }
 
@@ -400,6 +401,7 @@ func provideServer(
 	asynqServer *hibikenasynq.Server,
 	asynqMux *hibikenasynq.ServeMux,
 	recoveryCancel context.CancelFunc,
+	metrics *turnagent.PrometheusMetrics,
 ) *server.Server {
 	// Inject stream store into UpdatePublisher
 	svcCtx.UpdatePublisher.SetStreamStore(streamStore)
@@ -417,6 +419,7 @@ func provideServer(
 		asynqServer,
 		asynqMux,
 		recoveryCancel,
+		metrics,
 	)
 }
 

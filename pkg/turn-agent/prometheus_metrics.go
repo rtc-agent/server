@@ -34,6 +34,9 @@ type PrometheusMetrics struct {
 	scriptExecutionDuration *prometheus.HistogramVec
 	scriptResultSize        *prometheus.HistogramVec
 	scriptCodeSize          *prometheus.HistogramVec
+
+	// Recovery metrics (stale turn scanner)
+	staleTurnsRecovered *prometheus.CounterVec // label: status (running/pending/interrupted)
 }
 
 // NewPrometheusMetrics 创建并注册所有 Prometheus 指标。
@@ -174,6 +177,13 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Help:      "Script source code size in bytes.",
 			Buckets:   prometheus.ExponentialBuckets(64, 2, 12),
 		}, []string{"action"}),
+
+		staleTurnsRecovered: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "recovery",
+			Name:      "stale_turns_recovered_total",
+			Help:      "Total number of stale turns recovered by the periodic scanner.",
+		}, []string{"status"}), // status: "running", "pending", "interrupted"
 	}
 }
 
@@ -292,4 +302,20 @@ func (m *PrometheusMetrics) RecordScriptExecution(ctx context.Context, attrs Scr
 	if attrs.CodeSize > 0 {
 		m.scriptCodeSize.WithLabelValues(attrs.Action).Observe(float64(attrs.CodeSize))
 	}
+}
+
+// StaleTurnRecoveryAttrs contains attributes for a stale turn recovery event.
+type StaleTurnRecoveryAttrs struct {
+	// Status is the original stale turn status: "running", "pending", or "interrupted".
+	Status string
+}
+
+// RecordStaleTurnRecovery records a stale turn recovery event.
+// Defined on concrete type, not the Metrics interface (see design doc rationale).
+func (m *PrometheusMetrics) RecordStaleTurnRecovery(ctx context.Context, attrs StaleTurnRecoveryAttrs) {
+	status := attrs.Status
+	if status == "" {
+		status = "unknown"
+	}
+	m.staleTurnsRecovered.WithLabelValues(status).Inc()
 }

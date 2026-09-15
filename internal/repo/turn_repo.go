@@ -47,6 +47,14 @@ type TurnRepo interface {
 	UpdateInterruptID(ctx context.Context, id uuid.UUID, interruptID string) error
 	// GetByIDs 批量查询 Turn，返回 map[id]*Turn。未找到的 ID 不会出现在 map 中。
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Turn, error)
+	// CountBySessionAndStatus counts turns for a session with the given status.
+	// Used by stale scanner to check if other running turns exist before
+	// transitioning session to idle.
+	CountBySessionAndStatus(ctx context.Context, sessionID uuid.UUID, status string) (int64, error)
+	// FindStaleTurnsWithLimit finds turns in the given statuses with a LIMIT
+	// clause to protect against extreme scenarios (e.g., thousands of stale
+	// turns after a long outage). Used by periodic scanner.
+	FindStaleTurnsWithLimit(ctx context.Context, statuses []string, limit int) ([]*model.Turn, error)
 }
 
 type turnRepo struct {
@@ -238,4 +246,41 @@ func (r *turnRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID
 		result[t.ID] = t
 	}
 	return result, nil
+}
+
+// CountBySessionAndStatus counts turns for a session with the given status.
+// Used by stale scanner to check if other running turns exist before
+// transitioning session to idle.
+func (r *turnRepo) CountBySessionAndStatus(ctx context.Context, sessionID uuid.UUID, status string) (int64, error) {
+	var count int64
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.Turn{}).
+		Where("session_id = ? AND status = ?", sessionID, status).
+		Count(&count).Error
+	if err != nil {
+		return 0, fmt.Errorf("count turns for session %s with status %s: %w", sessionID, status, err)
+	}
+	return count, nil
+}
+
+// FindStaleTurnsWithLimit finds turns in the given statuses with a LIMIT
+// clause to protect against extreme scenarios (e.g., thousands of stale
+// turns after a long outage). Used by periodic scanner.
+func (r *turnRepo) FindStaleTurnsWithLimit(ctx context.Context, statuses []string, limit int) ([]*model.Turn, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100 // default safety limit
+	}
+	var turns []*model.Turn
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("status IN ?", statuses).
+		Order("created_at ASC").
+		Limit(limit).
+		Find(&turns).Error
+	if err != nil {
+		return nil, fmt.Errorf("find stale turns with limit: %w", err)
+	}
+	return turns, nil
 }

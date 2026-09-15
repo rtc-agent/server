@@ -12,7 +12,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/google/uuid"
 	"github.com/google/wire"
-	hibikenasynq "github.com/hibiken/asynq"
+	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/agent/command"
@@ -53,7 +53,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
 	userMemoryRepo := repo.NewUserMemoryRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
-	memoryRepo := repo.NewMemoryRepo(db)
+	repository := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
 	updatePublisher := provideUpdatePublisher(db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo)
 	node, err := provideCentrifugeNode()
@@ -68,7 +68,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, memoryRepo, loopRepo, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, repository, loopRepo, updatePublisher, node, dualBroker, jwtSigner)
 	return serviceContext, nil
 }
 
@@ -86,7 +86,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
 	userMemoryRepo := repo.NewUserMemoryRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
-	memoryRepo := repo.NewMemoryRepo(db)
+	repository := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
 	updatePublisher := provideUpdatePublisher(db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo)
 	node, err := provideCentrifugeNode()
@@ -101,7 +101,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, memoryRepo, loopRepo, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, repository, loopRepo, updatePublisher, node, dualBroker, jwtSigner)
 	prometheusMetrics := provideMetrics()
 	cmdChatModelResult, err := provideChatModel(cfg, prometheusMetrics)
 	if err != nil {
@@ -113,10 +113,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	}
 	dependencies := provideUsecaseDependencies(serviceContext, cmdChatModelResult, cfg, taskScheduler)
 	queue := provideQueue(rdb)
-	asynqServer := provideAsynqServer(cfg)
-	asynqMux := provideAsynqMux(queue, loopRepo)
 	inspector := provideAsynqInspector(cfg)
-	recoveryCancel := provideRecoveryCancel(cfg, loopRepo, taskScheduler, inspector)
 	handler := provideRPCHandler(serviceContext, dependencies, sessionRepo, queue, cfg, prometheusMetrics, inspector)
 	httphandlerHandler := provideHTTPHandler(serviceContext)
 	redisStore := provideStateStore(universalClient)
@@ -124,13 +121,16 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	oAuth2Handler := provideOAuth2Handler(serviceContext, jwtSigner, redisStore, client, cfg)
 	interruptHandler := provideInterruptHandler(universalClient, cfg, serviceContext, jwtSigner)
 	memoriesHandler := provideMemoriesHandler(serviceContext, jwtSigner)
-	agentInstance, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics)
+	agent, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics)
 	if err != nil {
 		return nil, err
 	}
-	queueWorker := provideQueueWorker(queue, agentInstance, cfg)
+	worker := provideQueueWorker(queue, agent, cfg)
 	streamStore := provideStreamStore(universalClient, cfg)
-	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, memoriesHandler, queueWorker, queue, streamStore, asynqServer, asynqMux, recoveryCancel)
+	asynqServer := provideAsynqServer(cfg)
+	serveMux := provideAsynqMux(queue, loopRepo)
+	cancelFunc := provideRecoveryCancel(cfg, loopRepo, taskScheduler)
+	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, memoriesHandler, worker, queue, streamStore, asynqServer, serveMux, cancelFunc, prometheusMetrics)
 	return serverServer, nil
 }
 
@@ -318,19 +318,21 @@ func provideAgent(
 	metrics *turnagent.PrometheusMetrics,
 ) (*turnagent.Agent, error) {
 	return agent.New(agent.Config{
-		Deps:                      deps,
-		Redis:                     redisClient,
-		Queue:                     queue,
-		ContextTokensLimit:        cfg.Worker.ContextTokensLimit,
-		AutoCompactBufferTokens:   cfg.Worker.AutoCompactBufferTokens,
-		CacheHitRateWarnThreshold: cfg.Worker.CacheHitRateWarnThreshold,
-		MaxOutputTokensForSummary: cfg.Worker.MaxOutputTokensForSummary,
-		EnableLLMLogging:          logger.IsDebugMode(),
-		CheckpointTTL:             cfg.Worker.CheckpointTTL,
-		StreamChunkTTL:            cfg.Worker.StreamChunkTTL,
-		Logger:                    agent.NewLogger(),
-		Metrics:                   metrics,
-		ModelPricing:              convertModelPricing(cfg.LLM.Pricing),
+		Deps:                            deps,
+		Redis:                           redisClient,
+		Queue:                           queue,
+		ContextTokensLimit:              cfg.Worker.ContextTokensLimit,
+		AutoCompactBufferTokens:         cfg.Worker.AutoCompactBufferTokens,
+		CacheHitRateWarnThreshold:       cfg.Worker.CacheHitRateWarnThreshold,
+		MaxOutputTokensForSummary:       cfg.Worker.MaxOutputTokensForSummary,
+		EnableLLMLogging:                logger.IsDebugMode(),
+		CheckpointTTL:                   cfg.Worker.CheckpointTTL,
+		StreamChunkTTL:                  cfg.Worker.StreamChunkTTL,
+		Logger:                          agent.NewLogger(),
+		Metrics:                         metrics,
+		ModelPricing:                    convertModelPricing(cfg.LLM.Pricing),
+		EnableStrategicCacheBreakpoints: cfg.Worker.EnableStrategicCacheBreakpoints,
+		ShowRawErrors:                   cfg.Debug.Enabled && cfg.Debug.ShowRawErrors,
 	})
 }
 
@@ -399,14 +401,6 @@ func provideStateStore(redisClient redis.UniversalClient) *oauth.RedisStore {
 	return oauth.NewRedisStore(redisClient)
 }
 
-func provideTaskScheduler(cfg *config.Config) (usecase.TaskScheduler, error) {
-	addr := cfg.Asynq.RedisAddr
-	if addr == "" {
-		addr = cfg.Redis.Addr
-	}
-	return taskscheduler.NewTaskScheduler(addr)
-}
-
 func provideOAuth2ProviderClient(cfg *config.Config) *oauth.Client {
 	providers := server.BuildProviderClients(cfg)
 	return oauth.NewClient(providers, cfg.Providers.HTTPTimeout)
@@ -419,7 +413,7 @@ func provideRPCHandler(
 	queue *rtcqueue.Queue,
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
-	inspector *hibikenasynq.Inspector,
+	inspector *asynq.Inspector,
 ) *rpchandler.Handler {
 	handler := rpchandler.NewHandler(&rpchandler.Dependencies{
 		Deps:                deps,
@@ -475,11 +469,12 @@ func provideServer(
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
 	streamStore *agent.StreamStore,
-	asynqServer *hibikenasynq.Server,
-	asynqMux *hibikenasynq.ServeMux,
+	asynqServer *asynq.Server,
+	asynqMux *asynq.ServeMux,
 	recoveryCancel context.CancelFunc,
+	metrics *turnagent.PrometheusMetrics,
 ) *server.Server {
-	// Inject stream store into UpdatePublisher
+
 	svcCtx.UpdatePublisher.SetStreamStore(streamStore)
 
 	return server.NewWithDeps(
@@ -495,15 +490,22 @@ func provideServer(
 		asynqServer,
 		asynqMux,
 		recoveryCancel,
+		metrics,
 	)
 }
 
-// =============================================================================
-// Asynq provider functions
-// =============================================================================
+// provideTaskScheduler creates the asynq-based TaskScheduler.
+// It returns the usecase.TaskScheduler interface for injection into usecase.Dependencies.
+func provideTaskScheduler(cfg *config.Config) (usecase.TaskScheduler, error) {
+	addr := cfg.Asynq.RedisAddr
+	if addr == "" {
+		addr = cfg.Redis.Addr
+	}
+	return taskscheduler.NewTaskScheduler(addr)
+}
 
 // provideAsynqServer creates the asynq Server for processing loop tasks.
-func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
+func provideAsynqServer(cfg *config.Config) *asynq.Server {
 	addr := cfg.Asynq.RedisAddr
 	if addr == "" {
 		addr = cfg.Redis.Addr
@@ -516,33 +518,31 @@ func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
 	if queueName == "" {
 		queueName = "loop"
 	}
-	return hibikenasynq.NewServer(
-		hibikenasynq.RedisClientOpt{Addr: addr},
-		hibikenasynq.Config{
-			Concurrency: concurrency,
-			Queues: map[string]int{
-				queueName: 6,
-				"default": 3,
-			},
+	return asynq.NewServer(asynq.RedisClientOpt{Addr: addr}, asynq.Config{
+		Concurrency: concurrency,
+		Queues: map[string]int{
+			queueName: 6,
+			"default": 3,
 		},
+	},
 	)
 }
 
 // provideAsynqMux creates the asynq ServeMux with loop task handlers registered.
-func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo) *hibikenasynq.ServeMux {
+func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo) *asynq.ServeMux {
 	worker := loop.NewWorker(queue, loopRepo)
-	mux := hibikenasynq.NewServeMux()
+	mux := asynq.NewServeMux()
 	worker.RegisterHandlers(mux)
 	return mux
 }
 
 // provideAsynqInspector creates the asynq Inspector for task management.
-func provideAsynqInspector(cfg *config.Config) *hibikenasynq.Inspector {
+func provideAsynqInspector(cfg *config.Config) *asynq.Inspector {
 	addr := cfg.Asynq.RedisAddr
 	if addr == "" {
 		addr = cfg.Redis.Addr
 	}
-	return hibikenasynq.NewInspector(hibikenasynq.RedisClientOpt{Addr: addr})
+	return asynq.NewInspector(asynq.RedisClientOpt{Addr: addr})
 }
 
 // provideRecoveryCancel creates the recovery goroutine and returns its cancel function.
@@ -550,16 +550,16 @@ func provideRecoveryCancel(
 	cfg *config.Config,
 	loopRepo repo.LoopRepo,
 	scheduler usecase.TaskScheduler,
-	inspector *hibikenasynq.Inspector,
 ) context.CancelFunc {
-	// Recovery needs direct access to asynq client.
-	// Extract it from the concrete scheduler type.
+	// Recovery needs direct access to asynq client/inspector.
+	// Extract them from the concrete scheduler type.
 	type clientProvider interface {
-		Client() *hibikenasynq.Client
+		Client() *asynq.Client
+		Inspector() *asynq.Inspector
 	}
 	cp, ok := scheduler.(clientProvider)
 	if !ok || cp == nil {
-		// TaskScheduler not available or wrong type; return no-op cancel.
+
 		return func() {}
 	}
 
@@ -582,7 +582,7 @@ func provideRecoveryCancel(
 	go loop.RunRecovery(ctx, loop.RecoveryDeps{
 		LoopRepo:       loopRepo,
 		Client:         cp.Client(),
-		Inspector:      inspector,
+		Inspector:      cp.Inspector(),
 		Interval:       interval,
 		StaleThreshold: staleThreshold,
 		RetryMax:       retryMax,
