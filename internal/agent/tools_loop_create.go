@@ -38,12 +38,12 @@ type createLoopArgs struct {
 
 // createLoopResult is the JSON returned to LLM and persisted in toolcall_output.
 type createLoopResult struct {
-	ID              string `json:"id"`
-	Prompt          string `json:"prompt"`
-	Status          string `json:"status"`
-	IntervalSeconds int    `json:"interval_seconds"`
-	MaxTurns        int    `json:"max_turns"`
-	CompletedTurns  int    `json:"completed_turns"`
+	ID              string           `json:"id"`
+	Prompt          string           `json:"prompt"`
+	Status          model.LoopStatus `json:"status"`
+	IntervalSeconds int              `json:"interval_seconds"`
+	MaxTurns        int              `json:"max_turns"`
+	CompletedTurns  int              `json:"completed_turns"`
 }
 
 func (t *createLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -116,7 +116,7 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		IntervalSeconds: intervalSeconds,
 		MaxTurns:        maxTurns,
 		CompletedTurns:  0,
-		Status:          string(model.LoopStatusActive),
+		Status:          model.LoopStatusActive,
 		ExpiresAt:       &expiresAt,
 	}
 	if err := t.helpers.deps.LoopRepo.Create(ctx, loop); err != nil {

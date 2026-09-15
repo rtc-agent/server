@@ -21,11 +21,11 @@ type pauseLoopTool struct {
 }
 
 type pauseLoopResult struct {
-	ID             string `json:"id"`
-	Prompt         string `json:"prompt"`
-	Status         string `json:"status"`
-	CompletedTurns int    `json:"completed_turns"`
-	MaxTurns       int    `json:"max_turns"`
+	ID             string           `json:"id"`
+	Prompt         string           `json:"prompt"`
+	Status         model.LoopStatus `json:"status"`
+	CompletedTurns int              `json:"completed_turns"`
+	MaxTurns       int              `json:"max_turns"`
 }
 
 func (t *pauseLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -50,7 +50,7 @@ func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	}
 
 	updateFields := map[string]any{
-		"status": string(model.LoopStatusPaused),
+		"status": model.LoopStatusPaused,
 	}
 
 	// Cancel the scheduled task if TaskScheduler is available.
@@ -63,7 +63,7 @@ func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	result := pauseLoopResult{
 		ID:             loop.ID.String(),
 		Prompt:         loop.Prompt,
-		Status:         string(model.LoopStatusPaused),
+		Status:         model.LoopStatusPaused,
 		CompletedTurns: loop.CompletedTurns,
 		MaxTurns:       loop.MaxTurns,
 	}

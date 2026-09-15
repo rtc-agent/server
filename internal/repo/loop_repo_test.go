@@ -29,7 +29,7 @@ func newTestLoop(t *testing.T, sessionID uuid.UUID) *model.Loop {
 		IntervalSeconds: 60,
 		MaxTurns:        10,
 		CompletedTurns:  0,
-		Status:          string(model.LoopStatusActive),
+		Status:          model.LoopStatusActive,
 	}
 }
 
@@ -103,7 +103,7 @@ func TestLoopRepo_FindActive_Found(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, loop.ID, got.ID)
-	assert.Equal(t, string(model.LoopStatusActive), got.Status)
+	assert.Equal(t, model.LoopStatusActive, got.Status)
 }
 
 func TestLoopRepo_FindActive_None(t *testing.T) {
@@ -129,7 +129,7 @@ func TestLoopRepo_FindActive_IgnoresTerminal(t *testing.T) {
 
 	// Complete the loop
 	require.NoError(t, repo.Update(ctx, loop.ID, map[string]any{
-		"status": string(model.LoopStatusCompleted),
+		"status": model.LoopStatusCompleted,
 	}))
 
 	got, err := repo.FindActive(ctx, sessionID)
@@ -149,7 +149,7 @@ func TestLoopRepo_FindActive_IgnoresPaused(t *testing.T) {
 
 	// Pause the loop
 	require.NoError(t, repo.Update(ctx, loop.ID, map[string]any{
-		"status": string(model.LoopStatusPaused),
+		"status": model.LoopStatusPaused,
 	}))
 
 	got, err := repo.FindActive(ctx, sessionID)
@@ -174,7 +174,7 @@ func TestLoopRepo_FindActive_ReturnsMostRecent(t *testing.T) {
 
 	// Cancel first loop
 	require.NoError(t, repo.Update(ctx, loop1.ID, map[string]any{
-		"status": string(model.LoopStatusCancelled),
+		"status": model.LoopStatusCancelled,
 	}))
 
 	// Create second active loop
@@ -249,13 +249,13 @@ func TestLoopRepo_Update_TerminalStatus_AutoCompletedAt(t *testing.T) {
 	assert.Nil(t, loop.CompletedAt)
 
 	err := repo.Update(ctx, loop.ID, map[string]any{
-		"status": string(model.LoopStatusCompleted),
+		"status": model.LoopStatusCompleted,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, loop.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(model.LoopStatusCompleted), got.Status)
+	assert.Equal(t, model.LoopStatusCompleted, got.Status)
 	assert.NotNil(t, got.CompletedAt, "completed_at should be auto-filled for terminal status")
 }
 
@@ -272,14 +272,14 @@ func TestLoopRepo_Update_TerminalStatus_ExplicitCompletedAt(t *testing.T) {
 	explicitTime := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	err := repo.Update(ctx, loop.ID, map[string]any{
-		"status":       string(model.LoopStatusCancelled),
+		"status":       model.LoopStatusCancelled,
 		"completed_at": explicitTime,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, loop.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(model.LoopStatusCancelled), got.Status)
+	assert.Equal(t, model.LoopStatusCancelled, got.Status)
 	assert.NotNil(t, got.CompletedAt)
 	assert.WithinDuration(t, explicitTime, *got.CompletedAt, time.Second)
 }
@@ -502,7 +502,7 @@ func TestLoopRepo_FindStaleLoops_ExcludesNonActive(t *testing.T) {
 	// Pause the loop and set stale last_run_at
 	staleTime := time.Now().Add(-2 * time.Hour)
 	require.NoError(t, repo.Update(ctx, loop.ID, map[string]any{
-		"status":      string(model.LoopStatusPaused),
+		"status":      model.LoopStatusPaused,
 		"last_run_at": staleTime,
 	}))
 
@@ -626,7 +626,7 @@ func TestLoopRepo_FindExpiredLoops_ExcludesNonActive(t *testing.T) {
 	// Complete the loop with past expires_at
 	expiredTime := time.Now().Add(-1 * time.Hour)
 	require.NoError(t, repo.Update(ctx, loop.ID, map[string]any{
-		"status":     string(model.LoopStatusCompleted),
+		"status":     model.LoopStatusCompleted,
 		"expires_at": expiredTime,
 	}))
 
@@ -659,13 +659,13 @@ func TestLoopRepo_Update_CancelledStatus_AutoCompletedAt(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, loop))
 
 	err := repo.Update(ctx, loop.ID, map[string]any{
-		"status": string(model.LoopStatusCancelled),
+		"status": model.LoopStatusCancelled,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, loop.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(model.LoopStatusCancelled), got.Status)
+	assert.Equal(t, model.LoopStatusCancelled, got.Status)
 	assert.NotNil(t, got.CompletedAt)
 }
 
@@ -680,13 +680,13 @@ func TestLoopRepo_Update_ExhaustedStatus_AutoCompletedAt(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, loop))
 
 	err := repo.Update(ctx, loop.ID, map[string]any{
-		"status": string(model.LoopStatusExhausted),
+		"status": model.LoopStatusExhausted,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, loop.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(model.LoopStatusExhausted), got.Status)
+	assert.Equal(t, model.LoopStatusExhausted, got.Status)
 	assert.NotNil(t, got.CompletedAt)
 }
 
@@ -703,13 +703,13 @@ func TestLoopRepo_Update_PausedStatus_NoAutoCompletedAt(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, loop))
 
 	err := repo.Update(ctx, loop.ID, map[string]any{
-		"status": string(model.LoopStatusPaused),
+		"status": model.LoopStatusPaused,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, loop.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(model.LoopStatusPaused), got.Status)
+	assert.Equal(t, model.LoopStatusPaused, got.Status)
 	assert.Nil(t, got.CompletedAt, "completed_at should NOT be set for paused status")
 }
 
@@ -727,7 +727,7 @@ func TestLoopRepo_Update_WithLastReason(t *testing.T) {
 
 	reason := "loop exhausted after max turns"
 	err := repo.Update(ctx, loop.ID, map[string]any{
-		"status":      string(model.LoopStatusExhausted),
+		"status":      model.LoopStatusExhausted,
 		"last_reason": reason,
 	})
 	require.NoError(t, err)

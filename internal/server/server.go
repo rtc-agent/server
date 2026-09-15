@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -299,6 +300,16 @@ func NewWithDeps(
 //     (processing but lock expired) and requeue it
 //  3. Mark stale turns as interrupted and publish resume work items
 //  4. Release stale session locks
+
+// resumeWorkPayload 是 recoverStaleTurns 发布的 resume 工作项 JSON 载体。
+// 使用 struct + json.Marshal 替代 fmt.Sprintf 拼接 JSON，
+// 避免字符串转义风险并保证字段类型安全。
+type resumeWorkPayload struct {
+	Kind        string `json:"kind"`
+	SessionID   string `json:"session_id"`
+	InterruptID string `json:"interrupt_id"`
+}
+
 func (s *Server) recoverStaleTurns(ctx context.Context) {
 	// Find turns in running, pending, OR interrupted state.
 	// - running/pending: server crashed while executing
@@ -342,8 +353,18 @@ func (s *Server) recoverStaleTurns(ctx context.Context) {
 		if s.queue != nil {
 			// Build payload with InterruptID for proper ResumeParams construction
 			interruptID := turn.InterruptID
-			payload := fmt.Sprintf(`{"kind":"resume","session_id":"%s","interrupt_id":"%s"}`,
-				turn.SessionID.String(), interruptID)
+			payloadBytes, err := json.Marshal(&resumeWorkPayload{
+				Kind:        "resume",
+				SessionID:   turn.SessionID.String(),
+				InterruptID: interruptID,
+			})
+			if err != nil {
+				logger.Error(ctx, "[Server] recoverStaleTurns: marshal resume payload",
+					zap.String("turn_id", turn.ID.String()),
+					zap.Error(err))
+				continue
+			}
+			payload := string(payloadBytes)
 
 			if _, err := s.queue.Publish(ctx, turn.SessionID.String(), payload, 100); err != nil {
 				logger.Error(ctx, "[Server] recoverStaleTurns: publish resume",

@@ -64,7 +64,7 @@ func (r *loopRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Loop, erro
 func (r *loopRepo) FindActive(ctx context.Context, sessionID uuid.UUID) (*model.Loop, error) {
 	var loop model.Loop
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Where("session_id = ? AND status = ?", sessionID, string(model.LoopStatusActive)).
+		Where("session_id = ? AND status = ?", sessionID, model.LoopStatusActive).
 		Order("created_at DESC").
 		First(&loop).Error
 	if err != nil {
@@ -108,7 +108,7 @@ func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time)
 	var loops []*model.Loop
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("status = ? AND (asynq_task_id IS NULL OR asynq_task_id = '') AND last_run_at IS NOT NULL AND last_run_at < ?",
-			string(model.LoopStatusActive), staleThreshold).
+			model.LoopStatusActive, staleThreshold).
 		Find(&loops).Error
 	if err != nil {
 		return nil, fmt.Errorf("find stale loops: %w", err)
@@ -121,7 +121,7 @@ func (r *loopRepo) FindExpiredLoops(ctx context.Context) ([]*model.Loop, error) 
 	var loops []*model.Loop
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("status = ? AND expires_at IS NOT NULL AND expires_at < ?",
-			string(model.LoopStatusActive), time.Now()).
+			model.LoopStatusActive, time.Now()).
 		Find(&loops).Error
 	if err != nil {
 		return nil, fmt.Errorf("find expired loops: %w", err)

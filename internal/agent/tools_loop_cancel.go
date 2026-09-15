@@ -25,11 +25,11 @@ type cancelLoopArgs struct {
 }
 
 type cancelLoopResult struct {
-	ID             string `json:"id"`
-	Prompt         string `json:"prompt"`
-	Status         string `json:"status"`
-	Reason         string `json:"reason"`
-	CompletedTurns int    `json:"completed_turns"`
+	ID             string           `json:"id"`
+	Prompt         string           `json:"prompt"`
+	Status         model.LoopStatus `json:"status"`
+	Reason         string           `json:"reason"`
+	CompletedTurns int              `json:"completed_turns"`
 }
 
 func (t *cancelLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -64,7 +64,7 @@ func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	}
 
 	updateFields := map[string]any{
-		"status":      string(model.LoopStatusCancelled),
+		"status":      model.LoopStatusCancelled,
 		"last_reason": args.Reason,
 	}
 
@@ -78,7 +78,7 @@ func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	result := cancelLoopResult{
 		ID:             loop.ID.String(),
 		Prompt:         loop.Prompt,
-		Status:         string(model.LoopStatusCancelled),
+		Status:         model.LoopStatusCancelled,
 		Reason:         args.Reason,
 		CompletedTurns: loop.CompletedTurns,
 	}
@@ -123,11 +123,11 @@ type completeLoopArgs struct {
 }
 
 type completeLoopResult struct {
-	ID             string `json:"id"`
-	Prompt         string `json:"prompt"`
-	Status         string `json:"status"`
-	Reason         string `json:"reason"`
-	CompletedTurns int    `json:"completed_turns"`
+	ID             string           `json:"id"`
+	Prompt         string           `json:"prompt"`
+	Status         model.LoopStatus `json:"status"`
+	Reason         string           `json:"reason"`
+	CompletedTurns int              `json:"completed_turns"`
 }
 
 func (t *completeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -162,7 +162,7 @@ func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	}
 
 	updateFields := map[string]any{
-		"status":      string(model.LoopStatusCompleted),
+		"status":      model.LoopStatusCompleted,
 		"last_reason": args.Reason,
 	}
 
@@ -176,7 +176,7 @@ func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	result := completeLoopResult{
 		ID:             loop.ID.String(),
 		Prompt:         loop.Prompt,
-		Status:         string(model.LoopStatusCompleted),
+		Status:         model.LoopStatusCompleted,
 		Reason:         args.Reason,
 		CompletedTurns: loop.CompletedTurns,
 	}

@@ -505,12 +505,18 @@ func TestTopicBrokerConfig(t *testing.T) {
 
 // TestGenerateEpoch tests epoch generation
 func TestGenerateEpoch(t *testing.T) {
-	epoch := generateEpoch()
+	epoch, err := generateEpoch()
+	if err != nil {
+		t.Fatalf("generateEpoch failed: %v", err)
+	}
 	if epoch == "" {
 		t.Error("expected non-empty epoch")
 	}
 
-	epoch2 := generateEpoch()
+	epoch2, err := generateEpoch()
+	if err != nil {
+		t.Fatalf("generateEpoch failed: %v", err)
+	}
 	if epoch == epoch2 {
 		t.Error("expected different epochs")
 	}
@@ -1704,7 +1710,10 @@ func TestTopicBroker_PublishWithOffset_EpochMismatch(t *testing.T) {
 	defer client.Close()
 
 	metaKey := prefix + ":meta:test-channel"
-	newEpoch := generateEpoch()
+	newEpoch, err := generateEpoch()
+	if err != nil {
+		t.Fatalf("generateEpoch failed: %v", err)
+	}
 	client.Do(ctx, client.B().Hset().Key(metaKey).FieldValue().FieldValue("e", newEpoch).Build())
 
 	// Try to publish with old epoch - should fail
@@ -1941,7 +1950,10 @@ func TestTopicBroker_PushFailureAfterPersist(t *testing.T) {
 	defer client.Close()
 
 	metaKey := prefix + ":meta:ch-1"
-	newEpoch := generateEpoch()
+	newEpoch, err := generateEpoch()
+	if err != nil {
+		t.Fatalf("generateEpoch failed: %v", err)
+	}
 	client.Do(ctx, client.B().Hset().Key(metaKey).FieldValue().FieldValue("e", newEpoch).Build())
 
 	// Step 4: PublishWithOffset fails due to epoch mismatch

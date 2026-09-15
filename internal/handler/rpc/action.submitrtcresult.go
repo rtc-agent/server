@@ -75,7 +75,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 			DataList: new([]interface{}{
 				model.ToProtocolRtc(rtc),
 			}),
-			Id: uuid.NewString(),
+			Id: uuid.Must(uuid.NewV7()).String(),
 			Items: []protocol.UpdateItem{protocol.UpdateItem{
 				Action:   protocol.ActionUpdated,
 				Entity:   protocol.EntityRtc,

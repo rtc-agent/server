@@ -26,14 +26,14 @@ type listLoopsArgs struct {
 }
 
 type loopSummary struct {
-	ID              string  `json:"id"`
-	Prompt          string  `json:"prompt"`
-	Status          string  `json:"status"`
-	IntervalSeconds int     `json:"interval_seconds"`
-	MaxTurns        int     `json:"max_turns"`
-	CompletedTurns  int     `json:"completed_turns"`
-	CreatedAt       string  `json:"created_at"`
-	LastRunAt       *string `json:"last_run_at,omitempty"`
+	ID              string           `json:"id"`
+	Prompt          string           `json:"prompt"`
+	Status          model.LoopStatus `json:"status"`
+	IntervalSeconds int              `json:"interval_seconds"`
+	MaxTurns        int              `json:"max_turns"`
+	CompletedTurns  int              `json:"completed_turns"`
+	CreatedAt       string           `json:"created_at"`
+	LastRunAt       *string          `json:"last_run_at,omitempty"`
 }
 
 type listLoopsResult struct {

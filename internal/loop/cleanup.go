@@ -50,7 +50,7 @@ func cancelActiveLoop(ctx context.Context, loopRepo repo.LoopRepo, inspector *hi
 	// Update status to cancelled
 	reason := "session closed"
 	if err := loopRepo.Update(ctx, loop.ID, map[string]any{
-		"status":      string(model.LoopStatusCancelled),
+		"status":      model.LoopStatusCancelled,
 		"last_reason": &reason,
 	}); err != nil {
 		logger.Error(ctx, "[loop.Cleanup] cancel loop",
@@ -83,7 +83,7 @@ func cancelActiveGoal(ctx context.Context, goalRepo repo.GoalRepo, sessionID uui
 
 	reason := "session closed"
 	if err := goalRepo.Update(ctx, goal.ID, map[string]any{
-		"status":      string(model.GoalStatusCancelled),
+		"status":      model.GoalStatusCancelled,
 		"last_reason": &reason,
 	}); err != nil {
 		logger.Error(ctx, "[loop.Cleanup] cancel goal",

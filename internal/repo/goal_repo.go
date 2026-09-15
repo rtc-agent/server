@@ -57,7 +57,7 @@ func (r *goalRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Goal, erro
 func (r *goalRepo) FindActive(ctx context.Context, sessionID uuid.UUID) (*model.Goal, error) {
 	var goal model.Goal
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Where("session_id = ? AND status = ?", sessionID, string(model.GoalStatusActive)).
+		Where("session_id = ? AND status = ?", sessionID, model.GoalStatusActive).
 		Order("created_at DESC").
 		First(&goal).Error
 	if err != nil {

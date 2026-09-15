@@ -71,7 +71,7 @@ func recoverExpired(ctx context.Context, deps RecoveryDeps) {
 		// Mark as cancelled
 		reason := "expired"
 		if err := deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
-			"status":      string(model.LoopStatusCancelled),
+			"status":      model.LoopStatusCancelled,
 			"last_reason": &reason,
 		}); err != nil {
 			logger.Error(ctx, "[loop.Recovery] cancel expired loop",

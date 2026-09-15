@@ -152,7 +152,7 @@ func New(cfg Config) (*turnagent.Agent, error) {
 	}
 	if cfg.WorkerID == "" {
 		// Auto-generate WorkerID if not provided
-		cfg.WorkerID = fmt.Sprintf("worker-%s", uuid.New().String()[:8])
+		cfg.WorkerID = fmt.Sprintf("worker-%s", uuid.Must(uuid.NewV7()).String()[:8])
 	}
 
 	// Build a helpers struct that holds all shared state for the callbacks.

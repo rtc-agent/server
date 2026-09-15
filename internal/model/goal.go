@@ -22,7 +22,7 @@ type Goal struct {
 	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	SessionID      uuid.UUID  `gorm:"type:uuid;not null;index" json:"session_id"`
 	Condition      string     `gorm:"type:text;not null" json:"condition"`
-	Status         string     `gorm:"size:20;not null;default:'active';index" json:"status"`
+	Status         GoalStatus `gorm:"size:20;not null;default:'active';index" json:"status"`
 	CompletedTurns int        `gorm:"not null;default:0" json:"completed_turns"`
 	TokenUsage     int        `gorm:"not null;default:0" json:"token_usage"`
 	MaxTurns       int        `gorm:"not null;default:50" json:"max_turns"`
@@ -44,7 +44,7 @@ func (g *Goal) BeforeCreate(tx *gorm.DB) error {
 
 // IsTerminal 判断 goal 是否处于终态
 func (g *Goal) IsTerminal() bool {
-	return g.Status == string(GoalStatusCompleted) ||
-		g.Status == string(GoalStatusCancelled) ||
-		g.Status == string(GoalStatusExhausted)
+	return g.Status == GoalStatusCompleted ||
+		g.Status == GoalStatusCancelled ||
+		g.Status == GoalStatusExhausted
 }

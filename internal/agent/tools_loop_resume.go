@@ -21,11 +21,11 @@ type resumeLoopTool struct {
 }
 
 type resumeLoopResult struct {
-	ID             string `json:"id"`
-	Prompt         string `json:"prompt"`
-	Status         string `json:"status"`
-	CompletedTurns int    `json:"completed_turns"`
-	MaxTurns       int    `json:"max_turns"`
+	ID             string           `json:"id"`
+	Prompt         string           `json:"prompt"`
+	Status         model.LoopStatus `json:"status"`
+	CompletedTurns int              `json:"completed_turns"`
+	MaxTurns       int              `json:"max_turns"`
 }
 
 func (t *resumeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -44,7 +44,7 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return "", fmt.Errorf("resume_loop: list loops: %w", err)
 	}
 	for _, l := range loops {
-		if l.Status == string(model.LoopStatusPaused) {
+		if l.Status == model.LoopStatusPaused {
 			pausedLoop = l
 			break
 		}
@@ -71,7 +71,7 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	}
 
 	if err := t.helpers.deps.LoopRepo.Update(ctx, pausedLoop.ID, map[string]any{
-		"status": string(model.LoopStatusActive),
+		"status": model.LoopStatusActive,
 	}); err != nil {
 		return "", fmt.Errorf("resume_loop: update: %w", err)
 	}
@@ -79,7 +79,7 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	result := resumeLoopResult{
 		ID:             pausedLoop.ID.String(),
 		Prompt:         pausedLoop.Prompt,
-		Status:         string(model.LoopStatusActive),
+		Status:         model.LoopStatusActive,
 		CompletedTurns: pausedLoop.CompletedTurns,
 		MaxTurns:       pausedLoop.MaxTurns,
 	}

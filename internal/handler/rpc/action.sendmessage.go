@@ -102,7 +102,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	// Generate a workID up front for debug tracing. This is NOT pre-registered
 	// as a turn ClientID — the turn is created by turn-agent when the worker
 	// picks up the work item. The workID is used only for log correlation.
-	workID := uuid.New().String()
+	workID := uuid.Must(uuid.NewV7()).String()
 
 	var createdMessage *model.Message
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {

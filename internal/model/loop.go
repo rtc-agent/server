@@ -31,7 +31,7 @@ type Loop struct {
 	IntervalSeconds int        `gorm:"not null" json:"interval_seconds"`
 	MaxTurns        int        `gorm:"not null;default:10" json:"max_turns"`
 	CompletedTurns  int        `gorm:"not null;default:0" json:"completed_turns"`
-	Status          string     `gorm:"size:20;not null;default:'active';index" json:"status"`
+	Status          LoopStatus `gorm:"size:20;not null;default:'active';index" json:"status"`
 	AsynqTaskID     string     `gorm:"size:255" json:"asynq_task_id,omitempty"`
 	LastReason      *string    `gorm:"type:text" json:"last_reason,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
@@ -53,17 +53,17 @@ func (l *Loop) BeforeCreate(tx *gorm.DB) error {
 
 // IsTerminal 判断 loop 是否处于终态
 func (l *Loop) IsTerminal() bool {
-	return l.Status == string(LoopStatusCompleted) ||
-		l.Status == string(LoopStatusCancelled) ||
-		l.Status == string(LoopStatusExhausted)
+	return l.Status == LoopStatusCompleted ||
+		l.Status == LoopStatusCancelled ||
+		l.Status == LoopStatusExhausted
 }
 
 // IsPausable 判断 loop 是否可暂停（仅 active 状态可暂停）
 func (l *Loop) IsPausable() bool {
-	return l.Status == string(LoopStatusActive)
+	return l.Status == LoopStatusActive
 }
 
 // IsResumable 判断 loop 是否可恢复（仅 paused 状态可恢复）
 func (l *Loop) IsResumable() bool {
-	return l.Status == string(LoopStatusPaused)
+	return l.Status == LoopStatusPaused
 }

@@ -346,7 +346,7 @@ func provideQueueWorker(
 ) *rtcqueue.Worker {
 	workerID := cfg.Worker.WorkerID
 	if workerID == "" {
-		workerID = "worker-" + uuid.New().String()
+		workerID = "worker-" + uuid.Must(uuid.NewV7()).String()
 	}
 
 	return rtcqueue.NewWorker(queue, rtcqueue.WorkerConfig{

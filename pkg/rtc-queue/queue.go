@@ -46,7 +46,7 @@ func (q *Queue) Publish(ctx context.Context, sessionID, data string, priority in
 		return "", fmt.Errorf("rtcqueue: session_id required")
 	}
 
-	workID := uuid.New().String()
+	workID := uuid.Must(uuid.NewV7()).String()
 	now := time.Now().Unix()
 
 	workKey := keyWork(workID)
@@ -112,7 +112,7 @@ func (q *Queue) ClaimWithCredential(ctx context.Context, sessionID, workerID, cr
 
 	// Generate credential if not provided (first claim)
 	if credential == "" {
-		credential = uuid.New().String()
+		credential = uuid.Must(uuid.NewV7()).String()
 	}
 
 	now := time.Now().Unix()

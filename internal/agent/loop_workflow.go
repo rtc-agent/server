@@ -112,7 +112,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 			// Inject transaction into context so LoopRepo.Update uses it
 			txCtx := repo.WithTx(ctx, tx)
 			return l.helpers.deps.LoopRepo.Update(txCtx, loop.ID, map[string]any{
-				"status":          string(model.LoopStatusExhausted),
+				"status":          model.LoopStatusExhausted,
 				"completed_turns": newTurns,
 			})
 		})
@@ -179,15 +179,22 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 	return nil
 }
 
+// loopSchedulePayload 是 scheduleNextLoop 写入 TaskScheduler 的 JSON 载体。
+// 使用 struct 替代 map[string]any，避免运行时反射查找字段、获得类型安全。
+type loopSchedulePayload struct {
+	LoopID    string `json:"loop_id"`
+	SessionID string `json:"session_id"`
+}
+
 // scheduleNextLoop schedules the next loop turn via TaskScheduler.
 // This runs in a separate goroutine (fire-and-forget) to avoid blocking
 // the turn completion. The caller MUST pass context.Background() (not the
 // request context) because this goroutine outlives the request. Errors
 // are logged but not propagated.
 func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
-	payload, marshalErr := json.Marshal(map[string]any{
-		"loop_id":    loop.ID.String(),
-		"session_id": loop.SessionID.String(),
+	payload, marshalErr := json.Marshal(&loopSchedulePayload{
+		LoopID:    loop.ID.String(),
+		SessionID: loop.SessionID.String(),
 	})
 	if marshalErr != nil {
 		l.helpers.logger.Info(ctx, "loopWorkflow.marshal_failed", map[string]any{

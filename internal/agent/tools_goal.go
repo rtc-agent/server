@@ -30,11 +30,11 @@ type createGoalArgs struct {
 
 // createGoalResult is the JSON returned to LLM and persisted in toolcall_output.
 type createGoalResult struct {
-	ID             string `json:"id"`
-	Condition      string `json:"condition"`
-	Status         string `json:"status"`
-	MaxTurns       int    `json:"max_turns"`
-	CompletedTurns int    `json:"completed_turns"`
+	ID             string           `json:"id"`
+	Condition      string           `json:"condition"`
+	Status         model.GoalStatus `json:"status"`
+	MaxTurns       int              `json:"max_turns"`
+	CompletedTurns int              `json:"completed_turns"`
 }
 
 func (t *createGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -81,7 +81,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	goal := &model.Goal{
 		SessionID:      t.session.ID,
 		Condition:      args.Condition,
-		Status:         string(model.GoalStatusActive),
+		Status:         model.GoalStatusActive,
 		MaxTurns:       defaultGoalMaxTurns,
 		CompletedTurns: 0,
 		TokenUsage:     0,
@@ -139,11 +139,11 @@ type completeGoalArgs struct {
 }
 
 type completeGoalResult struct {
-	ID             string `json:"id"`
-	Condition      string `json:"condition"`
-	Status         string `json:"status"`
-	Reason         string `json:"reason"`
-	CompletedTurns int    `json:"completed_turns"`
+	ID             string           `json:"id"`
+	Condition      string           `json:"condition"`
+	Status         model.GoalStatus `json:"status"`
+	Reason         string           `json:"reason"`
+	CompletedTurns int              `json:"completed_turns"`
 }
 
 func (t *completeGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -178,7 +178,7 @@ func (t *completeGoalTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	}
 
 	updateFields := map[string]any{
-		"status":      string(model.GoalStatusCompleted),
+		"status":      model.GoalStatusCompleted,
 		"last_reason": args.Reason,
 	}
 	if err := t.helpers.deps.GoalRepo.Update(ctx, goal.ID, updateFields); err != nil {
@@ -188,7 +188,7 @@ func (t *completeGoalTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	result := completeGoalResult{
 		ID:             goal.ID.String(),
 		Condition:      goal.Condition,
-		Status:         string(model.GoalStatusCompleted),
+		Status:         model.GoalStatusCompleted,
 		Reason:         args.Reason,
 		CompletedTurns: goal.CompletedTurns,
 	}
@@ -233,11 +233,11 @@ type cancelGoalArgs struct {
 }
 
 type cancelGoalResult struct {
-	ID             string `json:"id"`
-	Condition      string `json:"condition"`
-	Status         string `json:"status"`
-	Reason         string `json:"reason"`
-	CompletedTurns int    `json:"completed_turns"`
+	ID             string           `json:"id"`
+	Condition      string           `json:"condition"`
+	Status         model.GoalStatus `json:"status"`
+	Reason         string           `json:"reason"`
+	CompletedTurns int              `json:"completed_turns"`
 }
 
 func (t *cancelGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -272,7 +272,7 @@ func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	}
 
 	updateFields := map[string]any{
-		"status":      string(model.GoalStatusCancelled),
+		"status":      model.GoalStatusCancelled,
 		"last_reason": args.Reason,
 	}
 	if err := t.helpers.deps.GoalRepo.Update(ctx, goal.ID, updateFields); err != nil {
@@ -282,7 +282,7 @@ func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	result := cancelGoalResult{
 		ID:             goal.ID.String(),
 		Condition:      goal.Condition,
-		Status:         string(model.GoalStatusCancelled),
+		Status:         model.GoalStatusCancelled,
 		Reason:         args.Reason,
 		CompletedTurns: goal.CompletedTurns,
 	}

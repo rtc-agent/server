@@ -108,7 +108,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	if newTurns > goal.MaxTurns {
 		err = g.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
 			return g.helpers.deps.GoalRepo.Update(ctx, goal.ID, map[string]any{
-				"status":          string(model.GoalStatusExhausted),
+				"status":          model.GoalStatusExhausted,
 				"completed_turns": newTurns,
 			})
 		})

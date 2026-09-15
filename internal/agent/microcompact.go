@@ -6,11 +6,15 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
-// CompactableTools lists the tools whose results can be cleared by
+// CompactableTools is the set of tools whose results can be cleared by
 // Microcompact. These tools typically produce large outputs that are not
 // needed once the conversation has moved on.
 //
 // The tool names must match those registered in tools.go's createTools.
+//
+// This is a variable (not const) to allow runtime configuration if needed.
+// It lives in an internal package and is not exposed via any public API, so
+// external mutation is not a concern.
 var CompactableTools = map[string]bool{
 	"read":   true,
 	"write":  true,

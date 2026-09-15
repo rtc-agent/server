@@ -32,7 +32,7 @@ func (t *Turn) BeforeCreate(tx *gorm.DB) error {
 		t.ID = id
 	}
 	if t.ClientID == "" {
-		t.ClientID = uuid.New().String()
+		t.ClientID = uuid.Must(uuid.NewV7()).String()
 	}
 	return nil
 }

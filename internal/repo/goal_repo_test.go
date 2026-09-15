@@ -26,7 +26,7 @@ func newTestGoal(t *testing.T, sessionID uuid.UUID) *model.Goal {
 	return &model.Goal{
 		SessionID:      sessionID,
 		Condition:      "test condition",
-		Status:         string(model.GoalStatusActive),
+		Status:         model.GoalStatusActive,
 		CompletedTurns: 0,
 		TokenUsage:     0,
 		MaxTurns:       50,
@@ -54,7 +54,7 @@ func TestGoalRepo_Create(t *testing.T) {
 	assert.Equal(t, goal.ID, got.ID)
 	assert.Equal(t, sessionID, got.SessionID)
 	assert.Equal(t, "test condition", got.Condition)
-	assert.Equal(t, string(model.GoalStatusActive), got.Status)
+	assert.Equal(t, model.GoalStatusActive, got.Status)
 	assert.Equal(t, 50, got.MaxTurns)
 }
 
@@ -104,7 +104,7 @@ func TestGoalRepo_FindActive_Found(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, goal.ID, got.ID)
-	assert.Equal(t, string(model.GoalStatusActive), got.Status)
+	assert.Equal(t, model.GoalStatusActive, got.Status)
 }
 
 func TestGoalRepo_FindActive_None(t *testing.T) {
@@ -131,7 +131,7 @@ func TestGoalRepo_FindActive_IgnoresTerminal(t *testing.T) {
 	goal := newTestGoal(t, sessionID)
 	require.NoError(t, repo.Create(ctx, goal))
 	require.NoError(t, repo.Update(ctx, goal.ID, map[string]any{
-		"status": string(model.GoalStatusCompleted),
+		"status": model.GoalStatusCompleted,
 	}))
 
 	// FindActive should return nil (no active goal)
@@ -158,7 +158,7 @@ func TestGoalRepo_FindActive_ReturnsMostRecent(t *testing.T) {
 
 	// Cancel first goal so we can create another active one
 	require.NoError(t, repo.Update(ctx, goal1.ID, map[string]any{
-		"status": string(model.GoalStatusCancelled),
+		"status": model.GoalStatusCancelled,
 	}))
 
 	// Create second active goal
@@ -237,13 +237,13 @@ func TestGoalRepo_Update_TerminalStatus_AutoCompletedAt(t *testing.T) {
 
 	// Update to completed status without setting completed_at
 	err := repo.Update(ctx, goal.ID, map[string]any{
-		"status": string(model.GoalStatusCompleted),
+		"status": model.GoalStatusCompleted,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, goal.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(model.GoalStatusCompleted), got.Status)
+	assert.Equal(t, model.GoalStatusCompleted, got.Status)
 	assert.NotNil(t, got.CompletedAt, "completed_at should be auto-filled for terminal status")
 }
 
@@ -261,14 +261,14 @@ func TestGoalRepo_Update_TerminalStatus_ExplicitCompletedAt(t *testing.T) {
 
 	// Update to completed status WITH explicit completed_at
 	err := repo.Update(ctx, goal.ID, map[string]any{
-		"status":       string(model.GoalStatusCompleted),
+		"status":       model.GoalStatusCompleted,
 		"completed_at": explicitTime,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, goal.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(model.GoalStatusCompleted), got.Status)
+	assert.Equal(t, model.GoalStatusCompleted, got.Status)
 	assert.NotNil(t, got.CompletedAt)
 	// The explicit time should be preserved (not overwritten by NOW())
 	assert.WithinDuration(t, explicitTime, *got.CompletedAt, time.Second)
@@ -455,13 +455,13 @@ func TestGoalRepo_Update_CancelledStatus_AutoCompletedAt(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, goal))
 
 	err := repo.Update(ctx, goal.ID, map[string]any{
-		"status": string(model.GoalStatusCancelled),
+		"status": model.GoalStatusCancelled,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, goal.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(model.GoalStatusCancelled), got.Status)
+	assert.Equal(t, model.GoalStatusCancelled, got.Status)
 	assert.NotNil(t, got.CompletedAt)
 }
 
@@ -476,13 +476,13 @@ func TestGoalRepo_Update_ExhaustedStatus_AutoCompletedAt(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, goal))
 
 	err := repo.Update(ctx, goal.ID, map[string]any{
-		"status": string(model.GoalStatusExhausted),
+		"status": model.GoalStatusExhausted,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, goal.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(model.GoalStatusExhausted), got.Status)
+	assert.Equal(t, model.GoalStatusExhausted, got.Status)
 	assert.NotNil(t, got.CompletedAt)
 }
 
@@ -500,13 +500,13 @@ func TestGoalRepo_Update_ActiveStatus_NoAutoCompletedAt(t *testing.T) {
 
 	// Explicitly set status to active (non-terminal)
 	err := repo.Update(ctx, goal.ID, map[string]any{
-		"status": string(model.GoalStatusActive),
+		"status": model.GoalStatusActive,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.GetByID(ctx, goal.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(model.GoalStatusActive), got.Status)
+	assert.Equal(t, model.GoalStatusActive, got.Status)
 	assert.Nil(t, got.CompletedAt, "completed_at should NOT be auto-filled for active status")
 }
 
@@ -524,7 +524,7 @@ func TestGoalRepo_Update_WithLastReason(t *testing.T) {
 
 	reason := "max turns reached"
 	err := repo.Update(ctx, goal.ID, map[string]any{
-		"status":      string(model.GoalStatusExhausted),
+		"status":      model.GoalStatusExhausted,
 		"last_reason": reason,
 	})
 	require.NoError(t, err)

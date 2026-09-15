@@ -118,7 +118,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	// is created by turn-agent's CreateTurn callback when the worker picks
 	// up the work item from rtc-queue. The turn lifecycle is managed by
 	// turn-agent, not the API layer.
-	workID := uuid.New().String()
+	workID := uuid.Must(uuid.NewV7()).String()
 
 	// 8. 构造批量消息列表
 	messagesToCreate := make([]primitives.MessageToCreate, len(oldMessages))

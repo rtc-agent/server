@@ -136,6 +136,7 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 	var logsList, warningsList, errorsList model.StringArray
 
 	if req.Result != nil {
+		// 计算 result 大小（仍需 Marshal）
 		resultBytes, err := json.Marshal(req.Result)
 		if err != nil {
 			logger.Warn(ctx, "[scriptExecutionRecorder] marshal result failed",
@@ -144,21 +145,28 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 		}
 		resultSize = int64(len(resultBytes))
 
-		var resultData struct {
-			DurationMs int64    `json:"duration_ms"`
-			Logs       []string `json:"logs"`
-			Warnings   []string `json:"warnings"`
-			Errors     []string `json:"errors"`
+		// 直接从 map 中提取字段，避免二次 JSON 解析
+		if resultData, ok := req.Result.(map[string]interface{}); ok {
+			if v, ok := resultData["duration_ms"]; ok {
+				switch d := v.(type) {
+				case float64:
+					durationMs = int64(d)
+				case int64:
+					durationMs = d
+				case int:
+					durationMs = int64(d)
+				}
+			}
+			if v, ok := resultData["logs"]; ok {
+				logsList = extractStringSlice(v)
+			}
+			if v, ok := resultData["warnings"]; ok {
+				warningsList = extractStringSlice(v)
+			}
+			if v, ok := resultData["errors"]; ok {
+				errorsList = extractStringSlice(v)
+			}
 		}
-		if err := json.Unmarshal(resultBytes, &resultData); err != nil {
-			logger.Warn(ctx, "[scriptExecutionRecorder] unmarshal result failed",
-				zap.String("rtc", rtc.ID.String()),
-				zap.Error(err))
-		}
-		durationMs = resultData.DurationMs
-		logsList = resultData.Logs
-		warningsList = resultData.Warnings
-		errorsList = resultData.Errors
 	}
 
 	// 3. 计算代码大小和 SHA-256 哈希
@@ -238,5 +246,25 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 			ResultSize: resultSize,
 			CodeSize:   codeSize,
 		})
+	}
+}
+
+// extractStringSlice 从 interface{} 安全提取 model.StringArray。
+// JSON 反序列化后 string slice 通常为 []interface{}，
+// 但也可能是 []string（直接构造时）。
+func extractStringSlice(v interface{}) model.StringArray {
+	switch s := v.(type) {
+	case []interface{}:
+		result := make(model.StringArray, 0, len(s))
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+		return result
+	case []string:
+		return model.StringArray(s)
+	default:
+		return nil
 	}
 }
