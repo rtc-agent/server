@@ -18,12 +18,12 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 	var prevResumeCancel context.CancelFunc
 
 	return adk.TurnLoopConfig[TurnWorkItem, *schema.Message]{
-		GenInput:     mgr.genInput,
-		GenResume:    mgr.genResume(&prevResumeCancel),
-		PrepareAgent: mgr.prepareAgent,
+		GenInput:      mgr.genInput,
+		GenResume:     mgr.genResume(&prevResumeCancel),
+		PrepareAgent:  mgr.prepareAgent,
 		OnAgentEvents: mgr.onAgentEvents,
-		Store:        mgr.cfg.CheckpointStore,
-		CheckpointID: mgr.checkpointID,
+		Store:         mgr.cfg.CheckpointStore,
+		CheckpointID:  mgr.checkpointID,
 	}
 }
 

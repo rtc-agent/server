@@ -310,7 +310,7 @@ func TestBuildCompressedResult_EmptyRetention(t *testing.T) {
 
 func TestEstimateTokensAfterCompact(t *testing.T) {
 	msgs := []*schema.Message{
-		{Role: schema.User, Content: strings.Repeat("a", 4000)}, // ~1000 tokens
+		{Role: schema.User, Content: strings.Repeat("a", 4000)},      // ~1000 tokens
 		{Role: schema.Assistant, Content: strings.Repeat("b", 8000)}, // ~2000 tokens
 	}
 
