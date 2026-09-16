@@ -860,7 +860,10 @@ const StreamIdleTimeout = 3 * time.Minute
 const eventIdleWarningTimeout = 10 * time.Minute
 
 // consumeStream drives a stream reader to completion.
+// The stream is always closed when the function returns, regardless of the exit path.
 func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentName, role, toolName string, stream *schema.StreamReader[*schema.Message]) error {
+	defer stream.Close() // Single point of cleanup — prevents resource leaks if new exit paths are added.
+
 	mgr.log(ctx, LogLevelDebug, "stream.consume_start", map[string]any{
 		"session_id": mgr.sessionID,
 		"turn_id":    turnID,
@@ -901,7 +904,6 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 		res, timedOut := RecvWithTimeout(ctx, stream.Recv, StreamIdleTimeout)
 
 		if timedOut {
-			stream.Close()
 			mgr.log(ctx, LogLevelError, "stream.idle_timeout", map[string]any{
 				"session_id": mgr.sessionID,
 				"turn_id":    turnID,
@@ -920,11 +922,9 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 					"session_id": mgr.sessionID,
 					"turn_id":    turnID,
 				})
-				stream.Close()
 				return res.Err
 			}
 			if errors.Is(res.Err, io.EOF) {
-				stream.Close()
 				// For assistant messages, set lastMessage from accumulated content
 				// This is needed for Sub Agent support to report the final result
 				if role == string(schema.Assistant) {
@@ -952,10 +952,8 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 			}
 			var cancelErr *adk.CancelError
 			if errors.As(res.Err, &cancelErr) {
-				stream.Close()
 				return nil
 			}
-			stream.Close()
 			if pubErr := mgr.cfg.PublishEvent(ctx, mgr.sessionID, turnID, &Event{
 				Kind:      EventKindError,
 				AgentName: agentName,
@@ -992,7 +990,6 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 			FinishReason:     finishReason,
 			TokenUsage:       tokenUsage,
 		}); err != nil {
-			stream.Close()
 			return err
 		}
 	}

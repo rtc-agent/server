@@ -398,7 +398,7 @@ streamLoop:
 	for {
 		res, timedOut := turnagent.RecvWithTimeout(ctx, stream.Recv, turnagent.StreamIdleTimeout)
 		if timedOut {
-			stream.Close()
+			// stream.Close() handled by defer above.
 			return "", &turnagent.StreamIdleTimeoutError{
 				SessionID: turnagent.SessionIDFromContext(ctx),
 				TurnID:    turnagent.TurnIDFromContext(ctx),
@@ -407,7 +407,7 @@ streamLoop:
 		}
 		if res.Err != nil {
 			if errors.Is(res.Err, context.Canceled) || errors.Is(res.Err, context.DeadlineExceeded) {
-				stream.Close()
+				// stream.Close() handled by defer above.
 				return "", res.Err
 			}
 			if errors.Is(res.Err, io.EOF) {
@@ -464,7 +464,7 @@ streamLoop:
 	for {
 		res, timedOut := turnagent.RecvWithTimeout(ctx, stream.Recv, turnagent.StreamIdleTimeout)
 		if timedOut {
-			stream.Close()
+			// stream.Close() handled by defer above.
 			return "", nil, &turnagent.StreamIdleTimeoutError{
 				SessionID: turnagent.SessionIDFromContext(ctx),
 				TurnID:    turnagent.TurnIDFromContext(ctx),
@@ -473,7 +473,7 @@ streamLoop:
 		}
 		if res.Err != nil {
 			if errors.Is(res.Err, context.Canceled) || errors.Is(res.Err, context.DeadlineExceeded) {
-				stream.Close()
+				// stream.Close() handled by defer above.
 				return "", nil, res.Err
 			}
 			if errors.Is(res.Err, io.EOF) {
