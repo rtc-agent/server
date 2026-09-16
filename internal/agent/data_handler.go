@@ -34,7 +34,9 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	state := h.streamState.getOrCreate(turnID.String())
 
 	// Debug logging: record stream chunk content for troubleshooting.
-	h.logger.Info(ctx, "handleStreamChunk.debug", map[string]any{
+	// Uses Debug level because this fires for EVERY stream chunk — too
+	// verbose for Info in production.
+	h.logger.Debug(ctx, "handleStreamChunk.debug", map[string]any{
 		"session_id":         sessionID.String(),
 		"turn_id":            turnID.String(),
 		"content_len":        len(event.Content),

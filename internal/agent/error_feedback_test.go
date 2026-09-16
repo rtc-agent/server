@@ -39,8 +39,8 @@ func TestClassifyError_StreamIdleTimeout(t *testing.T) {
 		Timeout:   3 * time.Minute,
 	}
 	cat, _, _, retryable := classifyError(err)
-	if cat != protocol.ErrorCategoryTimeout {
-		t.Errorf("category = %q, want %q", cat, protocol.ErrorCategoryTimeout)
+	if cat != protocol.ErrorCategoryStream {
+		t.Errorf("category = %q, want %q", cat, protocol.ErrorCategoryStream)
 	}
 	if retryable {
 		t.Error("expected retryable=false for stream idle timeout")
@@ -55,8 +55,8 @@ func TestClassifyError_StreamIdleTimeout_Wrapped(t *testing.T) {
 	}
 	err := fmt.Errorf("consume stream: %w", inner)
 	cat, _, _, retryable := classifyError(err)
-	if cat != protocol.ErrorCategoryTimeout {
-		t.Errorf("wrapped: category = %q, want %q", cat, protocol.ErrorCategoryTimeout)
+	if cat != protocol.ErrorCategoryStream {
+		t.Errorf("wrapped: category = %q, want %q", cat, protocol.ErrorCategoryStream)
 	}
 	if retryable {
 		t.Error("wrapped: expected retryable=false")

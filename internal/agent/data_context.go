@@ -170,6 +170,8 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	}
 
 	// Debug logging: record ALL loaded messages for troubleshooting.
+	// Uses Debug level because this logs full message previews per LLM
+	// call — too verbose for Info in production.
 	// Print each message's role and first 10 characters to diagnose checkpoint resume issues.
 	if len(messages) > 0 {
 		var preview []string
@@ -183,7 +185,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 			}
 			preview = append(preview, fmt.Sprintf("[%d]%s:%s", i, msg.Role, content))
 		}
-		h.logger.Info(ctx, "loadMessages.all_messages", map[string]any{
+		h.logger.Debug(ctx, "loadMessages.all_messages", map[string]any{
 			"session_id":    sid.String(),
 			"message_count": len(messages),
 			"messages":      preview,

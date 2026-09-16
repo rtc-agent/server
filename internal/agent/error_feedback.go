@@ -154,9 +154,11 @@ func classifyError(err error) (category protocol.ErrorCategory, title, message s
 	}
 
 	// 1b. Stream idle timeout — LLM stream stopped producing data.
+	// Categorized as "stream" (not "timeout") because the root cause is
+	// a broken/stalled stream, not a request-level deadline expiry.
 	if turnagent.IsStreamIdleTimeout(err) {
-		return protocol.ErrorCategoryTimeout,
-			"响应超时",
+		return protocol.ErrorCategoryStream,
+			"流式响应中断",
 			"AI 响应时间过长，已自动中断。请重新发送消息。",
 			false
 	}
