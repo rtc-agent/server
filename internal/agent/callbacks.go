@@ -574,9 +574,9 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 		activeChildren, findErr := h.deps.SessionRepo.FindActiveByParent(ctx, turn.SessionID)
 		if findErr == nil && len(activeChildren) > 0 {
 			h.logger.Info(ctx, "cancelTurn.cascade_cancel_start", map[string]any{
-				"turn_id":       turnID,
-				"session_id":    turn.SessionID.String(),
-				"child_count":   len(activeChildren),
+				"turn_id":     turnID,
+				"session_id":  turn.SessionID.String(),
+				"child_count": len(activeChildren),
 			})
 			for _, child := range activeChildren {
 				if err := h.queue.CancelSession(ctx, child.ID.String(), "parent session cancelled"); err != nil {

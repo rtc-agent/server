@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // searchMemoryTool 搜索记忆（同时搜索 Session Memory 和 User Memory）
@@ -238,10 +239,12 @@ func (t *searchMemoryTool) searchUserMemories(
 			break
 		}
 		mem := entry.memory
-		// 异步更新访问计数（不阻塞搜索）
-		go func(id uuid.UUID) {
-			_ = t.helpers.deps.UserMemoryRepo.IncrementAccessCount(context.Background(), id)
-		}(mem.ID)
+		// 异步更新访问计数（不阻塞搜索）。
+		// Use logger.SafeGo to prevent a panic in the DB driver from
+		// crashing the entire server process.
+		logger.SafeGo("memory-access-count", func() {
+			_ = t.helpers.deps.UserMemoryRepo.IncrementAccessCount(context.Background(), mem.ID)
+		})
 
 		results = append(results, searchResult{
 			MemoryType: "user",
