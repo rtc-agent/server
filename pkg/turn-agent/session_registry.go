@@ -363,6 +363,7 @@ func (r *SessionManagerRegistry) Replace(
 				mgr.log(ctx, LogLevelError, "session-registry-run-panic", map[string]any{
 					"session_id": mgr.sessionID,
 					"panic":      fmt.Sprintf("%v", r),
+					"source":     "Replace",
 				})
 			}
 		}()
