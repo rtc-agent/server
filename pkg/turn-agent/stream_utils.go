@@ -20,6 +20,14 @@ type StreamRecvResult struct {
 //
 // recv 通常绑定到 *schema.StreamReader[*schema.Message].Recv。
 // 内部 goroutine 会通过 panic recover 捕获底层 panic 并以 error 形式返回。
+//
+// Goroutine lifecycle: when the timeout fires (or ctx is cancelled), the
+// internal goroutine may still be blocked on recv(). This goroutine will
+// exit when recv() eventually returns (stream close, network timeout, EOF,
+// etc.). The buffered channel (cap=1) ensures the goroutine never blocks
+// on the send. This is a bounded, temporary resource hold — not a leak.
+// The caller MUST close the stream after timeout to ensure recv() returns
+// promptly and releases the goroutine.
 func RecvWithTimeout(
 	ctx context.Context,
 	recv func() (*schema.Message, error),

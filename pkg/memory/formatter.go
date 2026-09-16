@@ -26,7 +26,9 @@ var typeOrder = []string{
 // 参考 formatSessionMemoriesForInjection，但适配统一 Memory 模型。
 // 使用 <system-reminder> 标签包裹，每类别最多 3 条，内容截断 200 字符。
 // language 参数预留用于未来多语言支持（当前未使用，始终输出英文标签）。
-// TODO(rtc-agent): 根据 language 切换标签（context/progress/decision 等）— 当前 language 参数预留未使用
+// NOTE: language 参数当前预留未使用。未来如需多语言支持，可根据 language
+// 值切换标签文本（如中文"上下文"/"进展"/"决策"）。当前所有语言的 LLM 均
+// 理解英文标签，因此暂不实现切换。
 func (f *Formatter) FormatForInjection(memories []*Memory, language string) string {
 	if len(memories) == 0 {
 		return ""

@@ -19,9 +19,9 @@ import (
 // Mapping from old code: the old internal/worker/tools.go defined identical
 // tool types (LSTool, ReadTool, etc.) that delegated to a BaseRTC. The new
 // code defines them here in the agent package with the same delegation pattern.
-// Tool extraction to a shared package is deferred — TODO(rtc-agent): extract
-// RTC tools to a shared package for reuse across agent implementations.
-// The current implementation is fully functional within the agent package.
+// Tool extraction to a shared package is deferred — the current implementation
+// is fully functional within the agent package. If a second agent implementation
+// is added that shares the same RTC tools, extract to internal/agent/rtcutil/.
 
 // rtcToolBase is the base for all RTC tools in the new agent package.
 // It holds the session, helpers (for DB access), and the current turn ID.
