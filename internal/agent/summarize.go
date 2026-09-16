@@ -218,28 +218,48 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, c
 			if err != nil {
 				if summaryMsgID != uuid.Nil && !summaryFinalized {
 					// Mark as failed using the same finalization path
-					_ = h.appendStreamChunk(ctx, sessionID, uuid.Nil,
+					if chunkErr := h.appendStreamChunk(ctx, sessionID, uuid.Nil,
 						"", "stream_failed",
 						&summaryMsgID, &summaryFinalized,
-						buildSummaryContent, "summary", nil)
+						buildSummaryContent, "summary", nil); chunkErr != nil {
+						h.logger.Info(ctx, "summarize.finalize_failed_on_error", map[string]any{
+							"error": chunkErr.Error(),
+						})
+					}
 				}
 				return nil, fmt.Errorf("summarize all messages: %w", err)
 			}
-			_ = llmTokenUsage
+			if llmTokenUsage != nil {
+				h.logger.Info(ctx, "summarize.llm_token_usage", map[string]any{
+					"mode":          "full",
+					"input_tokens":  llmTokenUsage.InputTokens,
+					"output_tokens": llmTokenUsage.OutputTokens,
+				})
+			}
 		} else {
 			oldMsgs := msgs[:retentionIndex]
 			var llmTokenUsage *turnagent.TokenUsage
 			summary, llmTokenUsage, err = h.summarizeMessagesStreaming(ctx, oldMsgs, CompactModePartial, onChunk, customInstruction)
 			if err != nil {
 				if summaryMsgID != uuid.Nil && !summaryFinalized {
-					_ = h.appendStreamChunk(ctx, sessionID, uuid.Nil,
+					if chunkErr := h.appendStreamChunk(ctx, sessionID, uuid.Nil,
 						"", "stream_failed",
 						&summaryMsgID, &summaryFinalized,
-						buildSummaryContent, "summary", nil)
+						buildSummaryContent, "summary", nil); chunkErr != nil {
+						h.logger.Info(ctx, "summarize.finalize_failed_on_error", map[string]any{
+							"error": chunkErr.Error(),
+						})
+					}
 				}
 				return nil, fmt.Errorf("summarize old messages: %w", err)
 			}
-			_ = llmTokenUsage
+			if llmTokenUsage != nil {
+				h.logger.Info(ctx, "summarize.llm_token_usage", map[string]any{
+					"mode":          "partial",
+					"input_tokens":  llmTokenUsage.InputTokens,
+					"output_tokens": llmTokenUsage.OutputTokens,
+				})
+			}
 		}
 
 		// Finalize the streaming message with complete content + metadata
@@ -262,10 +282,14 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, c
 					metadata,
 				)
 			}
-			_ = h.appendStreamChunk(ctx, sessionID, uuid.Nil,
+			if chunkErr := h.appendStreamChunk(ctx, sessionID, uuid.Nil,
 				"", "stream_finalize",
 				&summaryMsgID, &summaryFinalized,
-				finalBuildContent, "summary", nil)
+				finalBuildContent, "summary", nil); chunkErr != nil {
+				h.logger.Info(ctx, "summarize.finalize_failed", map[string]any{
+					"error": chunkErr.Error(),
+				})
+			}
 		}
 	}
 

@@ -91,8 +91,8 @@ func recoverExpired(ctx context.Context, deps RecoveryDeps) {
 
 // staleLoopThreshold is the default duration used to determine if a loop is stale.
 // An active loop that has not produced an asynq task within this window is
-// considered stale and will be re-enqueued.
-// Deprecated: Use RecoveryDeps.StaleThreshold instead.
+// considered stale and will be re-enqueued. Used as fallback when
+// RecoveryDeps.StaleThreshold is not configured.
 const staleLoopThreshold = 5 * time.Minute
 
 // recoverStale re-enqueues loops that are stale (active but missing asynq task).

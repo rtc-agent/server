@@ -9,6 +9,8 @@ import (
 
 	hibikenasynq "github.com/hibiken/asynq"
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 const (
@@ -65,5 +67,7 @@ func (s *Impl) Inspector() *hibikenasynq.Inspector {
 
 // Close shuts down the asynq client.
 func (s *Impl) Close() {
-	_ = s.client.Close()
+	if err := s.client.Close(); err != nil {
+		logger.Error(context.Background(), "asynq client close failed", zap.Error(err))
+	}
 }

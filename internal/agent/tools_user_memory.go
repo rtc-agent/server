@@ -10,8 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/pkg/logger"
-	"go.uber.org/zap"
 )
 
 // getUserIDFromContext 从上下文中获取用户 ID
@@ -481,9 +479,3 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 // =============================================================================
 // Helper functions
 // =============================================================================
-
-func init() {
-	// Ensure logger is available (suppress unused import if only used conditionally)
-	_ = zap.Error
-	_ = logger.Info
-}

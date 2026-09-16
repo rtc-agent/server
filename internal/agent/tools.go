@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
@@ -35,6 +36,20 @@ import (
 //  6. JSON marshal/unmarshal errors must always be checked.
 //  7. Template rendering errors must be returned, not swallowed.
 //  8. uuid.Parse and similar parsing errors must be checked and returned.
+
+// saddExpireScript atomically adds a member to a set and sets the key TTL.
+// This prevents the TOCTOU race where a process crash between SADD and EXPIRE
+// leaves a key without TTL (permanent persistence).
+//
+// KEYS[1] = set key
+// ARGV[1] = member to add
+// ARGV[2] = TTL in seconds
+// Returns: 1 on success.
+var saddExpireScript = redis.NewScript(`
+redis.call("SADD", KEYS[1], ARGV[1])
+redis.call("EXPIRE", KEYS[1], tonumber(ARGV[2]))
+return 1
+`)
 
 // Each tool's Info returns the tool metadata; InvokableRun delegates to
 // rtcToolBase.InvokableRun which implements the full RTC tool logic
@@ -380,16 +395,13 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	// the interruptTurn callback when all tools have interrupted.
 	if r.helpers.deps.Redis != nil {
 		batchKey := cache.RtcBatchPending(turnUUID.String())
-		if err := r.helpers.deps.Redis.SAdd(ctx, batchKey, rtcID.String()).Err(); err != nil {
+		if err := saddExpireScript.Run(ctx, r.helpers.deps.Redis, []string{batchKey}, rtcID.String(), int(10*time.Minute/time.Second)).Err(); err != nil {
 			r.helpers.logger.Info(ctx, "rtcToolBase.batch_register_failed", map[string]any{
 				"rtc_id":  rtcID.String(),
 				"turn_id": turnUUID.String(),
 				"error":   err.Error(),
 			})
 			// Non-fatal: continue without batch tracking
-		} else {
-			// Set TTL on first registration (idempotent: only sets if key is new)
-			r.helpers.deps.Redis.Expire(ctx, batchKey, 10*time.Minute)
 		}
 	}
 

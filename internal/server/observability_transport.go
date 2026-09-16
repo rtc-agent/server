@@ -24,7 +24,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptrace"
 	"strings"
 	"time"
 
@@ -140,23 +139,12 @@ func (t *observabilityTransport) RoundTrip(req *http.Request) (*http.Response, e
 	}
 
 	// --- Execute the actual request ---
-	// Attach an httptrace to capture connection timing
-	var gotConnTime time.Time
-	traceCtx := httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
-		GotConn: func(ci httptrace.GotConnInfo) {
-			gotConnTime = time.Now()
-			_ = ci // unused beyond timing
-		},
-	})
-	req = req.WithContext(traceCtx)
-
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
 		t.logError("llm.http.error", req.URL.String(), err)
 		return nil, err
 	}
 
-	_ = gotConnTime // available for future use
 	elapsed := time.Since(start)
 
 	// --- Handle response ---

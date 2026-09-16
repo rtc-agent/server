@@ -63,7 +63,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	if p.Kind == WorkKindCompact {
 		if a.cfg.CompactContext == nil {
 			a.log(ctx, LogLevelWarn, "agent.compact_no_handler", map[string]any{
-				"p.SessionID": p.SessionID,
+				"session_id": p.SessionID,
 			})
 			return nil
 		}

@@ -233,8 +233,12 @@ func (s *Server) Stop() {
 		s.rpcHandler.Close()
 	}
 
-	_ = s.svcCtx.CentrifugeNode.Shutdown(ctx)
-	_ = s.svcCtx.Broker.Close(ctx)
+	if err := s.svcCtx.CentrifugeNode.Shutdown(ctx); err != nil {
+		logger.Error(ctx, "centrifuge node shutdown failed", zap.Error(err))
+	}
+	if err := s.svcCtx.Broker.Close(ctx); err != nil {
+		logger.Error(ctx, "broker close failed", zap.Error(err))
+	}
 
 	// 关闭 HTTP Server
 	if err := s.httpServer.Shutdown(ctx); err != nil {

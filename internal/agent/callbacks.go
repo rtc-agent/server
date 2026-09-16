@@ -14,7 +14,23 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
+
+// hsetExpireScript atomically sets multiple hash fields and refreshes the key TTL.
+// KEYS[1] = hash key
+// ARGV[1..N-1] = field/value pairs (must be even count)
+// ARGV[N] = TTL in seconds
+// Returns: number of fields added (HSET return value).
+var hsetExpireScript = redis.NewScript(`
+local n = #ARGV
+local ttl = tonumber(ARGV[n])
+for i = 1, n - 1, 2 do
+    redis.call("HSET", KEYS[1], ARGV[i], ARGV[i+1])
+end
+redis.call("EXPIRE", KEYS[1], ttl)
+return 1
+`)
 
 // =============================================================================
 // Turn ownership callbacks
@@ -343,18 +359,27 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 		turnUUID, parseErr := uuid.Parse(turnID)
 		if parseErr == nil {
 			interruptMapKey := cache.RtcBatchInterruptMap(turnUUID.String())
+			// Collect all RtcID -> InterruptCtx.ID pairs for atomic HSET + EXPIRE.
+			var args []interface{}
 			for _, ic := range allInterruptContexts {
-				// Extract RtcID from rtcInterruptInfo
 				if info, ok := ic.Info.(rtcInterruptInfo); ok && info.RtcID != "" {
-					// Store mapping: RtcID -> eino's InterruptCtx.ID
-					h.deps.Redis.HSet(ctx, interruptMapKey, info.RtcID, ic.ID)
+					args = append(args, info.RtcID, ic.ID)
 				}
 			}
-			h.deps.Redis.Expire(ctx, interruptMapKey, 10*time.Minute)
-			h.logger.Info(ctx, "interruptTurn.batch_interrupt_mapping_stored", map[string]any{
-				"turn_id":         turnID,
-				"interrupt_count": len(allInterruptContexts),
-			})
+			if len(args) > 0 {
+				args = append(args, int(10*time.Minute/time.Second)) // TTL as last ARGV
+				if err := hsetExpireScript.Run(ctx, h.deps.Redis, []string{interruptMapKey}, args...).Err(); err != nil {
+					h.logger.Info(ctx, "interruptTurn.batch_interrupt_mapping_failed", map[string]any{
+						"turn_id": turnID,
+						"error":   err.Error(),
+					})
+				} else {
+					h.logger.Info(ctx, "interruptTurn.batch_interrupt_mapping_stored", map[string]any{
+						"turn_id":         turnID,
+						"interrupt_count": len(args) / 2, // exclude TTL arg
+					})
+				}
+			}
 		}
 	}
 

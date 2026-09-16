@@ -243,7 +243,12 @@ func (t *searchMemoryTool) searchUserMemories(
 		// Use logger.SafeGo to prevent a panic in the DB driver from
 		// crashing the entire server process.
 		logger.SafeGo("memory-access-count", func() {
-			_ = t.helpers.deps.UserMemoryRepo.IncrementAccessCount(context.Background(), mem.ID)
+			if err := t.helpers.deps.UserMemoryRepo.IncrementAccessCount(context.Background(), mem.ID); err != nil {
+				t.helpers.logger.Info(context.Background(), "memory.access_count_update_failed", map[string]any{
+					"memory_id": mem.ID.String(),
+					"error":     err.Error(),
+				})
+			}
 		})
 
 		results = append(results, searchResult{

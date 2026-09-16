@@ -41,12 +41,14 @@ func (l *GormLogger) LogMode(level gormlogger.LogLevel) gormlogger.Interface {
 
 // Info 实现 gormlogger.Interface
 func (l *GormLogger) Info(ctx context.Context, msg string, data ...interface{}) {
-	Info(ctx, fmt.Sprintf("[gorm] "+msg, data...))
+	formatted := fmt.Sprintf(msg, data...)
+	Info(ctx, "[gorm] info", zap.String("detail", formatted))
 }
 
 // Warn 实现 gormlogger.Interface
 func (l *GormLogger) Warn(ctx context.Context, msg string, data ...interface{}) {
-	Warn(ctx, fmt.Sprintf("[gorm] "+msg, data...))
+	formatted := fmt.Sprintf(msg, data...)
+	Warn(ctx, "[gorm] warn", zap.String("detail", formatted))
 }
 
 // Error 实现 gormlogger.Interface
@@ -59,7 +61,14 @@ func (l *GormLogger) Error(ctx context.Context, msg string, data ...interface{})
 		}
 	}
 
-	Error(ctx, fmt.Sprintf("[gorm] "+msg, data...), zap.Error(data[0].(error)))
+	formatted := fmt.Sprintf(msg, data...)
+	fields := []zap.Field{zap.String("detail", formatted)}
+	if len(data) > 0 {
+		if err, ok := data[0].(error); ok {
+			fields = append(fields, zap.Error(err))
+		}
+	}
+	Error(ctx, "[gorm] error", fields...)
 }
 
 // Trace 实现 gormlogger.Interface

@@ -38,13 +38,6 @@ type TurnRepo interface {
 	// in a single DB write. This prevents a race condition where SubmitRtcResult
 	// could read the interrupted status before InterruptID is persisted.
 	UpdateStatusAndInterruptID(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, interruptID string) error
-	// UpdateInterruptID sets the eino interrupt ID on a turn. Used when a turn
-	// is interrupted so that SubmitRtcResult can include the interrupt ID in
-	// the resume work payload, enabling eino's ResumeParams to resume from the
-	// exact interrupt point.
-	//
-	// Deprecated: Use UpdateStatusAndInterruptID for atomic updates.
-	UpdateInterruptID(ctx context.Context, id uuid.UUID, interruptID string) error
 	// GetByIDs 批量查询 Turn，返回 map[id]*Turn。未找到的 ID 不会出现在 map 中。
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Turn, error)
 	// CountBySessionAndStatus counts turns for a session with the given status.
@@ -220,17 +213,6 @@ func (r *turnRepo) UpdateStatusBySession(ctx context.Context, sessionID uuid.UUI
 		return 0, fmt.Errorf("update turns for session %s to %s: %w", sessionID, toStatus, result.Error)
 	}
 	return result.RowsAffected, nil
-}
-
-func (r *turnRepo) UpdateInterruptID(ctx context.Context, id uuid.UUID, interruptID string) error {
-	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Turn{}).Where("id = ?", id).Update("interrupt_id", interruptID)
-	if result.Error != nil {
-		return fmt.Errorf("update turn %s interrupt_id: %w", id, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("update turn %s interrupt_id: %w", id, ErrTurnNotFound)
-	}
-	return nil
 }
 
 func (r *turnRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Turn, error) {
