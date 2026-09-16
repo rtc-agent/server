@@ -517,7 +517,7 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 // Message ordering: System messages are prepended to the message array
 // (Claude API requires system messages at the start). User messages are
 // appended to the end. This ensures valid message sequence for the LLM.
-func (h *helpers) injectCommandPrompts(goCtx context.Context, sessionID uuid.UUID, messages []*turnagent.Message) []*turnagent.Message {
+func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID, messages []*turnagent.Message) []*turnagent.Message {
 	if h.deps.CommandRegistry == nil {
 		return messages
 	}
@@ -532,7 +532,7 @@ func (h *helpers) injectCommandPrompts(goCtx context.Context, sessionID uuid.UUI
 	}
 
 	cmdCtx := command.Context{
-		Context:   goCtx,
+		Context:   ctx,
 		SessionID: sessionID,
 	}
 	contributions, err := h.deps.CommandRegistry.DetectAndInject(cmdCtx, lastUserContent)
