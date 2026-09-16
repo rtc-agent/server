@@ -259,3 +259,181 @@ func TestConvertDBMessage_SkipsErrorType(t *testing.T) {
 		t.Errorf("expected nil for error content type (must not enter LLM context), got %d messages", len(result))
 	}
 }
+
+func TestFilterMeaninglessThinking(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []*turnagent.Message
+		expected int // expected number of messages after filtering
+	}{
+		{
+			name:     "empty input",
+			input:    []*turnagent.Message{},
+			expected: 0,
+		},
+		{
+			name: "no thinking messages - all kept",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleUser, Content: "hello"},
+				{Role: turnagent.RoleAssistant, Content: "hi there"},
+			},
+			expected: 2,
+		},
+		{
+			name: "short thinking removed",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleAssistant, ReasoningContent: "...", Content: ""},
+			},
+			expected: 0,
+		},
+		{
+			name: "very short thinking removed",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleAssistant, ReasoningContent: "ok", Content: ""},
+			},
+			expected: 0,
+		},
+		{
+			name: "long thinking kept",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleAssistant, ReasoningContent: "This is a longer reasoning content that should be preserved", Content: ""},
+			},
+			expected: 1,
+		},
+		{
+			name: "thinking with content kept regardless of length",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleAssistant, ReasoningContent: "short", Content: "has text content"},
+			},
+			expected: 1,
+		},
+		{
+			name: "thinking with tool calls kept regardless of length",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleAssistant, ReasoningContent: "x", Content: "", ToolCalls: []turnagent.ToolCall{{ID: "1"}}},
+			},
+			expected: 1,
+		},
+		{
+			name: "user message never filtered",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleUser, ReasoningContent: "", Content: ""},
+			},
+			expected: 1,
+		},
+		{
+			name: "nil messages skipped",
+			input: []*turnagent.Message{
+				nil,
+				{Role: turnagent.RoleUser, Content: "hello"},
+				nil,
+			},
+			expected: 1,
+		},
+		{
+			name: "mixed scenario",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleUser, Content: "question"},
+				{Role: turnagent.RoleAssistant, ReasoningContent: "...", Content: ""},           // filtered
+				{Role: turnagent.RoleAssistant, ReasoningContent: "[no content]", Content: ""},   // filtered
+				{Role: turnagent.RoleAssistant, ReasoningContent: "valid reasoning here!", Content: ""}, // kept (>= 20 chars)
+				{Role: turnagent.RoleAssistant, Content: "answer"},
+			},
+			expected: 3, // user + valid thinking + answer
+		},
+		{
+			name: "whitespace-only thinking removed",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleAssistant, ReasoningContent: "   \n\t  ", Content: ""},
+			},
+			expected: 0,
+		},
+		{
+			name: "exactly 19 chars thinking removed",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleAssistant, ReasoningContent: "1234567890123456789", Content: ""},
+			},
+			expected: 0,
+		},
+		{
+			name: "exactly 20 chars thinking kept",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleAssistant, ReasoningContent: "12345678901234567890", Content: ""},
+			},
+			expected: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := filterMeaninglessThinking(tt.input)
+			if len(result) != tt.expected {
+				t.Errorf("filterMeaninglessThinking() returned %d messages, want %d", len(result), tt.expected)
+				t.Logf("result: %+v", result)
+			}
+		})
+	}
+}
+
+func TestSanitizeThinkTagLeak(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "no think tags - unchanged",
+			input:    "Hello, world!",
+			expected: "Hello, world!",
+		},
+		{
+			name:     "complete think tag removed",
+			input:    "<think>internal reasoning</think>Actual answer",
+			expected: "Actual answer",
+		},
+		{
+			name:     "multiline think tag removed",
+			input:    "<think>\nline 1\nline 2\n</think>Answer",
+			expected: "Answer",
+		},
+		{
+			name:     "think tag with trailing whitespace removed",
+			input:    "<think>reasoning</think>   Answer",
+			expected: "Answer",
+		},
+		{
+			name:     "case insensitive",
+			input:    "<THINK>reasoning</THINK>Answer",
+			expected: "Answer",
+		},
+		{
+			name:     "multiple think tags all removed",
+			input:    "<think>first</think>middle<think>second</think>end",
+			expected: "middleend",
+		},
+		{
+			name:     "empty think tag removed",
+			input:    "<think></think>Answer",
+			expected: "Answer",
+		},
+		{
+			name:     "incomplete think tag not removed (no closing)",
+			input:    "<think>no closing tag",
+			expected: "<think>no closing tag",
+		},
+		{
+			name:     "empty input",
+			input:    "",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := sanitizeThinkTagLeak(tt.input)
+			if result != tt.expected {
+				t.Errorf("sanitizeThinkTagLeak(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
