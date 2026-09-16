@@ -184,6 +184,67 @@ func TestAggressiveMicrocompact_MixedCompactableAndNonCompactable(t *testing.T) 
 	}
 }
 
+func TestAggressiveMicrocompact_SingleCompactablePair(t *testing.T) {
+	// Edge case: exactly one compactable pair with keep=0
+	messages := toolCallPair("read", "c1", "the only result")
+
+	result := aggressiveMicrocompact(messages, 0)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(result))
+	}
+	// The assistant message (with tool call) should be preserved
+	if result[0].Role != turnagent.RoleAssistant {
+		t.Errorf("expected assistant role, got %q", result[0].Role)
+	}
+	if len(result[0].ToolCalls) != 1 || result[0].ToolCalls[0].ID != "c1" {
+		t.Error("assistant tool call should be preserved")
+	}
+	// The tool result should be cleared
+	if result[1].Content != TimeBasedMCClearedMessage {
+		t.Errorf("expected cleared message, got %q", result[1].Content)
+	}
+	// ToolName and ToolCallID should be preserved for API pairing
+	if result[1].ToolName != "read" {
+		t.Errorf("ToolName should be preserved, got %q", result[1].ToolName)
+	}
+	if result[1].ToolCallID != "c1" {
+		t.Errorf("ToolCallID should be preserved, got %q", result[1].ToolCallID)
+	}
+}
+
+func TestAggressiveMicrocompact_SingleCompactablePairKeepOne(t *testing.T) {
+	// Edge case: exactly one compactable pair with keep=1 → no clearing
+	messages := toolCallPair("write", "c1", "the only result")
+
+	result := aggressiveMicrocompact(messages, 1)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(result))
+	}
+	if result[1].Content != "the only result" {
+		t.Errorf("expected preserved content, got %q", result[1].Content)
+	}
+}
+
+func TestAggressiveMicrocompact_OnlyUserMessages(t *testing.T) {
+	// Edge case: no tool calls at all → nothing to compact
+	messages := []*turnagent.Message{
+		{Role: turnagent.RoleUser, Content: "hello"},
+		{Role: turnagent.RoleAssistant, Content: "hi there"},
+		{Role: turnagent.RoleUser, Content: "how are you?"},
+	}
+
+	result := aggressiveMicrocompact(messages, 0)
+	if len(result) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(result))
+	}
+	// All messages should be unchanged
+	for i, msg := range result {
+		if msg.Content != messages[i].Content {
+			t.Errorf("message[%d] content changed: got %q, want %q", i, msg.Content, messages[i].Content)
+		}
+	}
+}
+
 // =============================================================================
 // Retention config tests
 // =============================================================================

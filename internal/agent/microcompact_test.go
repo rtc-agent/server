@@ -127,6 +127,37 @@ func TestMicrocompactMessages_DoesNotModifyOriginal(t *testing.T) {
 	}
 }
 
+func TestCollectCompactableToolCallIDs_EmptyAndNoMatches(t *testing.T) {
+	// Edge case: empty message list
+	if ids := collectCompactableToolCallIDs(nil); ids != nil {
+		t.Errorf("expected nil for nil input, got %v", ids)
+	}
+	if ids := collectCompactableToolCallIDs([]*turnagent.Message{}); len(ids) != 0 {
+		t.Errorf("expected empty for empty input, got %v", ids)
+	}
+
+	// Edge case: no compactable tools (only non-compactable like ask_user, ls, sub_agent)
+	msgs := []*turnagent.Message{
+		{Role: turnagent.RoleAssistant, ToolCalls: []turnagent.ToolCall{
+			{ID: "tc1", Name: "ask_user"},
+			{ID: "tc2", Name: "ls"},
+			{ID: "tc3", Name: "sub_agent"},
+		}},
+	}
+	if ids := collectCompactableToolCallIDs(msgs); len(ids) != 0 {
+		t.Errorf("expected no compactable IDs, got %v", ids)
+	}
+
+	// Edge case: user/tool messages only (no assistant with tool calls)
+	msgs = []*turnagent.Message{
+		{Role: turnagent.RoleUser, Content: "hello"},
+		{Role: turnagent.RoleTool, Content: "result", ToolName: "read", ToolCallID: "tc1"},
+	}
+	if ids := collectCompactableToolCallIDs(msgs); len(ids) != 0 {
+		t.Errorf("expected no compactable IDs from user/tool messages, got %v", ids)
+	}
+}
+
 func TestCollectCompactableToolCallIDs(t *testing.T) {
 	msgs := []*turnagent.Message{
 		{Role: turnagent.RoleAssistant, ToolCalls: []turnagent.ToolCall{
