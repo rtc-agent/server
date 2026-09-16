@@ -96,8 +96,8 @@ More content`,
 
 func TestGetCompactPrompt(t *testing.T) {
 	tests := []struct {
-		mode         CompactMode
-		mustContain  []string
+		mode           CompactMode
+		mustContain    []string
 		mustNotContain []string
 	}{
 		{

@@ -77,12 +77,12 @@ type Worker struct {
 	q   *Queue
 	cfg WorkerConfig
 
-	mu       sync.Mutex
-	running  bool
-	sessions map[string]context.CancelFunc // active session processors
-	sessionClaims sync.Mutex               // prevents concurrent processSession for the same session
-	wg       sync.WaitGroup
-	sem      chan struct{} // concurrency semaphore
+	mu            sync.Mutex
+	running       bool
+	sessions      map[string]context.CancelFunc // active session processors
+	sessionClaims sync.Mutex                    // prevents concurrent processSession for the same session
+	wg            sync.WaitGroup
+	sem           chan struct{} // concurrency semaphore
 }
 
 // NewWorker constructs a Worker. Call Run to start processing.
@@ -102,10 +102,10 @@ func NewWorker(q *Queue, cfg WorkerConfig) *Worker {
 		cfg.Logger = noopWorkerLogger{}
 	}
 	return &Worker{
-		q:             q,
-		cfg:           cfg,
-		sessions:      make(map[string]context.CancelFunc),
-		sem:           make(chan struct{}, cfg.Concurrency),
+		q:        q,
+		cfg:      cfg,
+		sessions: make(map[string]context.CancelFunc),
+		sem:      make(chan struct{}, cfg.Concurrency),
 	}
 }
 

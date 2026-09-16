@@ -141,9 +141,9 @@ func (h *helpers) reactiveCompactLevel3(ctx context.Context, sessionID uuid.UUID
 	}
 
 	h.logger.Info(ctx, "reactive_compact.L3.deleted", map[string]any{
-		"session_id":  sessionID.String(),
-		"deleted":     len(idsToDelete),
-		"remaining":   len(liveMsgs) - len(idsToDelete),
+		"session_id": sessionID.String(),
+		"deleted":    len(idsToDelete),
+		"remaining":  len(liveMsgs) - len(idsToDelete),
 	})
 
 	return nil

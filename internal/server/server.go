@@ -48,8 +48,8 @@ type Server struct {
 	goroutineCancel  func()             // cancels the goroutine metrics collector
 
 	// Stale turn scanner
-	instanceID         string               // unique ID for distributed scanner lock
-	staleScannerCancel context.CancelFunc   // cancels the stale turn scanner goroutine
+	instanceID         string                       // unique ID for distributed scanner lock
+	staleScannerCancel context.CancelFunc           // cancels the stale turn scanner goroutine
 	metrics            *turnagent.PrometheusMetrics // Prometheus metrics (may be nil)
 }
 

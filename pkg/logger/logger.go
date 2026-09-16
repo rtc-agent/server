@@ -31,6 +31,7 @@ func IsDebugMode() bool {
 // 除 cfg.Level 外，还会检查环境变量 DEBUG：
 //   - DEBUG=true / DEBUG=1 → 启用 debug 模式，额外输出到 logs/debug.log（console 编码）
 //   - 其他值 → 仅使用 cfg.Level 配置
+//
 // serverLogFile 如果非空，会额外输出 JSON 格式日志到该文件（用于 promtail 采集）。
 func Init(level string, serverLogFile ...string) {
 	var zapLevel zapcore.Level
@@ -93,7 +94,7 @@ func Init(level string, serverLogFile ...string) {
 			Filename:   "logs/debug.log",
 			MaxSize:    100, // MB
 			MaxBackups: 3,
-			MaxAge:     7,   // days
+			MaxAge:     7, // days
 			Compress:   true,
 		}
 
@@ -122,7 +123,7 @@ func Init(level string, serverLogFile ...string) {
 			Filename:   logPath,
 			MaxSize:    100, // MB
 			MaxBackups: 3,
-			MaxAge:     7,   // days
+			MaxAge:     7, // days
 			Compress:   true,
 		}
 		// JSON 编码器（与 stdout 相同）

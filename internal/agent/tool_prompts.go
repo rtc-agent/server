@@ -97,4 +97,3 @@ var listUserMemoryDesc string
 
 //go:embed prompts/tools/search-memory.md
 var searchMemoryDesc string
-

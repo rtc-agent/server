@@ -38,9 +38,9 @@ type (
 	// askUserResult is the shape the client must submit as RTC.Result for a
 	// completed ask_user call.
 	askUserResult struct {
-		Answers     map[string]string                 `json:"answers"`
-		Annotations map[string]askUserAnnotation      `json:"annotations,omitempty"`
-		Metadata    *askUserMetadata                  `json:"metadata,omitempty"`
+		Answers     map[string]string            `json:"answers"`
+		Annotations map[string]askUserAnnotation `json:"annotations,omitempty"`
+		Metadata    *askUserMetadata             `json:"metadata,omitempty"`
 	}
 	askUserAnnotation struct {
 		Preview string `json:"preview,omitempty"`

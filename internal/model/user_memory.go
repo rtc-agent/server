@@ -10,8 +10,8 @@ import (
 // UserMemory 用户级记忆模型
 // 用于跨会话保持用户偏好、项目信息、技术栈等长期知识。
 type UserMemory struct {
-	ID        uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID    uuid.UUID `gorm:"type:uuid;not null;index" json:"user_id"`
+	ID     uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	UserID uuid.UUID `gorm:"type:uuid;not null;index" json:"user_id"`
 
 	// 分类（对齐 Claude Code）: user/feedback/project/reference
 	Category   string `gorm:"size:50;not null;index" json:"category"`
@@ -23,11 +23,11 @@ type UserMemory struct {
 	Description *string `gorm:"size:500" json:"description,omitempty"` // 一行描述（用于检索）
 
 	// 标签
-	Tags      StringArray  `gorm:"type:text[]" json:"tags,omitempty"` // 标签（用于关键词匹配）
+	Tags StringArray `gorm:"type:text[]" json:"tags,omitempty"` // 标签（用于关键词匹配）
 
 	// 元数据
-	Metadata        JSONB[any]  `gorm:"type:jsonb;default:'{}'" json:"metadata"`
-	SourceSessionID *uuid.UUID  `gorm:"type:uuid" json:"source_session_id,omitempty"`
+	Metadata        JSONB[any] `gorm:"type:jsonb;default:'{}'" json:"metadata"`
+	SourceSessionID *uuid.UUID `gorm:"type:uuid" json:"source_session_id,omitempty"`
 
 	// 时间戳
 	CreatedAt      time.Time  `json:"created_at"`
@@ -117,4 +117,3 @@ func ImportanceWeight(importance string) float64 {
 		return 1.0
 	}
 }
-

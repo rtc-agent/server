@@ -40,7 +40,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
 		Logger: logger.NewGormLogger(
-			false,        // 迁移时不忽略 ErrRecordNotFound
+			false, // 迁移时不忽略 ErrRecordNotFound
 			200*time.Millisecond,
 		),
 	})

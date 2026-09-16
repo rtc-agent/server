@@ -27,11 +27,11 @@ import (
 type Dependencies struct {
 	Deps                *usecase.Dependencies
 	SessionRepo         repo.SessionRepo
-	Queue               *rtcqueue.Queue           // rtc-queue for publishing/cancelling work items
+	Queue               *rtcqueue.Queue // rtc-queue for publishing/cancelling work items
 	API                 config.APIConfig
-	ScriptExecutionRepo repo.ScriptExecutionRepo // script execution 持久化
+	ScriptExecutionRepo repo.ScriptExecutionRepo     // script execution 持久化
 	Metrics             *turnagent.PrometheusMetrics // Prometheus 指标
-	AsynqInspector      *hibikenasynq.Inspector     // asynq inspector for loop task cleanup
+	AsynqInspector      *hibikenasynq.Inspector      // asynq inspector for loop task cleanup
 }
 
 // Handler RPC 处理器

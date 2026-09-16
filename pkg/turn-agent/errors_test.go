@@ -125,4 +125,3 @@ func TestMarshalSubmitPayload_EmptySessionID(t *testing.T) {
 		t.Errorf("Kind = %q, want %q", payload.Kind, WorkKindSubmit)
 	}
 }
-

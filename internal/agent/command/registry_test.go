@@ -11,8 +11,8 @@ import (
 // --- minimal test doubles ---
 
 type fakeCmd struct {
-	name, prefix string
-	scope        Scope
+	name, prefix                   string
+	scope                          Scope
 	triggerContent, sustainContent string
 	triggerErr, sustainErr         error
 	triggerCalls, sustainCalls     int
@@ -71,7 +71,7 @@ func TestDefaultDetect(t *testing.T) {
 		{"/goal", "/goal", true, ""},
 		{"/goal", "/goal fix tests", true, "fix tests"},
 		{"/goal", "/goal  fix tests", true, "fix tests"}, // extra space trimmed
-		{"/goal", "/goalify", false, ""},                  // no false prefix match
+		{"/goal", "/goalify", false, ""},                 // no false prefix match
 		{"/goal", "/goals", false, ""},
 		{"/goal", "goal", false, ""},
 		{"/goal", "", false, ""},

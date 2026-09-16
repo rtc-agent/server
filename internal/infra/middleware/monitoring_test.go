@@ -131,10 +131,10 @@ func TestBasicAuth(t *testing.T) {
 	handler := middleware.BasicAuth(inner, "admin", "pass123")
 
 	tests := []struct {
-		name       string
-		setAuth    func(*http.Request)
-		wantCode   int
-		wantBody   string
+		name     string
+		setAuth  func(*http.Request)
+		wantCode int
+		wantBody string
 	}{
 		{
 			name:     "no auth header",

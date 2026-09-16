@@ -96,12 +96,12 @@ func (t *saveUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 
 func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args struct {
-		Category    string         `json:"category"`
-		Importance  string         `json:"importance"`
-		Title       string         `json:"title"`
-		Content     string         `json:"content"`
-		Description *string        `json:"description,omitempty"`
-		Tags        []string       `json:"tags,omitempty"`
+		Category    string           `json:"category"`
+		Importance  string           `json:"importance"`
+		Title       string           `json:"title"`
+		Content     string           `json:"content"`
+		Description *string          `json:"description,omitempty"`
+		Tags        []string         `json:"tags,omitempty"`
 		Metadata    model.JSONB[any] `json:"metadata,omitempty"`
 	}
 	if ok, msg := parseToolArgs(ctx, t.helpers, "save_user_memory", argumentsInJSON, &args); !ok {
@@ -247,12 +247,12 @@ func (t *updateUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, erro
 
 func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args struct {
-		MemoryID    string         `json:"memory_id"`
-		Title       *string        `json:"title,omitempty"`
-		Content     *string        `json:"content,omitempty"`
-		Description *string        `json:"description,omitempty"`
-		Importance  *string        `json:"importance,omitempty"`
-		Tags        []string       `json:"tags,omitempty"`
+		MemoryID    string           `json:"memory_id"`
+		Title       *string          `json:"title,omitempty"`
+		Content     *string          `json:"content,omitempty"`
+		Description *string          `json:"description,omitempty"`
+		Importance  *string          `json:"importance,omitempty"`
+		Tags        []string         `json:"tags,omitempty"`
 		Metadata    model.JSONB[any] `json:"metadata,omitempty"`
 	}
 	if ok, msg := parseToolArgs(ctx, t.helpers, "update_user_memory", argumentsInJSON, &args); !ok {

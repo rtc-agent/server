@@ -167,15 +167,15 @@ func (t *observabilityTransport) RoundTrip(req *http.Request) (*http.Response, e
 		// For streaming responses, wrap the body to observe chunks as consumed.
 		// Token usage is extracted from the accumulated stream data on EOF.
 		resp.Body = &observabilityReadCloser{
-			rc:           resp.Body,
-			url:          req.URL.String(),
-			model:        model,
-			payloadLog:   t.payloadLog,
-			observer:     t.observer,
-			req:          req,
-			startTime:    start,
-			statusCode:   resp.StatusCode,
-			isStream:     true,
+			rc:         resp.Body,
+			url:        req.URL.String(),
+			model:      model,
+			payloadLog: t.payloadLog,
+			observer:   t.observer,
+			req:        req,
+			startTime:  start,
+			statusCode: resp.StatusCode,
+			isStream:   true,
 		}
 		// Payload logging for streaming
 		if t.payloadLog {

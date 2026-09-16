@@ -10,11 +10,11 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
+	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/callbacks"
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
-	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/infra/config"
 	appmodel "github.com/rtc-agent/server/internal/model"

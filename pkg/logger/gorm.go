@@ -13,9 +13,9 @@ import (
 
 // GormLogger 将 GORM 的日志转发到 zap logger
 type GormLogger struct {
-	ctx                    context.Context
-	ignoreRecordNotFound   bool
-	slowThreshold          time.Duration
+	ctx                  context.Context
+	ignoreRecordNotFound bool
+	slowThreshold        time.Duration
 }
 
 // NewGormLogger 创建 GORM logger 适配器

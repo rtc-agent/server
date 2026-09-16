@@ -131,7 +131,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 
 // searchResult 统一的搜索结果格式
 type searchResult struct {
-	MemoryType string    // "session" or "user"
+	MemoryType string // "session" or "user"
 	ID         string
 	Category   string
 	Title      string

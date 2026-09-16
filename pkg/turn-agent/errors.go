@@ -41,10 +41,10 @@ func IsPromptTooLongError(err error) bool {
 // promptTooLongPatterns lists the case-insensitive substrings that indicate
 // a prompt-too-long error from an LLM provider.
 var promptTooLongPatterns = []string{
-	"prompt is too long",     // Claude
-	"reduce your prompt",     // Claude
+	"prompt is too long",      // Claude
+	"reduce your prompt",      // Claude
 	"context_length_exceeded", // OpenAI
-	"maximum context length", // OpenAI
+	"maximum context length",  // OpenAI
 }
 
 // StreamIdleTimeoutError 表示流式读取超时（consumeStream 3分钟无数据）

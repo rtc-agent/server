@@ -36,7 +36,7 @@ func TestFormatAskUserResult_Completed_SingleAnswer(t *testing.T) {
 func TestFormatAskUserResult_Completed_MultiAnswer(t *testing.T) {
 	payload := map[string]any{
 		"answers": map[string]string{
-			"Which auth?":    "OAuth 2.0",
+			"Which auth?":   "OAuth 2.0",
 			"Which layout?": "Stack, Cluster",
 		},
 	}

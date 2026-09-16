@@ -10,9 +10,9 @@ import "sync"
 //
 // WorkTracker is safe for concurrent use.
 type WorkTracker struct {
-	mu       sync.Mutex
-	pending  map[string]chan struct{}
-	allDone  bool // set by CompleteAll; once true, future Registers return closed channels
+	mu      sync.Mutex
+	pending map[string]chan struct{}
+	allDone bool // set by CompleteAll; once true, future Registers return closed channels
 }
 
 // NewWorkTracker creates an empty WorkTracker.

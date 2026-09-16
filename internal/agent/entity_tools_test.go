@@ -90,7 +90,7 @@ func (l *testEntityLogger) Debug(ctx context.Context, msg string, fields map[str
 func (l *testEntityLogger) Info(ctx context.Context, msg string, fields map[string]any) {
 	l.entries = append(l.entries, fields)
 }
-func (l *testEntityLogger) Warn(ctx context.Context, msg string, fields map[string]any) {}
+func (l *testEntityLogger) Warn(ctx context.Context, msg string, fields map[string]any)  {}
 func (l *testEntityLogger) Error(ctx context.Context, msg string, fields map[string]any) {}
 
 // compile-time interface checks

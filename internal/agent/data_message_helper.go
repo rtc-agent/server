@@ -199,12 +199,12 @@ func (h *helpers) appendStreamChunk(
 
 		// Debug logging: record chunk count and final content for troubleshooting.
 		h.logger.Info(ctx, "appendStreamChunk.finalize", map[string]any{
-			"message_id":         msgIDStr,
-			"kind":               kind,
-			"chunk_count":        len(chunks),
-			"full_content_len":   len(fullContent),
+			"message_id":           msgIDStr,
+			"kind":                 kind,
+			"chunk_count":          len(chunks),
+			"full_content_len":     len(fullContent),
 			"full_content_preview": stringutil.TruncateByByte(fullContent, 200),
-			"is_first":           isFirst,
+			"is_first":             isFirst,
 		})
 
 		// Detect potential chunk loss due to TTL expiration or Redis failures.

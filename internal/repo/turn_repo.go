@@ -179,8 +179,8 @@ func (r *turnRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status protoc
 // could read the interrupted status before InterruptID is persisted.
 func (r *turnRepo) UpdateStatusAndInterruptID(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, interruptID string) error {
 	updates := map[string]any{
-		"status":        string(status),
-		"interrupt_id":  interruptID,
+		"status":       string(status),
+		"interrupt_id": interruptID,
 	}
 	if status == model.TurnStatusRunning {
 		updates["started_at"] = gorm.Expr("NOW()")

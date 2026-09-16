@@ -21,19 +21,19 @@ func TestCalculateRetentionIndex(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		msgs           []*schema.Message
-		config         RetentionConfig
-		expectedIndex  int
-		description    string
+		name          string
+		msgs          []*schema.Message
+		config        RetentionConfig
+		expectedIndex int
+		description   string
 	}{
 		{
 			name: "empty messages",
 			msgs: []*schema.Message{},
 			config: RetentionConfig{
-				MinTokens:           100,
+				MinTokens:            100,
 				MinTextBlockMessages: 2,
-				MaxTokens:           1000,
+				MaxTokens:            1000,
 			},
 			expectedIndex: 0,
 			description:   "should return 0 for empty messages",
@@ -44,9 +44,9 @@ func TestCalculateRetentionIndex(t *testing.T) {
 				makeMsg(schema.User, 100), // ~25 tokens
 			},
 			config: RetentionConfig{
-				MinTokens:           100,
+				MinTokens:            100,
 				MinTextBlockMessages: 2,
-				MaxTokens:           1000,
+				MaxTokens:            1000,
 			},
 			expectedIndex: 1, // all messages fit in retention budget
 			description:   "should return len(msgs) when all fit in budget",
@@ -61,9 +61,9 @@ func TestCalculateRetentionIndex(t *testing.T) {
 				makeMsg(schema.User, 400),      // ~100 tokens (total ~500 tokens, 5 text blocks)
 			},
 			config: RetentionConfig{
-				MinTokens:           400, // need ~400 tokens
-				MinTextBlockMessages: 3,  // need 3 text blocks
-				MaxTokens:           2000,
+				MinTokens:            400, // need ~400 tokens
+				MinTextBlockMessages: 3,   // need 3 text blocks
+				MaxTokens:            2000,
 			},
 			// Walk from end: msg4(100) + msg3(100) + msg2(100) = 300 tokens, 3 text blocks
 			// Still need more tokens. msg1(100) = 400 tokens, 4 text blocks. Met both conditions.
@@ -81,9 +81,9 @@ func TestCalculateRetentionIndex(t *testing.T) {
 				makeMsg(schema.User, 4000),      // ~1000 tokens
 			},
 			config: RetentionConfig{
-				MinTokens:           10000, // never met
-				MinTextBlockMessages: 10,   // never met
-				MaxTokens:           3000,  // hit after 3 messages from end
+				MinTokens:            10000, // never met
+				MinTextBlockMessages: 10,    // never met
+				MaxTokens:            3000,  // hit after 3 messages from end
 			},
 			// Walk from end: msg4(1000) + msg3(1000) + msg2(1000) = 3000 tokens. Hit max.
 			// Index should be 2 (keep msgs 2-4).

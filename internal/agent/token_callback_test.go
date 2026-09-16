@@ -68,11 +68,11 @@ func TestReportLLMCall_NilSession_SetCurrentContextTokens_Zero(t *testing.T) {
 // is NOT nil, the calculation works correctly
 func TestReportLLMCall_WithSession_CorrectCalculation(t *testing.T) {
 	tests := []struct {
-		name                   string
-		totalTokens            int64
-		currentContextTokens   int64
-		fullUsageTotal         int64
-		expectedCurrentCtx     int64
+		name                 string
+		totalTokens          int64
+		currentContextTokens int64
+		fullUsageTotal       int64
+		expectedCurrentCtx   int64
 	}{
 		{
 			name:                 "uses CurrentContextTokens when > 0",
@@ -100,8 +100,8 @@ func TestReportLLMCall_WithSession_CorrectCalculation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			session := &model.Session{
-				TotalTokens:            tt.totalTokens,
-				CurrentContextTokens:   tt.currentContextTokens,
+				TotalTokens:          tt.totalTokens,
+				CurrentContextTokens: tt.currentContextTokens,
 			}
 			fullUsage := &FullTokenUsage{
 				TotalTokens: tt.fullUsageTotal,
@@ -128,10 +128,10 @@ func TestBUG02_StreamingCacheWriteTokens_AccumulatesMax(t *testing.T) {
 	// Each chunk.Message carries cache creation tokens via the eino extra key.
 
 	tests := []struct {
-		name                   string
-		chunkCacheWriteTokens  []int // cache creation tokens per chunk
-		expectedCachedWrite    int64
-		expectedInputTokens    int64
+		name                  string
+		chunkCacheWriteTokens []int // cache creation tokens per chunk
+		expectedCachedWrite   int64
+		expectedInputTokens   int64
 	}{
 		{
 			name:                  "message_start has tokens, later chunks have 0",
@@ -286,8 +286,8 @@ func TestBUG08_CompressionContext_SkipsCurrentContextTokensUpdate(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			// Simulate session state
 			session := &model.Session{
-				TotalTokens:            50000, // baseline TotalTokens
-				CurrentContextTokens:   tt.sessionCurrentContextTokens,
+				TotalTokens:          50000, // baseline TotalTokens
+				CurrentContextTokens: tt.sessionCurrentContextTokens,
 			}
 			fullUsage := &FullTokenUsage{
 				TotalTokens: tt.fullUsageTotal,

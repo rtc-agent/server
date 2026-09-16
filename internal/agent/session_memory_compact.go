@@ -43,7 +43,7 @@ func (h *helpers) compressContextWithSessionMemory(
 	summary := buildSummaryFromMemories(memories)
 
 	h.logger.Info(ctx, "compressContextWithSessionMemory.success", map[string]any{
-		"session_id":  sessionID.String(),
+		"session_id":   sessionID.String(),
 		"memory_count": len(memories),
 	})
 

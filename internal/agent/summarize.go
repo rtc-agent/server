@@ -773,8 +773,9 @@ func compressModeString(retentionIndex int) string {
 // to avoid double-counting compression overhead.
 //
 // BUG-08 fix: Compression flow writes CurrentContextTokens twice:
-//   1. persistCompressedMessages writes accurate tokensAfter
-//   2. token callback writes tokensAfter + fullUsage.TotalTokens (incorrect)
+//  1. persistCompressedMessages writes accurate tokensAfter
+//  2. token callback writes tokensAfter + fullUsage.TotalTokens (incorrect)
+//
 // The context mark prevents the second write for compression calls only.
 type compressContextKey struct{}
 

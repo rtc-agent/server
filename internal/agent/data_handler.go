@@ -35,17 +35,17 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 
 	// Debug logging: record stream chunk content for troubleshooting.
 	h.logger.Info(ctx, "handleStreamChunk.debug", map[string]any{
-		"session_id":           sessionID.String(),
-		"turn_id":              turnID.String(),
-		"content_len":          len(event.Content),
-		"content_preview":      stringutil.TruncateByByte(event.Content, 100),
-		"reasoning_len":        len(event.ReasoningContent),
-		"reasoning_preview":    stringutil.TruncateByByte(event.ReasoningContent, 100),
-		"finish_reason":        event.FinishReason,
-		"thinking_msg_id":      state.thinkingMsgID.String(),
-		"thinking_finalized":   state.thinkingFinalized,
-		"markdown_msg_id":      state.markdownMsgID.String(),
-		"markdown_finalized":   state.markdownFinalized,
+		"session_id":         sessionID.String(),
+		"turn_id":            turnID.String(),
+		"content_len":        len(event.Content),
+		"content_preview":    stringutil.TruncateByByte(event.Content, 100),
+		"reasoning_len":      len(event.ReasoningContent),
+		"reasoning_preview":  stringutil.TruncateByByte(event.ReasoningContent, 100),
+		"finish_reason":      event.FinishReason,
+		"thinking_msg_id":    state.thinkingMsgID.String(),
+		"thinking_finalized": state.thinkingFinalized,
+		"markdown_msg_id":    state.markdownMsgID.String(),
+		"markdown_finalized": state.markdownFinalized,
 	})
 
 	// Handle markdown content.
@@ -118,15 +118,20 @@ func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turn
 	state := h.streamState.getOrCreate(turnID.String())
 
 	h.logger.Info(ctx, "handleStreamEnd.start", map[string]any{
-		"session_id":            sessionID.String(),
-		"turn_id":               turnID.String(),
-		"role":                  event.Role,
-		"markdown_msg_id":       state.markdownMsgID.String(),
-		"markdown_finalized":    state.markdownFinalized,
-		"thinking_msg_id":       state.thinkingMsgID.String(),
-		"thinking_finalized":    state.thinkingFinalized,
-		"has_token_usage":       event.TokenUsage != nil,
-		"token_usage_total":     func() int { if event.TokenUsage != nil { return event.TokenUsage.TotalTokens }; return -1 }(),
+		"session_id":         sessionID.String(),
+		"turn_id":            turnID.String(),
+		"role":               event.Role,
+		"markdown_msg_id":    state.markdownMsgID.String(),
+		"markdown_finalized": state.markdownFinalized,
+		"thinking_msg_id":    state.thinkingMsgID.String(),
+		"thinking_finalized": state.thinkingFinalized,
+		"has_token_usage":    event.TokenUsage != nil,
+		"token_usage_total": func() int {
+			if event.TokenUsage != nil {
+				return event.TokenUsage.TotalTokens
+			}
+			return -1
+		}(),
 	})
 
 	// Determine which message receives the token usage.
@@ -328,4 +333,3 @@ func eventToTokenUsageUpdate(tu *turnagent.TokenUsage) *model.TokenUsageUpdate {
 		ReasoningTokens: tu.ReasoningTokens,
 	}
 }
-

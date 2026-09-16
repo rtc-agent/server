@@ -61,26 +61,26 @@ type Memory struct {
 	ScopeID uuid.UUID `json:"scopeId" gorm:"type:uuid;index"` // session_id / user_id / zero for global
 
 	// ─── OKF 标准字段 ───
-	Type        string            `json:"type" gorm:"type:varchar(50);not null;index"` // decision | context | progress | issue | learnings | ...
-	Title       string            `json:"title" gorm:"type:varchar(200);not null"`     // 5-10 词摘要
-	Description string            `json:"description" gorm:"type:varchar(500)"`        // 一句话描述
-	Content     string            `json:"content" gorm:"type:text;not null"`           // markdown body
+	Type        string `json:"type" gorm:"type:varchar(50);not null;index"` // decision | context | progress | issue | learnings | ...
+	Title       string `json:"title" gorm:"type:varchar(200);not null"`     // 5-10 词摘要
+	Description string `json:"description" gorm:"type:varchar(500)"`        // 一句话描述
+	Content     string `json:"content" gorm:"type:text;not null"`           // markdown body
 	// Tags 使用 JSONB 数组而非 PostgreSQL text[]，因为：
 	// 1. JSONB 更灵活，支持嵌套结构（未来扩展）
 	// 2. 与 Metadata 字段保持一致的存储策略
 	// 3. 查询性能差异在标签数量少的场景下可忽略
 	// 注意：与 UserMemory.Tags (text[]) 不一致，迁移时需要转换。
-	Tags        StringArray  `json:"tags" gorm:"type:jsonb;default:'[]'"`         // 标签数组
-	Resource    string       `json:"resource" gorm:"type:varchar(500)"`           // 外部链接
-	Timestamp   time.Time    `json:"timestamp" gorm:"not null"`                   // 知识时间戳
+	Tags      StringArray `json:"tags" gorm:"type:jsonb;default:'[]'"` // 标签数组
+	Resource  string      `json:"resource" gorm:"type:varchar(500)"`   // 外部链接
+	Timestamp time.Time   `json:"timestamp" gorm:"not null"`           // 知识时间戳
 
 	// ─── 扩展 ───
-	Metadata   JSONBString  `json:"metadata" gorm:"type:jsonb;default:'{}'"` // OKF Provenance/Trust/Lifecycle
-	TokenCount int               `json:"tokenCount" gorm:"default:0"`             // 预估 token
+	Metadata   JSONBString `json:"metadata" gorm:"type:jsonb;default:'{}'"` // OKF Provenance/Trust/Lifecycle
+	TokenCount int         `json:"tokenCount" gorm:"default:0"`             // 预估 token
 
 	// ─── 审计 ───
-	CreatedAt time.Time      `json:"createdAt"`
-	UpdatedAt time.Time      `json:"updatedAt"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 	// DeletedAt 使用 gorm.DeletedAt 而非 *time.Time，因为：
 	// 1. GORM 自动处理软删除过滤，减少手动 WHERE 条件
 	// 2. 与 GORM 生态更一致，便于使用 Unscoped() 等 API

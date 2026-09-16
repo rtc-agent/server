@@ -52,9 +52,9 @@ func (t *saveSessionMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, err
 
 func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args struct {
-		Category string         `json:"category"`
-		Title    string         `json:"title"`
-		Content  string         `json:"content"`
+		Category string           `json:"category"`
+		Title    string           `json:"title"`
+		Content  string           `json:"content"`
 		Metadata model.JSONB[any] `json:"metadata,omitempty"`
 	}
 	if ok, msg := parseToolArgs(ctx, t.helpers, "save_session_memory", argumentsInJSON, &args); !ok {

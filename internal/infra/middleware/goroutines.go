@@ -74,10 +74,10 @@ func collectGoroutineMetrics(leakThreshold int) {
 
 // stackEntry 表示一个 goroutine 的堆栈摘要。
 type stackEntry struct {
-	ID     int    `json:"id"`
-	State  string `json:"state"`
-	TopFn  string `json:"top_function"`
-	Stack  string `json:"stack,omitempty"` // 仅在详细模式下填充
+	ID    int    `json:"id"`
+	State string `json:"state"`
+	TopFn string `json:"top_function"`
+	Stack string `json:"stack,omitempty"` // 仅在详细模式下填充
 }
 
 // GoroutinesHandler 返回 /debug/goroutines HTTP 处理器。

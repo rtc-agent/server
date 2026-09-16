@@ -233,13 +233,13 @@ func classifyError(err error) (category protocol.ErrorCategory, title, message s
 }
 
 // =============================================================================
-// sanitizeRawError — 12 项净化规则
+// sanitizeRawError — 12 项正则净化规则 + 截断（共 13 步流水线）
 // =============================================================================
 
 // sanitizationRule defines a single regex-based sanitization rule.
 type sanitizationRule struct {
-    pattern     *regexp.Regexp
-    replacement string
+	pattern     *regexp.Regexp
+	replacement string
 }
 
 // Pre-compiled regular expressions and sanitization rules.
@@ -260,47 +260,47 @@ type sanitizationRule struct {
 //  12. File path usernames
 //  13. Truncation to maxRawErrorLen (500 chars)
 var (
-    // 1. Anthropic API key: sk-ant-...
-    reAPIKey = regexp.MustCompile(`sk-ant-[a-zA-Z0-9]+`)
-    // 2. Bearer token
-    reBearerToken = regexp.MustCompile(`Bearer [a-zA-Z0-9._-]+`)
-    // 3. SQL/Redis URI with credentials: scheme://user:pass@host
-    reCredURI = regexp.MustCompile(`\w+://[^:\s]+:[^@\s]+@`)
-    // 4. AWS access key: AKIA followed by 16 uppercase alphanumeric chars
-    reAWSKey = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
-    // 5. GitHub/GitLab token: ghp_, glpat-, gho_, ghs_ prefixes
-    reVCSToken = regexp.MustCompile(`(ghp_|glpat-|gho_|ghs_)[a-zA-Z0-9_]+`)
-    // 6. PEM private key blocks
-    rePEMKey = regexp.MustCompile(`-----BEGIN[A-Z ]+PRIVATE KEY-----[\s\S]*?-----END[A-Z ]+PRIVATE KEY-----`)
-    // 7. Generic password/secret parameters (case-insensitive)
-    rePassword = regexp.MustCompile(`(?i)(password|passwd|secret|api[_-]?key|token)\s*[=:]\s*\S+`)
-    // 8. Internal IPs and hostnames
-    reInternalAddr = regexp.MustCompile(`\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|[a-z0-9-]+\.internal)\b`)
-    // 9. Go stack trace pattern
-    reGoStackTrace = regexp.MustCompile(`goroutine \d+ \[[^\]]+\]:\n\s+[\w/.]+\.go:\d+`)
-    // 10. Email addresses
-    reEmail = regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`)
-    // 11. Phone numbers (international format)
-    rePhone = regexp.MustCompile(`\+\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}`)
-    // 12. File paths with username: /home/username/... -> /home/[USER]/...
-    reFilePath = regexp.MustCompile(`(/home/|/Users/|/usr/)[a-zA-Z0-9_.-]+/`)
+	// 1. Anthropic API key: sk-ant-...
+	reAPIKey = regexp.MustCompile(`sk-ant-[a-zA-Z0-9]+`)
+	// 2. Bearer token
+	reBearerToken = regexp.MustCompile(`Bearer [a-zA-Z0-9._-]+`)
+	// 3. SQL/Redis URI with credentials: scheme://user:pass@host
+	reCredURI = regexp.MustCompile(`\w+://[^:\s]+:[^@\s]+@`)
+	// 4. AWS access key: AKIA followed by 16 uppercase alphanumeric chars
+	reAWSKey = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
+	// 5. GitHub/GitLab token: ghp_, glpat-, gho_, ghs_ prefixes
+	reVCSToken = regexp.MustCompile(`(ghp_|glpat-|gho_|ghs_)[a-zA-Z0-9_]+`)
+	// 6. PEM private key blocks
+	rePEMKey = regexp.MustCompile(`-----BEGIN[A-Z ]+PRIVATE KEY-----[\s\S]*?-----END[A-Z ]+PRIVATE KEY-----`)
+	// 7. Generic password/secret parameters (case-insensitive)
+	rePassword = regexp.MustCompile(`(?i)(password|passwd|secret|api[_-]?key|token)\s*[=:]\s*\S+`)
+	// 8. Internal IPs and hostnames
+	reInternalAddr = regexp.MustCompile(`\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|[a-z0-9-]+\.internal)\b`)
+	// 9. Go stack trace pattern
+	reGoStackTrace = regexp.MustCompile(`goroutine \d+ \[[^\]]+\]:\n\s+[\w/.]+\.go:\d+`)
+	// 10. Email addresses
+	reEmail = regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`)
+	// 11. Phone numbers (international format)
+	rePhone = regexp.MustCompile(`\+\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}`)
+	// 12. File paths with username: /home/username/... -> /home/[USER]/...
+	reFilePath = regexp.MustCompile(`(/home/|/Users/|/usr/)[a-zA-Z0-9_.-]+/`)
 
-    // sanitizationRules is the ordered rule table applied by sanitizeRawError.
-    // Order is security-critical: credentials first, then PII, then metadata.
-    sanitizationRules = []sanitizationRule{
-        {reAPIKey, "[REDACTED_API_KEY]"},
-        {reBearerToken, "[REDACTED_TOKEN]"},
-        {reCredURI, "[REDACTED_URI]"},
-        {reAWSKey, "[REDACTED_AWS_KEY]"},
-        {reVCSToken, "[REDACTED_VCS_TOKEN]"},
-        {rePEMKey, "[REDACTED_PRIVATE_KEY]"},
-        {rePassword, "${1}=[REDACTED]"},
-        {reInternalAddr, "[INTERNAL_ADDR]"},
-        {reGoStackTrace, "[REDACTED_STACK_TRACE]"},
-        {reEmail, "[REDACTED_EMAIL]"},
-        {rePhone, "[REDACTED_PHONE]"},
-        {reFilePath, "${1}[USER]/"},
-    }
+	// sanitizationRules is the ordered rule table applied by sanitizeRawError.
+	// Order is security-critical: credentials first, then PII, then metadata.
+	sanitizationRules = []sanitizationRule{
+		{reAPIKey, "[REDACTED_API_KEY]"},
+		{reBearerToken, "[REDACTED_TOKEN]"},
+		{reCredURI, "[REDACTED_URI]"},
+		{reAWSKey, "[REDACTED_AWS_KEY]"},
+		{reVCSToken, "[REDACTED_VCS_TOKEN]"},
+		{rePEMKey, "[REDACTED_PRIVATE_KEY]"},
+		{rePassword, "${1}=[REDACTED]"},
+		{reInternalAddr, "[INTERNAL_ADDR]"},
+		{reGoStackTrace, "[REDACTED_STACK_TRACE]"},
+		{reEmail, "[REDACTED_EMAIL]"},
+		{rePhone, "[REDACTED_PHONE]"},
+		{reFilePath, "${1}[USER]/"},
+	}
 )
 
 const maxRawErrorLen = 500
@@ -323,21 +323,21 @@ const maxRawErrorLen = 500
 //  12. File paths with usernames
 //  13. Truncation to 500 characters
 func sanitizeRawError(raw string) string {
-    if raw == "" {
-        return ""
-    }
+	if raw == "" {
+		return ""
+	}
 
-    s := raw
-    for _, rule := range sanitizationRules {
-        s = rule.pattern.ReplaceAllString(s, rule.replacement)
-    }
+	s := raw
+	for _, rule := range sanitizationRules {
+		s = rule.pattern.ReplaceAllString(s, rule.replacement)
+	}
 
-    // Truncate to 500 characters.
-    if len(s) > maxRawErrorLen {
-        s = s[:maxRawErrorLen] + "..."
-    }
+	// Truncate to 500 characters.
+	if len(s) > maxRawErrorLen {
+		s = s[:maxRawErrorLen] + "..."
+	}
 
-    return s
+	return s
 }
 
 // =============================================================================

@@ -12,10 +12,10 @@ import (
 
 func TestExtractSystemMessages(t *testing.T) {
 	tests := []struct {
-		name       string
-		input      []*turnagent.Message
-		wantRoles  []string // expected role sequence
-		wantSame   bool     // true → expect same pointer (no allocation)
+		name      string
+		input     []*turnagent.Message
+		wantRoles []string // expected role sequence
+		wantSame  bool     // true → expect same pointer (no allocation)
 	}{
 		{
 			name:     "empty",
@@ -105,10 +105,10 @@ func TestExtractSystemMessages(t *testing.T) {
 
 func TestMergeConsecutiveSameRole(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     []*turnagent.Message
-		wantLen   int
-		wantRoles []string
+		name         string
+		input        []*turnagent.Message
+		wantLen      int
+		wantRoles    []string
 		wantContents []string
 	}{
 		{
@@ -206,8 +206,8 @@ func TestMergeConsecutiveSameRole(t *testing.T) {
 				{Role: turnagent.RoleAssistant, Content: "text", ReasoningContent: "think1"},
 				{Role: turnagent.RoleAssistant, Content: "", ReasoningContent: "think2"},
 			},
-			wantLen:   1,
-			wantRoles: []string{"assistant"},
+			wantLen:      1,
+			wantRoles:    []string{"assistant"},
 			wantContents: []string{"text"},
 		},
 	}

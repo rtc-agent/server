@@ -59,7 +59,7 @@ type UpdatePublisher struct {
 	broker               Broker
 	resolvers            map[string]EntityResolver
 	streamStore          StreamStoreAccessor // 可选：用于读取 streaming 状态消息的 chunks
-	compressionThreshold atomic.Int64            // 压缩触发阈值，用于计算 Token 预估字段
+	compressionThreshold atomic.Int64        // 压缩触发阈值，用于计算 Token 预估字段
 }
 
 // NewUpdatePublisher 创建 UpdatePublisher

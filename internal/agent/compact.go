@@ -33,7 +33,7 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 	}
 
 	h.logger.Info(ctx, "compact.start", map[string]any{
-		"session_id":           sessionID,
+		"session_id":             sessionID,
 		"has_custom_instruction": customInstruction != nil,
 	})
 
@@ -114,9 +114,9 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 			})
 		} else if estimate != nil {
 			h.logger.Info(ctx, "compact.reestimate", map[string]any{
-				"session_id":              sessionID,
-				"current_tokens":          estimate.CurrentTokens,
-				"estimated_next_round":    estimate.EstimatedNextRound,
+				"session_id":               sessionID,
+				"current_tokens":           estimate.CurrentTokens,
+				"estimated_next_round":     estimate.EstimatedNextRound,
 				"rounds_until_compression": estimate.RoundsUntilCompression,
 			})
 

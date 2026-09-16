@@ -109,7 +109,7 @@ func TestApplyToolResultBudget_LargeToolResult_Truncated(t *testing.T) {
 }
 
 func TestApplyToolResultBudget_MultipleToolResults(t *testing.T) {
-	smallContent := strings.Repeat("a", 10000)  // 10KB
+	smallContent := strings.Repeat("a", 10000) // 10KB
 	largeContent := strings.Repeat("b", 50000) // 50KB, over limit
 
 	msgs := []*turnagent.Message{
@@ -126,8 +126,8 @@ func TestApplyToolResultBudget_MultipleToolResults(t *testing.T) {
 			ToolCallID: "tool-2",
 		},
 		{
-			Role:       turnagent.RoleUser,
-			Content:    "Some user message",
+			Role:    turnagent.RoleUser,
+			Content: "Some user message",
 		},
 	}
 
