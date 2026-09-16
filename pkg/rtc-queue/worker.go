@@ -559,6 +559,10 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 				consecutiveRenewFailures.Store(0)
 				if !ok {
 					// Definitive lock loss (TTL expired or preempted by another worker).
+					w.log("worker.lock_lost", map[string]any{
+						"session_id": claim.SessionID,
+						"work_id":    claim.WorkID,
+					})
 					lockLost.Store(true)
 					workCancel() // abort OnWork — we no longer own this work
 					return
