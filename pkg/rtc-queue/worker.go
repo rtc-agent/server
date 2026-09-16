@@ -383,13 +383,6 @@ func (w *Worker) processWorkHoldLock(ctx context.Context, claim *ClaimResult) {
 	w.processWorkInternal(ctx, claim, true, claim.Credential)
 }
 
-// maxConsecutiveRenewFailures is the threshold for consecutive Redis errors
-// during lock renewal before the lock is considered lost. This matches the
-// SessionTurnManager's approach (in pkg/turn-agent/session_manager.go) to
-// prevent split-brain scenarios where transient network errors cause the lock
-// TTL to expire while the worker continues processing.
-const maxConsecutiveRenewFailures = 3
-
 // processWorkInternal is the shared implementation for both normal and hold-lock modes.
 func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, holdLock bool, credential string) {
 	w.log("worker.processing_work", map[string]any{
@@ -551,7 +544,7 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 						"consecutive_failures": failures,
 						"error":                err.Error(),
 					})
-					if failures >= maxConsecutiveRenewFailures {
+					if failures >= DefaultMaxConsecutiveRenewFailures {
 						w.logError("worker.renewal_giving_up",
 							"session", claim.SessionID,
 							"consecutive_failures", failures,

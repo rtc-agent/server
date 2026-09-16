@@ -57,6 +57,23 @@ const (
 	DefaultRenewIntervalSec = 30
 )
 
+// DefaultMaxConsecutiveRenewFailures is the threshold for consecutive Redis
+// errors during lock renewal before the lock is considered lost. Both the
+// Worker (pkg/rtc-queue) and SessionTurnManager (pkg/turn-agent) share this
+// value to maintain consistent split-brain protection across layers.
+//
+// Transient errors (network blips, connection pool exhaustion) are tolerated
+// up to this count; only when consecutive failures reach the threshold is
+// the lock deemed lost. An ok==false response (definitive lock loss) triggers
+// immediately regardless of the counter.
+const DefaultMaxConsecutiveRenewFailures = 3
+
+// ResumeWorkPriority is the priority used for resume work items. rtc-queue's
+// priority queue orders by score = -priority, so higher values are claimed
+// first. A resume must always outrank a fresh submit to ensure the eino
+// checkpoint is still intact when the worker picks it up.
+const ResumeWorkPriority int64 = 100
+
 // Redis key prefixes.
 const (
 	keyPrefixQueue  = "queue:session:"

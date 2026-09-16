@@ -12,6 +12,7 @@ import (
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/google/uuid"
@@ -207,10 +208,9 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 		return
 	}
 
-	// Use ResumePriority (100) to ensure the resume is claimed before any pending
+	// Use ResumeWorkPriority to ensure the resume is claimed before any pending
 	// Submit items, so the parent's checkpoint is still intact.
-	const resumePriority int64 = 100
-	if _, err := h.queue.Publish(ctx, parentSessionID, string(payload), resumePriority); err != nil {
+	if _, err := h.queue.Publish(ctx, parentSessionID, string(payload), rtcqueue.ResumeWorkPriority); err != nil {
 		h.logger.Warn(ctx, "resumeParentAfterSubAgent.publish_failed", map[string]any{
 			"parent_session_id": parentSessionID,
 			"error":             err.Error(),

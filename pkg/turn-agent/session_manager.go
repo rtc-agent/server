@@ -17,11 +17,6 @@ import (
 // Must be well below DefaultLockTTLSeconds (120s) to prevent expiry.
 const sessionRenewalInterval = 30 * time.Second
 
-// maxConsecutiveRenewFailures is the threshold for consecutive Redis errors
-// during lock renewal before the session is considered lost. Transient errors
-// (network blips, connection pool exhaustion) are tolerated up to this count.
-const maxConsecutiveRenewFailures = 3
-
 // SessionTurnManager manages the lifecycle of a single session's turn loop.
 //
 // A SessionTurnManager is created per session (not per turn). It holds the
@@ -400,7 +395,7 @@ func (mgr *SessionTurnManager) runLockRenewal(ctx context.Context) {
 					"consecutive_failures": failures,
 					"error":                err.Error(),
 				})
-				if failures >= maxConsecutiveRenewFailures {
+				if failures >= rtcqueue.DefaultMaxConsecutiveRenewFailures {
 					mgr.log(ctx, LogLevelError, "session_manager.renewal_giving_up", map[string]any{
 						"session_id":           mgr.sessionID,
 						"consecutive_failures": failures,

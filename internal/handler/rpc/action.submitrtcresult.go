@@ -19,15 +19,10 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"go.uber.org/zap"
 )
-
-// ResumePriority is the priority used for resume work items. rtc-queue's
-// priority queue orders by score = -priority, so higher values are claimed
-// first. A resume must always outrank a fresh submit to ensure the
-// checkpoint is still intact when the worker picks it up.
-const ResumePriority int64 = 100
 
 // SubmitRtcResult 提交 RTC 执行结果，标记 RTC 完成并继续 LLM 流程。
 func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcResultRequest) (*protocol.SubmitRtcResultResponse, error) {
@@ -497,7 +492,7 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 			logger.Error(ctx, "[resumeTurnAfterRtc] marshal resume payload", zap.Error(marshalErr))
 			return
 		}
-		if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), ResumePriority); err != nil {
+		if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), rtcqueue.ResumeWorkPriority); err != nil {
 			logger.Error(ctx, "[resumeTurnAfterRtc] Queue.Publish resume failed",
 				zap.String("rtc", rtc.ID.String()),
 				zap.String("session", rtc.SessionID.String()),
