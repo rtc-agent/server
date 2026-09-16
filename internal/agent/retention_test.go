@@ -103,8 +103,10 @@ func TestCalculateRetentionIndex(t *testing.T) {
 }
 
 func TestAdjustIndexToPreserveAPIInvariants(t *testing.T) {
-	t.Run("tool_result at boundary pulls in assistant", func(t *testing.T) {
-		msgs := []*schema.Message{
+	// Shared message sequence used by the first two subtests:
+	// user → assistant(tool_call) → tool(result) → assistant → user
+	toolPairMsgs := func() []*schema.Message {
+		return []*schema.Message{
 			{Role: schema.User, Content: "hello"},
 			{Role: schema.Assistant, Content: "", ToolCalls: []schema.ToolCall{
 				{ID: "call_1", Function: schema.FunctionCall{Name: "read", Arguments: "{}"}},
@@ -113,28 +115,20 @@ func TestAdjustIndexToPreserveAPIInvariants(t *testing.T) {
 			{Role: schema.Assistant, Content: "response"},
 			{Role: schema.User, Content: "thanks"},
 		}
+	}
 
+	t.Run("tool_result at boundary pulls in assistant", func(t *testing.T) {
 		// If retention starts at index 2 (the tool message), the corresponding
 		// assistant at index 1 should be pulled in to preserve the pairing.
-		result := adjustIndexToPreserveAPIInvariants(msgs, 2)
+		result := adjustIndexToPreserveAPIInvariants(toolPairMsgs(), 2)
 		if result != 1 {
 			t.Errorf("expected index 1 to include tool_use, got %d", result)
 		}
 	})
 
 	t.Run("no adjustment needed when tool pair fully retained", func(t *testing.T) {
-		msgs := []*schema.Message{
-			{Role: schema.User, Content: "hello"},
-			{Role: schema.Assistant, Content: "", ToolCalls: []schema.ToolCall{
-				{ID: "call_1", Function: schema.FunctionCall{Name: "read", Arguments: "{}"}},
-			}},
-			{Role: schema.Tool, Content: "file content", ToolCallID: "call_1", ToolName: "read"},
-			{Role: schema.Assistant, Content: "response"},
-			{Role: schema.User, Content: "thanks"},
-		}
-
 		// If retention starts at index 1, both assistant and tool are retained.
-		result := adjustIndexToPreserveAPIInvariants(msgs, 1)
+		result := adjustIndexToPreserveAPIInvariants(toolPairMsgs(), 1)
 		if result != 1 {
 			t.Errorf("expected index 1 unchanged, got %d", result)
 		}

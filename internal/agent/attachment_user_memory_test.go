@@ -66,83 +66,45 @@ func TestUserMemoryCategoryLabels(t *testing.T) {
 }
 
 func TestContainsCJKDirective(t *testing.T) {
-	tests := []struct {
+	assertBoolCases(t, containsCJKDirective, []struct {
 		name     string
 		text     string
 		expected bool
 	}{
-		{
-			name:     "Direct Chinese directive",
-			text:     "请 always respond in chinese",
-			expected: true,
-		},
-		{
-			name:     "Chinese directive with 中文",
-			text:     "respond in 中文 please",
-			expected: true,
-		},
-		{
-			name:     "用中文回复",
-			text:     "用中文回复用户的问题",
-			expected: true,
-		},
-		{
-			name:     "No directive",
-			text:     "You are a helpful assistant",
-			expected: false,
-		},
-		{
-			name:     "English only directive",
-			text:     "always respond in english",
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := containsCJKDirective(tt.text)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
+		{"Direct Chinese directive", "请 always respond in chinese", true},
+		{"Chinese directive with 中文", "respond in 中文 please", true},
+		{"用中文回复", "用中文回复用户的问题", true},
+		{"No directive", "You are a helpful assistant", false},
+		{"English only directive", "always respond in english", false},
+	})
 }
 
 func TestContainsChineseHint(t *testing.T) {
-	tests := []struct {
+	assertBoolCases(t, containsChineseHint, []struct {
 		name     string
 		text     string
 		expected bool
 	}{
-		{
-			name:     "Always respond in Chinese",
-			text:     "You should always respond in chinese",
-			expected: true,
-		},
-		{
-			name:     "Detect user's language",
-			text:     "Detect the user's language and respond accordingly",
-			expected: true,
-		},
-		{
-			name:     "Heavy CJK content",
-			text:     "这是一个中文助手的配置描述，包含了大量的中文字符来确保能够正确识别语言类型",
-			expected: true,
-		},
-		{
-			name:     "English only",
-			text:     "You are a helpful coding assistant that writes clean code",
-			expected: false,
-		},
-		{
-			name:     "Minimal CJK in mostly English",
-			text:     "The word for hello in Chinese is 你好 but everything else is English text that goes on for a while",
-			expected: false,
-		},
-	}
+		{"Always respond in Chinese", "You should always respond in chinese", true},
+		{"Detect user's language", "Detect the user's language and respond accordingly", true},
+		{"Heavy CJK content", "这是一个中文助手的配置描述，包含了大量的中文字符来确保能够正确识别语言类型", true},
+		{"English only", "You are a helpful coding assistant that writes clean code", false},
+		{"Minimal CJK in mostly English", "The word for hello in Chinese is 你好 but everything else is English text that goes on for a while", false},
+	})
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := containsChineseHint(tt.text)
-			assert.Equal(t, tt.expected, result)
+// assertBoolCases runs a table-driven test where each case calls fn(text)
+// and asserts the result equals expected.
+func assertBoolCases(t *testing.T, fn func(string) bool, cases []struct {
+	name     string
+	text     string
+	expected bool
+},
+) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, fn(tc.text))
 		})
 	}
 }

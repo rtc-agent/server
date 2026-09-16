@@ -117,29 +117,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	//
 	// Attachments are prepended to the message array (not appended) because
 	// they use system role, and Claude API requires system messages at the start.
-	if len(messages) > 0 && h.attachmentManager != nil {
-		// Get userID from session
-		var userID uuid.UUID
-		if session, sessionErr := h.deps.SessionRepo.GetByID(ctx, sid); sessionErr == nil && session != nil {
-			if parsedID, parseErr := uuid.Parse(session.OwnerRefID); parseErr == nil {
-				userID = parsedID
-			}
-		}
-
-		// Build attachments
-		attachmentMsgs, err := h.attachmentManager.BuildAttachments(ctx, sid, userID)
-		if err != nil {
-			h.logger.Warn(ctx, "loadMessages.build_attachments_failed", map[string]any{
-				"session_id": sid.String(),
-				"error":      err.Error(),
-			})
-		} else if len(attachmentMsgs) > 0 {
-			// Prepend attachments to the start of the message array.
-			// This ensures system-role attachments appear before user/assistant
-			// messages, complying with Claude API requirements.
-			messages = append(attachmentMsgs, messages...)
-		}
-	}
+	messages = h.prependAttachments(ctx, sid, messages)
 
 	// Normalize messages for LLM: extract system messages to the front,
 	// repair tool call/result pairing, merge consecutive same-role messages,
@@ -185,6 +163,39 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	}
 
 	return messages, nil
+}
+
+// prependAttachments builds system-role attachments (TodoList, SessionMemory,
+// UserMemory) and prepends them to the message array. If no attachments are
+// available or the attachment manager is nil, the original messages are
+// returned unchanged.
+func (h *helpers) prependAttachments(ctx context.Context, sid uuid.UUID, messages []*turnagent.Message) []*turnagent.Message {
+	if len(messages) == 0 || h.attachmentManager == nil {
+		return messages
+	}
+
+	var userID uuid.UUID
+	if session, sessionErr := h.deps.SessionRepo.GetByID(ctx, sid); sessionErr == nil && session != nil {
+		if parsedID, parseErr := uuid.Parse(session.OwnerRefID); parseErr == nil {
+			userID = parsedID
+		}
+	}
+
+	attachmentMsgs, err := h.attachmentManager.BuildAttachments(ctx, sid, userID)
+	if err != nil {
+		h.logger.Warn(ctx, "loadMessages.build_attachments_failed", map[string]any{
+			"session_id": sid.String(),
+			"error":      err.Error(),
+		})
+		return messages
+	}
+	if len(attachmentMsgs) == 0 {
+		return messages
+	}
+
+	// Prepend attachments so system-role entries appear before user/assistant
+	// messages, complying with Claude API requirements.
+	return append(attachmentMsgs, messages...)
 }
 
 // convertDBMessage converts a single model.Message to zero or more

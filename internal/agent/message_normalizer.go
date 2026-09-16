@@ -244,6 +244,17 @@ func validateMessageSequence(messages []*turnagent.Message) error {
 	}
 
 	// Rule 3: Validate role transitions in the conversation body.
+	if err := validateRoleTransitions(messages, convStart); err != nil {
+		return err
+	}
+
+	// Rule 4: Tool pairing integrity.
+	return validateToolPairing(messages)
+}
+
+// validateRoleTransitions checks that each role transition in the conversation
+// body follows the Anthropic Messages API contract.
+func validateRoleTransitions(messages []*turnagent.Message, convStart int) error {
 	for i := convStart; i < len(messages)-1; i++ {
 		curr := messages[i]
 		next := messages[i+1]
@@ -258,19 +269,15 @@ func validateMessageSequence(messages []*turnagent.Message) error {
 
 		case turnagent.RoleAssistant:
 			if len(curr.ToolCalls) > 0 {
-				// Assistant with tool calls: must be followed by tool results.
 				if next.Role != turnagent.RoleTool {
 					return fmt.Errorf(
 						"assistant with tool_calls at position %d not followed by tool",
 						i)
 				}
-			} else {
-				// Assistant without tool calls: must be followed by user.
-				if next.Role != turnagent.RoleUser {
-					return fmt.Errorf(
-						"assistant at position %d followed by %s (expected user)",
-						i, next.Role)
-				}
+			} else if next.Role != turnagent.RoleUser {
+				return fmt.Errorf(
+					"assistant at position %d followed by %s (expected user)",
+					i, next.Role)
 			}
 
 		case turnagent.RoleTool:
@@ -281,9 +288,7 @@ func validateMessageSequence(messages []*turnagent.Message) error {
 			}
 		}
 	}
-
-	// Rule 4: Tool pairing integrity.
-	return validateToolPairing(messages)
+	return nil
 }
 
 // -----------------------------------------------------------------------------

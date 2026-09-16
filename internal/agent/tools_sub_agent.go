@@ -99,92 +99,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		if !hasState {
 			return "", fmt.Errorf("sub_agent: state type mismatch on resume")
 		}
-
-		// Check if the sub session has completed.
-		subSessionID, parseErr := uuid.Parse(state.SubSessionID)
-		if parseErr != nil {
-			return "", fmt.Errorf("sub_agent: invalid sub_session_id in state: %w", parseErr)
-		}
-
-		subSession, dbErr := t.helpers.deps.SessionRepo.GetByID(ctx, subSessionID)
-		if dbErr != nil {
-			t.helpers.logger.Warn(ctx, "subAgent.resume.db_error", map[string]any{
-				"sub_session_id": subSessionID.String(),
-				"error":          dbErr.Error(),
-			})
-			// Re-interrupt and wait for sub session to complete.
-			info := subAgentInterruptInfo{
-				Type:            "sub_agent",
-				SubSessionID:    state.SubSessionID,
-				ParentMessageID: state.ParentMessageID,
-			}
-			return "", tool.StatefulInterrupt(ctx, info, state)
-		}
-
-		// If sub session is still active or idle (not completed/failed/closed), re-interrupt.
-		if subSession.Status != string(protocol.SessionStatusIdle) && subSession.Status != string(protocol.SessionStatusClosed) {
-			info := subAgentInterruptInfo{
-				Type:            "sub_agent",
-				SubSessionID:    state.SubSessionID,
-				ParentMessageID: state.ParentMessageID,
-			}
-			return "", tool.StatefulInterrupt(ctx, info, state)
-		}
-
-		// Sub session completed. Get the last assistant message as the result.
-		// The result is already passed via WorkPayload.SubAgentResult when the
-		// parent session was resumed, so we need to retrieve it from the checkpoint
-		// context or the last message in the sub session.
-		//
-		// For now, we'll fetch the last assistant message from the sub session.
-		// This is a simplification; the ideal approach would be to pass the result
-		// through the interrupt state, but that requires changes to the checkpoint
-		// mechanism.
-		recentMsgs, msgErr := t.helpers.deps.MessageRepo.ListRecentBySession(ctx, subSessionID, 50)
-		if msgErr != nil {
-			t.helpers.logger.Warn(ctx, "subAgent.resume.get_last_message_failed", map[string]any{
-				"sub_session_id": subSessionID.String(),
-				"error":          msgErr.Error(),
-			})
-			return formatSubAgentNoResult(), nil
-		}
-
-		// Find the last assistant message.
-		var lastMsg *model.Message
-		for i := len(recentMsgs) - 1; i >= 0; i-- {
-			if recentMsgs[i].Role == string(protocol.MessageRoleAssistant) {
-				lastMsg = recentMsgs[i]
-				break
-			}
-		}
-		if lastMsg == nil {
-			return formatSubAgentNoAssistant(), nil
-		}
-
-		// Deserialize the message content.
-		var content protocol.ContentData
-		if err := json.Unmarshal([]byte(lastMsg.Content), &content); err != nil {
-			t.helpers.logger.Warn(ctx, "subAgent.resume.deserialize_content_failed", map[string]any{
-				"sub_session_id": subSessionID.String(),
-				"error":          err.Error(),
-			})
-			return formatSubAgentParseFailed(), nil
-		}
-
-		// Extract the text content.
-		resultText := extractTextFromContent(content)
-
-		if resultText == "" {
-			resultText = formatSubAgentNoOutput()
-		}
-
-		t.helpers.logger.Info(ctx, "subAgent.resume.completed", map[string]any{
-			"sub_session_id":    subSessionID.String(),
-			"result_length":     len(resultText),
-			"parent_message_id": state.ParentMessageID,
-		})
-
-		return resultText, nil
+		return t.resumeSubAgent(ctx, state)
 	}
 
 	// === First-call path ===
@@ -432,4 +347,93 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 	}
 
 	return "", tool.StatefulInterrupt(ctx, info, state)
+}
+
+// resumeSubAgent handles the resume path after a sub-agent interrupt.
+// It checks whether the sub session has completed and, if so, retrieves the
+// last assistant message as the result. If the sub session is still active,
+// it re-interrupts to wait for completion.
+func (t *subAgentTool) resumeSubAgent(ctx context.Context, state subAgentInterruptState) (string, error) {
+	subSessionID, parseErr := uuid.Parse(state.SubSessionID)
+	if parseErr != nil {
+		return "", fmt.Errorf("sub_agent: invalid sub_session_id in state: %w", parseErr)
+	}
+
+	subSession, dbErr := t.helpers.deps.SessionRepo.GetByID(ctx, subSessionID)
+	if dbErr != nil {
+		t.helpers.logger.Warn(ctx, "subAgent.resume.db_error", map[string]any{
+			"sub_session_id": subSessionID.String(),
+			"error":          dbErr.Error(),
+		})
+		return t.reInterrupt(ctx, state)
+	}
+
+	// If sub session is still active or idle (not completed/failed/closed), re-interrupt.
+	if subSession.Status != string(protocol.SessionStatusIdle) && subSession.Status != string(protocol.SessionStatusClosed) {
+		return t.reInterrupt(ctx, state)
+	}
+
+	// Sub session completed. Retrieve the last assistant message.
+	resultText, err := t.fetchLastAssistantText(ctx, subSessionID)
+	if err != nil {
+		return formatSubAgentNoResult(), nil
+	}
+
+	t.helpers.logger.Info(ctx, "subAgent.resume.completed", map[string]any{
+		"sub_session_id":    subSessionID.String(),
+		"result_length":     len(resultText),
+		"parent_message_id": state.ParentMessageID,
+	})
+
+	return resultText, nil
+}
+
+// reInterrupt issues a StatefulInterrupt to keep waiting for the sub session.
+func (t *subAgentTool) reInterrupt(ctx context.Context, state subAgentInterruptState) (string, error) {
+	info := subAgentInterruptInfo{
+		Type:            "sub_agent",
+		SubSessionID:    state.SubSessionID,
+		ParentMessageID: state.ParentMessageID,
+	}
+	return "", tool.StatefulInterrupt(ctx, info, state)
+}
+
+// fetchLastAssistantText retrieves the text content of the most recent
+// assistant message in the given session. Returns a user-friendly fallback
+// string if no message is found or content cannot be parsed.
+func (t *subAgentTool) fetchLastAssistantText(ctx context.Context, sessionID uuid.UUID) (string, error) {
+	recentMsgs, err := t.helpers.deps.MessageRepo.ListRecentBySession(ctx, sessionID, 50)
+	if err != nil {
+		t.helpers.logger.Warn(ctx, "subAgent.resume.get_last_message_failed", map[string]any{
+			"sub_session_id": sessionID.String(),
+			"error":          err.Error(),
+		})
+		return "", err
+	}
+
+	var lastMsg *model.Message
+	for i := len(recentMsgs) - 1; i >= 0; i-- {
+		if recentMsgs[i].Role == string(protocol.MessageRoleAssistant) {
+			lastMsg = recentMsgs[i]
+			break
+		}
+	}
+	if lastMsg == nil {
+		return formatSubAgentNoAssistant(), nil
+	}
+
+	var content protocol.ContentData
+	if err := json.Unmarshal([]byte(lastMsg.Content), &content); err != nil {
+		t.helpers.logger.Warn(ctx, "subAgent.resume.deserialize_content_failed", map[string]any{
+			"sub_session_id": sessionID.String(),
+			"error":          err.Error(),
+		})
+		return formatSubAgentParseFailed(), nil
+	}
+
+	resultText := extractTextFromContent(content)
+	if resultText == "" {
+		resultText = formatSubAgentNoOutput()
+	}
+	return resultText, nil
 }

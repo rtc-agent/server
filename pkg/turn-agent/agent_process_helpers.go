@@ -193,6 +193,227 @@ func (a *Agent) handleInterruptExit(
 	return nil
 }
 
+// pushOrReplace pushes a work item to the manager's loop. If the loop has
+// stopped (push fails), it replaces the manager in the registry and retries.
+// Returns the (possibly replaced) manager, whether the caller is the owner,
+// and any error.
+func (a *Agent) pushOrReplace(
+	ctx context.Context,
+	mgr *SessionTurnManager,
+	isNew bool,
+	workItem TurnWorkItem,
+	sessionID, turnID, checkpointID, credential string,
+) (*SessionTurnManager, bool, error) {
+	pushed, _ := mgr.Loop().Push(workItem)
+	if pushed {
+		return mgr, isNew, nil
+	}
+
+	// Loop stopped. Try to replace the manager.
+	a.log(ctx, LogLevelInfo, "turn.push_failed_replacing", map[string]any{
+		"session_id": sessionID,
+		"turn_id":    turnID,
+	})
+
+	replacedMgr, replacedIsNew, err := a.registry.Replace(
+		ctx, a.queue, sessionID, a.workerID, turnID, checkpointID,
+		mgr, credential, a.cfg,
+		func(c context.Context, level LogLevel, msg string, fields map[string]any) {
+			a.log(c, level, msg, fields)
+		},
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("turnagent: Replace: %w", err)
+	}
+
+	if replacedIsNew {
+		isNew = true
+	}
+
+	pushed, _ = replacedMgr.Loop().Push(workItem)
+	if !pushed {
+		return nil, false, fmt.Errorf("turnagent: failed to push work item after replacement")
+	}
+
+	return replacedMgr, isNew, nil
+}
+
+// handleOwnerLifecycleEnd manages the post-loop lifecycle for the owning
+// Process call (isNew=true). It waits for the loop to exit, performs cleanup,
+// handles abandoned work, and dispatches to the appropriate turn-end handler
+// (cancel, interrupt, clean exit, or fail with optional reactive compact).
+func (a *Agent) handleOwnerLifecycleEnd(
+	ctx context.Context,
+	span trace.Span,
+	innerCtx context.Context,
+	mgr *SessionTurnManager,
+	p WorkPayload,
+	turnID string,
+	turnStart time.Time,
+	workID string,
+) error {
+	// Wait for loop to exit.
+	exitState := mgr.Wait()
+
+	// Perform cleanup (claim remaining work, release lock, remove from registry).
+	mgr.Cleanup(ctx)
+
+	// Check if the owner's own work was abandoned (pushed to the loop but never
+	// processed by OnAgentEvents). This can happen when the loop exits due to lock
+	// loss, context cancellation, or other errors before the work item is consumed.
+	// The work is still in "processing" state in Redis — requeue it so another
+	// worker can pick it up.
+	if mgr.Tracker().IsAbandoned(workID) {
+		a.log(ctx, LogLevelWarn, "turn.owner_work_abandoned", map[string]any{
+			"session_id": p.SessionID,
+			"turn_id":    turnID,
+			"work_id":    workID,
+			"message":    "owner's work was not processed before loop exited, requeuing",
+		})
+		if reErr := a.queue.RequeueWork(context.Background(), workID); reErr != nil {
+			a.log(ctx, LogLevelWarn, "turn.requeue_owner_failed", map[string]any{
+				"work_id": workID,
+				"error":   reErr.Error(),
+			})
+		}
+	}
+
+	a.log(ctx, LogLevelInfo, "turn.loop_exited", map[string]any{
+		"session_id":  p.SessionID,
+		"turn_id":     turnID,
+		"work_kind":   string(p.Kind),
+		"exit_reason": fmt.Sprintf("%v", exitState.ExitReason),
+		"has_error":   exitState.ExitReason != nil,
+	})
+
+	exitReason := exitState.ExitReason
+	turnDuration := time.Since(turnStart)
+
+	if mgr.IsCancelledByQueue() {
+		a.recordTurnEnd(ctx, span, p.SessionID, turnID, string(p.Kind), turnDuration, "cancel", nil)
+		_ = a.cfg.CancelTurn(ctx, turnID, mgr.CancelReason())
+		return nil
+	}
+
+	if errors.Is(innerCtx.Err(), context.Canceled) && ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	switch {
+	case exitReason == nil:
+		a.log(ctx, LogLevelInfo, "turn.clean_exit", map[string]any{
+			"session_id": p.SessionID,
+			"turn_id":    turnID,
+			"message":    "calling CompleteTurn",
+		})
+		a.recordTurnEnd(ctx, span, p.SessionID, turnID, string(p.Kind), turnDuration, "success", nil)
+		if err := a.cfg.CompleteTurn(ctx, p.SessionID, turnID, mgr.LastMessage()); err != nil {
+			a.log(ctx, LogLevelError, "turn.complete_callback_failed", map[string]any{
+				"session_id": p.SessionID,
+				"turn_id":    turnID,
+				"error":      err.Error(),
+			})
+		}
+		return nil
+
+	case isInterruptError(exitReason):
+		return a.handleInterruptExit(ctx, span, exitReason, p.SessionID, turnID)
+
+	default:
+		// Reactive compact: prompt-too-long retry logic.
+		if IsPromptTooLongError(exitReason) && a.cfg.RecoverFromPromptTooLong != nil {
+			if recovered := a.tryReactiveCompactRecovery(ctx, span, p, turnID, turnDuration, exitReason); recovered {
+				return nil
+			}
+		}
+
+		// Attempts exhausted or non-prompt-too-long: execute original FailTurn logic.
+		a.recordTurnEnd(ctx, span, p.SessionID, turnID, string(p.Kind), turnDuration, "fail", exitReason)
+		if err := a.cfg.FailTurn(ctx, turnID, exitReason); err != nil {
+			a.log(ctx, LogLevelError, "turn.fail_callback_failed", map[string]any{
+				"session_id": p.SessionID,
+				"turn_id":    turnID,
+				"error":      err.Error(),
+			})
+		}
+		return exitReason
+	}
+}
+
+// tryReactiveCompactRecovery attempts to recover from a prompt-too-long error
+// by running the first compression attempt and publishing a new work item.
+// Returns true if recovery was successfully published (caller should return nil
+// to let rtc-queue mark the current work complete). Returns false if the step
+// failed.
+//
+// NOTE: Although MaxReactiveCompactAttempts may be > 1, the current escalation
+// strategy (L1→L2→L3) is driven by recoverFromPromptTooLong internally via the
+// attempt parameter. We only need one outer cycle because each Process restart
+// creates a fresh TurnLoop that will invoke tryReactiveCompactRecovery again if
+// the prompt is still too long.
+func (a *Agent) tryReactiveCompactRecovery(
+	ctx context.Context,
+	span trace.Span,
+	p WorkPayload,
+	turnID string,
+	turnDuration time.Duration,
+	exitReason error,
+) bool {
+	attempt := 1
+	a.log(ctx, LogLevelWarn, "turn.prompt_too_long_recovering", map[string]any{
+		"session_id": p.SessionID,
+		"turn_id":    turnID,
+		"attempt":    attempt,
+		"max":        a.cfg.MaxReactiveCompactAttempts,
+	})
+
+	// Step 1: call reactive compact callback to compress context.
+	if recoverErr := a.cfg.RecoverFromPromptTooLong(ctx, p.SessionID, attempt); recoverErr != nil {
+		a.log(ctx, LogLevelError, "turn.reactive_compact_failed", map[string]any{
+			"error": recoverErr.Error(),
+		})
+		return false
+	}
+
+	// Step 2: insert "compressing" feedback message.
+	if a.cfg.InsertFeedbackMessage != nil {
+		_ = a.cfg.InsertFeedbackMessage(ctx, p.SessionID, turnID,
+			"context",
+			"上下文超出限制",
+			"对话内容太长，系统正在自动压缩后重试。请稍等片刻。",
+			true, "")
+	}
+
+	// Step 3: end current Turn (FailTurn must be before Publish).
+	// Use WithSkipErrorMessage to prevent failTurn callback from
+	// inserting a duplicate error message.
+	a.recordTurnEnd(ctx, span, p.SessionID, turnID, string(p.Kind), turnDuration, "failed", fmt.Errorf("prompt_too_long_recovering"))
+	skipCtx := WithSkipErrorMessage(ctx)
+	if err := a.cfg.FailTurn(skipCtx, turnID, exitReason); err != nil {
+		// NOTE: Unlike the normal FailTurn path, we log but do NOT propagate
+		// this error. The reactive compact path has already compressed the
+		// context and is about to publish a new work item; stopping here would
+		// waste the compression work and leave the user stuck.
+		a.log(ctx, LogLevelError, "turn.fail_callback_failed", map[string]any{
+			"error": err.Error(),
+		})
+	}
+
+	// Step 4: publish submit work item to trigger a new Process lifecycle.
+	// Use context.Background() because ctx may be cancelled.
+	payload := string(MarshalSubmitPayload(p.SessionID, attempt))
+	if _, err := a.queue.Publish(context.Background(), p.SessionID, payload, 100); err != nil {
+		a.log(ctx, LogLevelError, "turn.submit_publish_failed", map[string]any{
+			"error":   err.Error(),
+			"attempt": attempt,
+		})
+		return false
+	}
+
+	// Recovery published successfully.
+	return true
+}
+
 // resolveTurnID obtains a turnID for the given work item based on its kind.
 // For WorkKindSubmit it creates a new turn; for WorkKindResume it looks up the
 // existing turn. Returns ErrNoActiveTurn (unwrapped) when a resume target is

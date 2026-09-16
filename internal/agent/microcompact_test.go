@@ -72,37 +72,47 @@ func TestMicrocompactMessages_IdleUser_ClearsOld(t *testing.T) {
 	}
 }
 
-func TestMicrocompactMessages_NonCompactableTool(t *testing.T) {
-	// ls is not in CompactableTools -> should not be cleared
+func TestMicrocompactMessages_EdgeCases(t *testing.T) {
 	now := time.Now()
-	msgs := []*turnagent.Message{
-		{Role: turnagent.RoleAssistant, Content: "call",
-			ToolCalls: []turnagent.ToolCall{{ID: "tc1", Name: "ls"}},
-			CreatedAt: now.Add(-2 * time.Hour)},
-		{Role: turnagent.RoleTool, Content: "dir listing", ToolName: "ls", ToolCallID: "tc1",
-			CreatedAt: now.Add(-2 * time.Hour)},
-	}
-	cfg := MicrocompactConfig{GapThresholdMinutes: 60, KeepRecent: 1}
-	got := microcompactMessages(msgs, cfg)
-	if got[1].Content != "dir listing" {
-		t.Errorf("ls tool result should not be compacted, got %q", got[1].Content)
-	}
-}
 
-func TestMicrocompactMessages_KeepRecentClampedToAtLeast1(t *testing.T) {
-	// KeepRecent=0 should still keep at least 1
-	now := time.Now()
-	msgs := []*turnagent.Message{
-		{Role: turnagent.RoleAssistant, Content: "call",
-			ToolCalls: []turnagent.ToolCall{{ID: "tc1", Name: "read"}},
-			CreatedAt: now.Add(-2 * time.Hour)},
-		{Role: turnagent.RoleTool, Content: "result", ToolName: "read", ToolCallID: "tc1",
-			CreatedAt: now.Add(-2 * time.Hour)},
+	tests := []struct {
+		name            string
+		toolName        string
+		content         string
+		keepRecent      int
+		expectedContent string
+	}{
+		{
+			name:            "non-compactable tool is preserved",
+			toolName:        "ls",
+			content:         "dir listing",
+			keepRecent:      1,
+			expectedContent: "dir listing",
+		},
+		{
+			name:            "KeepRecent=0 still keeps the only result",
+			toolName:        "read",
+			content:         "result",
+			keepRecent:      0,
+			expectedContent: "result",
+		},
 	}
-	cfg := MicrocompactConfig{GapThresholdMinutes: 60, KeepRecent: 0}
-	got := microcompactMessages(msgs, cfg)
-	if got[1].Content != "result" {
-		t.Errorf("with 1 tool result and KeepRecent=0, should keep it, got %q", got[1].Content)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msgs := []*turnagent.Message{
+				{Role: turnagent.RoleAssistant, Content: "call",
+					ToolCalls: []turnagent.ToolCall{{ID: "tc1", Name: tt.toolName}},
+					CreatedAt: now.Add(-2 * time.Hour)},
+				{Role: turnagent.RoleTool, Content: tt.content, ToolName: tt.toolName, ToolCallID: "tc1",
+					CreatedAt: now.Add(-2 * time.Hour)},
+			}
+			cfg := MicrocompactConfig{GapThresholdMinutes: 60, KeepRecent: tt.keepRecent}
+			got := microcompactMessages(msgs, cfg)
+			if got[1].Content != tt.expectedContent {
+				t.Errorf("expected %q, got %q", tt.expectedContent, got[1].Content)
+			}
+		})
 	}
 }
 

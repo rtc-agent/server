@@ -30,28 +30,8 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 	})
 
 	var maxUsage *schema.TokenUsage
-	updateMaxUsage := func(usage *schema.TokenUsage) {
-		if usage == nil {
-			return
-		}
-		if maxUsage == nil {
-			maxUsage = &schema.TokenUsage{}
-		}
-		if usage.PromptTokens > maxUsage.PromptTokens {
-			maxUsage.PromptTokens = usage.PromptTokens
-		}
-		if usage.CompletionTokens > maxUsage.CompletionTokens {
-			maxUsage.CompletionTokens = usage.CompletionTokens
-		}
-		if usage.TotalTokens > maxUsage.TotalTokens {
-			maxUsage.TotalTokens = usage.TotalTokens
-		}
-		if usage.PromptTokenDetails.CachedTokens > maxUsage.PromptTokenDetails.CachedTokens {
-			maxUsage.PromptTokenDetails.CachedTokens = usage.PromptTokenDetails.CachedTokens
-		}
-		if usage.CompletionTokensDetails.ReasoningTokens > maxUsage.CompletionTokensDetails.ReasoningTokens {
-			maxUsage.CompletionTokensDetails.ReasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
-		}
+	updateMax := func(usage *schema.TokenUsage) {
+		maxUsage = mergeMaxTokenUsage(maxUsage, usage)
 	}
 
 	// Accumulate streamed content for lastMessage tracking (Sub Agent support)
@@ -75,58 +55,15 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 		}
 
 		if res.Err != nil {
-			if errors.Is(res.Err, context.Canceled) || errors.Is(res.Err, context.DeadlineExceeded) {
-				mgr.log(ctx, LogLevelInfo, "stream.ctx_cancelled", map[string]any{
-					"session_id": mgr.sessionID,
-					"turn_id":    turnID,
-				})
-				return res.Err
-			}
-			if errors.Is(res.Err, io.EOF) {
-				// For assistant messages, set lastMessage from accumulated content
-				// This is needed for Sub Agent support to report the final result
-				if role == string(schema.Assistant) {
-					content := streamedContent.String()
-					reasoning := streamedReasoningContent.String()
-					if content != "" || reasoning != "" {
-						mgr.setLastMessage(&Message{
-							Role:             role,
-							Content:          content,
-							ReasoningContent: reasoning,
-						})
-					}
-				}
-				var aggregatedTokenUsage *TokenUsage
-				if maxUsage != nil {
-					aggregatedTokenUsage = extractTokenUsage(maxUsage)
-				}
-				return mgr.cfg.PublishEvent(ctx, mgr.sessionID, turnID, &Event{
-					Kind:       EventKindStreamEnd,
-					AgentName:  agentName,
-					Role:       role,
-					ToolName:   toolName,
-					TokenUsage: aggregatedTokenUsage,
-				})
-			}
-			var cancelErr *adk.CancelError
-			if errors.As(res.Err, &cancelErr) {
-				return nil
-			}
-			if pubErr := mgr.cfg.PublishEvent(ctx, mgr.sessionID, turnID, &Event{
-				Kind:      EventKindError,
-				AgentName: agentName,
-				Err:       res.Err,
-			}); pubErr != nil {
-				return pubErr
-			}
-			return res.Err
+			return mgr.handleStreamRecvError(ctx, res.Err, turnID, agentName, role, toolName, maxUsage,
+				&streamedContent, &streamedReasoningContent)
 		}
 
 		var finishReason string
 		var tokenUsage *TokenUsage
 		if res.Msg.ResponseMeta != nil {
 			finishReason = res.Msg.ResponseMeta.FinishReason
-			updateMaxUsage(res.Msg.ResponseMeta.Usage)
+			updateMax(res.Msg.ResponseMeta.Usage)
 			if res.Msg.ResponseMeta.Usage != nil {
 				tokenUsage = extractTokenUsage(res.Msg.ResponseMeta.Usage)
 			}
@@ -151,4 +88,89 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 			return err
 		}
 	}
+}
+
+// handleStreamRecvError processes errors from stream.Recv, dispatching to the
+// appropriate exit path (EOF, cancel, context error, or generic error).
+func (mgr *SessionTurnManager) handleStreamRecvError(
+	ctx context.Context, recvErr error,
+	turnID, agentName, role, toolName string,
+	maxUsage *schema.TokenUsage,
+	streamedContent, streamedReasoning *strings.Builder,
+) error {
+	if errors.Is(recvErr, context.Canceled) || errors.Is(recvErr, context.DeadlineExceeded) {
+		mgr.log(ctx, LogLevelInfo, "stream.ctx_cancelled", map[string]any{
+			"session_id": mgr.sessionID,
+			"turn_id":    turnID,
+		})
+		return recvErr
+	}
+
+	if errors.Is(recvErr, io.EOF) {
+		// For assistant messages, set lastMessage from accumulated content
+		// (needed for Sub Agent support to report the final result).
+		if role == string(schema.Assistant) {
+			content := streamedContent.String()
+			reasoning := streamedReasoning.String()
+			if content != "" || reasoning != "" {
+				mgr.setLastMessage(&Message{
+					Role:             role,
+					Content:          content,
+					ReasoningContent: reasoning,
+				})
+			}
+		}
+		var aggregatedTokenUsage *TokenUsage
+		if maxUsage != nil {
+			aggregatedTokenUsage = extractTokenUsage(maxUsage)
+		}
+		return mgr.cfg.PublishEvent(ctx, mgr.sessionID, turnID, &Event{
+			Kind:       EventKindStreamEnd,
+			AgentName:  agentName,
+			Role:       role,
+			ToolName:   toolName,
+			TokenUsage: aggregatedTokenUsage,
+		})
+	}
+
+	var cancelErr *adk.CancelError
+	if errors.As(recvErr, &cancelErr) {
+		return nil
+	}
+
+	if pubErr := mgr.cfg.PublishEvent(ctx, mgr.sessionID, turnID, &Event{
+		Kind:      EventKindError,
+		AgentName: agentName,
+		Err:       recvErr,
+	}); pubErr != nil {
+		return pubErr
+	}
+	return recvErr
+}
+
+// mergeMaxTokenUsage merges src into dst, keeping the maximum of each field.
+// Returns dst (may allocate a new TokenUsage if dst is nil and src is non-nil).
+func mergeMaxTokenUsage(dst, src *schema.TokenUsage) *schema.TokenUsage {
+	if src == nil {
+		return dst
+	}
+	if dst == nil {
+		dst = &schema.TokenUsage{}
+	}
+	if src.PromptTokens > dst.PromptTokens {
+		dst.PromptTokens = src.PromptTokens
+	}
+	if src.CompletionTokens > dst.CompletionTokens {
+		dst.CompletionTokens = src.CompletionTokens
+	}
+	if src.TotalTokens > dst.TotalTokens {
+		dst.TotalTokens = src.TotalTokens
+	}
+	if src.PromptTokenDetails.CachedTokens > dst.PromptTokenDetails.CachedTokens {
+		dst.PromptTokenDetails.CachedTokens = src.PromptTokenDetails.CachedTokens
+	}
+	if src.CompletionTokensDetails.ReasoningTokens > dst.CompletionTokensDetails.ReasoningTokens {
+		dst.CompletionTokensDetails.ReasoningTokens = src.CompletionTokensDetails.ReasoningTokens
+	}
+	return dst
 }

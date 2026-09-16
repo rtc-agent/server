@@ -138,7 +138,9 @@ type completeGoalArgs struct {
 	Reason string `json:"reason"`
 }
 
-type completeGoalResult struct {
+// goalResult is the JSON returned to LLM for both complete_goal and
+// cancel_goal tools. Both produce structurally identical output.
+type goalResult struct {
 	ID             string           `json:"id"`
 	Condition      string           `json:"condition"`
 	Status         model.GoalStatus `json:"status"`
@@ -168,54 +170,7 @@ func (t *completeGoalTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if args.Reason == "" {
 		return "Error: reason is required and cannot be empty", nil
 	}
-
-	goal, err := t.helpers.deps.GoalRepo.FindActive(ctx, t.session.ID)
-	if err != nil {
-		return "", fmt.Errorf("complete_goal: find active goal: %w", err)
-	}
-	if goal == nil {
-		return "Error: no active goal to complete", nil
-	}
-
-	updateFields := map[string]any{
-		"status":      model.GoalStatusCompleted,
-		"last_reason": args.Reason,
-	}
-	if err := t.helpers.deps.GoalRepo.Update(ctx, goal.ID, updateFields); err != nil {
-		return "", fmt.Errorf("complete_goal: update: %w", err)
-	}
-
-	result := completeGoalResult{
-		ID:             goal.ID.String(),
-		Condition:      goal.Condition,
-		Status:         model.GoalStatusCompleted,
-		Reason:         args.Reason,
-		CompletedTurns: goal.CompletedTurns,
-	}
-	resultJSON, err := mustMarshalJSON(result)
-	if err != nil {
-		return "", fmt.Errorf("complete_goal: marshal result: %w", err)
-	}
-
-	if err := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "complete_goal",
-		ArgumentsInJSON: argumentsInJSON,
-		ResultJSON:      resultJSON,
-	}); err != nil {
-		return "", fmt.Errorf("complete_goal: publish messages: %w", err)
-	}
-
-	t.helpers.logger.Info(ctx, "completeGoal.completed", map[string]any{
-		"session_id": t.session.ID.String(),
-		"goal_id":    goal.ID.String(),
-		"reason":     args.Reason,
-	})
-
-	return resultJSON, nil
+	return finalizeGoalStatus(ctx, t.helpers, t.session, t.turnID, "complete_goal", "completeGoal.completed", model.GoalStatusCompleted, args.Reason, "no active goal to complete", argumentsInJSON)
 }
 
 // ---------------------------------------------------------------------------
@@ -230,14 +185,6 @@ type cancelGoalTool struct {
 
 type cancelGoalArgs struct {
 	Reason string `json:"reason"`
-}
-
-type cancelGoalResult struct {
-	ID             string           `json:"id"`
-	Condition      string           `json:"condition"`
-	Status         model.GoalStatus `json:"status"`
-	Reason         string           `json:"reason"`
-	CompletedTurns int              `json:"completed_turns"`
 }
 
 func (t *cancelGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -262,51 +209,74 @@ func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if args.Reason == "" {
 		return "Error: reason is required and cannot be empty", nil
 	}
+	return finalizeGoalStatus(ctx, t.helpers, t.session, t.turnID, "cancel_goal", "cancelGoal.completed", model.GoalStatusCancelled, args.Reason, "no active goal to cancel", argumentsInJSON)
+}
 
-	goal, err := t.helpers.deps.GoalRepo.FindActive(ctx, t.session.ID)
+// ---------------------------------------------------------------------------
+// finalizeGoalStatus — shared implementation for complete/cancel goal tools
+// ---------------------------------------------------------------------------
+
+// finalizeGoalStatus finds the active goal, updates its status, publishes tool
+// result messages, and returns the JSON-serialized result.
+//
+// Both complete_goal and cancel_goal share identical control flow; only the
+// target status, log event name, and "not found" message differ.
+func finalizeGoalStatus(
+	ctx context.Context,
+	h *helpers,
+	session *model.Session,
+	turnID uuid.UUID,
+	toolName string,
+	logEvent string,
+	status model.GoalStatus,
+	reason string,
+	notFoundMsg string,
+	argumentsInJSON string,
+) (string, error) {
+	goal, err := h.deps.GoalRepo.FindActive(ctx, session.ID)
 	if err != nil {
-		return "", fmt.Errorf("cancel_goal: find active goal: %w", err)
+		return "", fmt.Errorf("%s: find active goal: %w", toolName, err)
 	}
 	if goal == nil {
-		return "Error: no active goal to cancel", nil
+		return fmt.Sprintf("Error: %s", notFoundMsg), nil
 	}
 
 	updateFields := map[string]any{
-		"status":      model.GoalStatusCancelled,
-		"last_reason": args.Reason,
+		"status":      status,
+		"last_reason": reason,
 	}
-	if err := t.helpers.deps.GoalRepo.Update(ctx, goal.ID, updateFields); err != nil {
-		return "", fmt.Errorf("cancel_goal: update: %w", err)
+	if err := h.deps.GoalRepo.Update(ctx, goal.ID, updateFields); err != nil {
+		return "", fmt.Errorf("%s: update: %w", toolName, err)
 	}
 
-	result := cancelGoalResult{
+	result := goalResult{
 		ID:             goal.ID.String(),
 		Condition:      goal.Condition,
-		Status:         model.GoalStatusCancelled,
-		Reason:         args.Reason,
+		Status:         status,
+		Reason:         reason,
 		CompletedTurns: goal.CompletedTurns,
 	}
 	resultJSON, err := mustMarshalJSON(result)
 	if err != nil {
-		return "", fmt.Errorf("cancel_goal: marshal result: %w", err)
+		return "", fmt.Errorf("%s: marshal result: %w", toolName, err)
 	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "cancel_goal",
+		Helpers:         h,
+		SessionID:       session.ID,
+		OwnerRefID:      session.OwnerRefID,
+		TurnID:          turnID,
+		ToolName:        toolName,
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
-		return "", fmt.Errorf("cancel_goal: publish messages: %w", err)
+		return "", fmt.Errorf("%s: publish messages: %w", toolName, err)
 	}
 
-	t.helpers.logger.Info(ctx, "cancelGoal.completed", map[string]any{
-		"session_id": t.session.ID.String(),
+	h.logger.Info(ctx, logEvent, map[string]any{
+		"session_id": session.ID.String(),
 		"goal_id":    goal.ID.String(),
-		"reason":     args.Reason,
+		"reason":     reason,
 	})
 
 	return resultJSON, nil

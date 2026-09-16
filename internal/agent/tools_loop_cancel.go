@@ -24,7 +24,9 @@ type cancelLoopArgs struct {
 	Reason string `json:"reason"`
 }
 
-type cancelLoopResult struct {
+// loopResult is the JSON-serializable response for both cancel_loop and
+// complete_loop tools. Both produce structurally identical output.
+type loopResult struct {
 	ID             string           `json:"id"`
 	Prompt         string           `json:"prompt"`
 	Status         model.LoopStatus `json:"status"`
@@ -54,58 +56,7 @@ func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if args.Reason == "" {
 		return "Error: reason is required and cannot be empty", nil
 	}
-
-	loop, err := t.helpers.deps.LoopRepo.FindActive(ctx, t.session.ID)
-	if err != nil {
-		return "", fmt.Errorf("cancel_loop: find active loop: %w", err)
-	}
-	if loop == nil {
-		return "Error: no active loop to cancel", nil
-	}
-
-	updateFields := map[string]any{
-		"status":      model.LoopStatusCancelled,
-		"last_reason": args.Reason,
-	}
-
-	// Cancel the scheduled task if TaskScheduler is available.
-	cancelLoopAsynqTask(ctx, t.helpers.deps, t.helpers.logger, loop, updateFields)
-
-	if err := t.helpers.deps.LoopRepo.Update(ctx, loop.ID, updateFields); err != nil {
-		return "", fmt.Errorf("cancel_loop: update: %w", err)
-	}
-
-	result := cancelLoopResult{
-		ID:             loop.ID.String(),
-		Prompt:         loop.Prompt,
-		Status:         model.LoopStatusCancelled,
-		Reason:         args.Reason,
-		CompletedTurns: loop.CompletedTurns,
-	}
-	resultJSON, err := mustMarshalJSON(result)
-	if err != nil {
-		return "", fmt.Errorf("cancel_loop: marshal result: %w", err)
-	}
-
-	if err := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "cancel_loop",
-		ArgumentsInJSON: argumentsInJSON,
-		ResultJSON:      resultJSON,
-	}); err != nil {
-		return "", fmt.Errorf("cancel_loop: publish messages: %w", err)
-	}
-
-	t.helpers.logger.Info(ctx, "cancelLoop.completed", map[string]any{
-		"session_id": t.session.ID.String(),
-		"loop_id":    loop.ID.String(),
-		"reason":     args.Reason,
-	})
-
-	return resultJSON, nil
+	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "cancel_loop", "cancelLoop.completed", model.LoopStatusCancelled, args.Reason, "no active loop to cancel", argumentsInJSON)
 }
 
 // ---------------------------------------------------------------------------
@@ -120,14 +71,6 @@ type completeLoopTool struct {
 
 type completeLoopArgs struct {
 	Reason string `json:"reason"`
-}
-
-type completeLoopResult struct {
-	ID             string           `json:"id"`
-	Prompt         string           `json:"prompt"`
-	Status         model.LoopStatus `json:"status"`
-	Reason         string           `json:"reason"`
-	CompletedTurns int              `json:"completed_turns"`
 }
 
 func (t *completeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -152,55 +95,79 @@ func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if args.Reason == "" {
 		return "Error: reason is required and cannot be empty", nil
 	}
+	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "complete_loop", "completeLoop.completed", model.LoopStatusCompleted, args.Reason, "no active loop to complete", argumentsInJSON)
+}
 
-	loop, err := t.helpers.deps.LoopRepo.FindActive(ctx, t.session.ID)
+// ---------------------------------------------------------------------------
+// finalizeLoopStatus — shared implementation for cancel/complete loop tools
+// ---------------------------------------------------------------------------
+
+// finalizeLoopStatus finds the active loop, updates its status to the given
+// value, cancels any scheduled asynq task, publishes tool result messages,
+// and returns the JSON-serialized result.
+//
+// Both cancel_loop and complete_loop share identical control flow; only the
+// target status, log event name, and "not found" message differ.
+func finalizeLoopStatus(
+	ctx context.Context,
+	h *helpers,
+	session *model.Session,
+	turnID uuid.UUID,
+	toolName string,
+	logEvent string,
+	status model.LoopStatus,
+	reason string,
+	notFoundMsg string,
+	argumentsInJSON string,
+) (string, error) {
+	loop, err := h.deps.LoopRepo.FindActive(ctx, session.ID)
 	if err != nil {
-		return "", fmt.Errorf("complete_loop: find active loop: %w", err)
+		return "", fmt.Errorf("%s: find active loop: %w", toolName, err)
 	}
 	if loop == nil {
-		return "Error: no active loop to complete", nil
+		return fmt.Sprintf("Error: %s", notFoundMsg), nil
 	}
 
 	updateFields := map[string]any{
-		"status":      model.LoopStatusCompleted,
-		"last_reason": args.Reason,
+		"status":      status,
+		"last_reason": reason,
 	}
 
 	// Cancel the scheduled task if TaskScheduler is available.
-	cancelLoopAsynqTask(ctx, t.helpers.deps, t.helpers.logger, loop, updateFields)
+	cancelLoopAsynqTask(ctx, h.deps, h.logger, loop, updateFields)
 
-	if err := t.helpers.deps.LoopRepo.Update(ctx, loop.ID, updateFields); err != nil {
-		return "", fmt.Errorf("complete_loop: update: %w", err)
+	if err := h.deps.LoopRepo.Update(ctx, loop.ID, updateFields); err != nil {
+		return "", fmt.Errorf("%s: update: %w", toolName, err)
 	}
 
-	result := completeLoopResult{
+	result := loopResult{
 		ID:             loop.ID.String(),
 		Prompt:         loop.Prompt,
-		Status:         model.LoopStatusCompleted,
-		Reason:         args.Reason,
+		Status:         status,
+		Reason:         reason,
 		CompletedTurns: loop.CompletedTurns,
 	}
 	resultJSON, err := mustMarshalJSON(result)
 	if err != nil {
-		return "", fmt.Errorf("complete_loop: marshal result: %w", err)
+		return "", fmt.Errorf("%s: marshal result: %w", toolName, err)
 	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "complete_loop",
+		Helpers:         h,
+		SessionID:       session.ID,
+		OwnerRefID:      session.OwnerRefID,
+		TurnID:          turnID,
+		ToolName:        toolName,
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
-		return "", fmt.Errorf("complete_loop: publish messages: %w", err)
+		return "", fmt.Errorf("%s: publish messages: %w", toolName, err)
 	}
 
-	t.helpers.logger.Info(ctx, "completeLoop.completed", map[string]any{
-		"session_id": t.session.ID.String(),
+	h.logger.Info(ctx, logEvent, map[string]any{
+		"session_id": session.ID.String(),
 		"loop_id":    loop.ID.String(),
-		"reason":     args.Reason,
+		"reason":     reason,
 	})
 
 	return resultJSON, nil
