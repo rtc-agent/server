@@ -136,7 +136,24 @@ func (a *Agent) handleInterruptExit(
 	sessionID, turnID string,
 ) error {
 	var iErr *adk.InterruptError
-	_ = errors.As(exitReason, &iErr)
+	if !errors.As(exitReason, &iErr) || iErr == nil {
+		// Defensive: caller guards with isInterruptError, so this should
+		// never happen. But handle it gracefully to prevent nil dereference
+		// if the guard is ever relaxed.
+		a.log(ctx, LogLevelError, "handle_interrupt_exit.not_interrupt_error", map[string]any{
+			"session_id": sessionID,
+			"turn_id":    turnID,
+		})
+		a.recordTurnEnd(ctx, span, sessionID, turnID, "", 0, "fail", exitReason)
+		if err := a.cfg.FailTurn(ctx, turnID, exitReason); err != nil {
+			a.log(ctx, LogLevelError, "turn.fail_callback_failed", map[string]any{
+				"session_id": sessionID,
+				"turn_id":    turnID,
+				"error":      err.Error(),
+			})
+		}
+		return exitReason
+	}
 	root := rootInterruptCtx(iErr.InterruptContexts)
 	if root == nil {
 		a.recordTurnEnd(ctx, span, sessionID, turnID, "", 0, "fail", exitReason)

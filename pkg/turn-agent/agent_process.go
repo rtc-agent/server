@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/eino/adk"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // isInterruptError checks if the error is an eino InterruptError.
@@ -90,7 +91,14 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// Create turnCtx with its own cancel so we can cancel the entire turn
 	// (including the LLM call running in mgr.Run) when StopTurn is called.
 	turnCtx, turnCancel := context.WithCancel(ctx)
-	turnCtx, turnSpan := a.startSpanIfEnabled(turnCtx, "turn")
+	var turnSpan trace.Span
+	turnCtx, turnSpan = a.startSpanIfEnabled(turnCtx, "turn")
+	// Enrich context with sessionID so ALL callbacks (not just beginTurn) can
+	// fall back to it when DB lookups fail (e.g., failTurn/cancelTurn session
+	// status update). Without this, a GetByID failure after a terminal turn
+	// status update leaves the session stuck at "active" until the stale
+	// turn scanner runs (5-30 minutes).
+	turnCtx = WithSessionID(turnCtx, p.SessionID)
 	defer turnCancel()
 	defer turnSpan.End()
 	turnSpan.SetAttributes(

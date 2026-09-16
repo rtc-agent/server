@@ -374,9 +374,17 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
+		// Fallback: extract sessionID from context (set by agent_process.go
+		// via WithSessionID). Ensures event publishing still works when DB
+		// lookup fails.
+		sessionIDStr := turnagent.SessionIDFromContext(ctx)
+		if sid, parseErr := uuid.Parse(sessionIDStr); parseErr == nil {
+			h.batchLifecyclePublish(ctx, tid, sid, "interrupt")
+		}
 		h.logger.Warn(ctx, "interruptTurn.load_turn_failed", map[string]any{
-			"turn_id": turnID,
-			"error":   lookupErr.Error(),
+			"turn_id":  turnID,
+			"error":    lookupErr.Error(),
+			"fallback": sessionIDStr != "",
 		})
 		return nil
 	}
@@ -420,9 +428,16 @@ func (h *helpers) resumeTurn(ctx context.Context, turnID string) error {
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
+		// Fallback: extract sessionID from context (set by agent_process.go
+		// via WithSessionID). Session status was already updated above.
+		sessionIDStr := turnagent.SessionIDFromContext(ctx)
+		if sid, parseErr := uuid.Parse(sessionIDStr); parseErr == nil {
+			h.batchLifecyclePublish(ctx, tid, sid, "resume")
+		}
 		h.logger.Warn(ctx, "resumeTurn.load_turn_failed", map[string]any{
-			"turn_id": turnID,
-			"error":   lookupErr.Error(),
+			"turn_id":  turnID,
+			"error":    lookupErr.Error(),
+			"fallback": sessionIDStr != "",
 		})
 		return nil
 	}
@@ -464,9 +479,25 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
+		// Fallback: extract sessionID from context (set by agent_process.go
+		// via WithSessionID). Ensures session status update and event
+		// publishing still work when DB lookup fails. Without this, the
+		// session stays stuck at "active" until the stale turn scanner
+		// runs (5-30 minutes).
+		sessionIDStr := turnagent.SessionIDFromContext(ctx)
+		if sid, parseErr := uuid.Parse(sessionIDStr); parseErr == nil {
+			if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusIdle); err != nil {
+				h.logger.Warn(ctx, "failTurn.update_session_status_failed_fallback", map[string]any{
+					"session_id": sid.String(),
+					"error":      err.Error(),
+				})
+			}
+			h.batchLifecyclePublish(ctx, tid, sid, "fail")
+		}
 		h.logger.Warn(ctx, "failTurn.load_turn_failed", map[string]any{
-			"turn_id": turnID,
-			"error":   lookupErr.Error(),
+			"turn_id":  turnID,
+			"error":    lookupErr.Error(),
+			"fallback": sessionIDStr != "",
 		})
 		return nil
 	}
@@ -536,9 +567,46 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
+		// Fallback: extract sessionID from context (set by agent_process.go
+		// via WithSessionID). Ensures session status update, event publishing,
+		// and cascade cancel still work when DB lookup fails. Without this,
+		// the session stays stuck at "active" until the stale turn scanner
+		// runs (5-30 minutes).
+		sessionIDStr := turnagent.SessionIDFromContext(ctx)
+		if sid, parseErr := uuid.Parse(sessionIDStr); parseErr == nil {
+			if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusIdle); err != nil {
+				h.logger.Warn(ctx, "cancelTurn.update_session_status_failed_fallback", map[string]any{
+					"session_id": sid.String(),
+					"error":      err.Error(),
+				})
+			}
+			h.batchLifecyclePublish(ctx, tid, sid, "cancel")
+			// Cascade cancel: propagate to active child sessions even when
+			// GetByID failed. This prevents orphaned sub agents.
+			if h.queue != nil {
+				activeChildren, findErr := h.deps.SessionRepo.FindActiveByParent(ctx, sid)
+				if findErr == nil && len(activeChildren) > 0 {
+					h.logger.Info(ctx, "cancelTurn.cascade_cancel_start_fallback", map[string]any{
+						"turn_id":     turnID,
+						"session_id":  sid.String(),
+						"child_count": len(activeChildren),
+					})
+					for _, child := range activeChildren {
+						if err := h.queue.CancelSession(ctx, child.ID.String(), "parent session cancelled"); err != nil {
+							h.logger.Warn(ctx, "cancelTurn.cascade_cancel_failed", map[string]any{
+								"parent_session_id": sid.String(),
+								"child_session_id":  child.ID.String(),
+								"error":             err.Error(),
+							})
+						}
+					}
+				}
+			}
+		}
 		h.logger.Warn(ctx, "cancelTurn.load_turn_failed", map[string]any{
-			"turn_id": turnID,
-			"error":   lookupErr.Error(),
+			"turn_id":  turnID,
+			"error":    lookupErr.Error(),
+			"fallback": sessionIDStr != "",
 		})
 		return nil
 	}
