@@ -114,7 +114,7 @@ func (mgr *SessionTurnManager) onAgentEvents(
 				}
 				timer.Reset(eventIdleWarningTimeout)
 			case <-timer.C:
-				mgr.log(ctx, LogLevelError, "on_agent_events.idle_warning", map[string]any{
+				mgr.log(ctx, LogLevelWarn, "on_agent_events.idle_warning", map[string]any{
 					"session_id": mgr.sessionID,
 					"turn_id":    turnID,
 					"timeout":    eventIdleWarningTimeout.String(),
