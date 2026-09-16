@@ -308,16 +308,26 @@ func (h *helpers) handleMessage(ctx context.Context, sessionID uuid.UUID, turnID
 // These are errors attached to a single event in the agent's output stream,
 // not turn-level failures (which go through FailTurn). The typical action
 // is to log the error and continue; the turn may still complete successfully.
+//
+// Note: stream state is cleaned up here to prevent leaks in the sync.Map
+// when a stream error occurs between handleStreamChunk and handleStreamEnd.
 func (h *helpers) handleEventError(ctx context.Context, sessionID uuid.UUID, turnID uuid.UUID, event *turnagent.Event) error {
 	errMsg := ""
 	if event.Err != nil {
 		errMsg = event.Err.Error()
 	}
-	h.logger.Info(ctx, "handleEventError", map[string]any{
+	h.logger.Warn(ctx, "handleEventError", map[string]any{
 		"session_id": sessionID.String(),
 		"turn_id":    turnID.String(),
 		"error":      errMsg,
 	})
+
+	// Clean up per-turn stream state to prevent sync.Map leaks.
+	// On the normal path, handleStreamEnd performs this cleanup.
+	// On the error path, handleStreamEnd may not be called, so we
+	// must clean up here to avoid orphaned entries.
+	h.streamState.remove(turnID.String())
+
 	return nil
 }
 
