@@ -382,6 +382,16 @@ func NewWithDeps(
 //  3. Mark stale turns as interrupted and publish resume work items
 //  4. Release stale session locks
 
+// staleTurnStatuses is the set of turn statuses considered "stale" — i.e., the
+// turn is not in a terminal state (completed / failed / cancelled) and may be
+// stuck. Shared by both startup recovery (recoverStaleTurns) and the periodic
+// runtime scanner (periodicRecoverStaleTurns).
+var staleTurnStatuses = []string{
+	string(model.TurnStatusRunning),
+	string(model.TurnStatusPending),
+	string(model.TurnStatusInterrupted),
+}
+
 // resumeWorkPayload 是 recoverStaleTurns 发布的 resume 工作项 JSON 载体。
 // 使用 struct + json.Marshal 替代 fmt.Sprintf 拼接 JSON，
 // 避免字符串转义风险并保证字段类型安全。
@@ -391,16 +401,19 @@ type resumeWorkPayload struct {
 	InterruptID string `json:"interrupt_id"`
 }
 
+// recoverStaleTurns runs at startup to recover all stale turns left behind
+// after a crash. It finds every turn in running/pending/interrupted state,
+// marks them as interrupted, and publishes a resume work item so the agent
+// can continue. Finally, it requeues ghost work items and releases stale
+// session locks.
+//
+// Differences from periodicRecoverStaleTurns (runtime scanner):
+//   - No time thresholds — recovers ALL stale turns immediately.
+//   - No Worker liveness or checkpoint checks (no Workers connected at startup).
+//   - Publishes kind="resume" (preserving InterruptID) instead of kind="submit".
+//   - Performs ghost-work cleanup and session-lock release (runtime scanner does not).
 func (s *Server) recoverStaleTurns(ctx context.Context) {
-	// Find turns in running, pending, OR interrupted state.
-	// - running/pending: server crashed while executing
-	// - interrupted: server crashed while waiting for external input (RTC)
-	staleStatuses := []string{
-		string(model.TurnStatusRunning),
-		string(model.TurnStatusPending),
-		string(model.TurnStatusInterrupted),
-	}
-	staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurns(ctx, staleStatuses)
+	staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurns(ctx, staleTurnStatuses)
 	if err != nil {
 		logger.Error(ctx, "[Server] recoverStaleTurns: find stale turns", zap.Error(err))
 		return
@@ -535,8 +548,15 @@ func (s *Server) staleTurnScanner(ctx context.Context) {
 }
 
 // periodicRecoverStaleTurns scans for stale turns and recovers them based on
-// time thresholds. Different from recoverStaleTurns (startup recovery) in that
-// it uses time-based thresholds and checks Worker liveness.
+// time thresholds and Worker liveness. Called by the periodic staleTurnScanner.
+//
+// Differences from recoverStaleTurns (startup recovery):
+//   - Applies time thresholds (running > 10min, pending > 2min, interrupted > 30min).
+//   - Checks Worker liveness (session lock TTL) and checkpoint existence before recovery.
+//   - Per-status transitions: running → interrupted/failed, pending → failed, interrupted → cancelled.
+//   - Publishes kind="submit" via publishRecoveryWorkItem (not "resume").
+//   - Records Prometheus metrics and syncs session status after recovery.
+//   - Uses LIMIT 100 (startup uses no limit).
 func (s *Server) periodicRecoverStaleTurns(ctx context.Context) {
 	const (
 		runningThreshold     = 10 * time.Minute
@@ -545,13 +565,7 @@ func (s *Server) periodicRecoverStaleTurns(ctx context.Context) {
 		scanLimit            = 100
 	)
 
-	staleStatuses := []string{
-		string(model.TurnStatusRunning),
-		string(model.TurnStatusPending),
-		string(model.TurnStatusInterrupted),
-	}
-
-	staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurnsWithLimit(ctx, staleStatuses, scanLimit)
+	staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurnsWithLimit(ctx, staleTurnStatuses, scanLimit)
 	if err != nil {
 		logger.Error(ctx, "[Server] periodicRecoverStaleTurns: find stale turns", zap.Error(err))
 		return

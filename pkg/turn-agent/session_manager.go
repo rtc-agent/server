@@ -901,40 +901,10 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 	var streamedContent strings.Builder
 	var streamedReasoningContent strings.Builder
 
-	type recvResult struct {
-		msg *schema.Message
-		err error
-	}
-
 	for {
-		ch := make(chan recvResult, 1)
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					mgr.log(ctx, LogLevelError, "session_manager.stream_recv_panic", map[string]any{
-						"session_id": mgr.sessionID,
-						"turn_id":    turnID,
-						"panic":      fmt.Sprintf("%v", r),
-					})
-				}
-			}()
-			msg, err := stream.Recv()
-			ch <- recvResult{msg, err}
-		}()
+		res, timedOut := RecvWithTimeout(ctx, stream.Recv, StreamIdleTimeout)
 
-		idleTimer := time.NewTimer(StreamIdleTimeout)
-
-		select {
-		case <-ctx.Done():
-			idleTimer.Stop()
-			mgr.log(ctx, LogLevelInfo, "stream.ctx_cancelled", map[string]any{
-				"session_id": mgr.sessionID,
-				"turn_id":    turnID,
-			})
-			stream.Close()
-			return ctx.Err()
-
-		case <-idleTimer.C:
+		if timedOut {
 			stream.Close()
 			mgr.log(ctx, LogLevelError, "stream.idle_timeout", map[string]any{
 				"session_id": mgr.sessionID,
@@ -946,10 +916,18 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 				TurnID:    turnID,
 				Timeout:   StreamIdleTimeout,
 			}
+		}
 
-		case res := <-ch:
-			idleTimer.Stop()
-			if errors.Is(res.err, io.EOF) {
+		if res.Err != nil {
+			if errors.Is(res.Err, context.Canceled) || errors.Is(res.Err, context.DeadlineExceeded) {
+				mgr.log(ctx, LogLevelInfo, "stream.ctx_cancelled", map[string]any{
+					"session_id": mgr.sessionID,
+					"turn_id":    turnID,
+				})
+				stream.Close()
+				return res.Err
+			}
+			if errors.Is(res.Err, io.EOF) {
 				stream.Close()
 				// For assistant messages, set lastMessage from accumulated content
 				// This is needed for Sub Agent support to report the final result
@@ -976,52 +954,50 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 					TokenUsage: aggregatedTokenUsage,
 				})
 			}
-			if res.err != nil {
-				var cancelErr *adk.CancelError
-				if errors.As(res.err, &cancelErr) {
-					stream.Close()
-					return nil
-				}
+			var cancelErr *adk.CancelError
+			if errors.As(res.Err, &cancelErr) {
 				stream.Close()
-				if pubErr := mgr.cfg.PublishEvent(ctx, mgr.sessionID, turnID, &Event{
-					Kind:      EventKindError,
-					AgentName: agentName,
-					Err:       res.err,
-				}); pubErr != nil {
-					return pubErr
-				}
-				return res.err
+				return nil
 			}
+			stream.Close()
+			if pubErr := mgr.cfg.PublishEvent(ctx, mgr.sessionID, turnID, &Event{
+				Kind:      EventKindError,
+				AgentName: agentName,
+				Err:       res.Err,
+			}); pubErr != nil {
+				return pubErr
+			}
+			return res.Err
+		}
 
-			var finishReason string
-			var tokenUsage *TokenUsage
-			if res.msg.ResponseMeta != nil {
-				finishReason = res.msg.ResponseMeta.FinishReason
-				updateMaxUsage(res.msg.ResponseMeta.Usage)
-				if res.msg.ResponseMeta.Usage != nil {
-					tokenUsage = extractTokenUsage(res.msg.ResponseMeta.Usage)
-				}
+		var finishReason string
+		var tokenUsage *TokenUsage
+		if res.Msg.ResponseMeta != nil {
+			finishReason = res.Msg.ResponseMeta.FinishReason
+			updateMaxUsage(res.Msg.ResponseMeta.Usage)
+			if res.Msg.ResponseMeta.Usage != nil {
+				tokenUsage = extractTokenUsage(res.Msg.ResponseMeta.Usage)
 			}
-			// Accumulate content for lastMessage tracking
-			if res.msg.Content != "" {
-				streamedContent.WriteString(res.msg.Content)
-			}
-			if res.msg.ReasoningContent != "" {
-				streamedReasoningContent.WriteString(res.msg.ReasoningContent)
-			}
-			if err := mgr.cfg.PublishEvent(ctx, mgr.sessionID, turnID, &Event{
-				Kind:             EventKindStreamChunk,
-				AgentName:        agentName,
-				Role:             role,
-				ToolName:         toolName,
-				Content:          res.msg.Content,
-				ReasoningContent: res.msg.ReasoningContent,
-				FinishReason:     finishReason,
-				TokenUsage:       tokenUsage,
-			}); err != nil {
-				stream.Close()
-				return err
-			}
+		}
+		// Accumulate content for lastMessage tracking
+		if res.Msg.Content != "" {
+			streamedContent.WriteString(res.Msg.Content)
+		}
+		if res.Msg.ReasoningContent != "" {
+			streamedReasoningContent.WriteString(res.Msg.ReasoningContent)
+		}
+		if err := mgr.cfg.PublishEvent(ctx, mgr.sessionID, turnID, &Event{
+			Kind:             EventKindStreamChunk,
+			AgentName:        agentName,
+			Role:             role,
+			ToolName:         toolName,
+			Content:          res.Msg.Content,
+			ReasoningContent: res.Msg.ReasoningContent,
+			FinishReason:     finishReason,
+			TokenUsage:       tokenUsage,
+		}); err != nil {
+			stream.Close()
+			return err
 		}
 	}
 }

@@ -370,49 +370,32 @@ func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message,
 	var contentBuilder strings.Builder
 	var lastMsg *schema.Message
 
-	type recvResult struct {
-		msg *schema.Message
-		err error
-	}
-
 streamLoop:
 	for {
-		ch := make(chan recvResult, 1)
-		go func() {
-			msg, err := stream.Recv()
-			ch <- recvResult{msg, err}
-		}()
-
-		idleTimer := time.NewTimer(turnagent.StreamIdleTimeout)
-
-		select {
-		case <-ctx.Done():
-			idleTimer.Stop()
-			stream.Close()
-			return "", ctx.Err()
-
-		case <-idleTimer.C:
+		res, timedOut := turnagent.RecvWithTimeout(ctx, stream.Recv, turnagent.StreamIdleTimeout)
+		if timedOut {
 			stream.Close()
 			return "", &turnagent.StreamIdleTimeoutError{
 				SessionID: turnagent.SessionIDFromContext(ctx),
 				TurnID:    turnagent.TurnIDFromContext(ctx),
 				Timeout:   turnagent.StreamIdleTimeout,
 			}
-
-		case res := <-ch:
-			idleTimer.Stop()
-			if res.err != nil {
-				if errors.Is(res.err, io.EOF) {
-					break streamLoop
-				}
-				return "", fmt.Errorf("stream recv: %w", res.err)
-			}
-			if res.msg == nil {
-				continue
-			}
-			lastMsg = res.msg
-			contentBuilder.WriteString(res.msg.Content)
 		}
+		if res.Err != nil {
+			if errors.Is(res.Err, context.Canceled) || errors.Is(res.Err, context.DeadlineExceeded) {
+				stream.Close()
+				return "", res.Err
+			}
+			if errors.Is(res.Err, io.EOF) {
+				break streamLoop
+			}
+			return "", fmt.Errorf("stream recv: %w", res.Err)
+		}
+		if res.Msg == nil {
+			continue
+		}
+		lastMsg = res.Msg
+		contentBuilder.WriteString(res.Msg.Content)
 	}
 
 	content := contentBuilder.String()
@@ -453,55 +436,38 @@ func (h *helpers) summarizeMessagesStreaming(
 	var contentBuilder strings.Builder
 	var lastMsg *schema.Message
 
-	type recvResult struct {
-		msg *schema.Message
-		err error
-	}
-
 streamLoop:
 	for {
-		ch := make(chan recvResult, 1)
-		go func() {
-			msg, recvErr := stream.Recv()
-			ch <- recvResult{msg, recvErr}
-		}()
-
-		idleTimer := time.NewTimer(turnagent.StreamIdleTimeout)
-
-		select {
-		case <-ctx.Done():
-			idleTimer.Stop()
-			stream.Close()
-			return "", nil, ctx.Err()
-
-		case <-idleTimer.C:
+		res, timedOut := turnagent.RecvWithTimeout(ctx, stream.Recv, turnagent.StreamIdleTimeout)
+		if timedOut {
 			stream.Close()
 			return "", nil, &turnagent.StreamIdleTimeoutError{
 				SessionID: turnagent.SessionIDFromContext(ctx),
 				TurnID:    turnagent.TurnIDFromContext(ctx),
 				Timeout:   turnagent.StreamIdleTimeout,
 			}
-
-		case res := <-ch:
-			idleTimer.Stop()
-			if res.err != nil {
-				if res.err == io.EOF {
-					break streamLoop
-				}
-				return "", nil, fmt.Errorf("stream recv: %w", res.err)
+		}
+		if res.Err != nil {
+			if errors.Is(res.Err, context.Canceled) || errors.Is(res.Err, context.DeadlineExceeded) {
+				stream.Close()
+				return "", nil, res.Err
 			}
-			if res.msg == nil {
-				continue
+			if res.Err == io.EOF {
+				break streamLoop
 			}
-			lastMsg = res.msg
-			contentBuilder.WriteString(res.msg.Content)
+			return "", nil, fmt.Errorf("stream recv: %w", res.Err)
+		}
+		if res.Msg == nil {
+			continue
+		}
+		lastMsg = res.Msg
+		contentBuilder.WriteString(res.Msg.Content)
 
-			// Invoke chunk callback for live updates
-			if onChunk != nil && res.msg.Content != "" {
-				if cbErr := onChunk(res.msg.Content); cbErr != nil {
-					// Log but don't fail the stream
-					h.logger.Info(ctx, "summarize.on_chunk_error", map[string]any{"error": cbErr.Error()})
-				}
+		// Invoke chunk callback for live updates
+		if onChunk != nil && res.Msg.Content != "" {
+			if cbErr := onChunk(res.Msg.Content); cbErr != nil {
+				// Log but don't fail the stream
+				h.logger.Info(ctx, "summarize.on_chunk_error", map[string]any{"error": cbErr.Error()})
 			}
 		}
 	}

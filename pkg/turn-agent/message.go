@@ -16,6 +16,23 @@ const (
 	RoleTool      = "tool"
 )
 
+// FormatSystemReminder wraps content in <system-reminder> XML tags.
+//
+// This is a convention (not a type) aligned with CCHH (Claude Code):
+//   - The returned string is used as the Content of a user-role message.
+//   - The XML tags tell the LLM "this is system-level context, not user input".
+//   - No type attribute — keeps alignment with CCHH's simple tag format.
+//
+// Use cases:
+//   - Async sub-agent completion notifications (persisted to DB, triggers turn loop).
+//   - Future: deferred tools announcements (in-memory injection).
+//
+// Existing system-reminder usage (AgentPrompt, SessionMemory, PostCompact, Memory
+// formatting) remains as system-role attachments and is NOT affected by this function.
+func FormatSystemReminder(content string) string {
+	return "<system-reminder>\n" + content + "\n</system-reminder>"
+}
+
 // Cache breakpoint Extra keys for strategic cache control.
 // These keys are used to pass breakpoint markers through the conversion pipeline
 // and are consumed by the provider-specific adapter (e.g., claude_adapter.go).
