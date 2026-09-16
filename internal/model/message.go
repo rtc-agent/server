@@ -77,6 +77,29 @@ type TokenUsageUpdate struct {
 	ReasoningTokens int
 }
 
+// TokenUsage returns a TokenUsageUpdate populated from the message's
+// nullable token fields. Nil fields are treated as zero.
+// Extracted to avoid verbose copy boilerplate in fork/session operations.
+func (m *Message) TokenUsage() TokenUsageUpdate {
+	var u TokenUsageUpdate
+	if m.InputTokens != nil {
+		u.InputTokens = *m.InputTokens
+	}
+	if m.OutputTokens != nil {
+		u.OutputTokens = *m.OutputTokens
+	}
+	if m.TotalTokens != nil {
+		u.TotalTokens = *m.TotalTokens
+	}
+	if m.CachedTokens != nil {
+		u.CachedTokens = *m.CachedTokens
+	}
+	if m.ReasoningTokens != nil {
+		u.ReasoningTokens = *m.ReasoningTokens
+	}
+	return u
+}
+
 // ToProtocolMessage 将 dbmodel.Message 转换为 protocol.Message。
 // nil 输入返回零值 protocol.Message。
 func ToProtocolMessage(m *Message) protocol.Message {

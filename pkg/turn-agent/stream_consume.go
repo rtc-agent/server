@@ -31,7 +31,7 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 
 	var maxUsage *schema.TokenUsage
 	updateMax := func(usage *schema.TokenUsage) {
-		maxUsage = mergeMaxTokenUsage(maxUsage, usage)
+		maxUsage = MergeMaxTokenUsage(maxUsage, usage)
 	}
 
 	// Accumulate streamed content for lastMessage tracking (Sub Agent support)
@@ -148,9 +148,13 @@ func (mgr *SessionTurnManager) handleStreamRecvError(
 	return recvErr
 }
 
-// mergeMaxTokenUsage merges src into dst, keeping the maximum of each field.
+// MergeMaxTokenUsage merges src into dst, keeping the maximum of each field.
 // Returns dst (may allocate a new TokenUsage if dst is nil and src is non-nil).
-func mergeMaxTokenUsage(dst, src *schema.TokenUsage) *schema.TokenUsage {
+//
+// Used in both stream consumption (per-chunk aggregation) and the token
+// callback's streaming path (drainStreamAndReport). Exported so that both
+// packages share a single implementation instead of duplicating the logic.
+func MergeMaxTokenUsage(dst, src *schema.TokenUsage) *schema.TokenUsage {
 	if src == nil {
 		return dst
 	}

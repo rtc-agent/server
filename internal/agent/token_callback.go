@@ -328,6 +328,9 @@ func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.Strea
 	var thinkingContent string
 	var cachedWriteTokens int
 
+	// mergeUsage merges chunk.TokenUsage into maxUsage, keeping the maximum of
+	// each field. Parallel to turnagent.MergeMaxTokenUsage but operates on
+	// model.TokenUsage (the type used by eino's CallbackOutput).
 	mergeUsage := func(u *model.TokenUsage) {
 		if u == nil {
 			return

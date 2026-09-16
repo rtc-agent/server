@@ -97,19 +97,32 @@ func microcompactMessages(messages []*turnagent.Message, cfg MicrocompactConfig)
 		return messages
 	}
 
+	// Build a set of all compactable IDs for O(1) membership check.
+	// Non-compactable tool results (e.g., ask_user) must NOT be cleared.
 	keepSet := make(map[string]struct{}, keepRecent)
 	for _, id := range compactableIDs[len(compactableIDs)-keepRecent:] {
 		keepSet[id] = struct{}{}
 	}
 
-	// Build a set of all compactable IDs for O(1) membership check.
-	// Non-compactable tool results (e.g., ask_user) must NOT be cleared.
+	// 4. Build a new slice with cleared content for non-kept compactable tool results.
+	return clearCompactableToolResults(messages, compactableIDs, keepSet)
+}
+
+// clearCompactableToolResults builds a new message slice where non-kept
+// compactable tool results are replaced with a cleared placeholder.
+//
+// Shared by microcompactMessages (time-based) and aggressiveMicrocompact
+// (reactive compact). Extracted to avoid duplicating the iteration logic.
+func clearCompactableToolResults(
+	messages []*turnagent.Message,
+	compactableIDs []string,
+	keepSet map[string]struct{},
+) []*turnagent.Message {
 	compactableSet := make(map[string]struct{}, len(compactableIDs))
 	for _, id := range compactableIDs {
 		compactableSet[id] = struct{}{}
 	}
 
-	// 4. Build a new slice with cleared content for non-kept compactable tool results.
 	result := make([]*turnagent.Message, len(messages))
 	for i, msg := range messages {
 		if msg.Role == turnagent.RoleTool && msg.ToolCallID != "" {
@@ -128,7 +141,6 @@ func microcompactMessages(messages []*turnagent.Message, cfg MicrocompactConfig)
 		}
 		result[i] = msg
 	}
-
 	return result
 }
 

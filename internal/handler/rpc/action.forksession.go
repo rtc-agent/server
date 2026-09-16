@@ -140,28 +140,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 					zap.String("old_message", oldMessageID.String()),
 					zap.Error(parseErr))
 			}
-			tokenUsageUpdate := &model.TokenUsageUpdate{
-				InputTokens:     0,
-				OutputTokens:    0,
-				TotalTokens:     0,
-				CachedTokens:    0,
-				ReasoningTokens: 0,
-			}
-			if oldMsg.InputTokens != nil {
-				tokenUsageUpdate.InputTokens = *oldMsg.InputTokens
-			}
-			if oldMsg.OutputTokens != nil {
-				tokenUsageUpdate.OutputTokens = *oldMsg.OutputTokens
-			}
-			if oldMsg.TotalTokens != nil {
-				tokenUsageUpdate.TotalTokens = *oldMsg.TotalTokens
-			}
-			if oldMsg.CachedTokens != nil {
-				tokenUsageUpdate.CachedTokens = *oldMsg.CachedTokens
-			}
-			if oldMsg.ReasoningTokens != nil {
-				tokenUsageUpdate.ReasoningTokens = *oldMsg.ReasoningTokens
-			}
+			tokenUsage := oldMsg.TokenUsage()
 			messagesToCreate[i] = primitives.MessageToCreate{
 				Role:       protocol.MessageRole(oldMsg.Role),
 				Creator:    creator,
@@ -170,7 +149,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 				ClientID:   "", // 系统生成新 client_id
 				CreatedAt:  oldMsg.CreatedAt,
 				UpdatedAt:  oldMsg.UpdatedAt,
-				TokenUsage: tokenUsageUpdate,
+				TokenUsage: &tokenUsage,
 			}
 		}
 	}
