@@ -23,6 +23,8 @@ import (
 //	// UpdateItemArray = JSONB[protocol.UpdateItem]
 type JSONB[T any] []T
 
+// Value implements driver.Valuer, serializing the JSONB slice to a JSON string
+// for storage in PostgreSQL JSONB columns.
 func (j JSONB[T]) Value() (driver.Value, error) {
 	if j == nil {
 		return "[]", nil
@@ -34,6 +36,8 @@ func (j JSONB[T]) Value() (driver.Value, error) {
 	return string(b), nil
 }
 
+// Scan implements sql.Scanner, deserializing a JSON string from PostgreSQL
+// back into the JSONB slice.
 func (j *JSONB[T]) Scan(src any) error {
 	if src == nil {
 		*j = JSONB[T]{}

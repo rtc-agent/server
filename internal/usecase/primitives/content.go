@@ -31,6 +31,7 @@ func ThinkingContentData(thinking string) (protocol.ContentData, error) {
 	}, nil
 }
 
+// SummaryItem represents a single message in a conversation summary.
 type SummaryItem struct {
 	Role    string
 	Content string
@@ -100,6 +101,8 @@ func ParseContentData(content string) (protocol.ContentData, error) {
 	return cd, nil
 }
 
+// ParseContentDataToolCall converts an arbitrary value into a protocol.ToolCall
+// by round-tripping through JSON serialization.
 func ParseContentDataToolCall(data any) (protocol.ToolCall, error) {
 	bytes, err := json.Marshal(data)
 	if err != nil {

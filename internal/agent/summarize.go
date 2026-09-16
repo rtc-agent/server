@@ -166,10 +166,7 @@ func (h *helpers) runCompressionSummary(
 	customInstruction *string,
 ) (summary string, summaryMsgID uuid.UUID, summaryFinalized bool, sessionMemoryUsed bool, err error) {
 	// Try session memory first (zero API cost)
-	summaryPtr, memErr := h.compressContextWithSessionMemory(ctx, msgs, retentionIndex)
-	if memErr != nil {
-		return "", uuid.Nil, false, false, fmt.Errorf("compress with session memory: %w", memErr)
-	}
+	summaryPtr := h.compressContextWithSessionMemory(ctx)
 	if summaryPtr != nil {
 		return *summaryPtr, uuid.Nil, false, true, nil
 	}

@@ -22,8 +22,13 @@ type GoalWorkflow struct {
 	registry *command.CommandRegistry
 }
 
-func (g *GoalWorkflow) Name() string         { return "goal" }
-func (g *GoalWorkflow) Prefix() string       { return "/goal" }
+// Name returns the command name "goal".
+func (g *GoalWorkflow) Name() string { return "goal" }
+
+// Prefix returns the slash prefix "/goal".
+func (g *GoalWorkflow) Prefix() string { return "/goal" }
+
+// Scope returns ScopeSession, keeping the goal command active for the session.
 func (g *GoalWorkflow) Scope() command.Scope { return command.ScopeSession }
 
 // TriggerPrompt returns the goal creation user prompt. Called on the turn

@@ -37,7 +37,7 @@ func (a *Agent) log(ctx context.Context, level LogLevel, msg string, fields map[
 }
 
 // recordMetricIfEnabled calls the metrics recorder if it is not nil.
-func (a *Agent) recordMetricIfEnabled(ctx context.Context, record func(Metrics)) {
+func (a *Agent) recordMetricIfEnabled(record func(Metrics)) {
 	if a.cfg.Metrics != nil {
 		record(a.cfg.Metrics)
 	}

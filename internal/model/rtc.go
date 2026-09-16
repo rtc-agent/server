@@ -30,6 +30,7 @@ type Rtc struct {
 	DeletedAt       *time.Time  `gorm:"index" json:"-"`
 }
 
+// BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (r *Rtc) BeforeCreate(tx *gorm.DB) error {
 	if r.ID == uuid.Nil {
 		id, err := uuid.NewV7()

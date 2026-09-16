@@ -109,7 +109,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// before attachments are prepended, so the final order is:
 	// [system] Attachments → [system] Scenarios → [system] Command prompts → [conversation]
 	// Pass the already-loaded dbMsgs to avoid a redundant DB query.
-	messages = h.injectScenarioPrompts(ctx, sid, messages, dbMsgs)
+	messages = h.injectScenarioPrompts(messages, dbMsgs)
 
 	// Build and inject all attachments (TodoList, SessionMemory, UserMemory).
 	// Attachments are dynamic content that provides the LLM with persistent

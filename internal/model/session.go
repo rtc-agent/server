@@ -106,6 +106,7 @@ type Session struct {
 	DeletedAt *time.Time `gorm:"index" json:"-"`
 }
 
+// BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (s *Session) BeforeCreate(tx *gorm.DB) error {
 	if s.ID == uuid.Nil {
 		id, err := uuid.NewV7()

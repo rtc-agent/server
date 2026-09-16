@@ -2,45 +2,26 @@ package rpchandler
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
-	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
-	"go.uber.org/zap"
 )
 
 // MessageGet 获取当前用户会话中的单个消息。
 func (h *Handler) MessageGet(ctx context.Context, req *protocol.MessageGetRequest) (*protocol.MessageGetResponse, error) {
-	userID, err := h.requireUserID(ctx)
+	msg, _, err := h.getOwnedByID(
+		ctx,
+		req.MessageId,
+		"message_id",
+		"message.not_found",
+		"message",
+		h.deps.Deps.MessageRepo.GetByID,
+		func(m *model.Message) uuid.UUID { return m.SessionID },
+	)
 	if err != nil {
 		return nil, err
 	}
-
-	messageUUID, apiErr := parseUUID(req.MessageId, "message_id")
-	if apiErr != nil {
-		return nil, apiErr
-	}
-
-	msg, err := h.deps.Deps.MessageRepo.GetByID(ctx, messageUUID)
-	if err != nil {
-		if repo.IsNotFound(err) {
-			return nil, &APIError{
-				Code:    "message.not_found",
-				Message: fmt.Sprintf("message %s not found", req.MessageId),
-			}
-		}
-		return nil, h.internalError(ctx, "message.error", "internal error", err)
-	}
-
-	if _, err := h.loadOwnedSession(ctx, msg.SessionID, userID); err != nil {
-		return nil, err
-	}
-
-	logger.Info(ctx, "[MessageGet]",
-		zap.String("user", userID.String()),
-		zap.String("message", req.MessageId))
 	return &protocol.MessageGetResponse{
 		Item: model.ToProtocolMessage(msg),
 	}, nil

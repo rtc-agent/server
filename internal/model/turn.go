@@ -23,6 +23,7 @@ type Turn struct {
 	DeletedAt    *time.Time `gorm:"index" json:"-"`
 }
 
+// BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (t *Turn) BeforeCreate(tx *gorm.DB) error {
 	if t.ID == uuid.Nil {
 		id, err := uuid.NewV7()

@@ -32,11 +32,11 @@ type Command interface {
 type Scope int
 
 const (
-	// ScopeOneShot: command is active only on the turn it was triggered.
+	// ScopeOneShot means the command is active only on the turn it was triggered.
 	// Automatically deactivated after OnTurnComplete.
 	ScopeOneShot Scope = iota
 
-	// ScopeSession: command stays active for the entire session until
+	// ScopeSession means the command stays active for the entire session until
 	// explicitly deactivated or the session ends.
 	ScopeSession
 )

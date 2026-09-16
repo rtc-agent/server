@@ -107,13 +107,12 @@ func (mgr *SessionTurnManager) genResume(prevResumeCancel *context.CancelFunc) f
 		loop *adk.TurnLoop[TurnWorkItem, *schema.Message],
 		interrupted, unhandled, newItems []TurnWorkItem,
 	) (*adk.GenResumeResult[TurnWorkItem, *schema.Message], error) {
-		return mgr.genResumeImpl(ctx, interrupted, unhandled, newItems, prevResumeCancel)
+		return mgr.genResumeImpl(interrupted, unhandled, newItems, prevResumeCancel)
 	}
 }
 
 // genResumeImpl builds the resume input for a checkpoint recovery.
 func (mgr *SessionTurnManager) genResumeImpl(
-	ctx context.Context,
 	interrupted, unhandled, newItems []TurnWorkItem,
 	prevResumeCancel *context.CancelFunc,
 ) (*adk.GenResumeResult[TurnWorkItem, *schema.Message], error) {

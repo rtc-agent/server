@@ -69,34 +69,34 @@ func (h *Handler) Close() {
 func (h *Handler) registerRoutes() {
 	h.routes = map[protocol.RpcMethod]routeHandler{
 		// Session
-		protocol.MethodSessionList:    dispatch(h, h.ListSessions),
-		protocol.MethodSessionGet:     dispatch(h, h.GetSession),
-		protocol.MethodSessionClose:   dispatch(h, h.CloseSession),
-		protocol.MethodSessionCompact: dispatch(h, h.CompactSession),
-		protocol.MethodSessionUpdate:  dispatch(h, h.UpdateSession),
-		protocol.MethodSessionFork:    dispatch(h, h.ForkSession),
+		protocol.MethodSessionList:    dispatch(h.ListSessions),
+		protocol.MethodSessionGet:     dispatch(h.GetSession),
+		protocol.MethodSessionClose:   dispatch(h.CloseSession),
+		protocol.MethodSessionCompact: dispatch(h.CompactSession),
+		protocol.MethodSessionUpdate:  dispatch(h.UpdateSession),
+		protocol.MethodSessionFork:    dispatch(h.ForkSession),
 
 		// Message
-		protocol.MethodMessageSend: dispatch(h, h.SendMessage),
-		protocol.MethodMessageList: dispatch(h, h.MessageList),
-		protocol.MethodMessageGet:  dispatch(h, h.MessageGet),
+		protocol.MethodMessageSend: dispatch(h.SendMessage),
+		protocol.MethodMessageList: dispatch(h.MessageList),
+		protocol.MethodMessageGet:  dispatch(h.MessageGet),
 
 		// Turn
-		protocol.MethodTurnList: dispatch(h, h.TurnList),
-		protocol.MethodTurnGet:  dispatch(h, h.TurnGet),
-		protocol.MethodTurnStop: dispatch(h, h.StopTurn),
+		protocol.MethodTurnList: dispatch(h.TurnList),
+		protocol.MethodTurnGet:  dispatch(h.TurnGet),
+		protocol.MethodTurnStop: dispatch(h.StopTurn),
 
 		// RTC
-		protocol.MethodRtcList:         dispatch(h, h.RtcList),
-		protocol.MethodRtcGet:          dispatch(h, h.RtcGet),
-		protocol.MethodRtcUpdateStatus: dispatch(h, h.UpdateRtcStatus),
-		protocol.MethodRtcSubmitResult: dispatch(h, h.SubmitRtcResult),
+		protocol.MethodRtcList:         dispatch(h.RtcList),
+		protocol.MethodRtcGet:          dispatch(h.RtcGet),
+		protocol.MethodRtcUpdateStatus: dispatch(h.UpdateRtcStatus),
+		protocol.MethodRtcSubmitResult: dispatch(h.SubmitRtcResult),
 	}
 }
 
 // dispatch 泛型分发辅助：反序列化请求 → 调用 handler → 返回结果。
 // 消除每个 case 中重复的 Unmarshal 样板代码。
-func dispatch[Req any, Resp any](h *Handler, fn func(context.Context, *Req) (*Resp, error)) routeHandler {
+func dispatch[Req any, Resp any](fn func(context.Context, *Req) (*Resp, error)) routeHandler {
 	return func(ctx context.Context, data []byte) (any, error) {
 		var req Req
 		if err := json.Unmarshal(data, &req); err != nil {

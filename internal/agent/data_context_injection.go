@@ -109,8 +109,6 @@ func wrapWithTag(name, content string) string {
 //	[system] Command prompts (/goal, /persona, etc.)
 //	[user/assistant] Conversation history
 func (h *helpers) injectScenarioPrompts(
-	ctx context.Context,
-	sessionID uuid.UUID,
 	messages []*turnagent.Message,
 	dbMsgs []*model.Message,
 ) []*turnagent.Message {

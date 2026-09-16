@@ -10,11 +10,17 @@ import (
 // LoopStatus loop 状态
 type LoopStatus string
 
+// Loop status constants define the lifecycle states of a Loop.
 const (
-	LoopStatusActive    LoopStatus = "active"
-	LoopStatusPaused    LoopStatus = "paused"
+	// LoopStatusActive means the loop is currently running on schedule.
+	LoopStatusActive LoopStatus = "active"
+	// LoopStatusPaused means the loop is temporarily suspended.
+	LoopStatusPaused LoopStatus = "paused"
+	// LoopStatusCompleted means the loop finished all scheduled iterations.
 	LoopStatusCompleted LoopStatus = "completed"
+	// LoopStatusCancelled means the loop was explicitly cancelled by the user.
 	LoopStatusCancelled LoopStatus = "cancelled"
+	// LoopStatusExhausted means the loop reached its maximum turn or token limit.
 	LoopStatusExhausted LoopStatus = "exhausted"
 )
 
@@ -40,6 +46,7 @@ type Loop struct {
 	CompletedAt     *time.Time `json:"completed_at,omitempty"`
 }
 
+// BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (l *Loop) BeforeCreate(tx *gorm.DB) error {
 	if l.ID == uuid.Nil {
 		id, err := uuid.NewV7()

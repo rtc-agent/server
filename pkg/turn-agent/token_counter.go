@@ -37,10 +37,12 @@ type TokenCounter interface {
 // This is the current behavior and is accurate for English text.
 type HeuristicTokenCounter struct{}
 
+// CountTokens estimates token count using the ~4 chars/token heuristic.
 func (h *HeuristicTokenCounter) CountTokens(text string) int {
 	return len(text) / 4
 }
 
+// CountMessageTokens estimates token count for a single message.
 func (h *HeuristicTokenCounter) CountMessageTokens(msg *schema.Message) int {
 	if msg == nil {
 		return 0
@@ -118,6 +120,8 @@ func (t *TiktokenTokenCounter) init() {
 	})
 }
 
+// CountTokens returns the exact token count using tiktoken encoding.
+// Falls back to the heuristic if tiktoken initialization failed.
 func (t *TiktokenTokenCounter) CountTokens(text string) int {
 	t.init()
 	if t.err != nil || t.encoding == nil {
@@ -127,6 +131,7 @@ func (t *TiktokenTokenCounter) CountTokens(text string) int {
 	return len(t.encoding.Encode(text, nil, nil))
 }
 
+// CountMessageTokens returns the exact token count for a message using tiktoken.
 func (t *TiktokenTokenCounter) CountMessageTokens(msg *schema.Message) int {
 	if msg == nil {
 		return 0

@@ -164,7 +164,7 @@ func (e *Exporter) Export(ctx context.Context, opts ExportOptions, w io.Writer) 
 // writeBundle writes all bundle entries into the tar writer.
 func (e *Exporter) writeBundle(ctx context.Context, tw *tar.Writer, bundleName string, opts ExportOptions, memories []*Memory) error {
 	// Write index.md
-	indexContent := e.generateIndex(opts, memories, bundleName)
+	indexContent := e.generateIndex(opts, memories)
 	if err := writeFile(tw, bundleName+"/index.md", []byte(indexContent)); err != nil {
 		return err
 	}
@@ -236,7 +236,7 @@ func filterByTags(memories []*Memory, tags []string) []*Memory {
 }
 
 // generateIndex generates the index.md content for the OKF bundle
-func (e *Exporter) generateIndex(opts ExportOptions, memories []*Memory, bundleName string) string {
+func (e *Exporter) generateIndex(opts ExportOptions, memories []*Memory) string {
 	var b strings.Builder
 
 	// OKF version header

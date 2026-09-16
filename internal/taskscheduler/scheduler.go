@@ -32,6 +32,8 @@ func NewTaskScheduler(redisAddr string) (usecase.TaskScheduler, error) {
 	return &Impl{client: client, inspector: inspector}, nil
 }
 
+// ScheduleDelayed enqueues a task for execution after the specified delay.
+// It returns the asynq task ID, which can be used to cancel the task later.
 func (s *Impl) ScheduleDelayed(
 	ctx context.Context,
 	taskType string,
@@ -50,6 +52,7 @@ func (s *Impl) ScheduleDelayed(
 	return info.ID, nil
 }
 
+// Cancel removes a previously enqueued task from the loop queue.
 func (s *Impl) Cancel(ctx context.Context, taskID string) error {
 	// Inspector.DeleteTask requires the queue name. Loop tasks are in LoopQueue.
 	return s.inspector.DeleteTask(LoopQueue, taskID)

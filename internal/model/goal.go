@@ -10,10 +10,15 @@ import (
 // GoalStatus goal 状态
 type GoalStatus string
 
+// Goal status constants define the lifecycle states of a Goal.
 const (
-	GoalStatusActive    GoalStatus = "active"
+	// GoalStatusActive means the goal is currently being pursued.
+	GoalStatusActive GoalStatus = "active"
+	// GoalStatusCompleted means the goal condition has been satisfied.
 	GoalStatusCompleted GoalStatus = "completed"
+	// GoalStatusCancelled means the goal was explicitly cancelled by the user.
 	GoalStatusCancelled GoalStatus = "cancelled"
+	// GoalStatusExhausted means the goal reached its maximum turn or token limit.
 	GoalStatusExhausted GoalStatus = "exhausted"
 )
 
@@ -31,6 +36,7 @@ type Goal struct {
 	LastReason     *string    `json:"last_reason,omitempty"`
 }
 
+// BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (g *Goal) BeforeCreate(tx *gorm.DB) error {
 	if g.ID == uuid.Nil {
 		id, err := uuid.NewV7()

@@ -11,6 +11,7 @@ import (
 // 避免 pkg 层依赖 internal 层的架构违规。
 type StringArray []string
 
+// Value implements driver.Valuer, serializing the string slice to JSON.
 func (s StringArray) Value() (driver.Value, error) {
 	if s == nil {
 		return "[]", nil
@@ -22,6 +23,7 @@ func (s StringArray) Value() (driver.Value, error) {
 	return string(b), nil
 }
 
+// Scan implements sql.Scanner, deserializing JSON back into the string slice.
 func (s *StringArray) Scan(src any) error {
 	if src == nil {
 		*s = StringArray{}

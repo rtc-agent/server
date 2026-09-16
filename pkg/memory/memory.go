@@ -17,10 +17,14 @@ import (
 // ScopeType 定义 Memory 的作用域
 type ScopeType string
 
+// ScopeType constants define the memory persistence scope.
 const (
-	ScopeSession ScopeType = "session" // 会话级，随 session 结束归档
-	ScopeUser    ScopeType = "user"    // 用户级，跨 session 持久化
-	ScopeGlobal  ScopeType = "global"  // 全局级，所有用户共享
+	// ScopeSession is session-scoped; archived when the session ends.
+	ScopeSession ScopeType = "session"
+	// ScopeUser is user-scoped; persists across sessions.
+	ScopeUser ScopeType = "user"
+	// ScopeGlobal is shared across all users.
+	ScopeGlobal ScopeType = "global"
 )
 
 // ValidScopeTypes 所有有效的作用域

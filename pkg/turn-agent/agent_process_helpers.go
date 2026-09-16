@@ -114,7 +114,7 @@ func (a *Agent) recordTurnEnd(
 		fields["error"] = err.Error()
 	}
 	a.log(ctx, LogLevelInfo, "turn.end", fields)
-	a.recordMetricIfEnabled(ctx, func(m Metrics) {
+	a.recordMetricIfEnabled(func(m Metrics) {
 		m.RecordTurn(ctx, TurnMetricsAttrs{
 			SessionID:  sessionID,
 			TurnID:     turnID,
@@ -173,7 +173,7 @@ func (a *Agent) handleInterruptExit(
 		attribute.Int("interrupt.count", len(allContexts)),
 		attribute.String("reason", "stateful_interrupt"),
 	)
-	a.recordMetricIfEnabled(ctx, func(m Metrics) {
+	a.recordMetricIfEnabled(func(m Metrics) {
 		m.RecordInterrupt(ctx, InterruptMetricsAttrs{
 			SessionID:   sessionID,
 			TurnID:      turnID,

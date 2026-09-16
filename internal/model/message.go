@@ -39,6 +39,7 @@ type Message struct {
 	ReasoningTokens *int `json:"reasoning_tokens,omitempty"`
 }
 
+// BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (m *Message) BeforeCreate(tx *gorm.DB) error {
 	if m.ID == uuid.Nil {
 		id, err := uuid.NewV7()

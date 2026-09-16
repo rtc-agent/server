@@ -2,45 +2,26 @@ package rpchandler
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
-	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
-	"go.uber.org/zap"
 )
 
 // RtcGet 获取当前用户会话中的单个 RTC。
 func (h *Handler) RtcGet(ctx context.Context, req *protocol.RtcGetRequest) (*protocol.RtcGetResponse, error) {
-	userID, err := h.requireUserID(ctx)
+	rtc, _, err := h.getOwnedByID(
+		ctx,
+		req.RtcId,
+		"rtc_id",
+		"rtc.not_found",
+		"rtc",
+		h.deps.Deps.RtcRepo.GetByID,
+		func(r *model.Rtc) uuid.UUID { return r.SessionID },
+	)
 	if err != nil {
 		return nil, err
 	}
-
-	rtcUUID, apiErr := parseUUID(req.RtcId, "rtc_id")
-	if apiErr != nil {
-		return nil, apiErr
-	}
-
-	rtc, err := h.deps.Deps.RtcRepo.GetByID(ctx, rtcUUID)
-	if err != nil {
-		if repo.IsNotFound(err) {
-			return nil, &APIError{
-				Code:    "rtc.not_found",
-				Message: fmt.Sprintf("rtc %s not found", req.RtcId),
-			}
-		}
-		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
-	}
-
-	if _, err := h.loadOwnedSession(ctx, rtc.SessionID, userID); err != nil {
-		return nil, err
-	}
-
-	logger.Info(ctx, "[RtcGet]",
-		zap.String("user", userID.String()),
-		zap.String("rtc", req.RtcId))
 	return &protocol.RtcGetResponse{
 		Item: model.ToProtocolRtc(rtc),
 	}, nil

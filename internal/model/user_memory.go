@@ -39,6 +39,7 @@ type UserMemory struct {
 	AccessCount int `gorm:"default:0" json:"access_count"`
 }
 
+// BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (m *UserMemory) BeforeCreate(tx *gorm.DB) error {
 	if m.ID == uuid.Nil {
 		id, err := uuid.NewV7()

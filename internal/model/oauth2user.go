@@ -20,6 +20,7 @@ type OAuth2User struct {
 	DeletedAt *time.Time `gorm:"index" json:"-"`
 }
 
+// BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (u *OAuth2User) BeforeCreate(tx *gorm.DB) error {
 	if u.ID == uuid.Nil {
 		id, err := uuid.NewV7()

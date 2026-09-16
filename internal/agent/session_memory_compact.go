@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 
-	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
 )
@@ -15,14 +14,15 @@ import (
 //  1. Query session memories for the current session
 //  2. If memories exist, build summary from them (zero API cost)
 //  3. Otherwise, return nil to fall back to LLM summarization
+//
+// Errors during memory query are logged and treated as "no memories" (fall back
+// to LLM), so no error is returned to the caller.
 func (h *helpers) compressContextWithSessionMemory(
 	ctx context.Context,
-	msgs []*schema.Message,
-	retentionIndex int,
-) (*string, error) {
+) *string {
 	sessionID := getSessionIDFromContext(ctx)
 	if sessionID == uuid.Nil {
-		return nil, nil // No session ID, fall back to LLM
+		return nil // No session ID, fall back to LLM
 	}
 
 	// Query session memories
@@ -32,11 +32,11 @@ func (h *helpers) compressContextWithSessionMemory(
 			"session_id": sessionID.String(),
 			"error":      err.Error(),
 		})
-		return nil, nil // Fall back to LLM on error
+		return nil // Fall back to LLM on error
 	}
 
 	if len(memories) == 0 {
-		return nil, nil // No memories, fall back to LLM
+		return nil // No memories, fall back to LLM
 	}
 
 	// Build summary from memories
@@ -47,7 +47,7 @@ func (h *helpers) compressContextWithSessionMemory(
 		"memory_count": len(memories),
 	})
 
-	return &summary, nil
+	return &summary
 }
 
 // buildSummaryFromMemories 将 session memories 构建为摘要文本

@@ -14,8 +14,6 @@ import (
 // Stream store helper
 // =============================================================================
 
-// getStreamStore returns a StreamStore for buffering streaming message chunks
-// in Redis. Returns nil if the Redis client is not available.
 // NewStreamStore creates a stream store accessor backed by Redis.
 // The returned value satisfies updates.StreamStoreAccessor and can be injected
 // into UpdatePublisher via SetStreamStore. It uses the same Redis key format
@@ -63,6 +61,7 @@ func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error)
 	return result, nil
 }
 
+// GetAllChunks reads all buffered chunks for the given message from Redis.
 func (s *StreamStore) GetAllChunks(messageID string) ([]string, error) {
 	key := cache.MessageStream(messageID)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -74,6 +73,7 @@ func (s *StreamStore) GetAllChunks(messageID string) ([]string, error) {
 	return chunks, nil
 }
 
+// DeleteChunks removes all buffered chunks for the given message from Redis.
 func (s *StreamStore) DeleteChunks(messageID string) error {
 	key := cache.MessageStream(messageID)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -15,6 +15,7 @@ var rootCmd = &cobra.Command{
 	Long:  `RTC Agent Server - AI assistant SDK backend with Centrifugo WebSocket`,
 }
 
+// Execute runs the root command and starts the CLI application.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

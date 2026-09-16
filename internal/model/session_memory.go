@@ -32,6 +32,7 @@ type SessionMemory struct {
 	DeletedAt *time.Time `gorm:"index" json:"-"`
 }
 
+// BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (m *SessionMemory) BeforeCreate(tx *gorm.DB) error {
 	if m.ID == uuid.Nil {
 		id, err := uuid.NewV7()
@@ -52,7 +53,7 @@ const (
 	SessionMemoryCategoryLearnings = "learnings"
 )
 
-// ValidCategories 所有有效的分类
+// ValidSessionMemoryCategories lists all valid session memory categories.
 var ValidSessionMemoryCategories = []string{
 	SessionMemoryCategoryDecision,
 	SessionMemoryCategoryContext,

@@ -23,8 +23,13 @@ type LoopWorkflow struct {
 	registry *command.CommandRegistry
 }
 
-func (l *LoopWorkflow) Name() string         { return "loop" }
-func (l *LoopWorkflow) Prefix() string       { return "/loop" }
+// Name returns the command name "loop".
+func (l *LoopWorkflow) Name() string { return "loop" }
+
+// Prefix returns the slash prefix "/loop".
+func (l *LoopWorkflow) Prefix() string { return "/loop" }
+
+// Scope returns ScopeSession, keeping the loop command active for the session.
 func (l *LoopWorkflow) Scope() command.Scope { return command.ScopeSession }
 
 // TriggerPrompt returns the loop creation user prompt. Called on the turn

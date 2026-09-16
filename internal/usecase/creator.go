@@ -3,43 +3,52 @@ package usecase
 
 import "github.com/google/uuid"
 
-// CreatorKind 动作发起者类型。
+// CreatorKind identifies the origin of an action.
 type CreatorKind string
 
+// CreatorKind constants classify who initiated an action.
 const (
-	CreatorKindUser   CreatorKind = "user"
+	// CreatorKindUser means the action was initiated by a human user.
+	CreatorKindUser CreatorKind = "user"
+	// CreatorKindSystem means the action was initiated by the system (LLM/worker).
 	CreatorKindSystem CreatorKind = "system"
 	// 未来扩展：
 	// CreatorKindAgent CreatorKind = "agent"
 )
 
-// Creator 是所有动作发起者的抽象接口。
-// 用 interface 而不是 struct，保证后续加 Agent / Device / 第三方集成时不用改调用方。
+// Creator is the abstraction for all action initiators.
+// It uses an interface rather than a struct to allow future extensions
+// (Agent, Device, third-party integrations) without changing call sites.
 type Creator interface {
 	Kind() CreatorKind
-	// ReferenceID 是稳定可存储的标识，用于 DB 列 / 日志 / 查询。
-	// UserCreator  → user UUID 字符串
-	// SystemCreator → 字面量 "system"
+	// ReferenceID returns a stable, storable identifier for the creator.
+	// UserCreator returns the user UUID string; SystemCreator returns "system".
 	ReferenceID() string
 }
 
-// UserCreator 真实用户发起的动作。
+// UserCreator represents actions initiated by a human user.
 type UserCreator struct {
 	UserID   uuid.UUID
 	DeviceID string
 }
 
-func (c UserCreator) Kind() CreatorKind   { return CreatorKindUser }
+// Kind returns CreatorKindUser.
+func (c UserCreator) Kind() CreatorKind { return CreatorKindUser }
+
+// ReferenceID returns the user's UUID as a string.
 func (c UserCreator) ReferenceID() string { return c.UserID.String() }
 
-// SystemCreator 系统发起的动作（LLM / Worker 自动任务）。
-// SystemCreator 没有 user/device 概念。
+// SystemCreator represents actions initiated by the system (LLM or worker).
+// SystemCreator has no user or device identity.
 type SystemCreator struct{}
 
-func (c SystemCreator) Kind() CreatorKind   { return CreatorKindSystem }
+// Kind returns CreatorKindSystem.
+func (c SystemCreator) Kind() CreatorKind { return CreatorKindSystem }
+
+// ReferenceID returns the literal string "system".
 func (c SystemCreator) ReferenceID() string { return "system" }
 
-// 编译期校验
+// Compile-time interface verification.
 var (
 	_ Creator = UserCreator{}
 	_ Creator = SystemCreator{}

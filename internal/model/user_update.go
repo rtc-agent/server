@@ -24,6 +24,7 @@ func (UserUpdate) TableName() string {
 	return "user_updates"
 }
 
+// BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (u *UserUpdate) BeforeCreate(tx *gorm.DB) error {
 	if u.ID == uuid.Nil {
 		id, err := uuid.NewV7()

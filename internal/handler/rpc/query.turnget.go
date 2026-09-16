@@ -2,45 +2,26 @@ package rpchandler
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
-	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
-	"go.uber.org/zap"
 )
 
 // TurnGet 获取当前用户会话中的单个 Turn。
 func (h *Handler) TurnGet(ctx context.Context, req *protocol.TurnGetRequest) (*protocol.TurnGetResponse, error) {
-	userID, err := h.requireUserID(ctx)
+	turn, _, err := h.getOwnedByID(
+		ctx,
+		req.TurnId,
+		"turn_id",
+		"turn.not_found",
+		"turn",
+		h.deps.Deps.TurnRepo.GetByID,
+		func(t *model.Turn) uuid.UUID { return t.SessionID },
+	)
 	if err != nil {
 		return nil, err
 	}
-
-	turnUUID, apiErr := parseUUID(req.TurnId, "turn_id")
-	if apiErr != nil {
-		return nil, apiErr
-	}
-
-	turn, err := h.deps.Deps.TurnRepo.GetByID(ctx, turnUUID)
-	if err != nil {
-		if repo.IsNotFound(err) {
-			return nil, &APIError{
-				Code:    "turn.not_found",
-				Message: fmt.Sprintf("turn %s not found", req.TurnId),
-			}
-		}
-		return nil, h.internalError(ctx, "turn.error", "internal error", err)
-	}
-
-	if _, err := h.loadOwnedSession(ctx, turn.SessionID, userID); err != nil {
-		return nil, err
-	}
-
-	logger.Info(ctx, "[TurnGet]",
-		zap.String("user", userID.String()),
-		zap.String("turn", req.TurnId))
 	return &protocol.TurnGetResponse{
 		Item: model.ToProtocolTurn(turn),
 	}, nil

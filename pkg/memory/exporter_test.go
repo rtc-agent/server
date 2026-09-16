@@ -501,7 +501,7 @@ func TestGenerateIndexFormat(t *testing.T) {
 		},
 	}
 
-	result := exporter.generateIndex(opts, memories, "user-aaaaaaaa-20260115-100000")
+	result := exporter.generateIndex(opts, memories)
 
 	assert.Contains(t, result, `okf_version: "0.2"`)
 	assert.Contains(t, result, "# User aaaaaaaa Memory Bundle")
