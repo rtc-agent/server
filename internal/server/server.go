@@ -433,8 +433,40 @@ func (s *Server) recoverStaleTurns(ctx context.Context) {
 	// Collect unique session IDs for ghost work cleanup
 	sessionIDs := make(map[string]bool)
 
+	// sessionStatusCache avoids repeated DB queries for sessions with multiple
+	// stale turns. Key: sessionID string, Value: session status string.
+	sessionStatusCache := make(map[string]string)
+
 	for _, turn := range staleTurns {
 		sessionID := turn.SessionID.String()
+
+		// Check if the session is closed. Resume work items for closed sessions
+		// would be wasted — the worker would process them only to discover the
+		// session is closed. Skip early to save resources.
+		cachedStatus, cached := sessionStatusCache[sessionID]
+		if !cached {
+			session, sessErr := s.svcCtx.SessionRepo.GetByID(ctx, turn.SessionID)
+			if sessErr != nil {
+				logger.Warn(ctx, "[Server] recoverStaleTurns: load session failed",
+					zap.String("turn_id", turn.ID.String()),
+					zap.String("session_id", sessionID),
+					zap.Error(sessErr))
+			} else if session != nil {
+				cachedStatus = session.Status
+			}
+			sessionStatusCache[sessionID] = cachedStatus
+		}
+		if cachedStatus == string(model.SessionStatusClosed) {
+			logger.Info(ctx, "[Server] recoverStaleTurns: skip closed session",
+				zap.String("turn_id", turn.ID.String()),
+				zap.String("session_id", sessionID))
+			// Still mark the turn as failed/interrupted so it leaves the stale state.
+			if turn.Status != string(model.TurnStatusInterrupted) {
+				_ = s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusFailed, "server restart recovery (session closed)")
+			}
+			continue
+		}
+
 		sessionIDs[sessionID] = true
 
 		// Mark as interrupted (if not already)

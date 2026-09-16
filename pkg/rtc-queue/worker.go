@@ -426,10 +426,8 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	// The cancelSessionActiveScript persists the cancelled status to the work hash,
 	// so we can detect it here. If cancelled, trigger the cancel immediately.
 	//
-	// NOTE: We do NOT call workCancel() here because workCtx hasn't been created
-	// yet at this point in the original flow. Instead, we create it above (before
-	// the check) and only send to cancelCh + set adminCancelled. The workCancel()
-	// will happen via defer when processWorkInternal returns.
+	// NOTE: workCtx is already created (line above). We send to cancelCh, set
+	// adminCancelled, and call workCancel() to abort OnWork promptly.
 	if work.Status == StatusCancelled {
 		w.log("worker.cancelled_before_subscribe", map[string]any{
 			"work_id":    claim.WorkID,

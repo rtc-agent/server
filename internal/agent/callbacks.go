@@ -119,8 +119,9 @@ func (h *helpers) createTurn(ctx context.Context, sessionID string, workID strin
 
 // lookupTurn finds the active turn for a session during a resume work.
 //
-// It queries for turns in "running" or "interrupted" status. If multiple
-// exist (shouldn't happen in normal operation), the most recent is returned.
+// It queries for turns in "pending", "running", or "interrupted" status. If
+// multiple exist (shouldn't happen in normal operation), the most recent is
+// returned (ordered by created_at ASC).
 //
 // Mapping from old code: the old worker got the turnID from the TurnItem
 // pushed into the session's buffer. The new code must look it up from DB
@@ -196,6 +197,9 @@ func (h *helpers) beginTurn(ctx context.Context, turnID string) error {
 		// Fallback: extract sessionID from context (set by agent_process.go
 		// via WithSessionID before calling BeginTurn). This ensures session
 		// activation and event publishing still work even when DB lookup fails.
+		// NOTE: beginTurn returns nil here — the turn status was already updated
+		// to "running" above. The caller sees success; only the session activation
+		// and event publishing use the fallback path.
 		sessionIDStr := turnagent.SessionIDFromContext(ctx)
 		if sid, parseErr := uuid.Parse(sessionIDStr); parseErr == nil {
 			if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusActive); err != nil {
