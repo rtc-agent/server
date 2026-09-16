@@ -89,18 +89,7 @@ func (r *loopRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]a
 }
 
 func (r *loopRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Loop, error) {
-	var loops []*model.Loop
-	q := DBFromContext(ctx, r.db).WithContext(ctx).Where("session_id = ?", sessionID).Order("created_at DESC")
-	if cursor != nil {
-		q = q.Where("id < ?", *cursor)
-	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if err := q.Limit(limit).Find(&loops).Error; err != nil {
-		return nil, fmt.Errorf("list loops for session %s: %w", sessionID, err)
-	}
-	return loops, nil
+	return listBySessionPaged[model.Loop](ctx, r.db, sessionID, cursor, limit, "created_at DESC, id DESC", "id", "<", "loops")
 }
 
 // FindStaleLoops 查找 stale loops（active 且缺少 asynq task 的）

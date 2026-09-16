@@ -85,39 +85,11 @@ func (r *userMemoryRepo) ListByUser(ctx context.Context, userID uuid.UUID, limit
 }
 
 func (r *userMemoryRepo) ListByCategory(ctx context.Context, userID uuid.UUID, category string, limit int) ([]*model.UserMemory, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	var memories []*model.UserMemory
-	if err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Where("user_id = ? AND category = ? AND deleted_at IS NULL", userID, category).
-		Order("updated_at DESC").
-		Limit(limit).
-		Find(&memories).Error; err != nil {
-		return nil, fmt.Errorf("list user memories by category %s for user %s: %w", category, userID, err)
-	}
-	return memories, nil
+	return listByCategory[model.UserMemory](ctx, r.db, "user_id", userID, category, limit, "updated_at DESC", "AND deleted_at IS NULL", "user memories")
 }
 
 func (r *userMemoryRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]any) error {
-	// 添加 updated_at
-	updates := make(map[string]any, len(fields)+1)
-	for k, v := range fields {
-		updates[k] = v
-	}
-	updates["updated_at"] = time.Now()
-
-	result := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&model.UserMemory{}).
-		Where("id = ? AND deleted_at IS NULL", id).
-		Updates(updates)
-	if result.Error != nil {
-		return fmt.Errorf("update user memory %s: %w", id, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("user memory %s: %w", id, ErrNotFound)
-	}
-	return nil
+	return updateWithAutoTimestamp(ctx, r.db, &model.UserMemory{}, id, fields, "id = ? AND deleted_at IS NULL", "user memory", ErrNotFound)
 }
 
 func (r *userMemoryRepo) Delete(ctx context.Context, id uuid.UUID) error {

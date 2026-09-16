@@ -100,18 +100,7 @@ func (r *sessionMemoryRepo) ListBySession(ctx context.Context, sessionID uuid.UU
 }
 
 func (r *sessionMemoryRepo) ListByCategory(ctx context.Context, sessionID uuid.UUID, category string, limit int) ([]*model.SessionMemory, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	var memories []*model.SessionMemory
-	if err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Where("session_id = ? AND category = ?", sessionID, category).
-		Order("created_at DESC").
-		Limit(limit).
-		Find(&memories).Error; err != nil {
-		return nil, fmt.Errorf("list session memories by category %s for session %s: %w", category, sessionID, err)
-	}
-	return memories, nil
+	return listByCategory[model.SessionMemory](ctx, r.db, "session_id", sessionID, category, limit, "created_at DESC", "", "session memories")
 }
 
 // ListRecentForInjection 列出用于注入的最新记忆

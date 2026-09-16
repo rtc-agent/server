@@ -223,6 +223,15 @@ func validExportRequest(scope, scopeID string) ExportRequest {
 	}
 }
 
+// assertExportError verifies the HTTP status code and JSON error field.
+func assertExportError(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantError string) {
+	t.Helper()
+	assert.Equal(t, wantStatus, rec.Code)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, wantError, resp["error"])
+}
+
 // ─── tests ───
 
 func TestExportMemories_DevBypass_Success(t *testing.T) {
@@ -325,11 +334,7 @@ func TestExportMemories_UserScope_ForbiddenWhenScopeIdMismatch(t *testing.T) {
 		"X-Device-ID": "test-device",
 	})
 
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	assert.Equal(t, "forbidden", resp["error"])
+	assertExportError(t, rec, http.StatusForbidden, "forbidden")
 }
 
 func TestExportMemories_SessionScope_ForbiddenWhenNotOwner(t *testing.T) {
@@ -350,11 +355,7 @@ func TestExportMemories_SessionScope_ForbiddenWhenNotOwner(t *testing.T) {
 		"X-Device-ID": "test-device",
 	})
 
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	assert.Equal(t, "forbidden", resp["error"])
+	assertExportError(t, rec, http.StatusForbidden, "forbidden")
 }
 
 func TestExportMemories_SessionScope_NotFound(t *testing.T) {
@@ -369,11 +370,7 @@ func TestExportMemories_SessionScope_NotFound(t *testing.T) {
 		"X-Device-ID": "test-device",
 	})
 
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	assert.Equal(t, "session_not_found", resp["error"])
+	assertExportError(t, rec, http.StatusNotFound, "session_not_found")
 }
 
 func TestExportMemories_SessionScope_SuccessWhenOwner(t *testing.T) {

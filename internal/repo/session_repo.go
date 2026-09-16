@@ -147,20 +147,7 @@ func (r *sessionRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status pro
 }
 
 func (r *sessionRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]any) error {
-	// Copy to avoid mutating the caller's map.
-	updates := make(map[string]any, len(fields)+1)
-	for k, v := range fields {
-		updates[k] = v
-	}
-	updates["updated_at"] = time.Now()
-	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Session{}).Where("id = ?", id).Updates(updates)
-	if result.Error != nil {
-		return fmt.Errorf("update session %s: %w", id, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("update session %s: %w", id, ErrSessionNotFound)
-	}
-	return nil
+	return updateWithAutoTimestamp(ctx, r.db, &model.Session{}, id, fields, "id = ?", "session", ErrSessionNotFound)
 }
 
 func (r *sessionRepo) TouchActive(ctx context.Context, id uuid.UUID) error {
@@ -198,18 +185,7 @@ func (r *sessionRepo) UpdateFieldsActive(ctx context.Context, id uuid.UUID, fiel
 }
 
 func (r *sessionRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Session, error) {
-	if len(ids) == 0 {
-		return make(map[uuid.UUID]*model.Session), nil
-	}
-	var sessions []*model.Session
-	if err := DBFromContext(ctx, r.db).WithContext(ctx).Where("id IN ?", ids).Find(&sessions).Error; err != nil {
-		return nil, fmt.Errorf("get sessions by ids: %w", err)
-	}
-	result := make(map[uuid.UUID]*model.Session, len(sessions))
-	for _, s := range sessions {
-		result[s.ID] = s
-	}
-	return result, nil
+	return getByIDs[model.Session](ctx, r.db, ids, func(s *model.Session) uuid.UUID { return s.ID }, "sessions")
 }
 
 func (r *sessionRepo) ListByRoot(ctx context.Context, rootServerSessionID uuid.UUID, status string) ([]*model.Session, error) {

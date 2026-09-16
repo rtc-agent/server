@@ -182,30 +182,43 @@ func TestProcessTask_Failed(t *testing.T) {
 	}
 }
 
-func TestProcessTask_DefaultAction(t *testing.T) {
+func TestProcessTask_DefaultActionAfterNoActionOrMalformed(t *testing.T) {
 	t.Parallel()
 
-	var captured *model.ScriptExecution
-	repo := &mockScriptExecutionRepo{
-		createFunc: func(_ context.Context, exec *model.ScriptExecution) error {
-			captured = exec
-			return nil
-		},
+	tests := []struct {
+		name   string
+		params string
+	}{
+		{"default action when no action field", `{"title":"默认action","code":"1+1"}`},
+		{"default action after malformed json", `{not valid json`},
 	}
-	r := newTestRecorder(t, repo)
 
-	// Parameters without "action" field.
-	rtc := testRtc(t, `{"title":"默认action","code":"1+1"}`)
-	req := testResultReq()
-	ctx := testContext(t)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	r.processTask(scriptRecordTask{ctx: ctx, rtc: rtc, req: req})
+			var captured *model.ScriptExecution
+			repo := &mockScriptExecutionRepo{
+				createFunc: func(_ context.Context, exec *model.ScriptExecution) error {
+					captured = exec
+					return nil
+				},
+			}
+			r := newTestRecorder(t, repo)
 
-	if captured == nil {
-		t.Fatal("expected repo.Create to be called")
-	}
-	if captured.Action != "eval" {
-		t.Errorf("Action = %q, want %q (default)", captured.Action, "eval")
+			rtc := testRtc(t, tt.params)
+			req := testResultReq()
+			ctx := testContext(t)
+
+			r.processTask(scriptRecordTask{ctx: ctx, rtc: rtc, req: req})
+
+			if captured == nil {
+				t.Fatal("expected repo.Create to be called")
+			}
+			if captured.Action != "eval" {
+				t.Errorf("Action = %q, want %q (default)", captured.Action, "eval")
+			}
+		})
 	}
 }
 
@@ -233,34 +246,6 @@ func TestProcessTask_EmptyTitle(t *testing.T) {
 	}
 	if captured.Title != "" {
 		t.Errorf("Title = %q, want empty", captured.Title)
-	}
-}
-
-func TestProcessTask_MalformedParameters(t *testing.T) {
-	t.Parallel()
-
-	var captured *model.ScriptExecution
-	repo := &mockScriptExecutionRepo{
-		createFunc: func(_ context.Context, exec *model.ScriptExecution) error {
-			captured = exec
-			return nil
-		},
-	}
-	r := newTestRecorder(t, repo)
-
-	// Malformed JSON — should not panic.
-	rtc := testRtc(t, `{not valid json`)
-	req := testResultReq()
-	ctx := testContext(t)
-
-	r.processTask(scriptRecordTask{ctx: ctx, rtc: rtc, req: req})
-
-	if captured == nil {
-		t.Fatal("expected repo.Create to be called even with malformed params")
-	}
-	// Default action should be "eval" since unmarshal failed.
-	if captured.Action != "eval" {
-		t.Errorf("Action = %q, want %q (default after malformed)", captured.Action, "eval")
 	}
 }
 

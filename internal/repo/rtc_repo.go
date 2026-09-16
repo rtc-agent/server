@@ -80,18 +80,7 @@ func (r *rtcRepo) FindByClientID(ctx context.Context, clientID string) (*model.R
 }
 
 func (r *rtcRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Rtc, error) {
-	var rtcs []*model.Rtc
-	q := DBFromContext(ctx, r.db).WithContext(ctx).Where("session_id = ?", sessionID).Order("created_at ASC")
-	if cursor != nil {
-		q = q.Where("id > ?", *cursor)
-	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if err := q.Limit(limit).Find(&rtcs).Error; err != nil {
-		return nil, fmt.Errorf("list rtcs by session %s: %w", sessionID, err)
-	}
-	return rtcs, nil
+	return listBySessionPaged[model.Rtc](ctx, r.db, sessionID, cursor, limit, "created_at ASC, id ASC", "id", ">", "rtcs")
 }
 
 func (r *rtcRepo) ListByTurn(ctx context.Context, turnID uuid.UUID) ([]*model.Rtc, error) {
@@ -165,16 +154,5 @@ func (r *rtcRepo) UpdateOutputMessageID(ctx context.Context, id uuid.UUID, outpu
 }
 
 func (r *rtcRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Rtc, error) {
-	if len(ids) == 0 {
-		return make(map[uuid.UUID]*model.Rtc), nil
-	}
-	var rtcs []*model.Rtc
-	if err := DBFromContext(ctx, r.db).WithContext(ctx).Where("id IN ?", ids).Find(&rtcs).Error; err != nil {
-		return nil, fmt.Errorf("get rtcs by ids: %w", err)
-	}
-	result := make(map[uuid.UUID]*model.Rtc, len(rtcs))
-	for _, rtc := range rtcs {
-		result[rtc.ID] = rtc
-	}
-	return result, nil
+	return getByIDs[model.Rtc](ctx, r.db, ids, func(r *model.Rtc) uuid.UUID { return r.ID }, "rtcs")
 }

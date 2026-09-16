@@ -94,18 +94,7 @@ func (r *turnRepo) FindByClientID(ctx context.Context, clientID string) (*model.
 }
 
 func (r *turnRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Turn, error) {
-	var turns []*model.Turn
-	q := DBFromContext(ctx, r.db).WithContext(ctx).Where("session_id = ?", sessionID).Order("created_at ASC")
-	if cursor != nil {
-		q = q.Where("id > ?", *cursor)
-	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if err := q.Limit(limit).Find(&turns).Error; err != nil {
-		return nil, fmt.Errorf("list turns by session %s: %w", sessionID, err)
-	}
-	return turns, nil
+	return listBySessionPaged[model.Turn](ctx, r.db, sessionID, cursor, limit, "created_at ASC, id ASC", "id", ">", "turns")
 }
 
 // FindActiveBySession returns all pending, running, or interrupted turns for a session.
@@ -208,18 +197,7 @@ func (r *turnRepo) UpdateStatusBySession(ctx context.Context, sessionID uuid.UUI
 }
 
 func (r *turnRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Turn, error) {
-	if len(ids) == 0 {
-		return make(map[uuid.UUID]*model.Turn), nil
-	}
-	var turns []*model.Turn
-	if err := DBFromContext(ctx, r.db).WithContext(ctx).Where("id IN ?", ids).Find(&turns).Error; err != nil {
-		return nil, fmt.Errorf("get turns by ids: %w", err)
-	}
-	result := make(map[uuid.UUID]*model.Turn, len(turns))
-	for _, t := range turns {
-		result[t.ID] = t
-	}
-	return result, nil
+	return getByIDs[model.Turn](ctx, r.db, ids, func(t *model.Turn) uuid.UUID { return t.ID }, "turns")
 }
 
 // CountBySessionAndStatus counts turns for a session with the given status.

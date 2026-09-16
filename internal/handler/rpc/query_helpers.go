@@ -64,3 +64,70 @@ func (h *Handler) getOwnedByID[T any](
 
 	return entity, userID, nil
 }
+
+// listBySessionCursor is a generic helper for cursor-paginated list handlers
+// that share the common auth + session ownership verification pattern.
+//
+// Parameters:
+//   - ctx: request context
+//   - sessionID: raw session ID string from the request
+//   - limit: raw limit from the request
+//   - cursor: cursor value from the request
+//   - entityName: entity name for log/error messages (e.g., "rtc", "turn")
+//   - list: function to fetch items from the repository
+//   - toProtocol: function to convert a domain model item to its protocol representation
+//   - getEntityID: function to extract the string ID from a domain model item (for nextCursor)
+func listBySessionCursor[T any, P any](
+	ctx context.Context,
+	h *Handler,
+	sessionID string,
+	reqLimit *int,
+	cursor *string,
+	entityName string,
+	list func(ctx context.Context, sessionUUID uuid.UUID, cursor *string, limit int) ([]*T, error),
+	toProtocol func(*T) P,
+	getEntityID func(*T) string,
+) ([]P, *string, error) {
+	userID, err := h.requireUserID(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	clampedLimit, apiErr := clampLimit(reqLimit, h.deps.API.QueryDefaultLimit, h.deps.API.QueryMaxLimit)
+	if apiErr != nil {
+		return nil, nil, apiErr
+	}
+
+	sessionUUID, apiErr := parseUUID(sessionID, "session_id")
+	if apiErr != nil {
+		return nil, nil, apiErr
+	}
+
+	if _, err := h.loadOwnedSession(ctx, sessionUUID, userID); err != nil {
+		return nil, nil, err
+	}
+
+	items, err := list(ctx, sessionUUID, cursor, clampedLimit)
+	if err != nil {
+		return nil, nil, h.internalError(ctx, entityName+".list_failed", "internal error", err)
+	}
+
+	protoItems := make([]P, 0, len(items))
+	for _, item := range items {
+		protoItems = append(protoItems, toProtocol(item))
+	}
+
+	var nextCursor *string
+	if len(items) == clampedLimit {
+		last := getEntityID(items[len(items)-1])
+		nextCursor = &last
+	}
+
+	logger.Info(ctx, "["+entityName+".list]",
+		zap.String("user", userID.String()),
+		zap.String("session", sessionID),
+		zap.Int("count", len(protoItems)),
+		zap.Bool("has_next", nextCursor != nil))
+
+	return protoItems, nextCursor, nil
+}

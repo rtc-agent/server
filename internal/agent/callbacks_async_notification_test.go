@@ -36,132 +36,138 @@ func TestAsyncSubAgentNotificationFormat(t *testing.T) {
 			name:        "completed status",
 			status:      "completed",
 			lastMessage: lastMessage,
-			validate: func(t *testing.T, content string) {
-				// Should contain system-reminder tags
-				if !strings.HasPrefix(content, "<system-reminder>\n") {
-					t.Errorf("Content should start with <system-reminder> tag, got: %s", content[:50])
-				}
-				if !strings.HasSuffix(content, "\n</system-reminder>") {
-					t.Errorf("Content should end with </system-reminder> tag")
-				}
-				// Should contain completion information
-				if !strings.Contains(content, "has completed") {
-					t.Error("Content should mention completion")
-				}
-				if !strings.Contains(content, subSession.Title) {
-					t.Error("Content should include session title")
-				}
-				if !strings.Contains(content, lastMessage.Content) {
-					t.Error("Content should include the result")
-				}
-				// Should NOT contain old [System Notification] format
-				if strings.Contains(content, "[System Notification]") {
-					t.Error("Content should not contain old [System Notification] format")
-				}
-			},
+			validate:    validateCompletedNotification(subSession, lastMessage),
 		},
 		{
 			name:         "failed status",
 			status:       "failed",
-			lastMessage:  nil,
 			errorMessage: strPtr("connection timeout"),
-			validate: func(t *testing.T, content string) {
-				if !strings.HasPrefix(content, "<system-reminder>\n") {
-					t.Errorf("Content should start with <system-reminder> tag")
-				}
-				if !strings.Contains(content, "has failed") {
-					t.Error("Content should mention failure")
-				}
-				if !strings.Contains(content, "connection timeout") {
-					t.Error("Content should include error message")
-				}
-			},
+			validate:     validateFailedNotification("connection timeout"),
 		},
 		{
 			name:         "cancelled status",
 			status:       "cancelled",
-			lastMessage:  nil,
 			errorMessage: strPtr("user requested cancellation"),
-			validate: func(t *testing.T, content string) {
-				if !strings.HasPrefix(content, "<system-reminder>\n") {
-					t.Errorf("Content should start with <system-reminder> tag")
-				}
-				if !strings.Contains(content, "has been cancelled") {
-					t.Error("Content should mention cancellation")
-				}
-				if !strings.Contains(content, "user requested cancellation") {
-					t.Error("Content should include cancellation reason")
-				}
-			},
+			validate:     validateCancelledNotification("user requested cancellation"),
 		},
 		{
-			name:        "unknown status",
-			status:      "unknown",
-			lastMessage: nil,
-			validate: func(t *testing.T, content string) {
-				if !strings.HasPrefix(content, "<system-reminder>\n") {
-					t.Errorf("Content should start with <system-reminder> tag")
-				}
-				if !strings.Contains(content, "unknown") {
-					t.Error("Content should include the status")
-				}
-			},
+			name:     "unknown status",
+			status:   "unknown",
+			validate: validateUnknownNotification(),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Simulate the notification text building logic from notifyParentAfterAsyncSubAgent
-			var notificationText string
-			switch tt.status {
-			case "completed":
-				result := "(no output)"
-				if tt.lastMessage != nil {
-					result = tt.lastMessage.Content
-				}
-				content := formatTestNotification(
-					"The async sub agent task has completed.\n- Session ID: %s\n- Title: %s\n- Status: completed\n\nResult:\n%s",
-					subSession.ID.String(),
-					subSession.Title,
-					result,
-				)
-				notificationText = turnagent.FormatSystemReminder(content)
-			case "failed":
-				errMsg := "(unknown error)"
-				if tt.errorMessage != nil {
-					errMsg = *tt.errorMessage
-				}
-				content := formatTestNotification(
-					"The async sub agent task has failed.\n- Session ID: %s\n- Title: %s\n- Status: failed\n\nError:\n%s",
-					subSession.ID.String(),
-					subSession.Title,
-					errMsg,
-				)
-				notificationText = turnagent.FormatSystemReminder(content)
-			case "cancelled":
-				reason := "(no reason given)"
-				if tt.errorMessage != nil {
-					reason = *tt.errorMessage
-				}
-				content := formatTestNotification(
-					"The async sub agent task has been cancelled.\n- Session ID: %s\n- Title: %s\n- Status: cancelled\n\nReason:\n%s",
-					subSession.ID.String(),
-					subSession.Title,
-					reason,
-				)
-				notificationText = turnagent.FormatSystemReminder(content)
-			default:
-				content := formatTestNotification(
-					"The async sub agent task has ended with status: %s.\n- Session ID: %s\n- Title: %s",
-					tt.status,
-					subSession.ID.String(),
-					subSession.Title,
-				)
-				notificationText = turnagent.FormatSystemReminder(content)
-			}
-
+			notificationText := buildTestNotification(tt.status, subSession, tt.lastMessage, tt.errorMessage)
 			tt.validate(t, notificationText)
 		})
+	}
+}
+
+// buildTestNotification mirrors the logic in notifyParentAfterAsyncSubAgent.
+func buildTestNotification(status string, subSession *model.Session, lastMsg *turnagent.Message, errMsg *string) string {
+	switch status {
+	case "completed":
+		result := "(no output)"
+		if lastMsg != nil {
+			result = lastMsg.Content
+		}
+		content := fmt.Sprintf(
+			"The async sub agent task has completed.\n- Session ID: %s\n- Title: %s\n- Status: completed\n\nResult:\n%s",
+			subSession.ID.String(), subSession.Title, result,
+		)
+		return turnagent.FormatSystemReminder(content)
+	case "failed":
+		err := "(unknown error)"
+		if errMsg != nil {
+			err = *errMsg
+		}
+		content := fmt.Sprintf(
+			"The async sub agent task has failed.\n- Session ID: %s\n- Title: %s\n- Status: failed\n\nError:\n%s",
+			subSession.ID.String(), subSession.Title, err,
+		)
+		return turnagent.FormatSystemReminder(content)
+	case "cancelled":
+		reason := "(no reason given)"
+		if errMsg != nil {
+			reason = *errMsg
+		}
+		content := fmt.Sprintf(
+			"The async sub agent task has been cancelled.\n- Session ID: %s\n- Title: %s\n- Status: cancelled\n\nReason:\n%s",
+			subSession.ID.String(), subSession.Title, reason,
+		)
+		return turnagent.FormatSystemReminder(content)
+	default:
+		content := fmt.Sprintf(
+			"The async sub agent task has ended with status: %s.\n- Session ID: %s\n- Title: %s",
+			status, subSession.ID.String(), subSession.Title,
+		)
+		return turnagent.FormatSystemReminder(content)
+	}
+}
+
+func validateCompletedNotification(subSession *model.Session, lastMsg *turnagent.Message) func(*testing.T, string) {
+	return func(t *testing.T, content string) {
+		t.Helper()
+		assertSystemReminderFormat(t, content)
+		requireContains(t, content, "has completed", subSession.Title, lastMsg.Content)
+		requireNotContains(t, content, "[System Notification]")
+	}
+}
+
+func validateFailedNotification(expectedErr string) func(*testing.T, string) {
+	return func(t *testing.T, content string) {
+		t.Helper()
+		assertSystemReminderFormat(t, content)
+		requireContains(t, content, "has failed", expectedErr)
+	}
+}
+
+func validateCancelledNotification(expectedReason string) func(*testing.T, string) {
+	return func(t *testing.T, content string) {
+		t.Helper()
+		assertSystemReminderFormat(t, content)
+		requireContains(t, content, "has been cancelled", expectedReason)
+	}
+}
+
+func validateUnknownNotification() func(*testing.T, string) {
+	return func(t *testing.T, content string) {
+		t.Helper()
+		assertSystemReminderFormat(t, content)
+		requireContains(t, content, "unknown")
+	}
+}
+
+// assertSystemReminderFormat verifies the standard system-reminder wrapper.
+func assertSystemReminderFormat(t *testing.T, content string) {
+	t.Helper()
+	if !strings.HasPrefix(content, "<system-reminder>\n") {
+		t.Errorf("content should start with <system-reminder> tag, got: %.50s", content)
+	}
+	if !strings.HasSuffix(content, "\n</system-reminder>") {
+		t.Error("content should end with </system-reminder> tag")
+	}
+}
+
+// requireContains asserts that content includes all expected substrings.
+func requireContains(t *testing.T, content string, substrs ...string) {
+	t.Helper()
+	for _, s := range substrs {
+		if !strings.Contains(content, s) {
+			t.Errorf("content should contain %q", s)
+		}
+	}
+}
+
+// requireNotContains asserts that content does not include any of the substrings.
+func requireNotContains(t *testing.T, content string, substrs ...string) {
+	t.Helper()
+	for _, s := range substrs {
+		if strings.Contains(content, s) {
+			t.Errorf("content should not contain %q", s)
+		}
 	}
 }
 
@@ -178,12 +184,6 @@ func TestAsyncSubAgentNotificationRole(t *testing.T) {
 	if expectedRole != "user" {
 		t.Errorf("Expected role to be 'user', got %s", expectedRole)
 	}
-}
-
-// formatTestNotification is a helper that formats notification content
-// (mirrors the logic in notifyParentAfterAsyncSubAgent)
-func formatTestNotification(format string, args ...interface{}) string {
-	return fmt.Sprintf(format, args...)
 }
 
 func strPtr(s string) *string {

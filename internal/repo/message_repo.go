@@ -201,18 +201,7 @@ func (r *messageRepo) ListBySessionBeforeOffset(ctx context.Context, sessionID u
 }
 
 func (r *messageRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Message, error) {
-	if len(ids) == 0 {
-		return make(map[uuid.UUID]*model.Message), nil
-	}
-	var messages []*model.Message
-	if err := DBFromContext(ctx, r.db).WithContext(ctx).Where("id IN ?", ids).Find(&messages).Error; err != nil {
-		return nil, fmt.Errorf("get messages by ids: %w", err)
-	}
-	result := make(map[uuid.UUID]*model.Message, len(messages))
-	for _, m := range messages {
-		result[m.ID] = m
-	}
-	return result, nil
+	return getByIDs[model.Message](ctx, r.db, ids, func(m *model.Message) uuid.UUID { return m.ID }, "messages")
 }
 
 func (r *messageRepo) UpdateTokenUsage(ctx context.Context, id uuid.UUID, usage *model.TokenUsageUpdate) error {

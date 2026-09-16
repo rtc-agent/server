@@ -444,46 +444,39 @@ func TestGoalRepo_ListBySession_Empty(t *testing.T) {
 
 // ─── All terminal statuses ───
 
-func TestGoalRepo_Update_CancelledStatus_AutoCompletedAt(t *testing.T) {
+func TestGoalRepo_Update_CancelledOrExhausted_AutoCompletedAt(t *testing.T) {
 	t.Parallel()
-	db := setupGoalTestDB(t)
-	repo := NewGoalRepo(db)
-	ctx := context.Background()
 
-	sessionID := uuid.New()
-	goal := newTestGoal(t, sessionID)
-	require.NoError(t, repo.Create(ctx, goal))
+	tests := []struct {
+		name   string
+		status model.GoalStatus
+	}{
+		{"cancelled", model.GoalStatusCancelled},
+		{"exhausted", model.GoalStatusExhausted},
+	}
 
-	err := repo.Update(ctx, goal.ID, map[string]any{
-		"status": model.GoalStatusCancelled,
-	})
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			db := setupGoalTestDB(t)
+			repo := NewGoalRepo(db)
+			ctx := context.Background()
 
-	got, err := repo.GetByID(ctx, goal.ID)
-	require.NoError(t, err)
-	assert.Equal(t, model.GoalStatusCancelled, got.Status)
-	assert.NotNil(t, got.CompletedAt)
-}
+			sessionID := uuid.New()
+			goal := newTestGoal(t, sessionID)
+			require.NoError(t, repo.Create(ctx, goal))
 
-func TestGoalRepo_Update_ExhaustedStatus_AutoCompletedAt(t *testing.T) {
-	t.Parallel()
-	db := setupGoalTestDB(t)
-	repo := NewGoalRepo(db)
-	ctx := context.Background()
+			err := repo.Update(ctx, goal.ID, map[string]any{
+				"status": tt.status,
+			})
+			require.NoError(t, err)
 
-	sessionID := uuid.New()
-	goal := newTestGoal(t, sessionID)
-	require.NoError(t, repo.Create(ctx, goal))
-
-	err := repo.Update(ctx, goal.ID, map[string]any{
-		"status": model.GoalStatusExhausted,
-	})
-	require.NoError(t, err)
-
-	got, err := repo.GetByID(ctx, goal.ID)
-	require.NoError(t, err)
-	assert.Equal(t, model.GoalStatusExhausted, got.Status)
-	assert.NotNil(t, got.CompletedAt)
+			got, err := repo.GetByID(ctx, goal.ID)
+			require.NoError(t, err)
+			assert.Equal(t, tt.status, got.Status)
+			assert.NotNil(t, got.CompletedAt)
+		})
+	}
 }
 
 // ─── Update with status field but non-terminal ───

@@ -648,46 +648,39 @@ func TestLoopRepo_FindExpiredLoops_Empty(t *testing.T) {
 
 // ─── Additional terminal status coverage ───
 
-func TestLoopRepo_Update_CancelledStatus_AutoCompletedAt(t *testing.T) {
+func TestLoopRepo_Update_CancelledOrExhausted_AutoCompletedAt(t *testing.T) {
 	t.Parallel()
-	db := setupLoopTestDB(t)
-	repo := NewLoopRepo(db)
-	ctx := context.Background()
 
-	sessionID := uuid.New()
-	loop := newTestLoop(t, sessionID)
-	require.NoError(t, repo.Create(ctx, loop))
+	tests := []struct {
+		name   string
+		status model.LoopStatus
+	}{
+		{"cancelled", model.LoopStatusCancelled},
+		{"exhausted", model.LoopStatusExhausted},
+	}
 
-	err := repo.Update(ctx, loop.ID, map[string]any{
-		"status": model.LoopStatusCancelled,
-	})
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			db := setupLoopTestDB(t)
+			repo := NewLoopRepo(db)
+			ctx := context.Background()
 
-	got, err := repo.GetByID(ctx, loop.ID)
-	require.NoError(t, err)
-	assert.Equal(t, model.LoopStatusCancelled, got.Status)
-	assert.NotNil(t, got.CompletedAt)
-}
+			sessionID := uuid.New()
+			loop := newTestLoop(t, sessionID)
+			require.NoError(t, repo.Create(ctx, loop))
 
-func TestLoopRepo_Update_ExhaustedStatus_AutoCompletedAt(t *testing.T) {
-	t.Parallel()
-	db := setupLoopTestDB(t)
-	repo := NewLoopRepo(db)
-	ctx := context.Background()
+			err := repo.Update(ctx, loop.ID, map[string]any{
+				"status": tt.status,
+			})
+			require.NoError(t, err)
 
-	sessionID := uuid.New()
-	loop := newTestLoop(t, sessionID)
-	require.NoError(t, repo.Create(ctx, loop))
-
-	err := repo.Update(ctx, loop.ID, map[string]any{
-		"status": model.LoopStatusExhausted,
-	})
-	require.NoError(t, err)
-
-	got, err := repo.GetByID(ctx, loop.ID)
-	require.NoError(t, err)
-	assert.Equal(t, model.LoopStatusExhausted, got.Status)
-	assert.NotNil(t, got.CompletedAt)
+			got, err := repo.GetByID(ctx, loop.ID)
+			require.NoError(t, err)
+			assert.Equal(t, tt.status, got.Status)
+			assert.NotNil(t, got.CompletedAt)
+		})
+	}
 }
 
 // ─── Paused status (non-terminal, should not trigger completed_at) ───

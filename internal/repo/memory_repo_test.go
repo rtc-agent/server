@@ -451,41 +451,39 @@ func TestMemoryRepo_ListRecentForInjection_TokenBudget(t *testing.T) {
 	assert.Len(t, result2, 2)
 }
 
-func TestMemoryRepo_ListRecentForInjection_SingleMemoryExceedsBudget(t *testing.T) {
+func TestMemoryRepo_ListRecentForInjection_BudgetEdgeCases(t *testing.T) {
 	t.Parallel()
-	db := setupMemoryTestDB(t)
-	repo := newTestMemoryRepo(db)
-	ctx := context.Background()
 
-	sessionID := uuid.New()
-	mem := newTestMemoryRecord(t, memory.ScopeSession, sessionID, "context")
-	mem.Title = "big"
-	mem.TokenCount = 5000
-	require.NoError(t, repo.Create(ctx, mem))
+	tests := []struct {
+		name       string
+		title      string
+		tokenCount int
+		maxCount   int
+		budget     int
+	}{
+		{"single memory exceeds budget", "big", 5000, 10, 100},
+		{"zero token count", "zero-tokens", 0, 10, 1},
+	}
 
-	// Budget is 100, but the single memory should still be included
-	result, err := repo.ListRecentForInjection(ctx, memory.ScopeSession, sessionID, 10, 100)
-	require.NoError(t, err)
-	assert.Len(t, result, 1)
-	assert.Equal(t, "big", result[0].Title)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			db := setupMemoryTestDB(t)
+			repo := newTestMemoryRepo(db)
+			ctx := context.Background()
 
-func TestMemoryRepo_ListRecentForInjection_ZeroTokenCount(t *testing.T) {
-	t.Parallel()
-	db := setupMemoryTestDB(t)
-	repo := newTestMemoryRepo(db)
-	ctx := context.Background()
+			sessionID := uuid.New()
+			mem := newTestMemoryRecord(t, memory.ScopeSession, sessionID, "context")
+			mem.Title = tt.title
+			mem.TokenCount = tt.tokenCount
+			require.NoError(t, repo.Create(ctx, mem))
 
-	sessionID := uuid.New()
-	mem := newTestMemoryRecord(t, memory.ScopeSession, sessionID, "context")
-	mem.Title = "zero-tokens"
-	mem.TokenCount = 0
-	require.NoError(t, repo.Create(ctx, mem))
-
-	result, err := repo.ListRecentForInjection(ctx, memory.ScopeSession, sessionID, 10, 1)
-	require.NoError(t, err)
-	assert.Len(t, result, 1)
-	assert.Equal(t, "zero-tokens", result[0].Title)
+			result, err := repo.ListRecentForInjection(ctx, memory.ScopeSession, sessionID, tt.maxCount, tt.budget)
+			require.NoError(t, err)
+			assert.Len(t, result, 1)
+			assert.Equal(t, tt.title, result[0].Title)
+		})
+	}
 }
 
 // ─── Search Tests ───

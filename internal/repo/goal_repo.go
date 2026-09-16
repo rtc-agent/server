@@ -82,18 +82,7 @@ func (r *goalRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]a
 }
 
 func (r *goalRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Goal, error) {
-	var goals []*model.Goal
-	q := DBFromContext(ctx, r.db).WithContext(ctx).Where("session_id = ?", sessionID).Order("created_at DESC")
-	if cursor != nil {
-		q = q.Where("id < ?", *cursor)
-	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if err := q.Limit(limit).Find(&goals).Error; err != nil {
-		return nil, fmt.Errorf("list goals for session %s: %w", sessionID, err)
-	}
-	return goals, nil
+	return listBySessionPaged[model.Goal](ctx, r.db, sessionID, cursor, limit, "created_at DESC, id DESC", "id", "<", "goals")
 }
 
 // ensure interfaces
