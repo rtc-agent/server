@@ -23,7 +23,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // newTestQueue spins up a miniredis server and returns a Queue bound to it.
-func newTestQueue(t *testing.T) (*rtcqueue.Queue, *miniredis.Miniredis) {
+func newTestQueue(t *testing.T) *rtcqueue.Queue {
 	t.Helper()
 	mr, err := miniredis.Run()
 	if err != nil {
@@ -34,7 +34,7 @@ func newTestQueue(t *testing.T) (*rtcqueue.Queue, *miniredis.Miniredis) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
 
-	return rtcqueue.New(rdb), mr
+	return rtcqueue.New(rdb)
 }
 
 // mockAgent is a minimal adk.Agent for testing.
@@ -65,11 +65,11 @@ func (a *mockAgent) Run(ctx context.Context, input *adk.AgentInput, _ ...adk.Age
 }
 
 // publishWorkJSON marshals a WorkPayload and publishes it to the queue.
-func publishWorkJSON(t *testing.T, ctx context.Context, q *rtcqueue.Queue, sessionID string, payload WorkPayload, priority int64) string {
+func publishWorkJSON(t *testing.T, ctx context.Context, q *rtcqueue.Queue, sessionID string, payload WorkPayload) string {
 	t.Helper()
 	data, err := json.Marshal(payload)
 	require.NoError(t, err)
-	id, err := q.Publish(ctx, sessionID, string(data), priority)
+	id, err := q.Publish(ctx, sessionID, string(data), 1)
 	require.NoError(t, err)
 	return id
 }
@@ -198,12 +198,12 @@ func TestWorkTracker_IdempotentComplete(t *testing.T) {
 
 func TestRegistry_GetOrCreate_New(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 	sessionID := "session-1"
 
 	// Publish work so claim can succeed.
-	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID}, 1)
+	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID})
 
 	registry := NewSessionManagerRegistry()
 	cfg := minimalConfig(t)
@@ -220,11 +220,11 @@ func TestRegistry_GetOrCreate_New(t *testing.T) {
 
 func TestRegistry_GetOrCreate_Existing(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 	sessionID := "session-2"
 
-	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID}, 1)
+	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID})
 
 	registry := NewSessionManagerRegistry()
 	cfg := minimalConfig(t)
@@ -245,11 +245,11 @@ func TestRegistry_GetOrCreate_Existing(t *testing.T) {
 
 func TestRegistry_Remove(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 	sessionID := "session-3"
 
-	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID}, 1)
+	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID})
 
 	registry := NewSessionManagerRegistry()
 	cfg := minimalConfig(t)
@@ -268,7 +268,7 @@ func TestRegistry_Remove(t *testing.T) {
 
 func TestRegistry_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 
 	registry := NewSessionManagerRegistry()
@@ -283,7 +283,7 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			sessionID := fmt.Sprintf("session-concurrent-%d", id)
-			publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID}, 1)
+			publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID})
 			mgr, _, err := registry.GetOrCreate(ctx, q, sessionID, "worker-1", "turn-1", "cp-1", "", cfg, noopLogFn)
 			if err != nil {
 				return
@@ -313,11 +313,11 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 
 func TestSessionTurnManager_CreatedWithCredential(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 	sessionID := "session-mgr-1"
 
-	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID}, 1)
+	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID})
 
 	claim, err := q.ClaimWithCredential(ctx, sessionID, "worker-1", "")
 	require.NoError(t, err)
@@ -337,7 +337,7 @@ func TestSessionTurnManager_CreatedWithCredential(t *testing.T) {
 
 func TestSessionTurnManager_EmptyCredential(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 
 	cfg := minimalConfig(t)
@@ -352,11 +352,11 @@ func TestSessionTurnManager_EmptyCredential(t *testing.T) {
 
 func TestSessionTurnManager_UpdateCredential(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 	sessionID := "session-cred"
 
-	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID}, 1)
+	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID})
 
 	claim, err := q.ClaimWithCredential(ctx, sessionID, "worker-1", "")
 	require.NoError(t, err)
@@ -379,11 +379,11 @@ func TestSessionTurnManager_UpdateCredential(t *testing.T) {
 
 func TestSessionTurnManager_SetCancelledByQueue(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 	sessionID := "session-cancel"
 
-	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID}, 1)
+	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID})
 
 	claim, err := q.ClaimWithCredential(ctx, sessionID, "worker-1", "")
 	require.NoError(t, err)
@@ -405,11 +405,11 @@ func TestSessionTurnManager_SetCancelledByQueue(t *testing.T) {
 
 func TestSessionTurnManager_LastMessage(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 	sessionID := "session-msg"
 
-	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID}, 1)
+	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID})
 
 	claim, err := q.ClaimWithCredential(ctx, sessionID, "worker-1", "")
 	require.NoError(t, err)
@@ -430,11 +430,11 @@ func TestSessionTurnManager_LastMessage(t *testing.T) {
 
 func TestSessionTurnManager_DoneChannel(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 	sessionID := "session-done"
 
-	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID}, 1)
+	publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID})
 
 	claim, err := q.ClaimWithCredential(ctx, sessionID, "worker-1", "")
 	require.NoError(t, err)
@@ -470,12 +470,12 @@ func TestSessionTurnManager_DoneChannel(t *testing.T) {
 
 func TestRequeueWork(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 	sessionID := "session-requeue"
 
 	// Publish and claim a work item.
-	workID := publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID}, 1)
+	workID := publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID})
 	claim, err := q.ClaimWithCredential(ctx, sessionID, "worker-1", "")
 	require.NoError(t, err)
 	require.NotNil(t, claim)
@@ -498,7 +498,7 @@ func TestRequeueWork(t *testing.T) {
 
 func TestRequeueWork_NotFound(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 
 	err := q.RequeueWork(ctx, "nonexistent")
@@ -508,12 +508,12 @@ func TestRequeueWork_NotFound(t *testing.T) {
 
 func TestRequeueWork_NotProcessing(t *testing.T) {
 	t.Parallel()
-	q, _ := newTestQueue(t)
+	q := newTestQueue(t)
 	ctx := context.Background()
 	sessionID := "session-requeue-pending"
 
 	// Publish but don't claim — work stays pending.
-	workID := publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID}, 1)
+	workID := publishWorkJSON(t, ctx, q, sessionID, WorkPayload{Kind: WorkKindSubmit, SessionID: sessionID})
 
 	// Requeue should fail because work is not in processing state.
 	err := q.RequeueWork(ctx, workID)

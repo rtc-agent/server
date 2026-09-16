@@ -176,7 +176,7 @@ func newTestSigner(t *testing.T) *auth.JWTSigner {
 
 // newTestHandler creates a MemoriesHandler with mock repos for testing.
 // allowDevBypass is always true in tests.
-func newTestHandler(t *testing.T, userID uuid.UUID) (*MemoriesHandler, *mockMemoryRepo, *mockSessionRepo) {
+func newTestHandler(t *testing.T) (*MemoriesHandler, *mockMemoryRepo, *mockSessionRepo) {
 	t.Helper()
 	signer := newTestSigner(t)
 	memRepo := &mockMemoryRepo{}
@@ -227,7 +227,7 @@ func validExportRequest(scope, scopeID string) ExportRequest {
 
 func TestExportMemories_DevBypass_Success(t *testing.T) {
 	userID := uuid.New()
-	h, memRepo, _ := newTestHandler(t, userID)
+	h, memRepo, _ := newTestHandler(t)
 	mux := muxWithAuth(h)
 
 	// Add a memory for the user
@@ -258,7 +258,7 @@ func TestExportMemories_DevBypass_Success(t *testing.T) {
 
 func TestExportMemories_JWTAuth_Success(t *testing.T) {
 	userID := uuid.New()
-	h, memRepo, _ := newTestHandler(t, userID)
+	h, memRepo, _ := newTestHandler(t)
 	mux := muxWithAuth(h)
 
 	now := time.Now().UTC()
@@ -292,7 +292,7 @@ func TestExportMemories_JWTAuth_Success(t *testing.T) {
 
 func TestExportMemories_NoAuth_Returns401(t *testing.T) {
 	userID := uuid.New()
-	h, _, _ := newTestHandler(t, userID)
+	h, _, _ := newTestHandler(t)
 	mux := muxWithAuth(h)
 
 	// No auth headers at all
@@ -303,7 +303,7 @@ func TestExportMemories_NoAuth_Returns401(t *testing.T) {
 
 func TestExportMemories_InvalidJWT_Returns401(t *testing.T) {
 	userID := uuid.New()
-	h, _, _ := newTestHandler(t, userID)
+	h, _, _ := newTestHandler(t)
 	mux := muxWithAuth(h)
 
 	rec := doExportRequest(mux, validExportRequest("user", userID.String()), map[string]string{
@@ -315,7 +315,7 @@ func TestExportMemories_InvalidJWT_Returns401(t *testing.T) {
 
 func TestExportMemories_UserScope_ForbiddenWhenScopeIdMismatch(t *testing.T) {
 	userID := uuid.New()
-	h, _, _ := newTestHandler(t, userID)
+	h, _, _ := newTestHandler(t)
 	mux := muxWithAuth(h)
 
 	// Request export for a different user's scope
@@ -334,7 +334,7 @@ func TestExportMemories_UserScope_ForbiddenWhenScopeIdMismatch(t *testing.T) {
 
 func TestExportMemories_SessionScope_ForbiddenWhenNotOwner(t *testing.T) {
 	userID := uuid.New()
-	h, _, sessRepo := newTestHandler(t, userID)
+	h, _, sessRepo := newTestHandler(t)
 	mux := muxWithAuth(h)
 
 	// Create a session owned by a different user
@@ -359,7 +359,7 @@ func TestExportMemories_SessionScope_ForbiddenWhenNotOwner(t *testing.T) {
 
 func TestExportMemories_SessionScope_NotFound(t *testing.T) {
 	userID := uuid.New()
-	h, _, _ := newTestHandler(t, userID)
+	h, _, _ := newTestHandler(t)
 	mux := muxWithAuth(h)
 
 	// Request a session that doesn't exist
@@ -378,7 +378,7 @@ func TestExportMemories_SessionScope_NotFound(t *testing.T) {
 
 func TestExportMemories_SessionScope_SuccessWhenOwner(t *testing.T) {
 	userID := uuid.New()
-	h, _, sessRepo := newTestHandler(t, userID)
+	h, _, sessRepo := newTestHandler(t)
 	mux := muxWithAuth(h)
 
 	// Create a session owned by the authenticated user
@@ -399,7 +399,7 @@ func TestExportMemories_SessionScope_SuccessWhenOwner(t *testing.T) {
 
 func TestExportMemories_MaxBytesExceeded_Returns413(t *testing.T) {
 	userID := uuid.New()
-	h, _, _ := newTestHandler(t, userID)
+	h, _, _ := newTestHandler(t)
 	mux := muxWithAuth(h)
 
 	// Create a body larger than 1MB (the MaxBytesReader limit)
@@ -421,7 +421,7 @@ func TestExportMemories_MaxBytesExceeded_Returns413(t *testing.T) {
 
 func TestExportMemories_GlobalScope_NoOwnershipCheck(t *testing.T) {
 	userID := uuid.New()
-	h, _, _ := newTestHandler(t, userID)
+	h, _, _ := newTestHandler(t)
 	mux := muxWithAuth(h)
 
 	// Global scope should not require ownership check

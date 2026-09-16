@@ -73,9 +73,9 @@ func testRtc(t *testing.T, paramsJSON string) *model.Rtc {
 	}
 }
 
-func testResultReq(success bool) *protocol.SubmitRtcResultRequest {
+func testResultReq() *protocol.SubmitRtcResultRequest {
 	return &protocol.SubmitRtcResultRequest{
-		Success: success,
+		Success: true,
 		Result: map[string]any{
 			"duration_ms": float64(42),
 			"logs":        []any{"hello", "world"},
@@ -108,7 +108,7 @@ func TestProcessTask_Success(t *testing.T) {
 
 	params := `{"title":"测试脚本","action":"run","name":"demo","code":"console.log(1)"}`
 	rtc := testRtc(t, params)
-	req := testResultReq(true)
+	req := testResultReq()
 	ctx := testContext(t)
 
 	r.processTask(scriptRecordTask{ctx: ctx, rtc: rtc, req: req})
@@ -196,7 +196,7 @@ func TestProcessTask_DefaultAction(t *testing.T) {
 
 	// Parameters without "action" field.
 	rtc := testRtc(t, `{"title":"默认action","code":"1+1"}`)
-	req := testResultReq(true)
+	req := testResultReq()
 	ctx := testContext(t)
 
 	r.processTask(scriptRecordTask{ctx: ctx, rtc: rtc, req: req})
@@ -222,7 +222,7 @@ func TestProcessTask_EmptyTitle(t *testing.T) {
 	r := newTestRecorder(t, repo)
 
 	rtc := testRtc(t, `{"title":"","action":"eval","code":"x"}`)
-	req := testResultReq(true)
+	req := testResultReq()
 	ctx := testContext(t)
 
 	// Should not panic.
@@ -250,7 +250,7 @@ func TestProcessTask_MalformedParameters(t *testing.T) {
 
 	// Malformed JSON — should not panic.
 	rtc := testRtc(t, `{not valid json`)
-	req := testResultReq(true)
+	req := testResultReq()
 	ctx := testContext(t)
 
 	r.processTask(scriptRecordTask{ctx: ctx, rtc: rtc, req: req})
@@ -311,7 +311,7 @@ func TestProcessTask_CodeHashComputation(t *testing.T) {
 	code := "console.log('hello world')"
 	params := fmt.Sprintf(`{"title":"hash test","action":"eval","code":%s}`, mustJSON(code))
 	rtc := testRtc(t, params)
-	req := testResultReq(true)
+	req := testResultReq()
 	ctx := testContext(t)
 
 	r.processTask(scriptRecordTask{ctx: ctx, rtc: rtc, req: req})
@@ -342,7 +342,7 @@ func TestProcessTask_DBCreateFails(t *testing.T) {
 	r := newTestRecorder(t, repo)
 
 	rtc := testRtc(t, `{"title":"db fail","action":"eval","code":"x"}`)
-	req := testResultReq(true)
+	req := testResultReq()
 	ctx := testContext(t)
 
 	// Should not panic when DB create fails.
@@ -366,7 +366,7 @@ func TestRecorder_SubmitProcessesTask(t *testing.T) {
 	r := newTestRecorder(t, repo)
 
 	rtc := testRtc(t, `{"title":"submit test","action":"eval","code":"x"}`)
-	req := testResultReq(true)
+	req := testResultReq()
 	ctx := testContext(t)
 
 	r.submit(ctx, rtc, req)
@@ -404,7 +404,7 @@ func TestRecorder_ChannelFullDropsTask(t *testing.T) {
 
 	ctx := testContext(t)
 	rtc := testRtc(t, `{"title":"t1","action":"eval","code":"x"}`)
-	req := testResultReq(true)
+	req := testResultReq()
 
 	// First submit fills the worker.
 	r.submit(ctx, rtc, req)
@@ -444,7 +444,7 @@ func TestRecorder_ShutdownDrainsTasks(t *testing.T) {
 
 	ctx := testContext(t)
 	rtc := testRtc(t, `{"title":"drain test","action":"eval","code":"x"}`)
-	req := testResultReq(true)
+	req := testResultReq()
 
 	// Submit 10 tasks.
 	for i := 0; i < 10; i++ {
@@ -476,7 +476,7 @@ func TestRecorder_WorkerPanicRecovery(t *testing.T) {
 
 	ctx := testContext(t)
 	rtc := testRtc(t, `{"title":"panic test","action":"eval","code":"x"}`)
-	req := testResultReq(true)
+	req := testResultReq()
 
 	// First task will panic in repo.Create via safeProcessTask.
 	r.submit(ctx, rtc, req)
@@ -513,7 +513,7 @@ func TestRecorder_ConcurrentSubmit(t *testing.T) {
 
 	ctx := testContext(t)
 	rtc := testRtc(t, `{"title":"concurrent","action":"eval","code":"x"}`)
-	req := testResultReq(true)
+	req := testResultReq()
 
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
