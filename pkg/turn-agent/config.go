@@ -124,7 +124,6 @@ type CompleteTurnFunc func(ctx context.Context, sessionID string, turnID string,
 // allInterruptContexts contains all interrupt contexts. Each context has:
 //   - ID: eino's internal interrupt ID (used as key in ResumeParams.Targets)
 //   - Info: the opaque info passed to StatefulInterrupt
-//   - State: the opaque state passed to StatefulInterrupt
 //
 // The eino checkpoint has already been persisted to the CheckpointStore.
 // The implementation should persist the "interrupted" state and notify the
