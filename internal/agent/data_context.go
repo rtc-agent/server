@@ -12,7 +12,6 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -85,15 +84,11 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		}
 	}
 
-	// Filter out meaningless thinking messages that may appear after interrupt/resume.
-	// These are typically very short (like "...\n") and don't contain useful reasoning.
+	// Filter out meaningless thinking messages (e.g., "...\\n") from interrupt/resume.
 	messages = filterMeaninglessThinking(messages)
 
-	// Merge consecutive thinking + text messages from the same assistant turn.
-	// The streaming handler stores thinking and text as separate DB messages;
-	// when loaded back, the thinking-only message has Content="" which causes
-	// the Claude adapter to produce an empty text block fallback.
-	// This merge eliminates those empty-content messages before they reach the LLM.
+	// Merge consecutive thinking + text messages from the same assistant turn
+	// to prevent empty-content messages from reaching the LLM adapter.
 	messages = mergeAssistantMessages(messages)
 
 	// Apply context management: tool result budget and microcompact
@@ -169,10 +164,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		h.triggerSessionMemoryExtraction(ctx, sid, messages)
 	}
 
-	// Debug logging: record ALL loaded messages for troubleshooting.
-	// Uses Debug level because this logs full message previews per LLM
-	// call — too verbose for Info in production.
-	// Print each message's role and first 10 characters to diagnose checkpoint resume issues.
+	// Debug logging: record all loaded message previews (Debug level to avoid production noise).
 	if len(messages) > 0 {
 		var preview []string
 		for i, msg := range messages {
@@ -503,243 +495,4 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 		i++
 	}
 	return result
-}
-
-// injectCommandPrompts runs the slash-command framework's DetectAndInject,
-// converting the returned PromptContributions to turnagent Messages.
-// If the registry has no commands or none match, this is a no-op.
-//
-// Each contributed prompt is wrapped with an XML tag identifying the
-// contributing command, so the LLM can distinguish sources:
-//
-//	<command name="persona">…</command>
-//
-// Message ordering: System messages are prepended to the message array
-// (Claude API requires system messages at the start). User messages are
-// appended to the end. This ensures valid message sequence for the LLM.
-func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID, messages []*turnagent.Message) []*turnagent.Message {
-	if h.deps.CommandRegistry == nil {
-		return messages
-	}
-
-	// Extract last user message content.
-	var lastUserContent string
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == turnagent.RoleUser {
-			lastUserContent = messages[i].Content
-			break
-		}
-	}
-
-	cmdCtx := command.Context{
-		Context:   ctx,
-		SessionID: sessionID,
-	}
-	contributions, err := h.deps.CommandRegistry.DetectAndInject(cmdCtx, lastUserContent)
-	if err != nil || len(contributions) == 0 {
-		return messages
-	}
-
-	// Separate system and user contributions.
-	// System messages must be at the start of the message array per Claude API.
-	var systemMsgs, userMsgs []*turnagent.Message
-	for _, nc := range contributions {
-		msg := &turnagent.Message{
-			Role:    nc.Contribution.Role,
-			Content: wrapWithTag(nc.CommandName, nc.Contribution.Content),
-		}
-		if nc.Contribution.Role == turnagent.RoleSystem {
-			systemMsgs = append(systemMsgs, msg)
-		} else {
-			userMsgs = append(userMsgs, msg)
-		}
-	}
-
-	// Prepend system messages, append user messages.
-	if len(systemMsgs) > 0 {
-		messages = append(systemMsgs, messages...)
-	}
-	if len(userMsgs) > 0 {
-		messages = append(messages, userMsgs...)
-	}
-	return messages
-}
-
-func wrapWithTag(name, content string) string {
-	return "<command name=\"" + escapeXMLAttr(name) + "\">\n" + escapeXMLContent(content) + "\n</command>"
-}
-
-// injectScenarioPrompts 注入场景内容作为系统提示词
-// 从最后一条 user 消息的 ContentData 中提取 scenarios，将每个 scenario 的 FileContent
-// 包裹为 <scenario> 标签，作为 system message 注入到消息数组开头。
-//
-// dbMsgs is the already-loaded DB messages from loadMessages, passed to avoid
-// a redundant DB query. The scenarios field is only available in the raw
-// model.Message (lost during convertDBMessage).
-//
-// 注入顺序（最终）：
-// [system] Attachments (TodoList, SessionMemory, UserMemory)
-// [system] Scenarios (本函数注入)
-// [system] Command prompts (/goal, /persona, etc.)
-// [user/assistant] Conversation history
-func (h *helpers) injectScenarioPrompts(
-	ctx context.Context,
-	sessionID uuid.UUID,
-	messages []*turnagent.Message,
-	dbMsgs []*model.Message,
-) []*turnagent.Message {
-	if len(messages) == 0 {
-		return messages
-	}
-
-	// 复用调用方已加载的 dbMsgs，避免重复查询数据库。
-	// scenarios 信息仅在原始 model.Message 中可用（convertDBMessage 转换后丢失）。
-	if len(dbMsgs) == 0 {
-		return messages
-	}
-
-	// 找到最后一条 user 消息
-	var lastUserMsg *model.Message
-	for i := len(dbMsgs) - 1; i >= 0; i-- {
-		if dbMsgs[i].Role == string(schema.User) {
-			lastUserMsg = dbMsgs[i]
-			break
-		}
-	}
-
-	if lastUserMsg == nil {
-		return messages
-	}
-
-	// 解析 ContentData
-	contentData, err := primitives.ParseContentData(lastUserMsg.Content)
-	if err != nil {
-		return messages
-	}
-
-	// 只处理 user_message 类型
-	if contentData.Type != protocol.ContentTypeUserMessage {
-		return messages
-	}
-
-	// 解析 UserMessageContent
-	umc, err := primitives.ParseUserMessageContent(contentData.Data)
-	if err != nil {
-		return messages
-	}
-
-	// 检查是否有 scenarios
-	if umc.Scenarios == nil || len(*umc.Scenarios) == 0 {
-		return messages
-	}
-
-	// 构建场景提示词
-	var scenarioPrompts []string
-	for _, scenario := range *umc.Scenarios {
-		if scenario.Title != "" && scenario.FileContent != "" {
-			scenarioPrompts = append(scenarioPrompts,
-				fmt.Sprintf("<scenario title=\"%s\">\n%s\n</scenario>",
-					escapeXMLAttr(scenario.Title),
-					escapeXMLContent(scenario.FileContent)))
-		}
-	}
-
-	if len(scenarioPrompts) == 0 {
-		return messages
-	}
-
-	// 拼接所有场景
-	combinedScenarios := strings.Join(scenarioPrompts, "\n\n")
-
-	// 创建 system 消息
-	scenarioMsg := &turnagent.Message{
-		Role:    turnagent.RoleSystem,
-		Content: fmt.Sprintf("<scenarios>\n%s\n</scenarios>", combinedScenarios),
-	}
-
-	// 插入到消息数组开头（system 消息必须在最前面）
-	// 注意：attachments 会在后续 prepend，所以最终顺序是：
-	// [system] Attachments
-	// [system] Scenarios (本函数注入)
-	// [system] Command prompts
-	// [conversation history]
-	messages = append([]*turnagent.Message{scenarioMsg}, messages...)
-
-	return messages
-}
-
-// =============================================================================
-// Strategic Cache Breakpoints
-// =============================================================================
-//
-// Strategic cache breakpoints protect stable content from invalidation caused
-// by microcompact or tool result budget modifications. The key insight is that
-// these modifications only affect messages after the summary boundary, so by
-// setting a breakpoint at the summary, we ensure the prefix (system + attachments
-// + summary) remains cacheable.
-//
-// Breakpoint allocation (Anthropic API limit: 4 per request):
-//   - bp1: summary message (protects all stable content)
-//   - bp2: last conversation message (protects latest context)
-//   - bp3: last tool definition (set automatically by AutoCacheControl)
-//   - Total: 2 manual + 1 auto = 3, leaving 1 spare
-
-// setCacheBreakpoints sets strategic cache breakpoints to protect stable content
-// from invalidation caused by microcompact or applyToolResultBudget modifications.
-//
-// IMPORTANT: This function must be called AFTER normalizeMessagesForLLM(), which
-// reorders system messages (extracts them to the front). The summary boundary
-// marker is set by buildMessagesFromSummaryItems and survives normalization.
-//
-// Breakpoint allocation strategy:
-//   - bp1 (summary, TTL=1h): Set on the last summary message identified by
-//     ExtraKeySummaryBoundary. Protects all stable content (system + attachments
-//   - summary). Uses 1h TTL because summary content is long-lived.
-//   - bp2 (last msg, TTL=5m): Set on the last user/assistant message. Protects
-//     the latest conversation context. Uses 5m TTL (default).
-//
-// Why bp2 is necessary: AutoCacheControl detects any manual message breakpoint
-// and skips its automatic breakpoint on the last message. We must explicitly set
-// bp2 to ensure the last message is cached.
-func (h *helpers) setCacheBreakpoints(msgs []*turnagent.Message) []*turnagent.Message {
-	if len(msgs) == 0 {
-		return msgs
-	}
-
-	// bp1: Set on the summary boundary message (search from the end to find
-	// the most recent summary if multiple exist).
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if isSummaryMessage(msgs[i]) {
-			msgs[i].CacheBreakpoint = true
-			msgs[i].CacheTTL = "1h" // Summary is stable, use long TTL
-			break
-		}
-	}
-
-	// bp2: Set on the last conversation message (user or assistant).
-	// This ensures the latest context is cached, compensating for AutoCacheControl's
-	// skip behavior when manual breakpoints are detected.
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == turnagent.RoleUser || msgs[i].Role == turnagent.RoleAssistant {
-			msgs[i].CacheBreakpoint = true
-			msgs[i].CacheTTL = "5m" // Latest context uses default TTL
-			break
-		}
-	}
-
-	return msgs
-}
-
-// isSummaryMessage checks if a message is marked as the summary boundary.
-// Uses Extra[ExtraKeySummaryBoundary] rather than text detection, which is fragile
-// (streaming path stores raw LLM output without wrapper text).
-//
-// All summary messages in the DB use Role="system", but we don't check Role here
-// to keep the function focused on the marker alone.
-func isSummaryMessage(m *turnagent.Message) bool {
-	if m.Extra == nil {
-		return false
-	}
-	isBoundary, _ := m.Extra[turnagent.ExtraKeySummaryBoundary].(bool)
-	return isBoundary
 }
