@@ -108,7 +108,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 
 		subSession, dbErr := t.helpers.deps.SessionRepo.GetByID(ctx, subSessionID)
 		if dbErr != nil {
-			t.helpers.logger.Info(ctx, "subAgent.resume.db_error", map[string]any{
+			t.helpers.logger.Warn(ctx, "subAgent.resume.db_error", map[string]any{
 				"sub_session_id": subSessionID.String(),
 				"error":          dbErr.Error(),
 			})
@@ -142,7 +142,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		// mechanism.
 		recentMsgs, msgErr := t.helpers.deps.MessageRepo.ListRecentBySession(ctx, subSessionID, 50)
 		if msgErr != nil {
-			t.helpers.logger.Info(ctx, "subAgent.resume.get_last_message_failed", map[string]any{
+			t.helpers.logger.Warn(ctx, "subAgent.resume.get_last_message_failed", map[string]any{
 				"sub_session_id": subSessionID.String(),
 				"error":          msgErr.Error(),
 			})
@@ -164,7 +164,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		// Deserialize the message content.
 		var content protocol.ContentData
 		if err := json.Unmarshal([]byte(lastMsg.Content), &content); err != nil {
-			t.helpers.logger.Info(ctx, "subAgent.resume.deserialize_content_failed", map[string]any{
+			t.helpers.logger.Warn(ctx, "subAgent.resume.deserialize_content_failed", map[string]any{
 				"sub_session_id": subSessionID.String(),
 				"error":          err.Error(),
 			})

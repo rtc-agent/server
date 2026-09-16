@@ -94,7 +94,7 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 		if err := h.deps.SessionRepo.Update(compactCtx, sid, map[string]any{
 			"current_context_tokens": tokensAfter,
 		}); err != nil {
-			h.logger.Info(ctx, "compact.update_context_tokens_failed", map[string]any{
+			h.logger.Warn(ctx, "compact.update_context_tokens_failed", map[string]any{
 				"session_id": sessionID,
 				"error":      err.Error(),
 			})
@@ -108,7 +108,7 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 	if h.tokenEstimator != nil {
 		estimate, estimateErr := h.tokenEstimator.ReestimateAfterCompact(compactCtx, sid, prevEWMA, tokensBefore, tokensAfter)
 		if estimateErr != nil {
-			h.logger.Info(ctx, "compact.reestimate_failed", map[string]any{
+			h.logger.Warn(ctx, "compact.reestimate_failed", map[string]any{
 				"session_id": sessionID,
 				"error":      estimateErr.Error(),
 			})

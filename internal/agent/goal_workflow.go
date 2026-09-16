@@ -89,7 +89,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 
 	goal, err := g.helpers.deps.GoalRepo.FindActive(ctx, ctx.SessionID)
 	if err != nil {
-		g.helpers.logger.Info(ctx, "goalWorkflow.find_active_failed", map[string]any{
+		g.helpers.logger.Warn(ctx, "goalWorkflow.find_active_failed", map[string]any{
 			"session_id": ctx.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -113,7 +113,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 			})
 		})
 		if err != nil {
-			g.helpers.logger.Info(ctx, "goalWorkflow.update_exhausted_failed", map[string]any{
+			g.helpers.logger.Warn(ctx, "goalWorkflow.update_exhausted_failed", map[string]any{
 				"goal_id": goal.ID.String(),
 				"error":   err.Error(),
 			})
@@ -135,7 +135,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 		})
 	})
 	if err != nil {
-		g.helpers.logger.Info(ctx, "goalWorkflow.update_goal_failed", map[string]any{
+		g.helpers.logger.Warn(ctx, "goalWorkflow.update_goal_failed", map[string]any{
 			"goal_id": goal.ID.String(),
 			"error":   err.Error(),
 		})
@@ -150,7 +150,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 			SessionID: ctx.SessionID.String(),
 		})
 		if marshalErr != nil {
-			g.helpers.logger.Info(ctx, "goalWorkflow.marshal_failed", map[string]any{
+			g.helpers.logger.Warn(ctx, "goalWorkflow.marshal_failed", map[string]any{
 				"goal_id": goal.ID.String(),
 				"error":   marshalErr.Error(),
 			})
@@ -158,7 +158,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 		}
 		const submitPriority int64 = 0
 		if _, err := g.helpers.queue.Publish(ctx, ctx.SessionID.String(), string(payload), submitPriority); err != nil {
-			g.helpers.logger.Info(ctx, "goalWorkflow.publish_failed", map[string]any{
+			g.helpers.logger.Warn(ctx, "goalWorkflow.publish_failed", map[string]any{
 				"goal_id":    goal.ID.String(),
 				"session_id": ctx.SessionID.String(),
 				"error":      err.Error(),

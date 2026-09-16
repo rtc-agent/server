@@ -91,7 +91,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 
 	loop, err := l.helpers.deps.LoopRepo.FindActive(ctx, ctx.SessionID)
 	if err != nil {
-		l.helpers.logger.Info(ctx, "loopWorkflow.find_active_failed", map[string]any{
+		l.helpers.logger.Warn(ctx, "loopWorkflow.find_active_failed", map[string]any{
 			"session_id": ctx.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -117,7 +117,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 			})
 		})
 		if err != nil {
-			l.helpers.logger.Info(ctx, "loopWorkflow.update_exhausted_failed", map[string]any{
+			l.helpers.logger.Warn(ctx, "loopWorkflow.update_exhausted_failed", map[string]any{
 				"loop_id": loop.ID.String(),
 				"error":   err.Error(),
 			})
@@ -146,7 +146,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 		})
 	})
 	if err != nil {
-		l.helpers.logger.Info(ctx, "loopWorkflow.update_loop_failed", map[string]any{
+		l.helpers.logger.Warn(ctx, "loopWorkflow.update_loop_failed", map[string]any{
 			"loop_id": loop.ID.String(),
 			"error":   err.Error(),
 		})
@@ -197,7 +197,7 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 		SessionID: loop.SessionID.String(),
 	})
 	if marshalErr != nil {
-		l.helpers.logger.Info(ctx, "loopWorkflow.marshal_failed", map[string]any{
+		l.helpers.logger.Warn(ctx, "loopWorkflow.marshal_failed", map[string]any{
 			"loop_id": loop.ID.String(),
 			"error":   marshalErr.Error(),
 		})
@@ -207,7 +207,7 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 	delay := time.Duration(loop.IntervalSeconds) * time.Second
 	taskID, err := l.helpers.deps.TaskScheduler.ScheduleDelayed(ctx, "loop_turn", payload, delay)
 	if err != nil {
-		l.helpers.logger.Info(ctx, "loopWorkflow.schedule_failed", map[string]any{
+		l.helpers.logger.Warn(ctx, "loopWorkflow.schedule_failed", map[string]any{
 			"loop_id":    loop.ID.String(),
 			"session_id": loop.SessionID.String(),
 			"error":      err.Error(),
@@ -219,7 +219,7 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 	if updateErr := l.helpers.deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
 		"asynq_task_id": taskID,
 	}); updateErr != nil {
-		l.helpers.logger.Info(ctx, "loopWorkflow.update_task_id_failed", map[string]any{
+		l.helpers.logger.Warn(ctx, "loopWorkflow.update_task_id_failed", map[string]any{
 			"loop_id": loop.ID.String(),
 			"error":   updateErr.Error(),
 		})

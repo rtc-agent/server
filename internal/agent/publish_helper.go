@@ -29,7 +29,7 @@ func (h *helpers) batchLifecyclePublish(ctx context.Context, turnID uuid.UUID, s
 
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionID)
 	if err != nil {
-		h.logger.Info(ctx, "batchLifecyclePublish.load_session_failed", map[string]any{
+		h.logger.Warn(ctx, "batchLifecyclePublish.load_session_failed", map[string]any{
 			"turn_id":    turnID.String(),
 			"session_id": sessionID.String(),
 			"action":     action,
@@ -67,7 +67,7 @@ func (h *helpers) batchLifecyclePublish(ctx context.Context, turnID uuid.UUID, s
 
 	merged := []updates.UpdatePublishItem{{Channel: ch, Items: allItems}}
 	if _, err := h.deps.UpdatePublisher.Publish(ctx, merged...); err != nil {
-		h.logger.Info(ctx, "batchLifecyclePublish.publish_failed", map[string]any{
+		h.logger.Warn(ctx, "batchLifecyclePublish.publish_failed", map[string]any{
 			"turn_id":    turnID.String(),
 			"session_id": sessionID.String(),
 			"action":     action,

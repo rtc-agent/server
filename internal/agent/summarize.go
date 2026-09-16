@@ -222,7 +222,7 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, c
 						"", "stream_failed",
 						&summaryMsgID, &summaryFinalized,
 						buildSummaryContent, "summary", nil); chunkErr != nil {
-						h.logger.Info(ctx, "summarize.finalize_failed_on_error", map[string]any{
+						h.logger.Warn(ctx, "summarize.finalize_failed_on_error", map[string]any{
 							"error": chunkErr.Error(),
 						})
 					}
@@ -246,7 +246,7 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, c
 						"", "stream_failed",
 						&summaryMsgID, &summaryFinalized,
 						buildSummaryContent, "summary", nil); chunkErr != nil {
-						h.logger.Info(ctx, "summarize.finalize_failed_on_error", map[string]any{
+						h.logger.Warn(ctx, "summarize.finalize_failed_on_error", map[string]any{
 							"error": chunkErr.Error(),
 						})
 					}
@@ -286,7 +286,7 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, c
 				"", "stream_finalize",
 				&summaryMsgID, &summaryFinalized,
 				finalBuildContent, "summary", nil); chunkErr != nil {
-				h.logger.Info(ctx, "summarize.finalize_failed", map[string]any{
+				h.logger.Warn(ctx, "summarize.finalize_failed", map[string]any{
 					"error": chunkErr.Error(),
 				})
 			}
@@ -304,7 +304,7 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, c
 		if err := h.persistCompressedMessages(ctx, []*schema.Message{
 			{Role: schema.User, Content: formatCompactUserMessage(formatCompactSummary(summary))},
 		}); err != nil {
-			h.logger.Info(ctx, "compress.fallback_persist_error", map[string]any{
+			h.logger.Warn(ctx, "compress.fallback_persist_error", map[string]any{
 				"error": err.Error(),
 			})
 		}
@@ -491,7 +491,7 @@ streamLoop:
 		if onChunk != nil && res.Msg.Content != "" {
 			if cbErr := onChunk(res.Msg.Content); cbErr != nil {
 				// Log but don't fail the stream
-				h.logger.Info(ctx, "summarize.on_chunk_error", map[string]any{"error": cbErr.Error()})
+				h.logger.Warn(ctx, "summarize.on_chunk_error", map[string]any{"error": cbErr.Error()})
 			}
 		}
 	}
@@ -725,7 +725,7 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 		if err := h.deps.SessionRepo.Update(ctx, sessionID, map[string]any{
 			"current_context_tokens": tokensAfter,
 		}); err != nil {
-			h.logger.Info(ctx, "persistCompressedMessages.update_context_tokens_failed", map[string]any{
+			h.logger.Warn(ctx, "persistCompressedMessages.update_context_tokens_failed", map[string]any{
 				"session_id": sessionID.String(),
 				"error":      err.Error(),
 			})

@@ -164,7 +164,7 @@ func (h *helpers) appendStreamChunk(
 	streamStore := h.getStreamStore()
 	if streamStore != nil {
 		if _, appendErr := streamStore.AppendChunk(msgIDStr, chunkContent); appendErr != nil {
-			h.logger.Info(ctx, "appendStreamChunk.redis_append_failed", map[string]any{
+			h.logger.Warn(ctx, "appendStreamChunk.redis_append_failed", map[string]any{
 				"message_id": msgIDStr,
 				"error":      appendErr.Error(),
 			})
@@ -179,7 +179,7 @@ func (h *helpers) appendStreamChunk(
 				{Entity: protocol.EntityMessage, Action: protocol.ActionUpdated, EntityId: protocol.UUID(msgIDStr)},
 			},
 		}); pubErr != nil {
-			h.logger.Info(ctx, "appendStreamChunk.live_publish_failed", map[string]any{
+			h.logger.Warn(ctx, "appendStreamChunk.live_publish_failed", map[string]any{
 				"message_id": msgIDStr,
 				"error":      pubErr.Error(),
 			})
@@ -273,7 +273,7 @@ func (h *helpers) appendStreamChunk(
 	// 4. Delete Redis chunks.
 	if streamStore != nil {
 		if delErr := streamStore.DeleteChunks(msgIDStr); delErr != nil {
-			h.logger.Info(ctx, "appendStreamChunk.redis_delete_failed", map[string]any{
+			h.logger.Warn(ctx, "appendStreamChunk.redis_delete_failed", map[string]any{
 				"message_id": msgIDStr,
 				"error":      delErr.Error(),
 			})

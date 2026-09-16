@@ -195,7 +195,7 @@ func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turn
 			CachedTokens:    event.TokenUsage.CachedTokens,
 			ReasoningTokens: event.TokenUsage.ReasoningTokens,
 		}); err != nil {
-			h.logger.Info(ctx, "handleStreamEnd.update_token_usage_failed", map[string]any{
+			h.logger.Warn(ctx, "handleStreamEnd.update_token_usage_failed", map[string]any{
 				"target_kind": tokenTargetKind,
 				"message_id":  tokenTargetID.String(),
 				"error":       err.Error(),

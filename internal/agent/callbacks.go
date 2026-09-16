@@ -96,7 +96,7 @@ func (h *helpers) createTurn(ctx context.Context, sessionID string, workID strin
 	if h.deps.UpdatePublisher != nil {
 		session, sessErr := h.deps.SessionRepo.GetByID(ctx, sid)
 		if sessErr != nil {
-			h.logger.Info(ctx, "createTurn.load_session_failed", map[string]any{
+			h.logger.Warn(ctx, "createTurn.load_session_failed", map[string]any{
 				"session_id": sessionID,
 				"error":      sessErr.Error(),
 			})
@@ -104,7 +104,7 @@ func (h *helpers) createTurn(ctx context.Context, sessionID string, workID strin
 			updates := primitives.BuildTurnCreatedUpdates(session, turn.ID)
 			if len(updates) > 0 {
 				if _, err := h.deps.UpdatePublisher.Publish(ctx, updates...); err != nil {
-					h.logger.Info(ctx, "createTurn.publish_failed", map[string]any{
+					h.logger.Warn(ctx, "createTurn.publish_failed", map[string]any{
 						"session_id": sessionID,
 						"turn_id":    turn.ID.String(),
 						"error":      err.Error(),
@@ -203,14 +203,14 @@ func (h *helpers) beginTurn(ctx context.Context, turnID string) error {
 		sessionIDStr := turnagent.SessionIDFromContext(ctx)
 		if sid, parseErr := uuid.Parse(sessionIDStr); parseErr == nil {
 			if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusActive); err != nil {
-				h.logger.Info(ctx, "beginTurn.update_session_status_failed_fallback", map[string]any{
+				h.logger.Warn(ctx, "beginTurn.update_session_status_failed_fallback", map[string]any{
 					"session_id": sid.String(),
 					"error":      err.Error(),
 				})
 			}
 			h.batchLifecyclePublish(ctx, tid, sid, "begin")
 		}
-		h.logger.Info(ctx, "beginTurn.load_turn_failed", map[string]any{
+		h.logger.Warn(ctx, "beginTurn.load_turn_failed", map[string]any{
 			"turn_id":  turnID,
 			"error":    lookupErr.Error(),
 			"fallback": sessionIDStr != "",
@@ -220,7 +220,7 @@ func (h *helpers) beginTurn(ctx context.Context, turnID string) error {
 
 	// DB update session status before publishing events.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, turn.SessionID, protocol.SessionStatusActive); err != nil {
-		h.logger.Info(ctx, "beginTurn.update_session_status_failed", map[string]any{
+		h.logger.Warn(ctx, "beginTurn.update_session_status_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -271,7 +271,7 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 	// Load session to check Sub Agent hierarchy and publish events.
 	session, sessionErr := h.deps.SessionRepo.GetByID(ctx, sid)
 	if sessionErr != nil {
-		h.logger.Info(ctx, "completeTurn.load_session_failed", map[string]any{
+		h.logger.Warn(ctx, "completeTurn.load_session_failed", map[string]any{
 			"session_id": sessionID,
 			"error":      sessionErr.Error(),
 		})
@@ -280,7 +280,7 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 
 	// DB update session status before publishing events.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusIdle); err != nil {
-		h.logger.Info(ctx, "completeTurn.update_session_status_failed", map[string]any{
+		h.logger.Warn(ctx, "completeTurn.update_session_status_failed", map[string]any{
 			"session_id": sessionID,
 			"error":      err.Error(),
 		})
@@ -321,7 +321,7 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 		}
 		if errs := h.deps.CommandRegistry.OnTurnComplete(cmdCtx); len(errs) > 0 {
 			for _, e := range errs {
-				h.logger.Info(ctx, "completeTurn.command_hook_failed", map[string]any{
+				h.logger.Warn(ctx, "completeTurn.command_hook_failed", map[string]any{
 					"session_id": sessionID,
 					"turn_id":    turnID,
 					"error":      e.Error(),
@@ -373,7 +373,7 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 			if len(args) > 0 {
 				args = append(args, int(10*time.Minute/time.Second)) // TTL as last ARGV
 				if err := hsetExpireScript.Run(ctx, h.deps.Redis, []string{interruptMapKey}, args...).Err(); err != nil {
-					h.logger.Info(ctx, "interruptTurn.batch_interrupt_mapping_failed", map[string]any{
+					h.logger.Warn(ctx, "interruptTurn.batch_interrupt_mapping_failed", map[string]any{
 						"turn_id": turnID,
 						"error":   err.Error(),
 					})
@@ -389,7 +389,7 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		h.logger.Info(ctx, "interruptTurn.load_turn_failed", map[string]any{
+		h.logger.Warn(ctx, "interruptTurn.load_turn_failed", map[string]any{
 			"turn_id": turnID,
 			"error":   lookupErr.Error(),
 		})
@@ -398,7 +398,7 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 
 	// Set session status to "idle" — turn is paused waiting for external input.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, turn.SessionID, protocol.SessionStatusIdle); err != nil {
-		h.logger.Info(ctx, "interruptTurn.update_session_status_failed", map[string]any{
+		h.logger.Warn(ctx, "interruptTurn.update_session_status_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -435,7 +435,7 @@ func (h *helpers) resumeTurn(ctx context.Context, turnID string) error {
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		h.logger.Info(ctx, "resumeTurn.load_turn_failed", map[string]any{
+		h.logger.Warn(ctx, "resumeTurn.load_turn_failed", map[string]any{
 			"turn_id": turnID,
 			"error":   lookupErr.Error(),
 		})
@@ -444,7 +444,7 @@ func (h *helpers) resumeTurn(ctx context.Context, turnID string) error {
 
 	// Set session status back to "active" — a turn is executing again.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, turn.SessionID, protocol.SessionStatusActive); err != nil {
-		h.logger.Info(ctx, "resumeTurn.update_session_status_failed", map[string]any{
+		h.logger.Warn(ctx, "resumeTurn.update_session_status_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -479,7 +479,7 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		h.logger.Info(ctx, "failTurn.load_turn_failed", map[string]any{
+		h.logger.Warn(ctx, "failTurn.load_turn_failed", map[string]any{
 			"turn_id": turnID,
 			"error":   lookupErr.Error(),
 		})
@@ -488,7 +488,7 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 
 	// Set session status to "idle" — turn ended due to an error.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, turn.SessionID, protocol.SessionStatusIdle); err != nil {
-		h.logger.Info(ctx, "failTurn.update_session_status_failed", map[string]any{
+		h.logger.Warn(ctx, "failTurn.update_session_status_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      err.Error(),
 		})
@@ -513,7 +513,7 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 		category, title, message, retryable := classifyError(turnErr)
 		if err := h.insertErrorMessage(ctx, turn.SessionID, &tid,
 			category, title, message, retryable, turnErr.Error()); err != nil {
-			h.logger.Info(ctx, "failTurn.insertErrorMessage_failed", map[string]any{
+			h.logger.Warn(ctx, "failTurn.insertErrorMessage_failed", map[string]any{
 				"turn_id":    turnID,
 				"session_id": turn.SessionID.String(),
 				"error":      err.Error(),
@@ -557,7 +557,7 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		h.logger.Info(ctx, "cancelTurn.load_turn_failed", map[string]any{
+		h.logger.Warn(ctx, "cancelTurn.load_turn_failed", map[string]any{
 			"turn_id": turnID,
 			"error":   lookupErr.Error(),
 		})
@@ -566,7 +566,7 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 
 	// Set session status to "idle" — turn was cancelled.
 	if err := h.deps.SessionRepo.UpdateStatus(ctx, turn.SessionID, protocol.SessionStatusIdle); err != nil {
-		h.logger.Info(ctx, "cancelTurn.update_session_status_failed", map[string]any{
+		h.logger.Warn(ctx, "cancelTurn.update_session_status_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      err.Error(),
 		})

@@ -218,7 +218,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		if dbErr != nil {
 			// DB query failed: degrade to re-interrupt and wait for client to
 			// re-submit. This matches the old code's fallback behavior.
-			r.helpers.logger.Info(ctx, "rtcToolBase.resume.db_error", map[string]any{
+			r.helpers.logger.Warn(ctx, "rtcToolBase.resume.db_error", map[string]any{
 				"rtc_id": rtcID.String(),
 				"error":  dbErr.Error(),
 			})
@@ -396,7 +396,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	if r.helpers.deps.Redis != nil {
 		batchKey := cache.RtcBatchPending(turnUUID.String())
 		if err := saddExpireScript.Run(ctx, r.helpers.deps.Redis, []string{batchKey}, rtcID.String(), int(10*time.Minute/time.Second)).Err(); err != nil {
-			r.helpers.logger.Info(ctx, "rtcToolBase.batch_register_failed", map[string]any{
+			r.helpers.logger.Warn(ctx, "rtcToolBase.batch_register_failed", map[string]any{
 				"rtc_id":  rtcID.String(),
 				"turn_id": turnUUID.String(),
 				"error":   err.Error(),
@@ -445,7 +445,7 @@ func parseToolArgs(ctx context.Context, h *helpers, toolName string, argumentsIn
 		if len(argPreview) > maxPreviewLen {
 			argPreview = argPreview[:maxPreviewLen] + "...(truncated)"
 		}
-		h.logger.Info(ctx, "tool.parse_arguments_failed", map[string]any{
+		h.logger.Warn(ctx, "tool.parse_arguments_failed", map[string]any{
 			"tool_name":   toolName,
 			"error":       err.Error(),
 			"raw_length":  len(argumentsInJSON),

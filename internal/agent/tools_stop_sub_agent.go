@@ -141,14 +141,14 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 			}
 			// Delete session memories (physical delete; they have served their purpose).
 			if err := t.helpers.deps.SessionMemoryRepo.DeleteBySession(txCtx, s.ID); err != nil {
-				t.helpers.logger.Info(ctx, "stopSubAgent.delete_memories_failed", map[string]any{
+				t.helpers.logger.Warn(ctx, "stopSubAgent.delete_memories_failed", map[string]any{
 					"session_id": s.ID.String(),
 					"error":      err.Error(),
 				})
 			}
 			return primitives.BuildSessionCloseUpdates(s), nil
 		}); pubErr != nil {
-			t.helpers.logger.Info(ctx, "stopSubAgent.close_session_failed", map[string]any{
+			t.helpers.logger.Warn(ctx, "stopSubAgent.close_session_failed", map[string]any{
 				"session_id": s.ID.String(),
 				"error":      pubErr.Error(),
 			})

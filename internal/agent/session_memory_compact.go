@@ -28,7 +28,7 @@ func (h *helpers) compressContextWithSessionMemory(
 	// Query session memories
 	memories, err := h.deps.SessionMemoryRepo.ListBySession(ctx, sessionID, 20)
 	if err != nil {
-		h.logger.Info(ctx, "compressContextWithSessionMemory.query_error", map[string]any{
+		h.logger.Warn(ctx, "compressContextWithSessionMemory.query_error", map[string]any{
 			"session_id": sessionID.String(),
 			"error":      err.Error(),
 		})

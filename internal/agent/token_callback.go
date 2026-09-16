@@ -111,7 +111,7 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 	// ===============================================================
 	session, sessErr := h.deps.SessionRepo.GetByID(ctx, sessionID)
 	if sessErr != nil {
-		h.logger.Info(ctx, "token_callback.get_session_failed", map[string]any{
+		h.logger.Warn(ctx, "token_callback.get_session_failed", map[string]any{
 			"session_id": sessionID,
 			"error":      sessErr.Error(),
 		})
@@ -164,7 +164,7 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 	}
 
 	if err := h.deps.SessionRepo.AtomicAddTokenUsage(ctx, sessionID, delta); err != nil {
-		h.logger.Info(ctx, "token_callback.atomic_update_failed", map[string]any{
+		h.logger.Warn(ctx, "token_callback.atomic_update_failed", map[string]any{
 			"session_id": sessionID,
 			"error":      err.Error(),
 		})

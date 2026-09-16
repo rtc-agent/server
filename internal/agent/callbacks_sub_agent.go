@@ -38,7 +38,7 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 	// Load the toolcall_input message.
 	inputMsg, err := h.deps.MessageRepo.GetByID(ctx, messageID)
 	if err != nil {
-		h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.load_input_failed", map[string]any{
+		h.logger.Warn(ctx, "resumeParentAfterSubAgentNewToolCallOutput.load_input_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -48,7 +48,7 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 	// Parse the toolcall_input content.
 	inputContentData, err := primitives.ParseContentData(inputMsg.Content)
 	if err != nil {
-		h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.parse_input_failed", map[string]any{
+		h.logger.Warn(ctx, "resumeParentAfterSubAgentNewToolCallOutput.parse_input_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -57,7 +57,7 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 
 	inputToolCall, err := primitives.ParseContentDataToolCall(inputContentData.Data)
 	if err != nil {
-		h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.parse_toolcall_failed", map[string]any{
+		h.logger.Warn(ctx, "resumeParentAfterSubAgentNewToolCallOutput.parse_toolcall_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -103,7 +103,7 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 		// Load session for event publishing.
 		session, sessErr := h.deps.SessionRepo.GetByID(txCtx, inputMsg.SessionID)
 		if sessErr != nil {
-			h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.load_session_failed", map[string]any{
+			h.logger.Warn(ctx, "resumeParentAfterSubAgentNewToolCallOutput.load_session_failed", map[string]any{
 				"session_id": inputMsg.SessionID.String(),
 				"error":      sessErr.Error(),
 			})
@@ -126,7 +126,7 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 		return items, nil
 	})
 	if err != nil {
-		h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.publish_failed", map[string]any{
+		h.logger.Warn(ctx, "resumeParentAfterSubAgentNewToolCallOutput.publish_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -200,7 +200,7 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 		InterruptResult: subAgentResult, // Sub agent result is the interrupt resolution
 	})
 	if marshalErr != nil {
-		h.logger.Info(ctx, "resumeParentAfterSubAgent.marshal_failed", map[string]any{
+		h.logger.Warn(ctx, "resumeParentAfterSubAgent.marshal_failed", map[string]any{
 			"parent_session_id": parentSessionID,
 			"error":             marshalErr.Error(),
 		})
@@ -211,7 +211,7 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 	// Submit items, so the parent's checkpoint is still intact.
 	const resumePriority int64 = 100
 	if _, err := h.queue.Publish(ctx, parentSessionID, string(payload), resumePriority); err != nil {
-		h.logger.Info(ctx, "resumeParentAfterSubAgent.publish_failed", map[string]any{
+		h.logger.Warn(ctx, "resumeParentAfterSubAgent.publish_failed", map[string]any{
 			"parent_session_id": parentSessionID,
 			"error":             err.Error(),
 		})
@@ -259,7 +259,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 	// and may confuse downstream workers.
 	parentSession, sessErr := h.deps.SessionRepo.GetByID(ctx, parentSessionID)
 	if sessErr != nil {
-		h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.parent_session_error", map[string]any{
+		h.logger.Warn(ctx, "notifyParentAfterAsyncSubAgent.parent_session_error", map[string]any{
 			"sub_session_id":    subSession.ID.String(),
 			"parent_session_id": parentSessionID.String(),
 			"error":             sessErr.Error(),
@@ -370,7 +370,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 		}, nil
 	})
 	if err != nil {
-		h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.publish_failed", map[string]any{
+		h.logger.Warn(ctx, "notifyParentAfterAsyncSubAgent.publish_failed", map[string]any{
 			"sub_session_id":    subSession.ID.String(),
 			"parent_session_id": parentSessionID.String(),
 			"error":             err.Error(),
@@ -384,7 +384,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 		SessionID: parentSessionID.String(),
 	})
 	if marshalErr != nil {
-		h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.marshal_failed", map[string]any{
+		h.logger.Warn(ctx, "notifyParentAfterAsyncSubAgent.marshal_failed", map[string]any{
 			"parent_session_id": parentSessionID.String(),
 			"error":             marshalErr.Error(),
 		})
@@ -392,7 +392,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 	}
 
 	if _, err := h.queue.Publish(ctx, parentSessionID.String(), string(payload), 0); err != nil {
-		h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.submit_failed", map[string]any{
+		h.logger.Warn(ctx, "notifyParentAfterAsyncSubAgent.submit_failed", map[string]any{
 			"parent_session_id": parentSessionID.String(),
 			"error":             err.Error(),
 		})
@@ -422,7 +422,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 	// Load the message.
 	msg, err := h.deps.MessageRepo.GetByID(ctx, messageID)
 	if err != nil {
-		h.logger.Info(ctx, "updateSubAgentInvocationStatus.load_failed", map[string]any{
+		h.logger.Warn(ctx, "updateSubAgentInvocationStatus.load_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -432,7 +432,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 	// Parse the content.
 	var content protocol.ContentData
 	if err := json.Unmarshal([]byte(msg.Content), &content); err != nil {
-		h.logger.Info(ctx, "updateSubAgentInvocationStatus.parse_failed", map[string]any{
+		h.logger.Warn(ctx, "updateSubAgentInvocationStatus.parse_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -443,7 +443,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 	if data, ok := content.Data.(map[string]any); ok {
 		data["status"] = status
 	} else {
-		h.logger.Info(ctx, "updateSubAgentInvocationStatus.invalid_data_type", map[string]any{
+		h.logger.Warn(ctx, "updateSubAgentInvocationStatus.invalid_data_type", map[string]any{
 			"message_id": messageID.String(),
 		})
 		return
@@ -452,7 +452,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 	// Serialize the updated content.
 	updatedContent, err := json.Marshal(content)
 	if err != nil {
-		h.logger.Info(ctx, "updateSubAgentInvocationStatus.serialize_failed", map[string]any{
+		h.logger.Warn(ctx, "updateSubAgentInvocationStatus.serialize_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -461,7 +461,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 
 	// Update the message in DB.
 	if err := h.deps.MessageRepo.UpdateStreamingStatus(ctx, messageID, protocol.MessageStreamingCompleted, string(updatedContent)); err != nil {
-		h.logger.Info(ctx, "updateSubAgentInvocationStatus.update_failed", map[string]any{
+		h.logger.Warn(ctx, "updateSubAgentInvocationStatus.update_failed", map[string]any{
 			"message_id": messageID.String(),
 			"error":      err.Error(),
 		})
@@ -484,7 +484,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 			},
 		}
 		if _, err := h.deps.UpdatePublisher.Publish(ctx, updates...); err != nil {
-			h.logger.Info(ctx, "updateSubAgentInvocationStatus.publish_failed", map[string]any{
+			h.logger.Warn(ctx, "updateSubAgentInvocationStatus.publish_failed", map[string]any{
 				"message_id": messageID.String(),
 				"error":      err.Error(),
 			})

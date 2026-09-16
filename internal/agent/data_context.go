@@ -134,7 +134,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		// Build attachments
 		attachmentMsgs, err := h.attachmentManager.BuildAttachments(ctx, sid, userID)
 		if err != nil {
-			h.logger.Info(ctx, "loadMessages.build_attachments_failed", map[string]any{
+			h.logger.Warn(ctx, "loadMessages.build_attachments_failed", map[string]any{
 				"session_id": sid.String(),
 				"error":      err.Error(),
 			})
