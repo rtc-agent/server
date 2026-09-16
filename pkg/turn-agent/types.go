@@ -152,6 +152,13 @@ type WorkPayload struct {
 	// resume all of them at once. Each item has an InterruptID and Result.
 	// When present, this takes precedence over InterruptID/InterruptResult.
 	BatchResumeItems []BatchResumeItem `json:"batch_resume_items,omitempty"`
+
+	// ReactiveCompactAttempt tracks the reactive compact escalation level
+	// across Process restarts. Starts at 0 (no recovery attempted). Each
+	// time prompt-too-long triggers recovery, the published submit payload
+	// carries the next attempt number so RecoverFromPromptTooLong can
+	// escalate (L1 → L2 → L3) instead of repeating L1 forever.
+	ReactiveCompactAttempt int `json:"reactive_compact_attempt,omitempty"`
 }
 
 // BatchResumeItem represents a single interrupt result in a batch resume.

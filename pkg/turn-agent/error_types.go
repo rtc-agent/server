@@ -25,13 +25,14 @@ func ShouldSkipErrorMessage(ctx context.Context) bool {
 }
 
 // MarshalSubmitPayload constructs a JSON payload for a kind="submit" work item.
-// attempt is reserved for future retry tracking; currently unused but kept in
-// the signature so callers can forward retry counts without breaking changes.
+// attempt is the reactive compact escalation level (0 = first attempt). It is
+// stored in the payload so that the next Process invocation can escalate
+// compression (L1 → L2 → L3) instead of repeating L1 forever.
 func MarshalSubmitPayload(sessionID string, attempt int) []byte {
-	_ = attempt // reserved for future use
 	p := WorkPayload{
-		Kind:      WorkKindSubmit,
-		SessionID: sessionID,
+		Kind:                   WorkKindSubmit,
+		SessionID:              sessionID,
+		ReactiveCompactAttempt: attempt,
 	}
 	data, err := json.Marshal(p)
 	if err != nil {

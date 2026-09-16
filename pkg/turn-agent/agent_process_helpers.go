@@ -341,16 +341,14 @@ func (a *Agent) handleOwnerLifecycleEnd(
 }
 
 // tryReactiveCompactRecovery attempts to recover from a prompt-too-long error
-// by running the first compression attempt and publishing a new work item.
-// Returns true if recovery was successfully published (caller should return nil
-// to let rtc-queue mark the current work complete). Returns false if the step
-// failed.
+// by running compression and publishing a new work item. Returns true if
+// recovery was successfully published (caller should return nil to let
+// rtc-queue mark the current work complete). Returns false if the step
+// failed or attempts are exhausted.
 //
-// NOTE: Although MaxReactiveCompactAttempts may be > 1, the current escalation
-// strategy (L1→L2→L3) is driven by recoverFromPromptTooLong internally via the
-// attempt parameter. We only need one outer cycle because each Process restart
-// creates a fresh TurnLoop that will invoke tryReactiveCompactRecovery again if
-// the prompt is still too long.
+// The escalation strategy (L1→L2→L3) is driven by the ReactiveCompactAttempt
+// field in WorkPayload: each recovery increments the attempt, and the next
+// Process invocation reads it to pass the correct level to RecoverFromPromptTooLong.
 func (a *Agent) tryReactiveCompactRecovery(
 	ctx context.Context,
 	span trace.Span,
@@ -359,7 +357,18 @@ func (a *Agent) tryReactiveCompactRecovery(
 	turnDuration time.Duration,
 	exitReason error,
 ) bool {
-	attempt := 1
+	// Escalate: use the attempt from the incoming payload + 1 so each
+	// Process restart advances the compression level (L1 → L2 → L3).
+	attempt := p.ReactiveCompactAttempt + 1
+	if attempt > a.cfg.MaxReactiveCompactAttempts {
+		a.log(ctx, LogLevelError, "turn.reactive_compact_attempts_exhausted", map[string]any{
+			"session_id": p.SessionID,
+			"turn_id":    turnID,
+			"attempt":    attempt,
+			"max":        a.cfg.MaxReactiveCompactAttempts,
+		})
+		return false
+	}
 	a.log(ctx, LogLevelWarn, "turn.prompt_too_long_recovering", map[string]any{
 		"session_id": p.SessionID,
 		"turn_id":    turnID,
