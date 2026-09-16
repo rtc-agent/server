@@ -176,20 +176,28 @@ func aggressiveMicrocompact(messages []*turnagent.Message, keepRecent int) []*tu
 			keepSet[id] = struct{}{}
 		}
 	}
-	// If keepRecent == 0, keepSet is empty → all tool results are cleared.
+
+	// Build a set of all compactable IDs for O(1) membership check.
+	// Non-compactable tool results (e.g., ask_user) must NOT be cleared.
+	compactableSet := make(map[string]struct{}, len(compactableIDs))
+	for _, id := range compactableIDs {
+		compactableSet[id] = struct{}{}
+	}
 
 	result := make([]*turnagent.Message, len(messages))
 	for i, msg := range messages {
 		if msg.Role == turnagent.RoleTool && msg.ToolCallID != "" {
-			if _, kept := keepSet[msg.ToolCallID]; !kept {
-				result[i] = &turnagent.Message{
-					Role:       msg.Role,
-					Content:    TimeBasedMCClearedMessage,
-					ToolName:   msg.ToolName,
-					ToolCallID: msg.ToolCallID,
-					CreatedAt:  msg.CreatedAt,
+			if _, isCompactable := compactableSet[msg.ToolCallID]; isCompactable {
+				if _, kept := keepSet[msg.ToolCallID]; !kept {
+					result[i] = &turnagent.Message{
+						Role:       msg.Role,
+						Content:    TimeBasedMCClearedMessage,
+						ToolName:   msg.ToolName,
+						ToolCallID: msg.ToolCallID,
+						CreatedAt:  msg.CreatedAt,
+					}
+					continue
 				}
-				continue
 			}
 		}
 		result[i] = msg
