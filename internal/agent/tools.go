@@ -59,7 +59,7 @@ return 1
 
 type lsTool struct{ base *rtcToolBase }
 
-func (l *lsTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+func (t *lsTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "ls",
 		Desc: lsDesc,
@@ -69,8 +69,8 @@ func (l *lsTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	}, nil
 }
 
-func (l *lsTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	return l.base.InvokableRun(ctx, "ls", argumentsInJSON, opts...)
+func (t *lsTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	return t.base.InvokableRun(ctx, "ls", argumentsInJSON, opts...)
 }
 
 // --- readTool ---
@@ -413,7 +413,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		ToolName:   toolName,
 	}
 
-	// 7. Build interrupt info.
+	// 8. Build interrupt info.
 	info := rtcInterruptInfo{
 		Type:      "rtc",
 		ToolName:  toolName,
@@ -422,7 +422,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		Args:      argumentsInJSON,
 	}
 
-	// 8. Pause the turn — eino will persist the checkpoint and return control
+	// 9. Pause the turn — eino will persist the checkpoint and return control
 	// to turn-agent, which calls InterruptTurn.
 	return "", tool.StatefulInterrupt(ctx, info, state)
 }

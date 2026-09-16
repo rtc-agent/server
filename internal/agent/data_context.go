@@ -395,7 +395,7 @@ const minThinkingLength = 20
 
 // thinkTagPattern matches a complete `<think>...</think>` block (case-insensitive,
 // dot-all) that may leak into assistant text content during streaming (observed with
-// qwen3.7-plus via proxy). See: https://github.com/cloudwego/eino-ext/issues/518, #767
+// qwen3.7-plus via proxy).
 // See: https://github.com/cloudwego/eino-ext/issues/518, #767
 var thinkTagPattern = regexp.MustCompile(`(?is)<think>.*?</think>\s*`)
 
