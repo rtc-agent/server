@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -93,13 +92,13 @@ func NewWorker(q *Queue, cfg WorkerConfig) *Worker {
 	if cfg.RenewInterval <= 0 {
 		cfg.RenewInterval = DefaultRenewIntervalSec * time.Second
 	}
-	if cfg.OnError == nil {
-		cfg.OnError = func(err error) {
-			log.Printf("[rtcqueue.Worker] error: %v", err)
-		}
-	}
 	if cfg.Logger == nil {
 		cfg.Logger = noopWorkerLogger{}
+	}
+	if cfg.OnError == nil {
+		cfg.OnError = func(err error) {
+			cfg.Logger.Error("worker error", "error", err)
+		}
 	}
 	return &Worker{
 		q:        q,
