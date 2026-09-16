@@ -9,26 +9,28 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-// StreamRecvResult 流接收结果
+// StreamRecvResult holds the result of a stream recv call.
 type StreamRecvResult struct {
 	Msg *schema.Message
 	Err error
 }
 
-// RecvWithTimeout 带超时的流接收。
-// 返回结果和是否超时的标志。
-// 超时调用方需要自行调用 stream.Close()。
+// RecvWithTimeout wraps a blocking stream recv call with a timeout.
 //
-// recv 通常绑定到 *schema.StreamReader[*schema.Message].Recv。
-// 内部 goroutine 会通过 panic recover 捕获底层 panic 并以 error 形式返回。
+// It spawns a goroutine that calls recv() and sends the result on a buffered
+// channel (cap=1). The caller selects on the channel, a timer, and ctx.Done().
 //
-// Goroutine lifecycle: when the timeout fires (or ctx is cancelled), the
-// internal goroutine may still be blocked on recv(). This goroutine will
-// exit when recv() eventually returns (stream close, network timeout, EOF,
-// etc.). The buffered channel (cap=1) ensures the goroutine never blocks
-// on the send. This is a bounded, temporary resource hold — not a leak.
-// The caller MUST close the stream after timeout to ensure recv() returns
-// promptly and releases the goroutine.
+// Goroutine lifecycle:
+//   - If recv() returns before timeout → goroutine exits naturally.
+//   - If timeout fires or ctx is cancelled → this function returns immediately.
+//     The goroutine remains blocked on recv() until the caller closes the
+//     stream, which causes recv() to return (typically with io.EOF or a
+//     "use of closed stream" error). The buffered channel ensures the
+//     goroutine never blocks on send. This is a bounded, temporary hold —
+//     not a leak — as long as the caller closes the stream after timeout.
+//
+// recv is typically bound to (*schema.StreamReader[*schema.Message]).Recv.
+// Internal panic recovery converts panics to error results.
 func RecvWithTimeout(
 	ctx context.Context,
 	recv func() (*schema.Message, error),
@@ -46,15 +48,14 @@ func RecvWithTimeout(
 	}()
 
 	timer := time.NewTimer(timeout)
+	defer timer.Stop() // safe: Stop on already-fired timer is a no-op (returns false)
 
 	select {
 	case <-ctx.Done():
-		timer.Stop()
 		return StreamRecvResult{Err: ctx.Err()}, false
 	case <-timer.C:
 		return StreamRecvResult{}, true
 	case res := <-ch:
-		timer.Stop()
 		return res, false
 	}
 }

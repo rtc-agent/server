@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -147,7 +148,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 				content = "[thinking]" + msg.ReasoningContent
 			}
 			if len(content) > 10 {
-				content = content[:10] + "..."
+				content = stringutil.TruncateByByte(content, 10)
 			}
 			preview = append(preview, fmt.Sprintf("[%d]%s:%s", i, msg.Role, content))
 		}

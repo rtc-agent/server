@@ -81,6 +81,10 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	// IMPORTANT: If FinishReason is set but Content is empty, we still need to
 	// call appendStreamChunk (via finalizeStreamMessage) to trigger the finalization
 	// path that updates the DB status to "completed".
+	//
+	// The markdownMsgID != uuid.Nil guard handles the edge case where only reasoning
+	// content was streamed (no markdown). In that case, handleStreamEnd finalizes
+	// the thinking message and routes token usage to it instead.
 	if event.FinishReason != "" && state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
 		if event.Content == "" {
 			// No content in this chunk, but we need to finalize the stream

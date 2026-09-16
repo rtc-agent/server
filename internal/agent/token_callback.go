@@ -328,6 +328,17 @@ func mergeTokenUsageMax(dst *model.TokenUsage, src *model.TokenUsage) {
 // It runs in its own goroutine (spawned by OnEndWithStreamOutput) and handles
 // panic recovery internally. Per-call state is local to the goroutine so
 // concurrent streams do not interfere with each other.
+//
+// Per-read timeout: unlike consumeStream (which uses RecvWithTimeout for the
+// main LLM stream), this function calls output.Recv() without a per-read
+// timeout. This is acceptable because:
+//  1. The caller (OnEndWithStreamOutput) wraps ctx with a 60s overall timeout,
+//     bounding the goroutine's lifetime.
+//  2. The StreamReader.Recv() is channel-based and returns promptly when the
+//     LLM call completes (stream Close triggers io.EOF on the channel).
+//  3. The stream type (*model.CallbackOutput) differs from the main LLM stream
+//     (*schema.Message), so the existing RecvWithTimeout cannot be reused
+//     without a generic version — the complexity is not justified given (1).
 func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.StreamReader[*model.CallbackOutput]) {
 	defer func() {
 		if r := recover(); r != nil {

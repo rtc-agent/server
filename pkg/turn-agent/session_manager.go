@@ -363,7 +363,16 @@ func (mgr *SessionTurnManager) notifyPendingWork(ctx context.Context) {
 	// Use the exported key accessor to avoid duplicating the Redis key format.
 	queueKey := rtcqueue.SessionQueueKey(mgr.sessionID)
 	count, err := mgr.queue.Client().ZCard(ctx, queueKey).Result()
-	if err != nil || count == 0 {
+	if err != nil {
+		// Log Redis failures so operators can detect connectivity issues.
+		// Without this, silent failures leave pending work unnotified with no trace.
+		mgr.log(ctx, LogLevelWarn, "session_manager.notify_pending_work_zcard_failed", map[string]any{
+			"session_id": mgr.sessionID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	if count == 0 {
 		return
 	}
 	// Use the exported channel constant to avoid duplicating the channel name.
