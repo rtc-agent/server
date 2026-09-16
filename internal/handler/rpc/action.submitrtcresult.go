@@ -66,7 +66,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 			}, nil
 		}
 		// 终态 + 不同 ClientID → 冲突，返回已有状态
-		ups := make([]protocol.Update, 0)
+		ups := make([]protocol.Update, 0, 1)
 		ups = append(ups, protocol.Update{
 			DataList: new([]interface{}{
 				model.ToProtocolRtc(rtc),

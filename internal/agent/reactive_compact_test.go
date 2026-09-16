@@ -65,7 +65,7 @@ func TestAggressiveMicrocompact_NoCompactableTools(t *testing.T) {
 
 func TestAggressiveMicrocompact_KeepRecent(t *testing.T) {
 	// 3 compactable tool call/result pairs, keep 1 (the last)
-	var messages []*turnagent.Message
+	messages := make([]*turnagent.Message, 0, 7) // 1 user + 3*(assistant+tool)
 	messages = append(messages, &turnagent.Message{Role: turnagent.RoleUser, Content: "start"})
 	messages = append(messages, toolCallPair("read", "c1", "file content 1")...)
 	messages = append(messages, toolCallPair("read", "c2", "file content 2")...)
@@ -93,7 +93,7 @@ func TestAggressiveMicrocompact_KeepRecent(t *testing.T) {
 
 func TestAggressiveMicrocompact_KeepZero(t *testing.T) {
 	// keepRecent=0 should clear ALL compactable tool results
-	var messages []*turnagent.Message
+	messages := make([]*turnagent.Message, 0, 4) // 2*(assistant+tool)
 	messages = append(messages, toolCallPair("read", "c1", "result 1")...)
 	messages = append(messages, toolCallPair("write", "c2", "result 2")...)
 

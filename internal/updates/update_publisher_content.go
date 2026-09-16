@@ -128,7 +128,7 @@ func collectEntityRefs(uus []*model.UserUpdate, resolvers map[string]EntityResol
 // buildUpdates 按原始顺序将查询结果回填到 protocol.Update 的 DataList。
 func buildUpdates(uus []*model.UserUpdate, allRefs []entityRef, resolved map[string]map[uuid.UUID]any) []*protocol.Update {
 	refIdx := 0
-	var result []*protocol.Update
+	result := make([]*protocol.Update, 0, len(uus))
 
 	for _, uu := range uus {
 		update := &protocol.Update{

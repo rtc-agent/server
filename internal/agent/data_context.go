@@ -323,7 +323,7 @@ func convertSummaryContent(data any, createdAt time.Time) []*turnagent.Message {
 // buildMessagesFromSummaryItems converts SummaryItem slice to turnagent messages.
 // Marks the last message with ExtraKeySummaryBoundary for strategic cache breakpoints.
 func buildMessagesFromSummaryItems(items []primitives.SummaryItem, createdAt time.Time) []*turnagent.Message {
-	var msgs []*turnagent.Message
+	msgs := make([]*turnagent.Message, 0, len(items))
 	for i, item := range items {
 		msg := &turnagent.Message{
 			Role:      item.Role,

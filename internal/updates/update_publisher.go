@@ -323,8 +323,8 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 		channelItemsMap[item.Channel] = append(channelItemsMap[item.Channel], item)
 	}
 
-	var channels []string
-	var batchSizes []int
+	channels := make([]string, 0, len(channelItemsMap))
+	batchSizes := make([]int, 0, len(channelItemsMap))
 	// 排序 channel 确保遍历顺序确定（map 迭代顺序不确定），便于调试与日志追踪。
 	for ch := range channelItemsMap {
 		channels = append(channels, ch)
