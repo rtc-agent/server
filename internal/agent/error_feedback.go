@@ -284,7 +284,8 @@ var (
 	// 11. Phone numbers (international format)
 	rePhone = regexp.MustCompile(`\+\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}`)
 	// 12. File paths with username: /home/username/... -> /home/[USER]/...
-	reFilePath = regexp.MustCompile(`(/home/|/Users/|/usr/)[a-zA-Z0-9_.-]+/`)
+	//     Also covers /root/ (Linux superuser) and /Users/ (macOS).
+	reFilePath = regexp.MustCompile(`(/home/|/root/|/Users/|/usr/)[a-zA-Z0-9_.-]+/`)
 
 	// sanitizationRules is the ordered rule table applied by sanitizeRawError.
 	// Order is security-critical: credentials first, then PII, then metadata.

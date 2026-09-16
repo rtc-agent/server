@@ -290,13 +290,37 @@ func TestSanitizeRawError_VCSTokenRedaction(t *testing.T) {
 }
 
 func TestSanitizeRawError_FilePathUsername(t *testing.T) {
-	input := "file at /home/alice/secret/data.txt not found"
-	got := sanitizeRawError(input)
-	if strings.Contains(got, "/home/alice/") {
-		t.Errorf("username not redacted: %s", got)
+	tests := []struct {
+		name     string
+		input    string
+		contains string // substring that must NOT appear in output
+	}{
+		{
+			name:     "home directory",
+			input:    "file at /home/alice/secret/data.txt not found",
+			contains: "/home/alice/",
+		},
+		{
+			name:     "Linux root user",
+			input:    "config at /root/.ssh/config not found",
+			contains: "/root/.ssh/",
+		},
+		{
+			name:     "macOS Users",
+			input:    "path /Users/bob/Documents/secret.key missing",
+			contains: "/Users/bob/",
+		},
 	}
-	if !strings.Contains(got, "[USER]") {
-		t.Errorf("expected [USER] placeholder: %s", got)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeRawError(tc.input)
+			if strings.Contains(got, tc.contains) {
+				t.Errorf("username not redacted: %s", got)
+			}
+			if !strings.Contains(got, "[USER]") {
+				t.Errorf("expected [USER] placeholder: %s", got)
+			}
+		})
 	}
 }
 
