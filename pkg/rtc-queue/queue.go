@@ -332,6 +332,13 @@ func (q *Queue) RenewLockWithCredential(ctx context.Context, sessionID, workerID
 // lock" mode where a worker can process multiple work items without releasing
 // and re-acquiring the session lock.
 //
+// Deprecated: This method uses HGET on the session lock (KEYS[4]), but the
+// non-credential lock (created by claimScript) is a Redis string, not a hash.
+// Calling this method would produce a WRONGTYPE Redis error. Use
+// CompleteWorkAndClaimNext instead, which correctly handles hash-based locks
+// with credential verification. This method is retained only for backward
+// compatibility and is not used by any caller in the codebase.
+//
 // Returns (nil, nil) if there is no next work item in the queue.
 // Returns (*ClaimResult, nil) if the next work was successfully claimed.
 // Returns (nil, error) on Redis errors.

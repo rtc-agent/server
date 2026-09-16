@@ -456,26 +456,29 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 
 			// Look ahead for the next assistant text/tool message.
 			next := i + 1
+			// thinkingContent accumulates reasoning from consecutive thinking-only
+			// messages without mutating the original objects.
+			thinkingContent := msg.ReasoningContent
 			for next < len(messages) &&
 				messages[next].Role == turnagent.RoleAssistant &&
 				messages[next].Content == "" &&
 				messages[next].ReasoningContent != "" &&
 				len(messages[next].ToolCalls) == 0 {
-				// Skip consecutive thinking-only messages — accumulate
-				// their reasoning into the current one.
-				msg.ReasoningContent += "\n" + messages[next].ReasoningContent
+				// Accumulate reasoning from consecutive thinking-only messages.
+				thinkingContent += "\n" + messages[next].ReasoningContent
 				next++
 			}
 
 			if next < len(messages) && messages[next].Role == turnagent.RoleAssistant {
 				// Merge: move thinking into the next message's ReasoningContent.
-				messages[next].ReasoningContent = msg.ReasoningContent
+				// Shallow-copy to avoid mutating the caller's original message.
+				copied := *messages[next]
+				copied.ReasoningContent = thinkingContent
 				// Drop the thinking-only message; advance past it.
 				i = next
-				continue
-			}
-
-			if next < len(messages) {
+				msg = &copied
+				// Fall through to append msg to result below.
+			} else if next < len(messages) {
 				// Followed by a non-assistant message (typically tool result).
 				// Drop the thinking to avoid:
 				//   1. Empty content block (adapter fallback: {text: ""})
@@ -485,12 +488,15 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 				// arguments (e.g., the file path the model decided to read).
 				i++
 				continue
+			} else {
+				// Trailing thinking (last message in conversation): convert to
+				// text so the content is preserved as a text block.
+				// Shallow-copy to avoid mutating the caller's original message.
+				copied := *msg
+				copied.Content = thinkingContent
+				copied.ReasoningContent = ""
+				msg = &copied
 			}
-
-			// Trailing thinking (last message in conversation): convert to
-			// text so the content is preserved as a text block.
-			msg.Content = msg.ReasoningContent
-			msg.ReasoningContent = ""
 		}
 
 		result = append(result, msg)
