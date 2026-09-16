@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cenkalti/backoff/v5"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/infra/contextx"
@@ -430,29 +431,29 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 
 			if interruptedTurnID != uuid.Nil {
 				// Retry with exponential backoff, waiting for interruptTurn to persist InterruptID.
-				const (
-					interruptPollMaxAttempts = 10
-					interruptPollInitDelay   = 20 * time.Millisecond
-					interruptPollMaxDelay    = 200 * time.Millisecond
-				)
-				for attempt := 0; attempt < interruptPollMaxAttempts; attempt++ {
-					delay := interruptPollInitDelay * time.Duration(1<<min(attempt, 4))
-					if delay > interruptPollMaxDelay {
-						delay = interruptPollMaxDelay
-					}
-					time.Sleep(delay)
-					updatedTurn, err := h.deps.Deps.TurnRepo.GetByID(ctx, interruptedTurnID)
-					if err != nil {
-						break
+				retryBO := backoff.NewExponentialBackOff()
+				retryBO.InitialInterval = 20 * time.Millisecond
+				retryBO.MaxInterval = 200 * time.Millisecond
+				gotID, err := backoff.Retry(ctx, func() (string, error) {
+					updatedTurn, repoErr := h.deps.Deps.TurnRepo.GetByID(ctx, interruptedTurnID)
+					if repoErr != nil {
+						// DB errors are not transient — stop retrying
+						return "", backoff.Permanent(repoErr)
 					}
 					if protocol.TurnStatus(updatedTurn.Status) == protocol.TurnStatusInterrupted && updatedTurn.InterruptID != "" {
-						interruptID = updatedTurn.InterruptID
-						// Always set interruptResult (even if empty) so the tool
-						// receives a non-nil resume result.
-						resultStr := string(rtc.Result)
-						interruptResult = &resultStr
-						break
+						return updatedTurn.InterruptID, nil
 					}
+					return "", errors.New("interrupt not ready")
+				},
+					backoff.WithBackOff(retryBO),
+					backoff.WithMaxTries(10),
+				)
+				if err == nil && gotID != "" {
+					interruptID = gotID
+					// Always set interruptResult (even if empty) so the tool
+					// receives a non-nil resume result.
+					resultStr := string(rtc.Result)
+					interruptResult = &resultStr
 				}
 				if interruptID == "" {
 					logger.Warn(ctx, "[resumeTurnAfterRtc] InterruptID not available after retry",

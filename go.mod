@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/anthropics/anthropic-sdk-go v1.56.0
+	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/centrifugal/centrifuge v0.39.0
 	github.com/cloudwego/eino v0.9.18
 	github.com/cloudwego/eino-ext/components/model/claude v0.1.25
@@ -63,7 +64,6 @@ require (
 	github.com/bytedance/mockey v1.4.6 // indirect
 	github.com/bytedance/sonic v1.15.0 // indirect
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
-	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/centrifugal/protocol v0.22.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
