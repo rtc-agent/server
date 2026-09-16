@@ -135,74 +135,30 @@ func NewUpdatePublisher(
 		return result, nil
 	}
 	u.resolvers[string(protocol.EntityTurn)] = func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
-		// 分离 nil UUID（占位符）与真实 ID
-		var realIDs []uuid.UUID
-		for _, id := range ids {
-			if id != uuid.Nil {
-				realIDs = append(realIDs, id)
-			}
-		}
-
-		var turns map[uuid.UUID]*model.Turn
-		if len(realIDs) > 0 {
-			var err error
-			turns, err = turnRepo.GetByIDs(ctx, realIDs)
+		return resolveWithNilPlaceholder(ctx, ids, func(ctx context.Context, realIDs []uuid.UUID) (map[uuid.UUID]any, error) {
+			turns, err := turnRepo.GetByIDs(ctx, realIDs)
 			if err != nil {
 				return nil, err
 			}
-		} else {
-			turns = make(map[uuid.UUID]*model.Turn)
-		}
-
-		result := make(map[uuid.UUID]any, len(ids))
-		for _, id := range ids {
-			if id == uuid.Nil {
-				result[id] = map[string]any{
-					"id":         id.String(),
-					"deleted_at": time.Now(),
-				}
-				continue
-			}
-			if t, ok := turns[id]; ok {
+			result := make(map[uuid.UUID]any, len(turns))
+			for id, t := range turns {
 				result[id] = toProtocolTurn(t)
 			}
-		}
-		return result, nil
+			return result, nil
+		})
 	}
 	u.resolvers[string(protocol.EntityRtc)] = func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
-		// 分离 nil UUID（占位符）与真实 ID
-		var realIDs []uuid.UUID
-		for _, id := range ids {
-			if id != uuid.Nil {
-				realIDs = append(realIDs, id)
-			}
-		}
-
-		var rtcs map[uuid.UUID]*model.Rtc
-		if len(realIDs) > 0 {
-			var err error
-			rtcs, err = rtcRepo.GetByIDs(ctx, realIDs)
+		return resolveWithNilPlaceholder(ctx, ids, func(ctx context.Context, realIDs []uuid.UUID) (map[uuid.UUID]any, error) {
+			rtcs, err := rtcRepo.GetByIDs(ctx, realIDs)
 			if err != nil {
 				return nil, err
 			}
-		} else {
-			rtcs = make(map[uuid.UUID]*model.Rtc)
-		}
-
-		result := make(map[uuid.UUID]any, len(ids))
-		for _, id := range ids {
-			if id == uuid.Nil {
-				result[id] = map[string]any{
-					"id":         id.String(),
-					"deleted_at": time.Now(),
-				}
-				continue
-			}
-			if r, ok := rtcs[id]; ok {
+			result := make(map[uuid.UUID]any, len(rtcs))
+			for id, r := range rtcs {
 				result[id] = toProtocolRtc(r)
 			}
-		}
-		return result, nil
+			return result, nil
+		})
 	}
 
 	return u
@@ -635,6 +591,40 @@ func buildUpdates(uus []*model.UserUpdate, allRefs []entityRef, resolved map[str
 	}
 
 	return result
+}
+
+// resolveWithNilPlaceholder separates nil UUIDs (treated as deleted placeholders)
+// from real IDs, resolves real IDs via inner, and fills nil UUID slots with a
+// tombstone entry containing id and deleted_at. This pattern is shared by entity
+// resolvers that need to handle nil UUID placeholders for deleted entities.
+func resolveWithNilPlaceholder(
+	ctx context.Context,
+	ids []uuid.UUID,
+	inner func(ctx context.Context, realIDs []uuid.UUID) (map[uuid.UUID]any, error),
+) (map[uuid.UUID]any, error) {
+	var realIDs []uuid.UUID
+	for _, id := range ids {
+		if id != uuid.Nil {
+			realIDs = append(realIDs, id)
+		}
+	}
+	resolved, err := inner(ctx, realIDs)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[uuid.UUID]any, len(ids))
+	for k, v := range resolved {
+		result[k] = v
+	}
+	for _, id := range ids {
+		if id == uuid.Nil {
+			result[id] = map[string]any{
+				"id":         id.String(),
+				"deleted_at": time.Now(),
+			}
+		}
+	}
+	return result, nil
 }
 
 // uniqueUUIDs 对 UUID 切片去重，保持首次出现的顺序。

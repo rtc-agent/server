@@ -354,7 +354,7 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 				logger.Info(ctx, "[resumeTurnAfterRtc] batch item",
 					zap.String("rtc_id", rtcID),
 					zap.String("interrupt_id", interruptID),
-					zap.String("result_len", fmt.Sprintf("%d", len(result))))
+					zap.Int("result_len", len(result)))
 			}
 
 			// Clean up all batch-related keys
