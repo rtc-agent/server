@@ -16,6 +16,7 @@ package agent
 import (
 	"context"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -253,18 +254,30 @@ func estimateStringTokens(s string) int {
 
 // truncateToTokens truncates a string to fit within the given token budget.
 // Keeps the head (60%) and tail (20%) of the content, with a truncation marker in the middle.
+// Respects UTF-8 character boundaries to avoid splitting multi-byte characters.
 func truncateToTokens(s string, maxTokens int) string {
 	maxChars := int(float64(maxTokens) * 4.0 / 1.33) // Reverse the token estimation
 	if len(s) <= maxChars {
 		return s
 	}
 
-	// Keep head 60% + tail 20%
+	// Keep head 60% + tail 20%, respecting UTF-8 boundaries.
 	headChars := int(float64(maxChars) * 0.6)
 	tailChars := int(float64(maxChars) * 0.2)
 
 	head := s[:headChars]
-	tail := s[len(s)-tailChars:]
+	// Walk backward from headChars to find a valid UTF-8 rune boundary.
+	for headChars > 0 && !utf8.RuneStart(s[headChars]) {
+		headChars--
+	}
+	head = s[:headChars]
+
+	// For the tail, walk backward from the end to find a valid UTF-8 rune boundary.
+	tailStart := len(s) - tailChars
+	for tailStart > 0 && !utf8.RuneStart(s[tailStart]) {
+		tailStart--
+	}
+	tail := s[tailStart:]
 
 	return head + "\n\n[Content truncated - exceeded token limit]\n\n" + tail
 }

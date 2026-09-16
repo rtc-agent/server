@@ -67,7 +67,8 @@ func DefaultModelPricing() ModelPricing {
 }
 
 // calculateCostMicros 计算 token 使用成本，返回微美元（1 USD = 1,000,000 micros）。
-// 使用整数避免浮点精度问题。
+// 内部使用 float64 进行中间计算，最终结果转为 int64 微美元。
+// 对于当前的定价量级（每百万 token 几美元），float64 精度足以满足成本追踪需求。
 func calculateCostMicros(u *FullTokenUsage, pricing ModelPricing) int64 {
 	inputCost := float64(u.InputTokens) / 1_000_000 * pricing.InputPerMillion
 	cachedReadCost := float64(u.CachedReadTokens) / 1_000_000 * pricing.CachedReadPerMillion

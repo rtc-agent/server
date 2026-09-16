@@ -88,8 +88,8 @@ func (h *helpers) publishSessionUpdate(ctx context.Context, session *model.Sessi
 	}
 
 	doPublish := func() {
-		updates := primitives.BuildSessionUpdateUpdates(session)
-		if _, err := h.deps.UpdatePublisher.Publish(ctx, updates...); err != nil {
+		sessionUpdates := primitives.BuildSessionUpdateUpdates(session)
+		if _, err := h.deps.UpdatePublisher.Publish(ctx, sessionUpdates...); err != nil {
 			h.logger.Info(ctx, "publishSessionUpdate.failed", map[string]any{
 				"session_id": session.ID,
 				"error":      err.Error(),
