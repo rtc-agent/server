@@ -115,7 +115,9 @@ type Config struct {
 	CheckpointTTL time.Duration
 
 	// StreamChunkTTL controls how long streaming message chunks live in Redis.
-	// If <= 0, defaults to 5m.
+	// If <= 0, defaults to 15m. The longer TTL handles extended LLM thinking/reasoning
+	// streams that may exceed shorter durations, preventing chunk loss and incomplete
+	// message persistence.
 	StreamChunkTTL time.Duration
 
 	// MicrocompactGapMinutes is the idle time threshold (in minutes) for
