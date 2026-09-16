@@ -5,6 +5,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"go.uber.org/zap"
@@ -133,6 +134,13 @@ func (m *Manager) Stop(ctx context.Context) error {
 	// 等待所有 goroutine 结束
 	done := make(chan struct{})
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error(context.Background(), "[lifecycle.Manager] shutdown wait panic",
+					zap.Any("recover", r),
+					zap.String("stack", string(debug.Stack())))
+			}
+		}()
 		m.wg.Wait()
 		close(done)
 	}()

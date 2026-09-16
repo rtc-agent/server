@@ -198,6 +198,12 @@ func (w *Worker) Stop(ctx context.Context) error {
 	// wait for all goroutines to finish, with timeout
 	done := make(chan struct{})
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				w.logError("stop wait panic",
+					"recover", r, "stack", string(debug.Stack()))
+			}
+		}()
 		w.wg.Wait()
 		close(done)
 	}()

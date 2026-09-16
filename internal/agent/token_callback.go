@@ -24,6 +24,7 @@ package agent
 
 import (
 	"context"
+	"runtime/debug"
 	"time"
 
 	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
@@ -76,6 +77,13 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 				bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 				go func() {
 					defer cancel()
+					defer func() {
+						if r := recover(); r != nil {
+							logger.Error(bgCtx, "drainStreamAndReport panic",
+								zap.Any("recover", r),
+								zap.String("stack", string(debug.Stack())))
+						}
+					}()
 					h.drainStreamAndReport(bgCtx, output)
 				}()
 				return ctx
