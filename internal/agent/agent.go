@@ -275,8 +275,14 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		// application's error message insertion (insertErrorMessage uses
 		// uuid.UUID parameters, so we wrap it here).
 		InsertFeedbackMessage: func(ctx context.Context, sessionID, turnID, category, title, message string, retryable bool, rawError string) error {
-			sid, _ := uuid.Parse(sessionID)
-			tid, _ := uuid.Parse(turnID)
+			sid, parseErr := uuid.Parse(sessionID)
+			if parseErr != nil {
+				return fmt.Errorf("insertFeedbackMessage: invalid session ID %q: %w", sessionID, parseErr)
+			}
+			tid, parseErr := uuid.Parse(turnID)
+			if parseErr != nil {
+				return fmt.Errorf("insertFeedbackMessage: invalid turn ID %q: %w", turnID, parseErr)
+			}
 			return h.insertErrorMessage(ctx, sid, &tid, protocol.ErrorCategory(category), title, message, retryable, rawError)
 		},
 
