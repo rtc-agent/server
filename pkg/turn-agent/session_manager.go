@@ -695,7 +695,8 @@ func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem
 						continue
 					}
 					if err := mgr.queue.CompleteWork(bgCtx, item.WorkID); err != nil {
-						mgr.log(ctx, LogLevelError, "on_agent_events.complete_work_failed", map[string]any{
+						// Use bgCtx for logging since ctx may be cancelled at this point.
+						mgr.log(bgCtx, LogLevelError, "on_agent_events.complete_work_failed", map[string]any{
 							"session_id": mgr.sessionID,
 							"turn_id":    turnID,
 							"work_id":    item.WorkID,
