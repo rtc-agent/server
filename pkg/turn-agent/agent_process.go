@@ -54,9 +54,9 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		return fmt.Errorf("turnagent: work payload missing session_id")
 	}
 	a.log(ctx, LogLevelInfo, "agent.process", map[string]any{
-		"p.SessionID": p.SessionID,
-		"p.Kind":      p.Kind,
-		"work_id":     work.ID,
+		"session_id": p.SessionID,
+		"kind":       p.Kind,
+		"work_id":    work.ID,
 	})
 
 	// 1.5. Fast path: compact work bypasses the turn loop entirely.

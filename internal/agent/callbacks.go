@@ -191,9 +191,9 @@ func (h *helpers) beginTurn(ctx context.Context, turnID string) error {
 			h.batchLifecyclePublish(ctx, tid, sid, "begin")
 		}
 		h.logger.Info(ctx, "beginTurn.load_turn_failed", map[string]any{
-			"turn_id":    turnID,
-			"error":      lookupErr.Error(),
-			"fallback":   sessionIDStr != "",
+			"turn_id":  turnID,
+			"error":    lookupErr.Error(),
+			"fallback": sessionIDStr != "",
 		})
 		return nil
 	}

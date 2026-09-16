@@ -36,6 +36,13 @@ func StartGoroutineCollector(leakThreshold int) (cancel func()) {
 	done := make(chan struct{})
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error(context.Background(), "StartGoroutineCollector panic recovered",
+					zap.Any("panic", r),
+				)
+			}
+		}()
 		defer ticker.Stop()
 		for {
 			select {
