@@ -152,6 +152,10 @@ func (r *mockSessionRepo) ListByRoot(_ context.Context, _ uuid.UUID, _ string) (
 	return nil, nil
 }
 
+func (r *mockSessionRepo) FindActiveByParent(_ context.Context, _ uuid.UUID) ([]*model.Session, error) {
+	return nil, nil
+}
+
 func (r *mockSessionRepo) AtomicAddTokenUsage(_ context.Context, _ uuid.UUID, _ repo.TokenUsageDelta) error {
 	return nil
 }

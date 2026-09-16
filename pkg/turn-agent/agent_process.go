@@ -74,10 +74,14 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	turnID, err := a.resolveTurnID(ctx, p.SessionID, work.ID, p.Kind)
 	if err != nil {
 		if p.Kind == WorkKindResume && errors.Is(err, ErrNoActiveTurn) {
-			a.log(ctx, LogLevelInfo, "resume.no_active_turn", map[string]any{
-				"session_id": p.SessionID,
-				"work_id":    work.ID,
-				"message":    "turn was cancelled/completed before resume",
+			// This can indicate a race condition (turn cancelled between resume
+			// publish and processing) or Checkpoint corruption. Use Warn so it
+			// shows up in production logs for investigation.
+			a.log(ctx, LogLevelWarn, "resume.no_active_turn", map[string]any{
+				"session_id":  p.SessionID,
+				"work_id":     work.ID,
+				"message":     "turn was cancelled/completed before resume — possible race condition or checkpoint corruption",
+				"interrupt_id": p.InterruptID,
 			})
 			return nil
 		}

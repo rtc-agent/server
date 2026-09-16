@@ -37,6 +37,9 @@ type SessionRepo interface {
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Session, error)
 	// ListByRoot 按 root_server_session_id 查询所有子孙会话，按指定 status 过滤，排除 root 自身。
 	ListByRoot(ctx context.Context, rootServerSessionID uuid.UUID, status string) ([]*model.Session, error)
+	// FindActiveByParent 根据 parent_server_session_id 查找活跃的子会话（status != closed）。
+	// 用于级联取消：父会话取消时需要取消所有活跃的子代理。
+	FindActiveByParent(ctx context.Context, parentSessionID uuid.UUID) ([]*model.Session, error)
 	// AtomicAddTokenUsage 原子累加 Session 的 token 使用统计
 	AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UUID, delta TokenUsageDelta) error
 	// AtomicUpdateEWMA 原子更新 Session 的 token 预估 EWMA 值
@@ -216,6 +219,17 @@ func (r *sessionRepo) ListByRoot(ctx context.Context, rootServerSessionID uuid.U
 		Order("created_at ASC").
 		Find(&sessions).Error; err != nil {
 		return nil, fmt.Errorf("list sessions by root %s: %w", rootServerSessionID, err)
+	}
+	return sessions, nil
+}
+
+func (r *sessionRepo) FindActiveByParent(ctx context.Context, parentSessionID uuid.UUID) ([]*model.Session, error) {
+	var sessions []*model.Session
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("parent_server_session_id = ? AND status != ?", parentSessionID, model.SessionStatusClosed).
+		Order("created_at ASC").
+		Find(&sessions).Error; err != nil {
+		return nil, fmt.Errorf("find active sessions by parent %s: %w", parentSessionID, err)
 	}
 	return sessions, nil
 }

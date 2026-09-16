@@ -69,6 +69,9 @@ func (m *mockSessionRepo) GetByIDs(_ context.Context, _ []uuid.UUID) (map[uuid.U
 func (m *mockSessionRepo) ListByRoot(_ context.Context, _ uuid.UUID, _ string) ([]*model.Session, error) {
 	panic("not implemented")
 }
+func (m *mockSessionRepo) FindActiveByParent(_ context.Context, _ uuid.UUID) ([]*model.Session, error) {
+	panic("not implemented")
+}
 func (m *mockSessionRepo) AtomicAddTokenUsage(_ context.Context, _ uuid.UUID, _ repo.TokenUsageDelta) error {
 	panic("not implemented")
 }

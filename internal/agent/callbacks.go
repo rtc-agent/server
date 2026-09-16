@@ -567,5 +567,33 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 		}
 	}
 
+	// Cascade cancel: if this session has active child sessions (sub agents),
+	// cancel them as well. This prevents orphaned sub agents from continuing
+	// to run after the parent has been cancelled.
+	if sessErr == nil && h.queue != nil {
+		activeChildren, findErr := h.deps.SessionRepo.FindActiveByParent(ctx, turn.SessionID)
+		if findErr == nil && len(activeChildren) > 0 {
+			h.logger.Info(ctx, "cancelTurn.cascade_cancel_start", map[string]any{
+				"turn_id":       turnID,
+				"session_id":    turn.SessionID.String(),
+				"child_count":   len(activeChildren),
+			})
+			for _, child := range activeChildren {
+				if err := h.queue.CancelSession(ctx, child.ID.String(), "parent session cancelled"); err != nil {
+					h.logger.Warn(ctx, "cancelTurn.cascade_cancel_failed", map[string]any{
+						"parent_session_id": turn.SessionID.String(),
+						"child_session_id":  child.ID.String(),
+						"error":             err.Error(),
+					})
+				}
+			}
+			h.logger.Info(ctx, "cancelTurn.cascade_cancel_done", map[string]any{
+				"turn_id":     turnID,
+				"session_id":  turn.SessionID.String(),
+				"child_count": len(activeChildren),
+			})
+		}
+	}
+
 	return nil
 }
