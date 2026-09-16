@@ -191,4 +191,3 @@ func (h *helpers) prependAttachments(ctx context.Context, sid uuid.UUID, message
 	// messages, complying with Claude API requirements.
 	return append(attachmentMsgs, messages...)
 }
-
