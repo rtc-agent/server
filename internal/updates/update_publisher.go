@@ -61,6 +61,28 @@ type UpdatePublisher struct {
 	compressionThreshold atomic.Int64        // 压缩触发阈值，用于计算 Token 预估字段
 }
 
+// buildRepoResolver creates a resolver function for entities that follow the
+// standard pattern: GetByIDs + nil placeholder + protocol conversion.
+// Shared by Turn and Rtc resolvers to avoid duplication.
+func buildRepoResolver[T any, P any](
+	getByIDs func(context.Context, []uuid.UUID) (map[uuid.UUID]*T, error),
+	toProtocol func(*T) P,
+) func(context.Context, []uuid.UUID) (map[uuid.UUID]any, error) {
+	return func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
+		return resolveWithNilPlaceholder(ctx, ids, func(ctx context.Context, realIDs []uuid.UUID) (map[uuid.UUID]any, error) {
+			items, err := getByIDs(ctx, realIDs)
+			if err != nil {
+				return nil, err
+			}
+			result := make(map[uuid.UUID]any, len(items))
+			for id, item := range items {
+				result[id] = toProtocol(item)
+			}
+			return result, nil
+		})
+	}
+}
+
 // NewUpdatePublisher 创建 UpdatePublisher
 func NewUpdatePublisher(
 	db *gorm.DB,
@@ -133,32 +155,8 @@ func NewUpdatePublisher(
 		}
 		return result, nil
 	}
-	u.resolvers[string(protocol.EntityTurn)] = func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
-		return resolveWithNilPlaceholder(ctx, ids, func(ctx context.Context, realIDs []uuid.UUID) (map[uuid.UUID]any, error) {
-			turns, err := turnRepo.GetByIDs(ctx, realIDs)
-			if err != nil {
-				return nil, err
-			}
-			result := make(map[uuid.UUID]any, len(turns))
-			for id, t := range turns {
-				result[id] = toProtocolTurn(t)
-			}
-			return result, nil
-		})
-	}
-	u.resolvers[string(protocol.EntityRtc)] = func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
-		return resolveWithNilPlaceholder(ctx, ids, func(ctx context.Context, realIDs []uuid.UUID) (map[uuid.UUID]any, error) {
-			rtcs, err := rtcRepo.GetByIDs(ctx, realIDs)
-			if err != nil {
-				return nil, err
-			}
-			result := make(map[uuid.UUID]any, len(rtcs))
-			for id, r := range rtcs {
-				result[id] = toProtocolRtc(r)
-			}
-			return result, nil
-		})
-	}
+	u.resolvers[string(protocol.EntityTurn)] = buildRepoResolver(turnRepo.GetByIDs, toProtocolTurn)
+	u.resolvers[string(protocol.EntityRtc)] = buildRepoResolver(rtcRepo.GetByIDs, toProtocolRtc)
 
 	return u
 }

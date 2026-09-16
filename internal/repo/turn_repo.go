@@ -147,34 +147,26 @@ func (r *turnRepo) FindStaleTurns(ctx context.Context, statuses []string) ([]*mo
 }
 
 func (r *turnRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, errMsg string) error {
-	updates := map[string]any{
+	return r.updateTurnFields(ctx, id, map[string]any{
 		"status":        string(status),
 		"error_message": errMsg,
-	}
-	if status == model.TurnStatusRunning {
-		updates["started_at"] = gorm.Expr("NOW()")
-	}
-	if status == model.TurnStatusCompleted || status == model.TurnStatusFailed || status == model.TurnStatusCancelled || status == model.TurnStatusMerged {
-		updates["completed_at"] = gorm.Expr("NOW()")
-	}
-	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Turn{}).Where("id = ?", id).Updates(updates)
-	if result.Error != nil {
-		return fmt.Errorf("update turn %s status: %w", id, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("update turn %s status: %w", id, ErrTurnNotFound)
-	}
-	return nil
+	}, status, "update turn %s status")
 }
 
 // UpdateStatusAndInterruptID atomically updates both status and interrupt_id
 // in a single DB write. This prevents a race condition where SubmitRtcResult
 // could read the interrupted status before InterruptID is persisted.
 func (r *turnRepo) UpdateStatusAndInterruptID(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, interruptID string) error {
-	updates := map[string]any{
+	return r.updateTurnFields(ctx, id, map[string]any{
 		"status":       string(status),
 		"interrupt_id": interruptID,
-	}
+	}, status, "update turn %s status and interrupt_id")
+}
+
+// updateTurnFields applies the given field updates to a turn, automatically
+// setting started_at/completed_at based on the target status. Shared helper
+// for UpdateStatus and UpdateStatusAndInterruptID to avoid duplication.
+func (r *turnRepo) updateTurnFields(ctx context.Context, id uuid.UUID, updates map[string]any, status protocol.TurnStatus, errFmt string) error {
 	if status == model.TurnStatusRunning {
 		updates["started_at"] = gorm.Expr("NOW()")
 	}
@@ -183,10 +175,10 @@ func (r *turnRepo) UpdateStatusAndInterruptID(ctx context.Context, id uuid.UUID,
 	}
 	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Turn{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
-		return fmt.Errorf("update turn %s status and interrupt_id: %w", id, result.Error)
+		return fmt.Errorf(errFmt+": %w", id, result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("update turn %s status and interrupt_id: %w", id, ErrTurnNotFound)
+		return fmt.Errorf(errFmt+": %w", id, ErrTurnNotFound)
 	}
 	return nil
 }
