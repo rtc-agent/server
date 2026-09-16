@@ -671,9 +671,9 @@ func (s *Server) periodicRecoverStaleTurns(ctx context.Context) {
 }
 
 // isWorkerAliveForSession checks whether a Worker is holding the session lock.
-// Uses the rtc-queue lock key format: "session:lock:<sessionID>".
+// Uses the exported key accessor to avoid duplicating the Redis key format.
 func (s *Server) isWorkerAliveForSession(ctx context.Context, sessionID string) bool {
-	lockKey := "session:lock:" + sessionID
+	lockKey := rtcqueue.SessionLockKey(sessionID)
 	ttl, err := s.svcCtx.Redis.TTL(ctx, lockKey).Result()
 	if err != nil {
 		return false

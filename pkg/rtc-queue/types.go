@@ -69,3 +69,14 @@ func keyQueue(sessionID string) string  { return keyPrefixQueue + sessionID }
 func keyWork(workID string) string      { return keyPrefixWork + workID }
 func keyLock(sessionID string) string   { return keyPrefixLock + sessionID }
 func keyActive(sessionID string) string { return keyPrefixActive + sessionID }
+
+// SessionQueueKey returns the Redis key for the given session's pending
+// work queue (a sorted set scored by priority/timestamp). Exported so that
+// external packages (e.g. turn-agent) can query pending work counts without
+// duplicating the key format.
+func SessionQueueKey(sessionID string) string { return keyQueue(sessionID) }
+
+// SessionLockKey returns the Redis key for the given session's distributed lock.
+// Exported so that external packages (e.g. server) can check lock liveness
+// without duplicating the key format.
+func SessionLockKey(sessionID string) string { return keyLock(sessionID) }

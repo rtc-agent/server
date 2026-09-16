@@ -369,18 +369,14 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 // publishes a session:new notification to wake up idle workers.
 // Called after ReleaseSession so that the notified workers can claim the lock.
 func (mgr *SessionTurnManager) notifyPendingWork(ctx context.Context) {
-	// Redis sorted set key: "queue:session:{sessionID}" — holds pending work items
-	// scored by priority/timestamp. Must match keyQueue() in pkg/rtc-queue/queue.go.
-	queueKey := "queue:session:" + mgr.sessionID
+	// Use the exported key accessor to avoid duplicating the Redis key format.
+	queueKey := rtcqueue.SessionQueueKey(mgr.sessionID)
 	count, err := mgr.queue.Client().ZCard(ctx, queueKey).Result()
 	if err != nil || count == 0 {
 		return
 	}
-	// Pub/Sub channel "session:new" — notifies idle workers that a session has
-	// pending work. Payload is the sessionID. Workers subscribe to this channel
-	// to wake up and attempt to claim the lock.
-	// Must match the channel constant in pkg/rtc-queue/types.go.
-	mgr.queue.Client().Publish(ctx, "session:new", mgr.sessionID)
+	// Use the exported channel constant to avoid duplicating the channel name.
+	mgr.queue.Client().Publish(ctx, rtcqueue.ChannelSessionNew, mgr.sessionID)
 	mgr.log(ctx, LogLevelInfo, "session_manager.notified_pending_work", map[string]any{
 		"session_id":    mgr.sessionID,
 		"pending_count": count,
