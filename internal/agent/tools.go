@@ -207,85 +207,73 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		if !hasState {
 			return "", fmt.Errorf("rtc: state type mismatch on resume")
 		}
-
-		// Checkpoint recovery: check if the RTC already has a result in DB
-		// (the client may have submitted it while the worker was down).
-		rtcID, parseErr := uuid.Parse(state.RtcID)
-		if parseErr != nil {
-			return "", fmt.Errorf("rtc: invalid rtc_id in state: %w", parseErr)
-		}
-		dbRtc, dbErr := r.helpers.deps.RtcRepo.GetByID(ctx, rtcID)
-		if dbErr != nil {
-			// DB query failed: degrade to re-interrupt and wait for client to
-			// re-submit. This matches the old code's fallback behavior.
-			r.helpers.logger.Warn(ctx, "rtcToolBase.resume.db_error", map[string]any{
-				"rtc_id": rtcID.String(),
-				"error":  dbErr.Error(),
-			})
-			info := rtcInterruptInfo{
-				Type:      "rtc",
-				ToolName:  state.ToolName,
-				RtcID:     state.RtcID,
-				MessageID: state.MessageID,
-			}
-			return "", tool.StatefulInterrupt(ctx, info, state)
-		}
-
-		// RTC reached terminal state -> return formatted result, no more interrupt.
-		switch protocol.RtcStatus(dbRtc.Status) {
-		case protocol.RtcStatusCompleted, protocol.RtcStatusFailed,
-			protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
-			// Per-tool formatter hook (e.g. askUserTool assembles human-readable
-			// answer text). Falls back to raw Result bytes when unset.
-			var toolOutput string
-			if r.formatResult != nil {
-				toolOutput = r.formatResult(dbRtc)
-			} else {
-				toolOutput = string(dbRtc.Result)
-				if dbRtc.Status == string(protocol.RtcStatusFailed) && dbRtc.ErrorMessage != "" {
-					toolOutput = dbRtc.ErrorMessage
-				}
-			}
-			tc := protocol.ToolCall{
-				Id:       state.ToolCallID,
-				ToolName: dbRtc.ToolName,
-				Output:   &toolOutput,
-				Status:   &dbRtc.Status,
-			}
-			return formatToolCallOutput(tc), nil
-		}
-
-		// RTC not yet terminal (pending/sent/executing) -> re-interrupt with
-		// same RTC ID so the tool waits again.
-		info := rtcInterruptInfo{
-			Type:      "rtc",
-			ToolName:  state.ToolName,
-			RtcID:     state.RtcID,
-			MessageID: state.MessageID,
-		}
-		return "", tool.StatefulInterrupt(ctx, info, state)
+		return r.handleRtcResume(ctx, state)
 	}
 
 	// === First-call path ===
+	return r.handleRtcFirstCall(ctx, toolName, argumentsInJSON)
+}
 
-	// 1. Get tool_call_id (eino injects it into context before calling the tool).
+// handleRtcResume handles the resume path for RTC tools: checks if the RTC
+// has reached terminal state, formats the result, or re-interrupts.
+func (r *rtcToolBase) handleRtcResume(ctx context.Context, state rtcInterruptState) (string, error) {
+	rtcID, parseErr := uuid.Parse(state.RtcID)
+	if parseErr != nil {
+		return "", fmt.Errorf("rtc: invalid rtc_id in state: %w", parseErr)
+	}
+
+	dbRtc, dbErr := r.helpers.deps.RtcRepo.GetByID(ctx, rtcID)
+	if dbErr != nil {
+		r.helpers.logger.Warn(ctx, "rtcToolBase.resume.db_error", map[string]any{
+			"rtc_id": rtcID.String(),
+			"error":  dbErr.Error(),
+		})
+		info := rtcInterruptInfo{Type: "rtc", ToolName: state.ToolName, RtcID: state.RtcID, MessageID: state.MessageID}
+		return "", tool.StatefulInterrupt(ctx, info, state)
+	}
+
+	switch protocol.RtcStatus(dbRtc.Status) {
+	case protocol.RtcStatusCompleted, protocol.RtcStatusFailed,
+		protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
+		var toolOutput string
+		if r.formatResult != nil {
+			toolOutput = r.formatResult(dbRtc)
+		} else {
+			toolOutput = string(dbRtc.Result)
+			if dbRtc.Status == string(protocol.RtcStatusFailed) && dbRtc.ErrorMessage != "" {
+				toolOutput = dbRtc.ErrorMessage
+			}
+		}
+		tc := protocol.ToolCall{
+			Id:       state.ToolCallID,
+			ToolName: dbRtc.ToolName,
+			Output:   &toolOutput,
+			Status:   &dbRtc.Status,
+		}
+		return formatToolCallOutput(tc), nil
+	}
+
+	// RTC not yet terminal: re-interrupt.
+	info := rtcInterruptInfo{Type: "rtc", ToolName: state.ToolName, RtcID: state.RtcID, MessageID: state.MessageID}
+	return "", tool.StatefulInterrupt(ctx, info, state)
+}
+
+// handleRtcFirstCall handles the first-call path for RTC tools: creates the
+// RTC record, message, and triggers the interrupt.
+func (r *rtcToolBase) handleRtcFirstCall(ctx context.Context, toolName, argumentsInJSON string) (string, error) {
 	callID := compose.GetToolCallID(ctx)
 	if callID == "" {
 		return "", fmt.Errorf("rtc: tool_call_id not set in context")
 	}
 
-	// 2. Turn ID is already known (stored on rtcToolBase at construction time).
-	// In the old code, this was read from context via getTurnUUID(ctx).
 	turnUUID := r.turnID
 	if turnUUID == uuid.Nil {
 		return "", fmt.Errorf("rtc: turn UUID is nil")
 	}
 
-	// 3. Generate RTC ID and ClientID.
 	rtcID := uuid.Must(uuid.NewV7())
 	clientID := uuid.Must(uuid.NewV7()).String()
 
-	// 4. Build toolcall_input ContentData.
 	toolCallData := protocol.ToolCall{
 		Id:       callID,
 		ToolName: toolName,
@@ -296,18 +284,38 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		Data: toolCallData,
 	}
 
-	// 5. Transactionally create Message + RTC record + publish updates.
+	msgID, err := r.createRtcAndMessage(ctx, rtcID, clientID, turnUUID, toolName, argumentsInJSON, contentData)
+	if err != nil {
+		return "", err
+	}
+
+	r.registerRtcBatch(ctx, rtcID, turnUUID)
+
+	state := rtcInterruptState{
+		RtcID:      rtcID.String(),
+		ToolCallID: callID,
+		MessageID:  msgID.String(),
+		ToolName:   toolName,
+	}
+	info := rtcInterruptInfo{
+		Type:      "rtc",
+		ToolName:  toolName,
+		RtcID:     rtcID.String(),
+		MessageID: msgID.String(),
+		Args:      argumentsInJSON,
+	}
+	return "", tool.StatefulInterrupt(ctx, info, state)
+}
+
+// createRtcAndMessage transactionally creates a Message and RTC record.
+func (r *rtcToolBase) createRtcAndMessage(ctx context.Context, rtcID uuid.UUID, clientID string, turnUUID uuid.UUID, toolName, argumentsInJSON string, contentData protocol.ContentData) (uuid.UUID, error) {
 	var msgID uuid.UUID
 	_, err := r.helpers.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
-		// Allocate RTC offset from a separate counter (does not consume message global_offset).
 		rtcOffset, offsetErr := primitives.AllocateRtcOffset(txCtx, r.helpers.deps, r.session.ID)
 		if offsetErr != nil {
 			return nil, fmt.Errorf("allocate rtc offset: %w", offsetErr)
 		}
 
-		// Create Message (role=tool, type=toolcall_input).
-		// Note: Token usage is intentionally NOT recorded on tool messages.
-		// See Message struct comments in model/message.go for design rationale.
 		msg, createErr := primitives.CreateMessage(
 			txCtx, r.helpers.deps,
 			r.session.ID, &turnUUID,
@@ -315,15 +323,13 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 			usecase.SystemCreator{},
 			contentData,
 			protocol.MessageStreamingCompleted,
-			"",  // system-generated
-			nil, // no parent message
+			"", nil,
 		)
 		if createErr != nil {
 			return nil, fmt.Errorf("create toolcall message: %w", createErr)
 		}
 		msgID = msg.ID
 
-		// Create RTC record (MessageID points to the toolcall_input message).
 		rtc := &model.Rtc{
 			ID:         rtcID,
 			ClientID:   clientID,
@@ -339,7 +345,6 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 			return nil, fmt.Errorf("create rtc: %w", err)
 		}
 
-		// Build publish updates (RTC status + toolcall_input message created).
 		items := primitives.BuildRtcStatusUpdates(r.session, rtcID)
 		if len(items) > 0 {
 			items[0].Items = append(items[0].Items, protocol.UpdateItem{
@@ -354,7 +359,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			r.helpers.logger.Info(ctx, "rtcToolBase.push_after_commit", map[string]any{"error": err.Error()})
 		} else {
-			return "", fmt.Errorf("create rtc and message: %w", err)
+			return uuid.Nil, fmt.Errorf("create rtc and message: %w", err)
 		}
 	}
 
@@ -366,65 +371,48 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	})
 
 	if toolName == "script" {
-		var scriptArgs struct {
-			Title  string `json:"title"`
-			Action string `json:"action"`
-			Name   string `json:"name"`
-		}
-		if err := json.Unmarshal([]byte(argumentsInJSON), &scriptArgs); err != nil {
-			logger.Warn(ctx, "script.parse_args_failed",
-				zap.String("rtc_id", rtcID.String()),
-				zap.Error(err),
-			)
-		}
-		logger.Info(ctx, "script.execution_started",
+		r.logScriptStart(ctx, rtcID, turnUUID, argumentsInJSON)
+	}
+
+	return msgID, nil
+}
+
+// logScriptStart logs the start of a script execution for monitoring.
+func (r *rtcToolBase) logScriptStart(ctx context.Context, rtcID, turnUUID uuid.UUID, argumentsInJSON string) {
+	var scriptArgs struct {
+		Title  string `json:"title"`
+		Action string `json:"action"`
+		Name   string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(argumentsInJSON), &scriptArgs); err != nil {
+		logger.Warn(ctx, "script.parse_args_failed",
 			zap.String("rtc_id", rtcID.String()),
-			zap.String("session_id", r.session.ID.String()),
-			zap.String("turn_id", turnUUID.String()),
-			zap.String("title", scriptArgs.Title),
-			zap.String("action", scriptArgs.Action),
-			zap.String("name", scriptArgs.Name),
+			zap.Error(err),
 		)
 	}
+	logger.Info(ctx, "script.execution_started",
+		zap.String("rtc_id", rtcID.String()),
+		zap.String("session_id", r.session.ID.String()),
+		zap.String("turn_id", turnUUID.String()),
+		zap.String("title", scriptArgs.Title),
+		zap.String("action", scriptArgs.Action),
+		zap.String("name", scriptArgs.Name),
+	)
+}
 
-	// 6. Register RTC in batch pending set for batch resume.
-	// This tracks all RTCs created in this turn. When all RTCs complete,
-	// SubmitRtcResult will publish a single Resume work item.
-	// Note: We don't store the interrupt mapping here because we don't have
-	// eino's internal InterruptCtx.ID yet. The mapping is stored later in
-	// the interruptTurn callback when all tools have interrupted.
-	if r.helpers.deps.Redis != nil {
-		batchKey := cache.RtcBatchPending(turnUUID.String())
-		if err := saddExpireScript.Run(ctx, r.helpers.deps.Redis, []string{batchKey}, rtcID.String(), int(10*time.Minute/time.Second)).Err(); err != nil {
-			r.helpers.logger.Warn(ctx, "rtcToolBase.batch_register_failed", map[string]any{
-				"rtc_id":  rtcID.String(),
-				"turn_id": turnUUID.String(),
-				"error":   err.Error(),
-			})
-			// Non-fatal: continue without batch tracking
-		}
+// registerRtcBatch registers the RTC in the batch pending set for batch resume.
+func (r *rtcToolBase) registerRtcBatch(ctx context.Context, rtcID, turnUUID uuid.UUID) {
+	if r.helpers.deps.Redis == nil {
+		return
 	}
-
-	// 7. Build interrupt state.
-	state = rtcInterruptState{
-		RtcID:      rtcID.String(),
-		ToolCallID: callID,
-		MessageID:  msgID.String(),
-		ToolName:   toolName,
+	batchKey := cache.RtcBatchPending(turnUUID.String())
+	if err := saddExpireScript.Run(ctx, r.helpers.deps.Redis, []string{batchKey}, rtcID.String(), int(10*time.Minute/time.Second)).Err(); err != nil {
+		r.helpers.logger.Warn(ctx, "rtcToolBase.batch_register_failed", map[string]any{
+			"rtc_id":  rtcID.String(),
+			"turn_id": turnUUID.String(),
+			"error":   err.Error(),
+		})
 	}
-
-	// 8. Build interrupt info.
-	info := rtcInterruptInfo{
-		Type:      "rtc",
-		ToolName:  toolName,
-		RtcID:     rtcID.String(),
-		MessageID: msgID.String(),
-		Args:      argumentsInJSON,
-	}
-
-	// 9. Pause the turn — eino will persist the checkpoint and return control
-	// to turn-agent, which calls InterruptTurn.
-	return "", tool.StatefulInterrupt(ctx, info, state)
 }
 
 // parseToolArgs safely parses JSON tool arguments.

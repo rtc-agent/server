@@ -32,6 +32,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	ucb "github.com/cloudwego/eino/utils/callbacks"
 	"github.com/google/uuid"
+	dbmodel "github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -87,7 +88,7 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 }
 
 // reportLLMCall is the shared sink for both streaming and non-streaming paths.
-// It performs the full token data flow: extract → cost → SQL accumulate → estimate → publish → metrics/log.
+// It performs the full token data flow: extract -> cost -> SQL accumulate -> estimate -> publish -> metrics/log.
 func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, modelName string) {
 	sessionIDStr := turnagent.SessionIDFromContext(ctx)
 	turnIDStr := turnagent.TurnIDFromContext(ctx)
@@ -98,17 +99,11 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 			"session_id": sessionIDStr,
 			"error":      parseErr.Error(),
 		})
-		return // 无法继续处理无效的 session ID
+		return
 	}
 
-	// ===============================================================
-	// Step 1: Calculate cost
-	// ===============================================================
 	costMicros := calculateCostMicros(fullUsage, h.modelPricing)
 
-	// ===============================================================
-	// Step 2: Read session to get prevEWMA + current TotalTokens
-	// ===============================================================
 	session, sessErr := h.deps.SessionRepo.GetByID(ctx, sessionID)
 	if sessErr != nil {
 		h.logger.Warn(ctx, "token_callback.get_session_failed", map[string]any{
@@ -117,52 +112,10 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 		})
 	}
 
-	// BUG-08 fix: Check if this is a compression LLM call.
-	// Compression calls should NOT update CurrentContextTokens because
-	// persistCompressedMessages already writes the accurate post-compression value.
-	// Without this check, the callback would overwrite with tokensAfter + compressionTokens,
-	// causing CurrentContextTokens to be overestimated.
 	isCompress := isCompressContext(ctx)
+	currentCtxTokens, estimate := h.computeTokenEstimate(ctx, session, sessionID, fullUsage.TotalTokens)
 
-	// ===============================================================
-	// Step 3: Compute token estimate (EWMA + derived fields)
-	// ===============================================================
-	var currentCtxTokens int64
-	var estimate *TokenEstimate
-	if session != nil {
-		currentCtxTokens = session.TotalTokens + fullUsage.TotalTokens
-		if session.CurrentContextTokens > 0 {
-			currentCtxTokens = session.CurrentContextTokens + fullUsage.TotalTokens
-		}
-		if h.tokenEstimator != nil {
-			prevEWMA := session.TokenEstimateEWMA
-			estimate = h.tokenEstimator.Estimate(ctx, sessionID, currentCtxTokens, prevEWMA, fullUsage.TotalTokens)
-		}
-	}
-
-	// ===============================================================
-	// Step 4: SQL atomic accumulate Session token usage + persist EWMA
-	// ===============================================================
-	delta := repo.TokenUsageDelta{
-		InputDelta:              fullUsage.InputTokens,
-		OutputDelta:             fullUsage.OutputTokens,
-		TotalDelta:              fullUsage.TotalTokens,
-		CachedReadDelta:         fullUsage.CachedReadTokens,
-		CachedWriteDelta:        fullUsage.CachedWriteTokens,
-		ReasoningDelta:          fullUsage.ReasoningTokens,
-		CostMicrosDelta:         costMicros,
-		SetCurrentContextTokens: 0, // default: don't update
-	}
-
-	// BUG-08 fix: Only update CurrentContextTokens for non-compression calls.
-	if !isCompress && session != nil {
-		delta.SetCurrentContextTokens = currentCtxTokens
-	}
-
-	if estimate != nil {
-		delta.SetEWMA = estimate.NewEWMA
-	}
-
+	delta := h.buildTokenUsageDelta(fullUsage, costMicros, isCompress, session, currentCtxTokens, estimate)
 	if err := h.deps.SessionRepo.AtomicAddTokenUsage(ctx, sessionID, delta); err != nil {
 		h.logger.Warn(ctx, "token_callback.atomic_update_failed", map[string]any{
 			"session_id": sessionID,
@@ -170,60 +123,9 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 		})
 	}
 
-	// Update session with new TotalTokens for publishing
-	if session != nil && estimate != nil {
-		session.TotalTokens += fullUsage.TotalTokens
-		if !isCompress {
-			session.CurrentContextTokens = currentCtxTokens
-		}
-		session.TotalInputTokens += fullUsage.InputTokens
-		session.TotalOutputTokens += fullUsage.OutputTokens
-		session.TotalCachedReadTokens += fullUsage.CachedReadTokens
-		session.TotalCachedWriteTokens += fullUsage.CachedWriteTokens
-		session.TotalReasoningTokens += fullUsage.ReasoningTokens
-		session.TotalCostMicros += costMicros
-		session.TokenEstimateEWMA = estimate.NewEWMA
-	}
+	h.applySessionTokenUpdates(session, fullUsage, costMicros, currentCtxTokens, isCompress, estimate)
+	h.publishSessionUpdateWithWarnings(ctx, session, sessionID, estimate)
 
-	// ===============================================================
-	// Step 5: Throttled Session Update publish
-	// ===============================================================
-	if session != nil {
-		h.publishSessionUpdate(ctx, session, true)
-
-		// Compression warning: alert when approaching threshold
-		if estimate != nil && estimate.RoundsUntilCompression >= 0 && estimate.RoundsUntilCompression <= 2 {
-			h.logger.Info(ctx, "token_callback.compression_approaching", map[string]any{
-				"session_id":            sessionID,
-				"current_tokens":        estimate.CurrentTokens,
-				"threshold":             estimate.CompressionThreshold,
-				"rounds_until_compress": estimate.RoundsUntilCompression,
-			})
-		}
-
-		// Cache hit rate warning: alert when session cumulative hit rate is below threshold.
-		if h.cacheHitRateWarnThreshold >= 0 {
-			totalCached := session.TotalCachedReadTokens
-			totalInput := session.TotalInputTokens
-			totalRelevant := totalCached + totalInput
-			if totalRelevant > 0 {
-				hitRate := float64(totalCached) / float64(totalRelevant)
-				if hitRate < h.cacheHitRateWarnThreshold {
-					logger.Warn(ctx, "cache hit rate below threshold",
-						zap.String("session_id", sessionID.String()),
-						zap.Float64("cache_hit_rate", hitRate),
-						zap.Float64("threshold", h.cacheHitRateWarnThreshold),
-						zap.Int64("cached_read_tokens", totalCached),
-						zap.Int64("input_tokens", totalInput),
-					)
-				}
-			}
-		}
-	}
-
-	// ===============================================================
-	// Step 6: Metrics + log (extended dimensions)
-	// ===============================================================
 	if h.metrics != nil {
 		h.metrics.RecordLLMCall(ctx, turnagent.LLMCallMetricsAttrs{
 			SessionID:       sessionIDStr,
@@ -249,6 +151,98 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 		"reasoning_tokens":    fullUsage.ReasoningTokens,
 		"cost_micros":         costMicros,
 	})
+}
+
+// computeTokenEstimate computes the current context tokens and token estimate
+// based on the session state.
+func (h *helpers) computeTokenEstimate(ctx context.Context, session *dbmodel.Session, sessionID uuid.UUID, totalTokens int64) (int64, *TokenEstimate) {
+	if session == nil {
+		return 0, nil
+	}
+	currentCtxTokens := session.TotalTokens + totalTokens
+	if session.CurrentContextTokens > 0 {
+		currentCtxTokens = session.CurrentContextTokens + totalTokens
+	}
+	var estimate *TokenEstimate
+	if h.tokenEstimator != nil {
+		estimate = h.tokenEstimator.Estimate(ctx, sessionID, currentCtxTokens, session.TokenEstimateEWMA, totalTokens)
+	}
+	return currentCtxTokens, estimate
+}
+
+// buildTokenUsageDelta builds a TokenUsageDelta for the SQL atomic accumulate step.
+func (h *helpers) buildTokenUsageDelta(fullUsage *FullTokenUsage, costMicros int64, isCompress bool, session *dbmodel.Session, currentCtxTokens int64, estimate *TokenEstimate) repo.TokenUsageDelta {
+	delta := repo.TokenUsageDelta{
+		InputDelta:              fullUsage.InputTokens,
+		OutputDelta:             fullUsage.OutputTokens,
+		TotalDelta:              fullUsage.TotalTokens,
+		CachedReadDelta:         fullUsage.CachedReadTokens,
+		CachedWriteDelta:        fullUsage.CachedWriteTokens,
+		ReasoningDelta:          fullUsage.ReasoningTokens,
+		CostMicrosDelta:         costMicros,
+		SetCurrentContextTokens: 0,
+	}
+	if !isCompress && session != nil {
+		delta.SetCurrentContextTokens = currentCtxTokens
+	}
+	if estimate != nil {
+		delta.SetEWMA = estimate.NewEWMA
+	}
+	return delta
+}
+
+// applySessionTokenUpdates updates the session struct in-memory with new token counts.
+func (h *helpers) applySessionTokenUpdates(session *dbmodel.Session, fullUsage *FullTokenUsage, costMicros, currentCtxTokens int64, isCompress bool, estimate *TokenEstimate) {
+	if session == nil || estimate == nil {
+		return
+	}
+	session.TotalTokens += fullUsage.TotalTokens
+	if !isCompress {
+		session.CurrentContextTokens = currentCtxTokens
+	}
+	session.TotalInputTokens += fullUsage.InputTokens
+	session.TotalOutputTokens += fullUsage.OutputTokens
+	session.TotalCachedReadTokens += fullUsage.CachedReadTokens
+	session.TotalCachedWriteTokens += fullUsage.CachedWriteTokens
+	session.TotalReasoningTokens += fullUsage.ReasoningTokens
+	session.TotalCostMicros += costMicros
+	session.TokenEstimateEWMA = estimate.NewEWMA
+}
+
+// publishSessionUpdateWithWarnings publishes the session update and logs
+// warnings about approaching compression or low cache hit rates.
+func (h *helpers) publishSessionUpdateWithWarnings(ctx context.Context, session *dbmodel.Session, sessionID uuid.UUID, estimate *TokenEstimate) {
+	if session == nil {
+		return
+	}
+	h.publishSessionUpdate(ctx, session, true)
+
+	if estimate != nil && estimate.RoundsUntilCompression >= 0 && estimate.RoundsUntilCompression <= 2 {
+		h.logger.Info(ctx, "token_callback.compression_approaching", map[string]any{
+			"session_id":            sessionID,
+			"current_tokens":        estimate.CurrentTokens,
+			"threshold":             estimate.CompressionThreshold,
+			"rounds_until_compress": estimate.RoundsUntilCompression,
+		})
+	}
+
+	if h.cacheHitRateWarnThreshold >= 0 {
+		totalCached := session.TotalCachedReadTokens
+		totalInput := session.TotalInputTokens
+		totalRelevant := totalCached + totalInput
+		if totalRelevant > 0 {
+			hitRate := float64(totalCached) / float64(totalRelevant)
+			if hitRate < h.cacheHitRateWarnThreshold {
+				logger.Warn(ctx, "cache hit rate below threshold",
+					zap.String("session_id", sessionID.String()),
+					zap.Float64("cache_hit_rate", hitRate),
+					zap.Float64("threshold", h.cacheHitRateWarnThreshold),
+					zap.Int64("cached_read_tokens", totalCached),
+					zap.Int64("input_tokens", totalInput),
+				)
+			}
+		}
+	}
 }
 
 // estimateClaudeReasoningTokens estimates reasoning tokens for Claude.
@@ -306,6 +300,28 @@ func (h *helpers) extractFullUsage(output *model.CallbackOutput) *FullTokenUsage
 	}
 }
 
+// mergeTokenUsageMax merges src into dst, keeping the maximum of each field.
+func mergeTokenUsageMax(dst *model.TokenUsage, src *model.TokenUsage) {
+	if src == nil {
+		return
+	}
+	if src.PromptTokens > dst.PromptTokens {
+		dst.PromptTokens = src.PromptTokens
+	}
+	if src.CompletionTokens > dst.CompletionTokens {
+		dst.CompletionTokens = src.CompletionTokens
+	}
+	if src.TotalTokens > dst.TotalTokens {
+		dst.TotalTokens = src.TotalTokens
+	}
+	if src.PromptTokenDetails.CachedTokens > dst.PromptTokenDetails.CachedTokens {
+		dst.PromptTokenDetails.CachedTokens = src.PromptTokenDetails.CachedTokens
+	}
+	if src.CompletionTokensDetails.ReasoningTokens > dst.CompletionTokensDetails.ReasoningTokens {
+		dst.CompletionTokensDetails.ReasoningTokens = src.CompletionTokensDetails.ReasoningTokens
+	}
+}
+
 // drainStreamAndReport drains a streaming CallbackOutput reader, aggregates
 // token usage across chunks, and reports the final usage once.
 //
@@ -328,52 +344,37 @@ func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.Strea
 	var thinkingContent string
 	var cachedWriteTokens int
 
-	// mergeUsage merges chunk.TokenUsage into maxUsage, keeping the maximum of
-	// each field. Parallel to turnagent.MergeMaxTokenUsage but operates on
-	// model.TokenUsage (the type used by eino's CallbackOutput).
-	mergeUsage := func(u *model.TokenUsage) {
-		if u == nil {
-			return
-		}
-		if u.PromptTokens > maxUsage.PromptTokens {
-			maxUsage.PromptTokens = u.PromptTokens
-		}
-		if u.CompletionTokens > maxUsage.CompletionTokens {
-			maxUsage.CompletionTokens = u.CompletionTokens
-		}
-		if u.TotalTokens > maxUsage.TotalTokens {
-			maxUsage.TotalTokens = u.TotalTokens
-		}
-		if u.PromptTokenDetails.CachedTokens > maxUsage.PromptTokenDetails.CachedTokens {
-			maxUsage.PromptTokenDetails.CachedTokens = u.PromptTokenDetails.CachedTokens
-		}
-		if u.CompletionTokensDetails.ReasoningTokens > maxUsage.CompletionTokensDetails.ReasoningTokens {
-			maxUsage.CompletionTokensDetails.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
-		}
-	}
-
 	for {
 		chunk, err := output.Recv()
 		if err != nil {
-			break // EOF or stream error — report whatever we accumulated.
+			break // EOF or stream error -- report whatever we accumulated.
 		}
 		if chunk.Config != nil && chunk.Config.Model != "" {
 			modelName = chunk.Config.Model
 		}
-		mergeUsage(chunk.TokenUsage)
+		mergeTokenUsageMax(&maxUsage, chunk.TokenUsage)
 		if chunk.Message != nil {
 			lastMessage = chunk.Message
 			if thinking, ok := einoclaude.GetThinking(chunk.Message); ok && thinking != "" {
 				thinkingContent += thinking
 			}
-			// BUG-02 fix: accumulate cache creation input tokens across chunks.
 			if v, ok := einoclaude.GetCacheCreationInputTokens(chunk.Message); ok && v > cachedWriteTokens {
 				cachedWriteTokens = v
 			}
 		}
 	}
 
-	// Build a synthetic CallbackOutput for extractFullUsage.
+	fullOutput := h.buildDrainedOutput(thinkingContent, lastMessage, modelName, &maxUsage)
+	fullUsage := h.extractFullUsage(fullOutput)
+	if fullUsage != nil {
+		applyCachedWriteOverride(fullUsage, cachedWriteTokens)
+		h.reportLLMCall(ctx, fullUsage, modelName)
+	}
+}
+
+// buildDrainedOutput constructs a synthetic CallbackOutput from accumulated
+// stream chunks, merging thinking content into the last message.
+func (h *helpers) buildDrainedOutput(thinkingContent string, lastMessage *schema.Message, modelName string, maxUsage *model.TokenUsage) *model.CallbackOutput {
 	if thinkingContent != "" && lastMessage != nil {
 		msgCopy := *lastMessage
 		if msgCopy.Extra == nil {
@@ -382,26 +383,24 @@ func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.Strea
 		msgCopy.Extra["_eino_claude_thinking"] = thinkingContent
 		lastMessage = &msgCopy
 	}
-	fullOutput := &model.CallbackOutput{
+	return &model.CallbackOutput{
 		Message:    lastMessage,
 		Config:     &model.Config{Model: modelName},
-		TokenUsage: &maxUsage,
+		TokenUsage: maxUsage,
 	}
-	fullUsage := h.extractFullUsage(fullOutput)
-	if fullUsage != nil {
-		// BUG-02 fix: streaming path lost cache creation tokens because
-		// message_start (which carries them) has empty Content and gets
-		// overwritten by later chunks; message_delta reports 0. Override
-		// with the accumulated max when it's larger.
-		if int64(cachedWriteTokens) > fullUsage.CachedWriteTokens {
-			fullUsage.CachedWriteTokens = int64(cachedWriteTokens)
-			promptTokens := fullUsage.TotalTokens - fullUsage.OutputTokens
-			pureInput := promptTokens - fullUsage.CachedReadTokens - fullUsage.CachedWriteTokens
-			if pureInput < 0 {
-				pureInput = 0
-			}
-			fullUsage.InputTokens = pureInput
-		}
-		h.reportLLMCall(ctx, fullUsage, modelName)
+}
+
+// applyCachedWriteOverride overrides the cached write tokens with the
+// accumulated max when it's larger, and recalculates input tokens accordingly.
+func applyCachedWriteOverride(fullUsage *FullTokenUsage, cachedWriteTokens int) {
+	if int64(cachedWriteTokens) <= fullUsage.CachedWriteTokens {
+		return
 	}
+	fullUsage.CachedWriteTokens = int64(cachedWriteTokens)
+	promptTokens := fullUsage.TotalTokens - fullUsage.OutputTokens
+	pureInput := promptTokens - fullUsage.CachedReadTokens - fullUsage.CachedWriteTokens
+	if pureInput < 0 {
+		pureInput = 0
+	}
+	fullUsage.InputTokens = pureInput
 }

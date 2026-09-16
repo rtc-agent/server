@@ -51,7 +51,6 @@ type ServiceContext struct {
 // NewServiceContext 创建服务上下文
 // 保留原有签名以兼容非 Wire 调用方。内部委托给 NewServiceContextWithDeps。
 func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClient) *ServiceContext {
-	// 创建 repos
 	sessionRepo := repo.NewSessionRepo(db)
 	messageRepo := repo.NewMessageRepo(db)
 	turnRepo := repo.NewTurnRepo(db)
@@ -66,12 +65,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	memoryRepo := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
 
-	// 创建 UpdatePublisher（需要先创建 repos）
 	updatePublisher := updates.NewUpdatePublisher(db, rdb, sessionRepo, messageRepo, turnRepo, rtcRepo)
-
-	// 公共初始化
-	configureUpdatePublisher(updatePublisher, cfg)
-	initTokenCounter(cfg)
 
 	jwtSigner, err := auth.NewJWTSigner(
 		cfg.Auth.JWTSecret,
@@ -96,31 +90,11 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		logger.Fatal(context.Background(), "assemble dual broker", zap.Error(err))
 	}
 
-	// 注入 broker 到 UpdatePublisher（解决循环依赖）
-	updatePublisher.SetBroker(dualBroker)
-
-	return &ServiceContext{
-		Config:              cfg,
-		DB:                  db,
-		Redis:               rdb,
-		SessionRepo:         sessionRepo,
-		MessageRepo:         messageRepo,
-		TurnRepo:            turnRepo,
-		RtcRepo:             rtcRepo,
-		GoalRepo:            goalRepo,
-		OAuth2UserRepo:      oauth2UserRepo,
-		DeviceRepo:          deviceRepo,
-		RefreshTokenRepo:    refreshTokenRepo,
-		SessionMemoryRepo:   sessionMemoryRepo,
-		UserMemoryRepo:      userMemoryRepo,
-		ScriptExecutionRepo: scriptExecutionRepo,
-		MemoryRepo:          memoryRepo,
-		LoopRepo:            loopRepo,
-		UpdatePublisher:     updatePublisher,
-		CentrifugeNode:      node,
-		Broker:              dualBroker,
-		JWTSigner:           jwtSigner,
-	}
+	return NewServiceContextWithDeps(cfg, db, rdb,
+		sessionRepo, messageRepo, turnRepo, rtcRepo,
+		goalRepo, oauth2UserRepo, deviceRepo, refreshTokenRepo,
+		sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, memoryRepo, loopRepo,
+		updatePublisher, node, dualBroker, jwtSigner)
 }
 
 // NewServiceContextWithDeps 创建服务上下文（Wire 兼容版本）。
@@ -147,10 +121,8 @@ func NewServiceContextWithDeps(
 	broker *centrifugeplus.DualBroker,
 	jwtSigner *auth.JWTSigner,
 ) *ServiceContext {
-	// 注入 broker 到 UpdatePublisher（解决循环依赖）
 	updatePublisher.SetBroker(broker)
 
-	// 公共初始化
 	configureUpdatePublisher(updatePublisher, cfg)
 	initTokenCounter(cfg)
 

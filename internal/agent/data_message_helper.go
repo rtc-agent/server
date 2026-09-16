@@ -173,63 +173,47 @@ func (h *helpers) appendStreamChunk(
 
 	// Not last chunk: publish to live channel (real-time update).
 	if !isLast {
-		if _, pubErr := h.deps.UpdatePublisher.Publish(ctx, updates.UpdatePublishItem{
-			Channel: liveCh,
-			Items: []protocol.UpdateItem{
-				{Entity: protocol.EntityMessage, Action: protocol.ActionUpdated, EntityId: msgIDStr},
-			},
-		}); pubErr != nil {
-			h.logger.Warn(ctx, "appendStreamChunk.live_publish_failed", map[string]any{
-				"message_id": msgIDStr,
-				"error":      pubErr.Error(),
-			})
-		}
+		h.publishLiveChunkUpdate(ctx, liveCh, msgIDStr)
 		return nil
 	}
 
 	// Last chunk: finalize.
-	// 1. Read all chunks from Redis and concatenate.
-	var fullContent string
-	if streamStore != nil {
-		chunks, readErr := streamStore.GetAllChunks(msgIDStr)
-		if readErr != nil {
-			return fmt.Errorf("appendStreamChunk: get all chunks: %w", readErr)
-		}
-		fullContent = strings.Join(chunks, "")
+	return h.finalizeLastStreamChunk(ctx, streamStore, msgID, msgIDStr, chunkContent,
+		isFirst, topicCh, buildContent, kind, tokenUsage, finalized)
+}
 
-		// Debug logging: record chunk count and final content for troubleshooting.
-		h.logger.Info(ctx, "appendStreamChunk.finalize", map[string]any{
-			"message_id":           msgIDStr,
-			"kind":                 kind,
-			"chunk_count":          len(chunks),
-			"full_content_len":     len(fullContent),
-			"full_content_preview": stringutil.TruncateByByte(fullContent, 200),
-			"is_first":             isFirst,
+// publishLiveChunkUpdate sends a real-time update for an intermediate chunk.
+func (h *helpers) publishLiveChunkUpdate(ctx context.Context, liveCh, msgIDStr string) {
+	if _, pubErr := h.deps.UpdatePublisher.Publish(ctx, updates.UpdatePublishItem{
+		Channel: liveCh,
+		Items: []protocol.UpdateItem{
+			{Entity: protocol.EntityMessage, Action: protocol.ActionUpdated, EntityId: msgIDStr},
+		},
+	}); pubErr != nil {
+		h.logger.Warn(ctx, "appendStreamChunk.live_publish_failed", map[string]any{
+			"message_id": msgIDStr,
+			"error":      pubErr.Error(),
 		})
-
-		// Detect potential chunk loss due to TTL expiration or Redis failures.
-		// If we have very few chunks but the message was streaming for a while,
-		// log a warning for monitoring and debugging.
-		if len(chunks) == 0 {
-			h.logger.Info(ctx, "appendStreamChunk.no_chunks_in_redis", map[string]any{
-				"message_id": msgIDStr,
-				"kind":       kind,
-				"hint":       "possible TTL expiration or Redis connectivity issue",
-			})
-		} else if len(chunks) <= 2 && !isFirst {
-			// Only 1-2 chunks but this is not the first chunk (meaning more chunks were expected)
-			h.logger.Info(ctx, "appendStreamChunk.few_chunks_detected", map[string]any{
-				"message_id":  msgIDStr,
-				"kind":        kind,
-				"chunk_count": len(chunks),
-				"hint":        "possible partial chunk loss due to TTL expiration",
-			})
-		}
-	} else {
-		fullContent = chunkContent
 	}
+}
 
-	// 2. Serialize final content as ContentData JSON.
+// finalizeLastStreamChunk handles the last chunk of a streaming message:
+// reads all Redis chunks, builds final content, updates DB, and cleans up Redis.
+func (h *helpers) finalizeLastStreamChunk(
+	ctx context.Context,
+	streamStore *StreamStore,
+	msgID *uuid.UUID,
+	msgIDStr string,
+	chunkContent string,
+	isFirst bool,
+	topicCh string,
+	buildContent func(string) (protocol.ContentData, error),
+	kind string,
+	tokenUsage *turnagent.TokenUsage,
+	finalized *bool,
+) error {
+	fullContent := h.readFullContent(ctx, streamStore, msgIDStr, chunkContent, isFirst, kind)
+
 	finalContentData, contentErr := buildContent(fullContent)
 	if contentErr != nil {
 		return fmt.Errorf("appendStreamChunk: build final content: %w", contentErr)
@@ -239,14 +223,84 @@ func (h *helpers) appendStreamChunk(
 		return fmt.Errorf("appendStreamChunk: serialize final content: %w", serializeErr)
 	}
 
-	// 3. Update DB + publish message.updated to topic channel.
-	if _, pubErr := h.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
-		if err := h.deps.MessageRepo.UpdateStreamingStatus(txCtx, *msgID, protocol.MessageStreamingCompleted, serializedContent); err != nil {
+	if pubErr := h.updateFinalMessage(ctx, *msgID, msgIDStr, topicCh, serializedContent, tokenUsage); pubErr != nil {
+		if errors.Is(pubErr, updates.ErrPushAfterCommit) {
+			h.logger.Info(ctx, "appendStreamChunk.push_after_commit", map[string]any{"error": pubErr.Error()})
+		} else {
+			return fmt.Errorf("appendStreamChunk: run and publish: %w", pubErr)
+		}
+	}
+
+	if streamStore != nil {
+		if delErr := streamStore.DeleteChunks(msgIDStr); delErr != nil {
+			h.logger.Warn(ctx, "appendStreamChunk.redis_delete_failed", map[string]any{
+				"message_id": msgIDStr,
+				"error":      delErr.Error(),
+			})
+		}
+	}
+
+	*finalized = true
+	return nil
+}
+
+// readFullContent reads the full content from Redis chunks, or falls back to
+// the current chunkContent if no stream store is available.
+func (h *helpers) readFullContent(ctx context.Context, streamStore *StreamStore, msgIDStr, chunkContent string, isFirst bool, kind string) string {
+	if streamStore == nil {
+		return chunkContent
+	}
+
+	chunks, readErr := streamStore.GetAllChunks(msgIDStr)
+	if readErr != nil {
+		h.logger.Warn(ctx, "appendStreamChunk.get_all_chunks_failed", map[string]any{
+			"message_id": msgIDStr,
+			"error":      readErr.Error(),
+		})
+		return chunkContent
+	}
+	fullContent := strings.Join(chunks, "")
+
+	h.logger.Info(ctx, "appendStreamChunk.finalize", map[string]any{
+		"message_id":           msgIDStr,
+		"kind":                 kind,
+		"chunk_count":          len(chunks),
+		"full_content_len":     len(fullContent),
+		"full_content_preview": stringutil.TruncateByByte(fullContent, 200),
+		"is_first":             isFirst,
+	})
+
+	h.logChunkAnomalies(ctx, msgIDStr, kind, len(chunks), isFirst)
+	return fullContent
+}
+
+// logChunkAnomalies logs warnings about potential chunk loss.
+func (h *helpers) logChunkAnomalies(ctx context.Context, msgIDStr, kind string, chunkCount int, isFirst bool) {
+	if chunkCount == 0 {
+		h.logger.Info(ctx, "appendStreamChunk.no_chunks_in_redis", map[string]any{
+			"message_id": msgIDStr,
+			"kind":       kind,
+			"hint":       "possible TTL expiration or Redis connectivity issue",
+		})
+	} else if chunkCount <= 2 && !isFirst {
+		h.logger.Info(ctx, "appendStreamChunk.few_chunks_detected", map[string]any{
+			"message_id":  msgIDStr,
+			"kind":        kind,
+			"chunk_count": chunkCount,
+			"hint":        "possible partial chunk loss due to TTL expiration",
+		})
+	}
+}
+
+// updateFinalMessage updates the message status and token usage in a transaction,
+// then publishes the update to the topic channel.
+func (h *helpers) updateFinalMessage(ctx context.Context, msgID uuid.UUID, msgIDStr, topicCh, serializedContent string, tokenUsage *turnagent.TokenUsage) error {
+	_, pubErr := h.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
+		if err := h.deps.MessageRepo.UpdateStreamingStatus(txCtx, msgID, protocol.MessageStreamingCompleted, serializedContent); err != nil {
 			return nil, fmt.Errorf("update streaming status: %w", err)
 		}
-		// 写入 token 用量（仅 final chunk 有值）。
 		if tokenUsage != nil {
-			if err := h.deps.MessageRepo.UpdateTokenUsage(txCtx, *msgID, &model.TokenUsageUpdate{
+			if err := h.deps.MessageRepo.UpdateTokenUsage(txCtx, msgID, &model.TokenUsageUpdate{
 				InputTokens:     tokenUsage.InputTokens,
 				OutputTokens:    tokenUsage.OutputTokens,
 				TotalTokens:     tokenUsage.TotalTokens,
@@ -262,24 +316,6 @@ func (h *helpers) appendStreamChunk(
 				{Entity: protocol.EntityMessage, Action: protocol.ActionUpdated, EntityId: msgIDStr},
 			},
 		}}, nil
-	}); pubErr != nil {
-		if errors.Is(pubErr, updates.ErrPushAfterCommit) {
-			h.logger.Info(ctx, "appendStreamChunk.push_after_commit", map[string]any{"error": pubErr.Error()})
-		} else {
-			return fmt.Errorf("appendStreamChunk: run and publish: %w", pubErr)
-		}
-	}
-
-	// 4. Delete Redis chunks.
-	if streamStore != nil {
-		if delErr := streamStore.DeleteChunks(msgIDStr); delErr != nil {
-			h.logger.Warn(ctx, "appendStreamChunk.redis_delete_failed", map[string]any{
-				"message_id": msgIDStr,
-				"error":      delErr.Error(),
-			})
-		}
-	}
-
-	*finalized = true
-	return nil
+	})
+	return pubErr
 }

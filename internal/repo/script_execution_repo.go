@@ -54,29 +54,20 @@ func (r *scriptExecutionRepo) GetByRtcID(ctx context.Context, rtcID uuid.UUID) (
 }
 
 func (r *scriptExecutionRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, limit, offset int) ([]*model.ScriptExecution, int64, error) {
-	var execs []*model.ScriptExecution
-	var total int64
-
-	db := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.ScriptExecution{}).
-		Where("session_id = ?", sessionID)
-
-	if err := db.Count(&total).Error; err != nil {
-		return nil, 0, fmt.Errorf("count script executions: %w", err)
-	}
-
-	if err := db.Order("created_at DESC").Limit(limit).Offset(offset).Find(&execs).Error; err != nil {
-		return nil, 0, fmt.Errorf("list script executions: %w", err)
-	}
-
-	return execs, total, nil
+	return r.listScriptExecutions(ctx, "session_id = ?", sessionID, limit, offset)
 }
 
 func (r *scriptExecutionRepo) ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*model.ScriptExecution, int64, error) {
+	return r.listScriptExecutions(ctx, "user_id = ?", userID, limit, offset)
+}
+
+// listScriptExecutions is the shared implementation for ListBySession/ListByUser.
+func (r *scriptExecutionRepo) listScriptExecutions(ctx context.Context, where string, id uuid.UUID, limit, offset int) ([]*model.ScriptExecution, int64, error) {
 	var execs []*model.ScriptExecution
 	var total int64
 
 	db := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.ScriptExecution{}).
-		Where("user_id = ?", userID)
+		Where(where, id)
 
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count script executions: %w", err)

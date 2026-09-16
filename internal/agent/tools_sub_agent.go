@@ -103,21 +103,14 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 	}
 
 	// === First-call path ===
-	// 1. Parse arguments.
 	var args subAgentArgs
 	if ok, errMsg := parseToolArgs(ctx, t.helpers, "sub_agent", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
-
-	if args.Title == "" {
-		return "Error: title is required", nil
+	if validationErr := validateSubAgentArgs(args); validationErr != "" {
+		return validationErr, nil
 	}
 
-	if args.Instruction == "" {
-		return "Error: instruction is required", nil
-	}
-
-	// Normalize mode: default to "async".
 	mode := args.Mode
 	if mode == "" {
 		mode = "async"
@@ -126,226 +119,52 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		return fmt.Sprintf("Error: mode must be \"sync\" or \"async\", got %q", mode), nil
 	}
 
-	// 2. Get tool_call_id (eino injects it into context before calling the tool).
 	callID := compose.GetToolCallID(ctx)
 	if callID == "" {
 		return "", fmt.Errorf("sub_agent: tool_call_id not set in context")
 	}
 
-	// 3. Turn ID is already known (stored on subAgentTool at construction time).
 	turnUUID := t.turnID
 	if turnUUID == uuid.Nil {
 		return "", fmt.Errorf("sub_agent: turn UUID is nil")
 	}
 
-	// 4. Queue is required for submitting work to the sub session.
 	if t.helpers.queue == nil {
 		return "", fmt.Errorf("sub_agent: queue not available")
 	}
 
-	// 5. Generate sub session IDs.
 	subSessionID := uuid.Must(uuid.NewV7())
 	subSessionClientID := uuid.Must(uuid.NewV7()).String()
 
-	// Determine root session: if the current session is already a sub session,
-	// use its root; otherwise, the current session is the root.
-	rootClientSessionID := t.session.ClientID
-	rootServerSessionID := t.session.ID
-	if t.session.RootServerSessionID != uuid.Nil {
-		rootClientSessionID = t.session.RootClientSessionID
-		rootServerSessionID = t.session.RootServerSessionID
-	}
+	rootClientSessionID, rootServerSessionID := t.resolveRootSession()
 
-	// 6. Create sub session + first message + parent message + publish updates.
-	var parentMessageID uuid.UUID
-	var subSessionMsgID uuid.UUID
-
-	toolCallData := protocol.ToolCall{
-		Id:       callID,
-		ToolName: "sub_agent",
-		Input:    argumentsInJSON,
-	}
-	parentContent := protocol.ContentData{
-		Type: protocol.ContentTypeToolCallInput,
-		Data: toolCallData,
-	}
-
-	_, err := t.helpers.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
-		// Create sub session.
-		subSession := &model.Session{
-			ID:                    subSessionID,
-			ClientID:              subSessionClientID,
-			OwnerKind:             t.session.OwnerKind,
-			OwnerRefID:            t.session.OwnerRefID,
-			DeviceID:              t.session.DeviceID,
-			Title:                 args.Title,
-			Status:                string(protocol.SessionStatusActive),
-			AgentPrompt:           t.session.AgentPrompt,
-			ParentClientSessionID: t.session.ClientID,
-			ParentServerSessionID: t.session.ID,
-			RootClientSessionID:   rootClientSessionID,
-			RootServerSessionID:   rootServerSessionID,
-			SubAgentMode:          mode,
-			CreatedAt:             time.Now(),
-			UpdatedAt:             time.Now(),
-			ClosedAt:              nil,
-			DeletedAt:             nil,
-		}
-		if err := t.helpers.deps.SessionRepo.Create(txCtx, subSession); err != nil {
-			return nil, fmt.Errorf("create sub session: %w", err)
-		}
-
-		// Create first message in sub session (role=user, the instruction).
-		subContent := protocol.ContentData{
-			Type: protocol.ContentTypeText,
-			Data: args.Instruction,
-		}
-		subMsg, err := primitives.CreateMessage(
-			txCtx, t.helpers.deps,
-			subSessionID, nil, // no turn ID for the first message
-			protocol.MessageRoleUser,
-			usecase.SystemCreator{}, // system-created (agent伪装)
-			subContent,
-			protocol.MessageStreamingCompleted,
-			"",  // auto-generate client ID
-			nil, // no parent message
-		)
-		if err != nil {
-			return nil, fmt.Errorf("create sub session first message: %w", err)
-		}
-		subSessionMsgID = subMsg.ID
-
-		parentMsg, err := primitives.CreateMessage(
-			txCtx, t.helpers.deps,
-			t.session.ID, &turnUUID,
-			protocol.MessageRoleTool,
-			usecase.SystemCreator{},
-			parentContent,
-			protocol.MessageStreamingCompleted,
-			"",  // auto-generate client ID
-			nil, // no parent message
-		)
-		if err != nil {
-			return nil, fmt.Errorf("create parent session sub_agent_invocation message: %w", err)
-		}
-		parentMessageID = parentMsg.ID
-
-		// Update sub session with parent message ID.
-		if err := t.helpers.deps.SessionRepo.UpdateFieldsActive(txCtx, subSessionID, map[string]any{
-			"sub_agent_parent_message_id": parentMessageID,
-		}); err != nil {
-			return nil, fmt.Errorf("update sub session parent message ID: %w", err)
-		}
-
-		// Build publish updates.
-		// Use channel.UserTopic to construct the proper channel format.
-		parentChannel := channel.UserTopic(t.session.OwnerRefID)
-		subChannel := channel.UserTopic(subSession.OwnerRefID)
-
-		items := []updates.UpdatePublishItem{
-			{
-				Channel: parentChannel,
-				Items: []protocol.UpdateItem{
-					{
-						Entity:   protocol.EntitySession,
-						Action:   protocol.ActionCreated,
-						EntityId: t.session.ID.String(),
-					},
-					{
-						Entity:   protocol.EntityMessage,
-						Action:   protocol.ActionCreated,
-						EntityId: parentMessageID.String(),
-					},
-				},
-			},
-			{
-				Channel: subChannel,
-				Items: []protocol.UpdateItem{
-					{
-						Entity:   protocol.EntitySession,
-						Action:   protocol.ActionUpdated,
-						EntityId: subSessionID.String(),
-					},
-					{
-						Entity:   protocol.EntityMessage,
-						Action:   protocol.ActionCreated,
-						EntityId: subSessionMsgID.String(),
-					},
-				},
-			},
-		}
-		return items, nil
-	})
+	parentMessageID, subSessionMsgID, err := t.createSubSessionAndMessages(ctx, subSessionID, subSessionClientID, rootClientSessionID, rootServerSessionID, turnUUID, callID, mode, args)
 	if err != nil {
-		return "", fmt.Errorf("create sub agent: %w", err)
+		return "", err
 	}
 
-	t.helpers.logger.Info(ctx, "subAgent.created", map[string]any{
-		"sub_session_id":     subSessionID.String(),
-		"parent_message_id":  parentMessageID.String(),
-		"sub_first_msg_id":   subSessionMsgID.String(),
-		"parent_session_id":  t.session.ID.String(),
-		"turn_id":            turnUUID.String(),
-		"instruction_length": len(args.Instruction),
-	})
+	t.logSubAgentCreated(ctx, subSessionID, parentMessageID, subSessionMsgID, turnUUID, args.Instruction)
 
-	// 7. Submit work item to sub session's rtc-queue.
-	payload, err := json.Marshal(turnagent.WorkPayload{
-		Kind:      turnagent.WorkKindSubmit,
-		SessionID: subSessionID.String(),
-	})
-	if err != nil {
-		return "", fmt.Errorf("marshal work payload: %w", err)
+	if err := t.publishSubAgentWork(ctx, subSessionID); err != nil {
+		return "", err
 	}
 
-	if _, err := t.helpers.queue.Publish(ctx, subSessionID.String(), string(payload), 0); err != nil {
-		return "", fmt.Errorf("publish work item to sub session: %w", err)
-	}
-
-	t.helpers.logger.Info(ctx, "subAgent.work_submitted", map[string]any{
-		"sub_session_id": subSessionID.String(),
-		"mode":           mode,
-	})
-
-	// 8. Async mode: create toolcall_output and return immediately.
 	if mode == "async" {
-		asyncResult := formatSubAgentAsyncResult(subSessionID.String(), args.Title)
-
-		if err := publishOutputOnly(ctx, publishOutputOnlyInput{
-			Helpers:         t.helpers,
-			SessionID:       t.session.ID,
-			OwnerRefID:      t.session.OwnerRefID,
-			TurnID:          turnUUID,
-			ToolName:        "sub_agent",
-			ArgumentsInJSON: argumentsInJSON,
-			Output:          asyncResult,
-			ParentMessageID: parentMessageID,
-		}); err != nil {
-			return "", fmt.Errorf("publish async toolcall_output: %w", err)
-		}
-
-		t.helpers.logger.Info(ctx, "subAgent.async.returned_immediately", map[string]any{
-			"sub_session_id":    subSessionID.String(),
-			"parent_message_id": parentMessageID.String(),
-		})
-
-		return asyncResult, nil
+		return t.handleAsyncSubAgent(ctx, subSessionID, args.Title, parentMessageID, turnUUID, argumentsInJSON)
 	}
 
-	// 9. Sync mode: build interrupt state and pause the turn.
+	// Sync mode: build interrupt state and pause the turn.
 	state = subAgentInterruptState{
 		SubSessionID:    subSessionID.String(),
 		ToolCallID:      callID,
 		ParentMessageID: parentMessageID.String(),
 	}
-
 	info := subAgentInterruptInfo{
 		Type:            "sub_agent",
 		SubSessionID:    subSessionID.String(),
 		ParentMessageID: parentMessageID.String(),
 		Instruction:     args.Instruction,
 	}
-
 	return "", tool.StatefulInterrupt(ctx, info, state)
 }
 
@@ -436,4 +255,184 @@ func (t *subAgentTool) fetchLastAssistantText(ctx context.Context, sessionID uui
 		resultText = formatSubAgentNoOutput()
 	}
 	return resultText, nil
+}
+
+// validateSubAgentArgs validates sub-agent arguments and returns an error message string.
+// Returns empty string if valid.
+func validateSubAgentArgs(args subAgentArgs) string {
+	if args.Title == "" {
+		return "Error: title is required"
+	}
+	if args.Instruction == "" {
+		return "Error: instruction is required"
+	}
+	return ""
+}
+
+// resolveRootSession returns the root client/server session IDs.
+// If the current session is already a sub session, uses its root;
+// otherwise, the current session is the root.
+func (t *subAgentTool) resolveRootSession() (string, uuid.UUID) {
+	rootClientSessionID := t.session.ClientID
+	rootServerSessionID := t.session.ID
+	if t.session.RootServerSessionID != uuid.Nil {
+		rootClientSessionID = t.session.RootClientSessionID
+		rootServerSessionID = t.session.RootServerSessionID
+	}
+	return rootClientSessionID, rootServerSessionID
+}
+
+// createSubSessionAndMessages transactionally creates a sub session, its first
+// message, and the parent session's toolcall message.
+func (t *subAgentTool) createSubSessionAndMessages(
+	ctx context.Context,
+	subSessionID uuid.UUID,
+	subSessionClientID string,
+	rootClientSessionID string,
+	rootServerSessionID uuid.UUID,
+	turnUUID uuid.UUID,
+	callID string,
+	mode string,
+	args subAgentArgs,
+) (parentMessageID uuid.UUID, subSessionMsgID uuid.UUID, err error) {
+	toolCallData := protocol.ToolCall{
+		Id:       callID,
+		ToolName: "sub_agent",
+		Input:    "",
+	}
+	parentContent := protocol.ContentData{
+		Type: protocol.ContentTypeToolCallInput,
+		Data: toolCallData,
+	}
+
+	_, publishErr := t.helpers.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
+		now := time.Now()
+		subSession := &model.Session{
+			ID:                    subSessionID,
+			ClientID:              subSessionClientID,
+			OwnerKind:             t.session.OwnerKind,
+			OwnerRefID:            t.session.OwnerRefID,
+			DeviceID:              t.session.DeviceID,
+			Title:                 args.Title,
+			Status:                string(protocol.SessionStatusActive),
+			AgentPrompt:           t.session.AgentPrompt,
+			ParentClientSessionID: t.session.ClientID,
+			ParentServerSessionID: t.session.ID,
+			RootClientSessionID:   rootClientSessionID,
+			RootServerSessionID:   rootServerSessionID,
+			SubAgentMode:          mode,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+		}
+		if err := t.helpers.deps.SessionRepo.Create(txCtx, subSession); err != nil {
+			return nil, fmt.Errorf("create sub session: %w", err)
+		}
+
+		subContent := protocol.ContentData{
+			Type: protocol.ContentTypeText,
+			Data: args.Instruction,
+		}
+		subMsg, createErr := primitives.CreateMessage(
+			txCtx, t.helpers.deps,
+			subSessionID, nil,
+			protocol.MessageRoleUser,
+			usecase.SystemCreator{},
+			subContent,
+			protocol.MessageStreamingCompleted,
+			"", nil,
+		)
+		if createErr != nil {
+			return nil, fmt.Errorf("create sub session first message: %w", createErr)
+		}
+		subSessionMsgID = subMsg.ID
+
+		parentMsg, createErr := primitives.CreateMessage(
+			txCtx, t.helpers.deps,
+			t.session.ID, &turnUUID,
+			protocol.MessageRoleTool,
+			usecase.SystemCreator{},
+			parentContent,
+			protocol.MessageStreamingCompleted,
+			"", nil,
+		)
+		if createErr != nil {
+			return nil, fmt.Errorf("create parent session sub_agent_invocation message: %w", createErr)
+		}
+		parentMessageID = parentMsg.ID
+
+		if err := t.helpers.deps.SessionRepo.UpdateFieldsActive(txCtx, subSessionID, map[string]any{
+			"sub_agent_parent_message_id": parentMessageID,
+		}); err != nil {
+			return nil, fmt.Errorf("update sub session parent message ID: %w", err)
+		}
+
+		parentChannel := channel.UserTopic(t.session.OwnerRefID)
+		subChannel := channel.UserTopic(subSession.OwnerRefID)
+		return []updates.UpdatePublishItem{
+			{Channel: parentChannel, Items: []protocol.UpdateItem{
+				{Entity: protocol.EntitySession, Action: protocol.ActionCreated, EntityId: t.session.ID.String()},
+				{Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: parentMessageID.String()},
+			}},
+			{Channel: subChannel, Items: []protocol.UpdateItem{
+				{Entity: protocol.EntitySession, Action: protocol.ActionUpdated, EntityId: subSessionID.String()},
+				{Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: subSessionMsgID.String()},
+			}},
+		}, nil
+	})
+	if publishErr != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("create sub agent: %w", publishErr)
+	}
+	return parentMessageID, subSessionMsgID, nil
+}
+
+// logSubAgentCreated logs the creation of a sub agent session.
+func (t *subAgentTool) logSubAgentCreated(ctx context.Context, subSessionID, parentMessageID, subSessionMsgID, turnUUID uuid.UUID, instruction string) {
+	t.helpers.logger.Info(ctx, "subAgent.created", map[string]any{
+		"sub_session_id":     subSessionID.String(),
+		"parent_message_id":  parentMessageID.String(),
+		"sub_first_msg_id":   subSessionMsgID.String(),
+		"parent_session_id":  t.session.ID.String(),
+		"turn_id":            turnUUID.String(),
+		"instruction_length": len(instruction),
+	})
+}
+
+// publishSubAgentWork submits a work item to the sub session's queue.
+func (t *subAgentTool) publishSubAgentWork(ctx context.Context, subSessionID uuid.UUID) error {
+	payload, err := json.Marshal(turnagent.WorkPayload{
+		Kind:      turnagent.WorkKindSubmit,
+		SessionID: subSessionID.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal work payload: %w", err)
+	}
+	if _, err := t.helpers.queue.Publish(ctx, subSessionID.String(), string(payload), 0); err != nil {
+		return fmt.Errorf("publish work item to sub session: %w", err)
+	}
+	t.helpers.logger.Info(ctx, "subAgent.work_submitted", map[string]any{
+		"sub_session_id": subSessionID.String(),
+	})
+	return nil
+}
+
+// handleAsyncSubAgent handles the async mode return path.
+func (t *subAgentTool) handleAsyncSubAgent(ctx context.Context, subSessionID uuid.UUID, title string, parentMessageID uuid.UUID, turnUUID uuid.UUID, argumentsInJSON string) (string, error) {
+	asyncResult := formatSubAgentAsyncResult(subSessionID.String(), title)
+	if err := publishOutputOnly(ctx, publishOutputOnlyInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          turnUUID,
+		ToolName:        "sub_agent",
+		ArgumentsInJSON: argumentsInJSON,
+		Output:          asyncResult,
+		ParentMessageID: parentMessageID,
+	}); err != nil {
+		return "", fmt.Errorf("publish async toolcall_output: %w", err)
+	}
+	t.helpers.logger.Info(ctx, "subAgent.async.returned_immediately", map[string]any{
+		"sub_session_id":    subSessionID.String(),
+		"parent_message_id": parentMessageID.String(),
+	})
+	return asyncResult, nil
 }

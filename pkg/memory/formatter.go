@@ -147,6 +147,62 @@ func (f *Formatter) FormatForSummary(memories []*Memory) string {
 	return sb.String()
 }
 
+// writeProvenanceBlock renders the OKF sources block.
+func writeProvenanceBlock(sb *strings.Builder, metadata map[string]any) {
+	sources, ok := metadata["sources"].([]any)
+	if !ok || len(sources) == 0 {
+		return
+	}
+	sb.WriteString("sources:\n")
+	for _, src := range sources {
+		if s, ok := src.(map[string]any); ok {
+			sb.WriteString("  - \n")
+			for k, v := range s {
+				fmt.Fprintf(sb, "    %s: %v\n", k, v)
+			}
+		}
+	}
+}
+
+// writeTrustBlock renders the OKF generated/verified blocks.
+func writeTrustBlock(sb *strings.Builder, metadata map[string]any, createdAt time.Time) {
+	sb.WriteString("generated:\n")
+	generatedBy := "rtc-agent/1.0"
+	if gen, ok := metadata["generated"].(map[string]any); ok {
+		if by, ok := gen["by"].(string); ok {
+			generatedBy = by
+		}
+	}
+	fmt.Fprintf(sb, "  by: %s\n", generatedBy)
+	fmt.Fprintf(sb, "  at: \"%s\"\n", createdAt.UTC().Format(time.RFC3339))
+
+	verified, ok := metadata["verified"].([]any)
+	if !ok || len(verified) == 0 {
+		return
+	}
+	sb.WriteString("verified:\n")
+	for _, v := range verified {
+		if vMap, ok := v.(map[string]any); ok {
+			sb.WriteString("  - \n")
+			for k, val := range vMap {
+				fmt.Fprintf(sb, "    %s: %v\n", k, val)
+			}
+		}
+	}
+}
+
+// writeLifecycleBlock renders the OKF status/stale_after block.
+func writeLifecycleBlock(sb *strings.Builder, metadata map[string]any) {
+	if status, ok := metadata["status"].(string); ok {
+		fmt.Fprintf(sb, "status: %s\n", status)
+	} else {
+		sb.WriteString("status: stable\n")
+	}
+	if staleAfter, ok := metadata["stale_after"].(string); ok {
+		fmt.Fprintf(sb, "stale_after: %s\n", staleAfter)
+	}
+}
+
 // FormatForExport 格式化为 OKF frontmatter + markdown
 //
 // 参考设计文档中的导出能力设计章节。
@@ -182,56 +238,10 @@ func (f *Formatter) FormatForExport(m *Memory) string {
 	}
 
 	if metadata != nil {
-		// OKF Provenance: sources
-		if sources, ok := metadata["sources"].([]any); ok && len(sources) > 0 {
-			sb.WriteString("sources:\n")
-			for _, src := range sources {
-				if s, ok := src.(map[string]any); ok {
-					sb.WriteString("  - \n")
-					for k, v := range s {
-						fmt.Fprintf(&sb, "    %s: %v\n", k, v)
-					}
-				}
-			}
-		}
-
-		// OKF Trust: generated
-		sb.WriteString("generated:\n")
-		generatedBy := "rtc-agent/1.0"
-		if gen, ok := metadata["generated"].(map[string]any); ok {
-			if by, ok := gen["by"].(string); ok {
-				generatedBy = by
-			}
-		}
-		fmt.Fprintf(&sb, "  by: %s\n", generatedBy)
-		fmt.Fprintf(&sb, "  at: \"%s\"\n", m.CreatedAt.UTC().Format(time.RFC3339))
-
-		// OKF Trust: verified
-		if verified, ok := metadata["verified"].([]any); ok && len(verified) > 0 {
-			sb.WriteString("verified:\n")
-			for _, v := range verified {
-				if vMap, ok := v.(map[string]any); ok {
-					sb.WriteString("  - \n")
-					for k, val := range vMap {
-						fmt.Fprintf(&sb, "    %s: %v\n", k, val)
-					}
-				}
-			}
-		}
-
-		// OKF Lifecycle: status
-		if status, ok := metadata["status"].(string); ok {
-			fmt.Fprintf(&sb, "status: %s\n", status)
-		} else {
-			sb.WriteString("status: stable\n")
-		}
-
-		// OKF Lifecycle: stale_after
-		if staleAfter, ok := metadata["stale_after"].(string); ok {
-			fmt.Fprintf(&sb, "stale_after: %s\n", staleAfter)
-		}
+		writeProvenanceBlock(&sb, metadata)
+		writeTrustBlock(&sb, metadata, m.CreatedAt)
+		writeLifecycleBlock(&sb, metadata)
 	} else {
-		// 最小 generated 信息
 		sb.WriteString("generated:\n")
 		fmt.Fprintf(&sb, "  by: rtc-agent/1.0\n")
 		fmt.Fprintf(&sb, "  at: \"%s\"\n", m.CreatedAt.UTC().Format(time.RFC3339))

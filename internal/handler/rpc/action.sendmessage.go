@@ -23,6 +23,60 @@ import (
 	"go.uber.org/zap"
 )
 
+// extractMessageContent extracts text content from ContentData.
+func extractMessageContent(cd protocol.ContentData) string {
+	switch cd.Type {
+	case protocol.ContentTypeText:
+		s, err := primitives.ContentDataString(cd.Data)
+		if err != nil {
+			logger.Warn(context.Background(), "[SendMessage] ContentDataString failed", zap.Error(err))
+			return ""
+		}
+		return s
+	case protocol.ContentTypeUserMessage:
+		umc, err := primitives.ParseUserMessageContent(cd.Data)
+		if err != nil {
+			logger.Warn(context.Background(), "[SendMessage] ParseUserMessageContent failed", zap.Error(err))
+			return ""
+		}
+		return umc.Text
+	default:
+		return ""
+	}
+}
+
+// summarizeTitleAsync runs title summarization in a background goroutine.
+func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Session) {
+	if h.deps.Deps.ChatModel == nil {
+		return
+	}
+	summarizer := agent.NewSessionTitleSummarizer(
+		h.deps.Deps.ChatModel,
+		h.deps.Deps.SessionRepo,
+		h.deps.Deps.MessageRepo,
+		h.deps.Deps.LLMConfig,
+		h.deps.Deps.TokenCallbackHandler,
+	)
+	detachedCtx := context.WithoutCancel(ctx)
+	logger.SafeGo("sendmessage.titleSummarize", func() {
+		summarizeCtx, cancel := context.WithTimeout(detachedCtx, 30*time.Second)
+		defer cancel()
+		title, err := summarizer.SummarizeIfNeeded(summarizeCtx, session.ID)
+		if err != nil || title == "" {
+			logger.Warn(summarizeCtx, "[SendMessage] title summarization failed",
+				zap.String("session", session.ID.String()), zap.Error(err))
+			return
+		}
+		if _, err := h.UpdateSession(detachedCtx, &protocol.UpdateSessionRequest{
+			SessionId: session.ID.String(),
+			Title:     &title,
+		}); err != nil {
+			logger.Warn(detachedCtx, "[SendMessage] UpdateSession title failed",
+				zap.String("session", session.ID.String()), zap.Error(err))
+		}
+	})
+}
+
 // SendMessage 发送消息（自动创建 session + turn）。
 func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequest) (*protocol.SendMessageResponse, error) {
 	userID, ok := contextx.GetUserID(ctx)
@@ -32,48 +86,19 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	deviceID, _ := contextx.GetDeviceID(ctx)
 	creator := usecase.UserCreator{UserID: userID, DeviceID: deviceID}
 
-	content := ""
-	switch req.ContentData.Type {
-	case protocol.ContentTypeText:
-		s, err := primitives.ContentDataString(req.ContentData.Data)
-		if err != nil {
-			logger.Warn(ctx, "[SendMessage] ContentDataString failed",
-				zap.Error(err))
-		} else {
-			content = s
-		}
-	case protocol.ContentTypeUserMessage:
-		if umc, err := primitives.ParseUserMessageContent(req.ContentData.Data); err == nil {
-			content = umc.Text
-		} else {
-			logger.Warn(ctx, "[SendMessage] ParseUserMessageContent failed",
-				zap.Error(err))
-		}
-	}
+	content := extractMessageContent(req.ContentData)
 
 	if err := primitives.ValidateCreateMessageRequest(content); err != nil {
 		return nil, &APIError{Code: "invalid_argument", Message: err.Error()}
 	}
 
-	// 将 protocol.UUID 转换为 uuid.UUID，供 internal函数使用
 	sessionUUIDPtr, apiErr := parseUUIDPtr(req.ServerSessionId, "server_session_id")
 	if apiErr != nil {
 		return nil, apiErr
 	}
 
-	// 幂等性检查：如果 client_id 已存在，返回已存在的消息
-	if req.ClientId != "" {
-		existing, err := h.deps.Deps.MessageRepo.FindByClientID(ctx, req.ClientId)
-		if err != nil {
-			return nil, h.internalError(ctx, "idempotency.error", "internal error", err)
-		}
-		if existing != nil {
-			// client_id 已存在，返回冲突错误
-			return nil, &APIError{
-				Code:    "client_id_conflict",
-				Message: fmt.Sprintf("client_id %s already used for message %s", req.ClientId, existing.ID),
-			}
-		}
+	if apiErr := h.checkClientIdIdempotency(ctx, req.ClientId); apiErr != nil {
+		return nil, apiErr
 	}
 
 	logger.Info(ctx, "[SendMessage]",
@@ -88,20 +113,15 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	if err != nil {
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
-	// 新 session 写入 agent_prompt（快照，后续只读）
 	if isNew && req.AgentPrompt != nil {
 		session.AgentPrompt = *req.AgentPrompt
 	}
-	// 仅对已有 session 做归属校验；新 session 的 owner 由 PrepareSession 按 creator 设置，无需校验
 	if !isNew {
 		if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, session.ID, creator); err != nil {
 			return nil, h.ownershipError(ctx, err)
 		}
 	}
 
-	// Generate a workID up front for debug tracing. This is NOT pre-registered
-	// as a turn ClientID — the turn is created by turn-agent when the worker
-	// picks up the work item. The workID is used only for log correlation.
 	workID := uuid.Must(uuid.NewV7()).String()
 
 	var createdMessage *model.Message
@@ -119,52 +139,30 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 			}
 		}
 
-		// Create message WITHOUT a turnID. The turn does not exist yet — it
-		// will be created by turn-agent when the worker processes the work
-		// item published below. Passing nil for turnID leaves the message's
-		// TurnID column NULL and TurnOffset unset.
+		// Create message WITHOUT a turnID — the turn is created by turn-agent
+		// when the worker processes the work item published below.
 		msg, err := primitives.CreateMessage(
-			txCtx, h.deps.Deps, session.ID, nil, /* no turnID — turn not created yet */
+			txCtx, h.deps.Deps, session.ID, nil,
 			protocol.MessageRoleUser, creator,
 			req.ContentData, protocol.MessageStreamingPending,
 			req.ClientId,
-			nil, // no parent message
+			nil,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("create message: %w", err)
 		}
 		createdMessage = msg
 
-		// Queue.Publish as the LAST step inside the transaction.
-		//
-		// Why inside the transaction? Atomicity — if Publish fails we roll
-		// back the DB writes (no orphan message without a work item). If
-		// Publish succeeds but Commit fails (partial failure), we log and
-		// accept the inconsistency: the work item is in the queue but the
-		// DB changes are not persisted. A reconciliation job can clean up
-		// orphan work items later.
-		if h.deps.Queue != nil {
-			payload, marshalErr := json.Marshal(turnagent.WorkPayload{
-				Kind:      turnagent.WorkKindSubmit,
-				SessionID: session.ID.String(),
-			})
-			if marshalErr != nil {
-				return nil, fmt.Errorf("marshal work payload: %w", marshalErr)
-			}
-			if _, err := h.deps.Queue.Publish(txCtx, session.ID.String(), string(payload), 0); err != nil {
-				return nil, fmt.Errorf("queue publish: %w", err)
-			}
-			if logger.IsDebugMode() {
-				logger.Debug(txCtx, "[SendMessage] Queue.Publish success",
-					zap.String("session", session.ID.String()),
-					zap.String("message", msg.ID.String()),
-					zap.String("work_id", workID))
-			}
+		if err := h.publishSubmitWork(txCtx, session.ID); err != nil {
+			return nil, err
+		}
+		if logger.IsDebugMode() {
+			logger.Debug(txCtx, "[SendMessage] Queue.Publish success",
+				zap.String("session", session.ID.String()),
+				zap.String("message", msg.ID.String()),
+				zap.String("work_id", workID))
 		}
 
-		// No turnID to report — the turn will be created asynchronously by
-		// turn-agent. Pass nil so BuildSendMessageUpdates skips the turn
-		// "created" update.
 		return primitives.BuildSendMessageUpdates(session, isNew, nil, msg.ID), nil
 	})
 	if err != nil {
@@ -175,48 +173,52 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		}
 	}
 
-	// Title summarization for new sessions.
-	// Run asynchronously to avoid blocking the response.
-	if isNew && h.deps.Deps.ChatModel != nil {
-		summarizer := agent.NewSessionTitleSummarizer(
-			h.deps.Deps.ChatModel,
-			h.deps.Deps.SessionRepo,
-			h.deps.Deps.MessageRepo,
-			h.deps.Deps.LLMConfig,
-			h.deps.Deps.TokenCallbackHandler,
-		)
-		// Use a detached context so the summarization continues even if the
-		// request context is cancelled. Set a reasonable timeout.
-		detachedCtx := context.WithoutCancel(ctx)
-		logger.SafeGo("sendmessage.titleSummarize", func() {
-			// Limit summarization to 30 seconds
-			summarizeCtx, cancel := context.WithTimeout(detachedCtx, 30*time.Second)
-			defer cancel()
-			if title, err := summarizer.SummarizeIfNeeded(summarizeCtx, session.ID); err != nil || title == "" {
-				logger.Warn(summarizeCtx, "[SendMessage] title summarization failed",
-					zap.String("session", session.ID.String()),
-					zap.Error(err))
-			} else {
-				if _, err := h.UpdateSession(detachedCtx, &protocol.UpdateSessionRequest{
-					SessionId: session.ID.String(),
-					Title:     &title,
-				}); err != nil {
-					logger.Warn(detachedCtx, "[SendMessage] UpdateSession title failed",
-						zap.String("session", session.ID.String()),
-						zap.Error(err))
-				}
-			}
-		})
+	if isNew {
+		h.summarizeTitleAsync(ctx, session)
 	}
 
 	return &protocol.SendMessageResponse{
 		Result: protocol.SendMessageResult{
 			SessionId: session.ID.String(),
-			// TurnId is empty — the turn is created asynchronously by
-			// turn-agent after the worker picks up the work item.
 			TurnId:    "",
 			MessageId: createdMessage.ID.String(),
 		},
 		Updates: updates.DerefUpdates(pushUpdates),
 	}, nil
+}
+
+// checkClientIdIdempotency checks if a client_id was already used.
+func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string) *APIError {
+	if clientID == "" {
+		return nil
+	}
+	existing, err := h.deps.Deps.MessageRepo.FindByClientID(ctx, clientID)
+	if err != nil {
+		return &APIError{Code: "internal_error", Message: "idempotency check failed"}
+	}
+	if existing != nil {
+		return &APIError{
+			Code:    "client_id_conflict",
+			Message: fmt.Sprintf("client_id %s already used for message %s", clientID, existing.ID),
+		}
+	}
+	return nil
+}
+
+// publishSubmitWork publishes a submit work item inside the transaction.
+func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID) error {
+	if h.deps.Queue == nil {
+		return nil
+	}
+	payload, err := json.Marshal(turnagent.WorkPayload{
+		Kind:      turnagent.WorkKindSubmit,
+		SessionID: sessionID.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal work payload: %w", err)
+	}
+	if _, err := h.deps.Queue.Publish(txCtx, sessionID.String(), string(payload), 0); err != nil {
+		return fmt.Errorf("queue publish: %w", err)
+	}
+	return nil
 }

@@ -261,19 +261,16 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		return "", fmt.Errorf("memory_id is required")
 	}
 
-	// Parse memory ID
 	memoryID, err := uuid.Parse(args.MemoryID)
 	if err != nil {
 		return "", fmt.Errorf("invalid memory_id: %w", err)
 	}
 
-	// Get user ID and verify ownership
 	userID, err := t.helpers.getUserIDFromContext(ctx)
 	if err != nil {
 		return "", fmt.Errorf("get user ID: %w", err)
 	}
 
-	// Fetch existing memory to verify ownership and category
 	existing, err := t.helpers.deps.UserMemoryRepo.GetByID(ctx, memoryID)
 	if err != nil {
 		return "", fmt.Errorf("get memory: %w", err)
@@ -282,21 +279,54 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		return "", fmt.Errorf("memory %s does not belong to current user", args.MemoryID)
 	}
 
-	// Validate importance if provided
-	if args.Importance != nil && !model.IsValidImportance(*args.Importance) {
-		return "", fmt.Errorf("invalid importance: %s", *args.Importance)
+	if validationErr := validateMemoryUpdateArgs(args, existing); validationErr != nil {
+		return "", validationErr
 	}
 
-	// Validate content structure for feedback/project if content is being updated
-	if args.Content != nil {
-		if existing.Category == model.UserMemoryCategoryFeedback || existing.Category == model.UserMemoryCategoryProject {
-			if err := validateStructuredContent(*args.Content); err != nil {
-				return "", fmt.Errorf("content validation failed: %w", err)
-			}
+	fields := buildMemoryUpdateFields(args)
+	if len(fields) == 0 {
+		return "No fields to update.", nil
+	}
+
+	if err := t.helpers.deps.UserMemoryRepo.Update(ctx, memoryID, fields); err != nil {
+		return "", fmt.Errorf("update memory: %w", err)
+	}
+
+	return formatUserMemoryUpdated(args.MemoryID), nil
+}
+
+// validateMemoryUpdateArgs validates the update arguments against the existing memory.
+func validateMemoryUpdateArgs(args struct {
+	MemoryID    string           `json:"memory_id"`
+	Title       *string          `json:"title,omitempty"`
+	Content     *string          `json:"content,omitempty"`
+	Description *string          `json:"description,omitempty"`
+	Importance  *string          `json:"importance,omitempty"`
+	Tags        []string         `json:"tags,omitempty"`
+	Metadata    model.JSONB[any] `json:"metadata,omitempty"`
+}, existing *model.UserMemory) error {
+	if args.Importance != nil && !model.IsValidImportance(*args.Importance) {
+		return fmt.Errorf("invalid importance: %s", *args.Importance)
+	}
+	if args.Content != nil &&
+		(existing.Category == model.UserMemoryCategoryFeedback || existing.Category == model.UserMemoryCategoryProject) {
+		if err := validateStructuredContent(*args.Content); err != nil {
+			return fmt.Errorf("content validation failed: %w", err)
 		}
 	}
+	return nil
+}
 
-	// Build update fields
+// buildMemoryUpdateFields builds the update fields map from the update arguments.
+func buildMemoryUpdateFields(args struct {
+	MemoryID    string           `json:"memory_id"`
+	Title       *string          `json:"title,omitempty"`
+	Content     *string          `json:"content,omitempty"`
+	Description *string          `json:"description,omitempty"`
+	Importance  *string          `json:"importance,omitempty"`
+	Tags        []string         `json:"tags,omitempty"`
+	Metadata    model.JSONB[any] `json:"metadata,omitempty"`
+}) map[string]any {
 	fields := make(map[string]any)
 	if args.Title != nil {
 		fields["title"] = *args.Title
@@ -316,16 +346,7 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 	if args.Metadata != nil {
 		fields["metadata"] = args.Metadata
 	}
-
-	if len(fields) == 0 {
-		return "No fields to update.", nil
-	}
-
-	if err := t.helpers.deps.UserMemoryRepo.Update(ctx, memoryID, fields); err != nil {
-		return "", fmt.Errorf("update memory: %w", err)
-	}
-
-	return formatUserMemoryUpdated(args.MemoryID), nil
+	return fields
 }
 
 // =============================================================================

@@ -3,7 +3,6 @@ package rpchandler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -16,11 +15,72 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
-	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// clampForkLimit normalizes the fork limit to [1, 1000].
+func clampForkLimit(ptr *int) int {
+	const defaultLimit = 200
+	if ptr == nil {
+		return defaultLimit
+	}
+	l := *ptr
+	if l < 1 {
+		return 1
+	}
+	if l > 1000 {
+		return 1000
+	}
+	return l
+}
+
+// buildForkMessages constructs the message list for a fork operation.
+// All messages are copied from the old session, except the last one which
+// is replaced with the new content.
+func buildForkMessages(
+	oldMessages []*model.Message,
+	creator usecase.UserCreator,
+	newContent protocol.ContentData,
+	newClientMsgID string,
+	oldMsgID uuid.UUID,
+	ctx context.Context,
+) []primitives.MessageToCreate {
+	result := make([]primitives.MessageToCreate, len(oldMessages))
+	lastIdx := len(oldMessages) - 1
+
+	for i, oldMsg := range oldMessages {
+		if i == lastIdx {
+			result[i] = primitives.MessageToCreate{
+				Role:     protocol.MessageRoleUser,
+				Creator:  creator,
+				Content:  newContent,
+				Status:   protocol.MessageStreamingPending,
+				ClientID: newClientMsgID,
+			}
+		} else {
+			content, parseErr := primitives.ParseContentData(oldMsg.Content)
+			if parseErr != nil {
+				logger.Warn(ctx, "[ForkSession] ParseContentData failed",
+					zap.String("old_message", oldMsgID.String()),
+					zap.Error(parseErr))
+			}
+			tokenUsage := oldMsg.TokenUsage()
+			result[i] = primitives.MessageToCreate{
+				Role:       protocol.MessageRole(oldMsg.Role),
+				Creator:    creator,
+				Content:    content,
+				Status:     protocol.MessageStreamingStatus(oldMsg.StreamingStatus),
+				ClientID:   "",
+				CreatedAt:  oldMsg.CreatedAt,
+				UpdatedAt:  oldMsg.UpdatedAt,
+				TokenUsage: &tokenUsage,
+			}
+		}
+	}
+	return result
+}
 
 // ForkSession 分叉对话：基于旧 session 创建新 session，批量复制消息并替换指定消息。
 //
@@ -30,7 +90,6 @@ import (
 //   - 最后一条消息用新的 content_data 替换
 //   - 触发 AI 流程（通过 rtc-queue Publish）
 func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequest) (*protocol.ForkSessionResponse, error) {
-	// 1. 获取用户身份
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
@@ -38,7 +97,6 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	deviceID, _ := contextx.GetDeviceID(ctx)
 	creator := usecase.UserCreator{UserID: userID, DeviceID: deviceID}
 
-	// 2. 解析 UUID 参数
 	oldSessionID, apiErr := parseUUID(req.OldServerSessionId, "old_server_session_id")
 	if apiErr != nil {
 		return nil, apiErr
@@ -48,17 +106,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		return nil, apiErr
 	}
 
-	// 3. 校验 limit 参数（默认200，最多1000）
-	limit := 200
-	if req.Limit != nil {
-		limit = *req.Limit
-		if limit > 1000 {
-			limit = 1000
-		}
-		if limit < 1 {
-			limit = 1
-		}
-	}
+	limit := clampForkLimit(req.Limit)
 
 	logger.Info(ctx, "[ForkSession] start",
 		zap.String("user", userID.String()),
@@ -66,19 +114,11 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		zap.String("old_message", oldMessageID.String()),
 		zap.Int("limit", limit))
 
-	// 4. 校验旧 session 归属
-	oldSession, err := h.deps.SessionRepo.GetByID(ctx, oldSessionID)
+	oldSession, err := h.validateForkSource(ctx, oldSessionID, creator)
 	if err != nil {
-		if repo.IsNotFound(err) {
-			return nil, &APIError{Code: "session.not_found", Message: fmt.Sprintf("old session %s not found", req.OldServerSessionId)}
-		}
-		return nil, h.internalError(ctx, "session.error", "internal error", err)
-	}
-	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, oldSessionID, creator); err != nil {
-		return nil, h.ownershipError(ctx, err)
+		return nil, err
 	}
 
-	// 5. 校验旧消息存在并获取其 offset
 	oldMessage, err := h.deps.Deps.MessageRepo.GetByID(ctx, oldMessageID)
 	if err != nil {
 		if repo.IsNotFound(err) {
@@ -87,7 +127,6 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		return nil, h.internalError(ctx, "message.error", "internal error", err)
 	}
 
-	// 6. 查询旧消息（从 oldMessage 往前最多 limit 条）
 	oldMessages, err := h.deps.Deps.MessageRepo.ListBySessionBeforeOffset(ctx, oldSessionID, oldMessage.GlobalOffset, limit)
 	if err != nil {
 		return nil, h.internalError(ctx, "message.error", "internal error", err)
@@ -96,107 +135,23 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		return nil, &APIError{Code: "message.not_found", Message: "no messages found to fork"}
 	}
 
-	// 7. 构造新 session
-	now := time.Now()
-	newSession := &model.Session{
-		ID:          uuid.Must(uuid.NewV7()),
-		ClientID:    req.NewClientSessionId,
-		OwnerKind:   string(creator.Kind()),
-		OwnerRefID:  creator.ReferenceID(),
-		DeviceID:    deviceID,
-		Title:       oldSession.Title, // 继承旧 session 标题
-		Status:      string(protocol.SessionStatusActive),
-		AgentPrompt: oldSession.AgentPrompt,
-		//TodoList:    oldSession.TodoList,
-		CreatedAt: now,
-		UpdatedAt: now,
-		ClosedAt:  nil,
-		DeletedAt: nil,
-	}
+	newSession := buildForkSessionModel(oldSession, req.NewClientSessionId, creator, deviceID)
+	messagesToCreate := buildForkMessages(oldMessages, creator, req.ContentData, req.NewClientMessageId, oldMessageID, ctx)
 
-	// Generate a workID for debug tracing. Do NOT pre-create the turn — it
-	// is created by turn-agent's CreateTurn callback when the worker picks
-	// up the work item from rtc-queue. The turn lifecycle is managed by
-	// turn-agent, not the API layer.
-	workID := uuid.Must(uuid.NewV7()).String()
-
-	// 8. 构造批量消息列表
-	messagesToCreate := make([]primitives.MessageToCreate, len(oldMessages))
-	for i, oldMsg := range oldMessages {
-		if i == len(oldMessages)-1 {
-			// 最后一条：用新内容替换（使用当前时间）
-			messagesToCreate[i] = primitives.MessageToCreate{
-				Role:     protocol.MessageRoleUser,
-				Creator:  creator,
-				Content:  req.ContentData,
-				Status:   protocol.MessageStreamingPending,
-				ClientID: req.NewClientMessageId,
-			}
-		} else {
-			// 复制旧消息（保留原始时间戳）
-			content, parseErr := primitives.ParseContentData(oldMsg.Content)
-			if parseErr != nil {
-				logger.Warn(ctx, "[ForkSession] ParseContentData failed",
-					zap.String("old_message", oldMessageID.String()),
-					zap.Error(parseErr))
-			}
-			tokenUsage := oldMsg.TokenUsage()
-			messagesToCreate[i] = primitives.MessageToCreate{
-				Role:       protocol.MessageRole(oldMsg.Role),
-				Creator:    creator,
-				Content:    content,
-				Status:     protocol.MessageStreamingStatus(oldMsg.StreamingStatus),
-				ClientID:   "", // 系统生成新 client_id
-				CreatedAt:  oldMsg.CreatedAt,
-				UpdatedAt:  oldMsg.UpdatedAt,
-				TokenUsage: &tokenUsage,
-			}
-		}
-	}
-
-	// 9. 事务内创建 session + 批量创建消息 + 发布 Queue work item。
-	//
-	// Do NOT pre-create the turn here. The turn is created by turn-agent's
-	// CreateTurn callback when the worker picks up the work item from
-	// rtc-queue. Messages are created without a turnID (nil) — they are
-	// associated with the session only.
 	var createdMessages []*model.Message
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
-		// 创建新 session
 		if err := primitives.CreateSession(txCtx, h.deps.Deps, newSession); err != nil {
 			return nil, fmt.Errorf("create session: %w", err)
 		}
 
-		// 批量创建消息（一次 Redis + 一次 DB）。
-		// turnID is nil — the turn does not exist yet. It will be created
-		// asynchronously by turn-agent when the worker processes the work
-		// item published below.
-		var err error
-		createdMessages, err = primitives.BatchCreateMessages(txCtx, h.deps.Deps, newSession.ID, nil /* no turnID */, messagesToCreate)
+		// turnID is nil — the turn is created asynchronously by turn-agent.
+		createdMessages, err = primitives.BatchCreateMessages(txCtx, h.deps.Deps, newSession.ID, nil, messagesToCreate)
 		if err != nil {
 			return nil, fmt.Errorf("batch create messages: %w", err)
 		}
 
-		// Queue.Publish as the LAST step inside the transaction.
-		// If Publish fails, the transaction is rolled back — no orphan
-		// messages without a work item. If Commit fails after Publish
-		// succeeds, a reconciliation job cleans up the orphan work item.
-		if h.deps.Queue != nil {
-			payload, marshalErr := json.Marshal(turnagent.WorkPayload{
-				Kind:      turnagent.WorkKindSubmit,
-				SessionID: newSession.ID.String(),
-			})
-			if marshalErr != nil {
-				return nil, fmt.Errorf("marshal work payload: %w", marshalErr)
-			}
-			if _, err := h.deps.Queue.Publish(txCtx, newSession.ID.String(), string(payload), 0); err != nil {
-				return nil, fmt.Errorf("queue publish: %w", err)
-			}
-			if logger.IsDebugMode() {
-				logger.Debug(txCtx, "[ForkSession] Queue.Publish success",
-					zap.String("session", newSession.ID.String()),
-					zap.String("work_id", workID))
-			}
+		if err := h.publishSubmitWork(txCtx, newSession.ID); err != nil {
+			return nil, err
 		}
 
 		return primitives.BuildForkSessionUpdates(newSession, createdMessages), nil
@@ -209,7 +164,6 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		}
 	}
 
-	// 11. 构建响应
 	messageIDs := make([]protocol.UUID, len(createdMessages))
 	for i, msg := range createdMessages {
 		messageIDs[i] = msg.ID.String()
@@ -217,12 +171,42 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 
 	return &protocol.ForkSessionResponse{
 		Result: protocol.ForkSessionResult{
-			SessionId: newSession.ID.String(),
-			// TurnId is empty — the turn is created asynchronously by
-			// turn-agent when the worker picks up the work item.
+			SessionId:  newSession.ID.String(),
 			TurnId:     "",
 			MessageIds: messageIDs,
 		},
 		Updates: updates.DerefUpdates(pushUpdates),
 	}, nil
+}
+
+// validateForkSource checks that the old session exists and belongs to the user.
+func (h *Handler) validateForkSource(ctx context.Context, oldSessionID uuid.UUID, creator usecase.UserCreator) (*model.Session, error) {
+	oldSession, err := h.deps.SessionRepo.GetByID(ctx, oldSessionID)
+	if err != nil {
+		if repo.IsNotFound(err) {
+			return nil, &APIError{Code: "session.not_found", Message: fmt.Sprintf("old session %s not found", oldSessionID)}
+		}
+		return nil, h.internalError(ctx, "session.error", "internal error", err)
+	}
+	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, oldSessionID, creator); err != nil {
+		return nil, h.ownershipError(ctx, err)
+	}
+	return oldSession, nil
+}
+
+// buildForkSessionModel creates the new session model for a fork operation.
+func buildForkSessionModel(old *model.Session, clientID string, creator usecase.UserCreator, deviceID string) *model.Session {
+	now := time.Now()
+	return &model.Session{
+		ID:          uuid.Must(uuid.NewV7()),
+		ClientID:    clientID,
+		OwnerKind:   string(creator.Kind()),
+		OwnerRefID:  creator.ReferenceID(),
+		DeviceID:    deviceID,
+		Title:       old.Title,
+		Status:      string(protocol.SessionStatusActive),
+		AgentPrompt: old.AgentPrompt,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
 }

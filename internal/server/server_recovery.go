@@ -11,6 +11,7 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
+	"github.com/rtc-agent/server/pkg/protocol"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
@@ -278,38 +279,31 @@ func (s *Server) periodicRecoverStaleTurns(ctx context.Context) {
 			s.recordStaleTurnRecovery("running")
 
 		case string(model.TurnStatusPending):
-			age = now.Sub(turn.CreatedAt)
-			if age < pendingThreshold {
-				continue
-			}
-			logger.Warn(ctx, "[Server] periodicRecoverStaleTurns: recovering stale pending turn",
-				zap.String("turn_id", turn.ID.String()),
-				zap.Duration("age", age))
-			if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusFailed, "periodic scanner: stale pending turn"); err != nil {
-				logger.Error(ctx, "[Server] periodicRecoverStaleTurns: update failed",
-					zap.String("turn_id", turn.ID.String()), zap.Error(err))
-				continue
-			}
-			s.syncSessionStatusAfterRecovery(ctx, turn)
-			s.recordStaleTurnRecovery("pending")
+			s.recoverSimpleStaleTurn(ctx, turn, now, pendingThreshold, model.TurnStatusFailed, "periodic scanner: stale pending turn", "pending")
 
 		case string(model.TurnStatusInterrupted):
-			age = now.Sub(turn.CreatedAt)
-			if age < interruptedThreshold {
-				continue
-			}
-			logger.Warn(ctx, "[Server] periodicRecoverStaleTurns: recovering stale interrupted turn",
-				zap.String("turn_id", turn.ID.String()),
-				zap.Duration("age", age))
-			if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusCancelled, "periodic scanner: stale interrupted turn"); err != nil {
-				logger.Error(ctx, "[Server] periodicRecoverStaleTurns: update cancelled",
-					zap.String("turn_id", turn.ID.String()), zap.Error(err))
-				continue
-			}
-			s.syncSessionStatusAfterRecovery(ctx, turn)
-			s.recordStaleTurnRecovery("interrupted")
+			s.recoverSimpleStaleTurn(ctx, turn, now, interruptedThreshold, model.TurnStatusCancelled, "periodic scanner: stale interrupted turn", "interrupted")
 		}
 	}
+}
+
+// recoverSimpleStaleTurn handles stale pending/interrupted turns by checking
+// age threshold, updating status, syncing session, and recording recovery.
+func (s *Server) recoverSimpleStaleTurn(ctx context.Context, turn *model.Turn, now time.Time, threshold time.Duration, targetStatus protocol.TurnStatus, reason, kind string) {
+	age := now.Sub(turn.CreatedAt)
+	if age < threshold {
+		return
+	}
+	logger.Warn(ctx, "[Server] periodicRecoverStaleTurns: recovering stale "+kind+" turn",
+		zap.String("turn_id", turn.ID.String()),
+		zap.Duration("age", age))
+	if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, targetStatus, reason); err != nil {
+		logger.Error(ctx, "[Server] periodicRecoverStaleTurns: update failed",
+			zap.String("turn_id", turn.ID.String()), zap.Error(err))
+		return
+	}
+	s.syncSessionStatusAfterRecovery(ctx, turn)
+	s.recordStaleTurnRecovery(kind)
 }
 
 // isWorkerAliveForSession checks whether a Worker is holding the session lock.
