@@ -471,10 +471,10 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 
 	// Publish Resume work item to parent session's rtc-queue.
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
-		Kind:           turnagent.WorkKindResume,
-		SessionID:      parentSessionID,
-		SubAgentResult: subAgentResult,
-		InterruptID:    interruptID,
+		Kind:            turnagent.WorkKindResume,
+		SessionID:       parentSessionID,
+		SubAgentResult:  subAgentResult,
+		InterruptID:     interruptID,
 		InterruptResult: subAgentResult, // Sub agent result is the interrupt resolution
 	})
 	if marshalErr != nil {
@@ -533,13 +533,35 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 
 	parentSessionID := subSession.ParentServerSessionID
 
+	// Check parent session status — skip notification if the parent is closed.
+	// Creating a message and triggering a turn in a closed session is wasted work
+	// and may confuse downstream workers.
+	parentSession, sessErr := h.deps.SessionRepo.GetByID(ctx, parentSessionID)
+	if sessErr != nil {
+		h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.parent_session_error", map[string]any{
+			"sub_session_id":    subSession.ID.String(),
+			"parent_session_id": parentSessionID.String(),
+			"error":             sessErr.Error(),
+		})
+		return
+	}
+	if parentSession == nil || protocol.SessionStatus(parentSession.Status) == protocol.SessionStatusClosed {
+		h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.parent_session_closed", map[string]any{
+			"sub_session_id":    subSession.ID.String(),
+			"parent_session_id": parentSessionID.String(),
+		})
+		return
+	}
+
 	h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.start", map[string]any{
 		"sub_session_id":    subSession.ID.String(),
 		"parent_session_id": parentSessionID.String(),
 		"status":            status,
 	})
 
-	// Build the notification text.
+	// Build the notification text wrapped in <system-reminder> tags.
+	// This is a convention aligned with CCHH: user-role message with XML tags
+	// telling the LLM "this is system-level context, not user input".
 	var notificationText string
 	switch status {
 	case "completed":
@@ -547,44 +569,51 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 		if lastMessage != nil {
 			result = lastMessage.Content
 		}
-		notificationText = fmt.Sprintf(
-			"[System Notification] The async sub agent task has completed.\n- Session ID: %s\n- Title: %s\n- Status: completed\n\nResult:\n%s",
+		content := fmt.Sprintf(
+			"The async sub agent task has completed.\n- Session ID: %s\n- Title: %s\n- Status: completed\n\nResult:\n%s",
 			subSession.ID.String(),
 			subSession.Title,
 			result,
 		)
+		notificationText = turnagent.FormatSystemReminder(content)
 	case "failed":
 		errMsg := "(unknown error)"
 		if errorMessage != nil {
 			errMsg = *errorMessage
 		}
-		notificationText = fmt.Sprintf(
-			"[System Notification] The async sub agent task has failed.\n- Session ID: %s\n- Title: %s\n- Status: failed\n\nError:\n%s",
+		content := fmt.Sprintf(
+			"The async sub agent task has failed.\n- Session ID: %s\n- Title: %s\n- Status: failed\n\nError:\n%s",
 			subSession.ID.String(),
 			subSession.Title,
 			errMsg,
 		)
+		notificationText = turnagent.FormatSystemReminder(content)
 	case "cancelled":
 		reason := "(no reason given)"
 		if errorMessage != nil {
 			reason = *errorMessage
 		}
-		notificationText = fmt.Sprintf(
-			"[System Notification] The async sub agent task has been cancelled.\n- Session ID: %s\n- Title: %s\n- Status: cancelled\n\nReason:\n%s",
+		content := fmt.Sprintf(
+			"The async sub agent task has been cancelled.\n- Session ID: %s\n- Title: %s\n- Status: cancelled\n\nReason:\n%s",
 			subSession.ID.String(),
 			subSession.Title,
 			reason,
 		)
+		notificationText = turnagent.FormatSystemReminder(content)
 	default:
-		notificationText = fmt.Sprintf(
-			"[System Notification] The async sub agent task has ended with status: %s.\n- Session ID: %s\n- Title: %s",
+		content := fmt.Sprintf(
+			"The async sub agent task has ended with status: %s.\n- Session ID: %s\n- Title: %s",
 			status,
 			subSession.ID.String(),
 			subSession.Title,
 		)
+		notificationText = turnagent.FormatSystemReminder(content)
 	}
 
 	// Create the notification message in the parent session.
+	// Role is user (not system) because system-reminder is a convention:
+	// user-role message with <system-reminder> XML tags.
+	// This triggers the turn loop so the LLM can process the notification.
 	notificationContent := protocol.ContentData{
 		Type: protocol.ContentTypeText,
 		Data: notificationText,
@@ -594,7 +623,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 		msg, createErr := primitives.CreateMessage(
 			txCtx, h.deps,
 			parentSessionID, nil, // no turn ID — will be picked up by the next Submit
-			protocol.MessageRoleSystem,
+			protocol.MessageRoleUser, // user-role to trigger turn loop
 			usecase.SystemCreator{},
 			notificationContent,
 			protocol.MessageStreamingCompleted,
