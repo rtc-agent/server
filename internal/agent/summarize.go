@@ -413,62 +413,13 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, c
 //
 // If customInstruction is non-nil and non-empty, it overrides the default
 // compression prompt template.
+//
+// This is a thin wrapper around summarizeMessagesStreaming without a chunk
+// callback. Both functions share the same stream consumption logic via the
+// streaming variant, eliminating duplication.
 func (h *helpers) summarizeMessages(ctx context.Context, msgs []*schema.Message, mode CompactMode, customInstruction *string) (string, error) {
-	// Build the full prompt with conversation history.
-	prompt := buildSummarizePrompt(msgs, mode, customInstruction)
-
-	// Call the LLM to generate the summary using streaming (required for long operations).
-	// Disable thinking to save tokens and reduce latency - compression doesn't need reasoning.
-	userPrompt := schema.UserMessage(prompt)
-	stream, err := h.deps.ChatModel.Stream(ctx, []*schema.Message{userPrompt}, h.noThinkingOptions()...)
-	if err != nil {
-		return "", fmt.Errorf("chat model stream: %w", err)
-	}
-	defer stream.Close()
-
-	// Consume the stream to build the complete response.
-	var contentBuilder strings.Builder
-	var lastMsg *schema.Message
-
-streamLoop:
-	for {
-		res, timedOut := turnagent.RecvWithTimeout(ctx, stream.Recv, turnagent.StreamIdleTimeout)
-		if timedOut {
-			// stream.Close() handled by defer above.
-			return "", &turnagent.StreamIdleTimeoutError{
-				SessionID: turnagent.SessionIDFromContext(ctx),
-				TurnID:    turnagent.TurnIDFromContext(ctx),
-				Timeout:   turnagent.StreamIdleTimeout,
-			}
-		}
-		if res.Err != nil {
-			if errors.Is(res.Err, context.Canceled) || errors.Is(res.Err, context.DeadlineExceeded) {
-				// stream.Close() handled by defer above.
-				return "", res.Err
-			}
-			if errors.Is(res.Err, io.EOF) {
-				break streamLoop
-			}
-			return "", fmt.Errorf("stream recv: %w", res.Err)
-		}
-		if res.Msg == nil {
-			continue
-		}
-		lastMsg = res.Msg
-		contentBuilder.WriteString(res.Msg.Content)
-	}
-
-	content := contentBuilder.String()
-	if content == "" {
-		return "", fmt.Errorf("chat model returned empty response")
-	}
-
-	// Record token usage for the summarization LLM call.
-	if lastMsg != nil {
-		h.logSummarizeTokenUsage(ctx, lastMsg)
-	}
-
-	return content, nil
+	summary, _, err := h.summarizeMessagesStreaming(ctx, msgs, mode, nil, customInstruction)
+	return summary, err
 }
 
 // summarizeMessagesStreaming generates a summary using streaming LLM calls with real-time callbacks.
