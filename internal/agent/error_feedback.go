@@ -11,6 +11,7 @@ import (
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/shared"
+	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/updates"
@@ -332,12 +333,8 @@ func sanitizeRawError(raw string) string {
 		s = rule.pattern.ReplaceAllString(s, rule.replacement)
 	}
 
-	// Truncate to 500 characters.
-	if len(s) > maxRawErrorLen {
-		s = s[:maxRawErrorLen] + "..."
-	}
-
-	return s
+	// Truncate to maxRawErrorLen bytes, respecting UTF-8 boundaries.
+	return stringutil.TruncateByByte(s, maxRawErrorLen)
 }
 
 // =============================================================================

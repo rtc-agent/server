@@ -16,10 +16,6 @@ import (
 
 // getStreamStore returns a StreamStore for buffering streaming message chunks
 // in Redis. Returns nil if the Redis client is not available.
-//
-// TODO: The StreamStore is currently defined in internal/worker/stream_store.go.
-// It should be moved to a shared package so both worker and agent can use it.
-// For now, we create a lightweight Redis-based chunk buffer inline.
 // NewStreamStore creates a stream store accessor backed by Redis.
 // The returned value satisfies updates.StreamStoreAccessor and can be injected
 // into UpdatePublisher via SetStreamStore. It uses the same Redis key format

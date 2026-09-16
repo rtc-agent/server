@@ -17,10 +17,10 @@ import (
 // graceful shutdown. The caller only provides a callback for the actual
 // work logic.
 //
-// Deprecated: Worker API is deprecated. Use the primitive API (Claim,
-// ClaimWithCredential, CompleteWork, ReleaseSession) instead to build
-// custom lifecycle management. This is required for "hold lock" mode
-// where a worker continuously processes work items for a session.
+// Note: Worker is the current production lifecycle manager, wired via
+// cmd/wire.go. The primitive API (Claim, ClaimWithCredential,
+// CompleteWork, ReleaseSession) is available for building custom
+// lifecycle management when needed (e.g., "hold lock" mode).
 type WorkerConfig struct {
 	// WorkerID uniquely identifies this worker. Used for lock ownership.
 	WorkerID string

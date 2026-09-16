@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"unicode/utf8"
+
+	"github.com/rtc-agent/server/internal/agent/stringutil"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -60,12 +63,17 @@ func applyToolResultBudget(messages []*turnagent.Message, cfg ToolResultBudgetCo
 	result := make([]*turnagent.Message, len(messages))
 	for i, msg := range messages {
 		if msg.Role == turnagent.RoleTool && len(msg.Content) > maxChars {
-			// Keep head 60% + tail 20%
+			// Keep head 60% + tail 20%, respecting UTF-8 boundaries.
 			headChars := int(float64(maxChars) * 0.6)
 			tailChars := int(float64(maxChars) * 0.2)
 
-			head := msg.Content[:headChars]
-			tail := msg.Content[len(msg.Content)-tailChars:]
+			head := stringutil.TruncateByByte(msg.Content, headChars)
+			// For the tail, take the last tailChars bytes and truncate safely.
+			tailStart := len(msg.Content) - tailChars
+			for tailStart > 0 && !utf8.RuneStart(msg.Content[tailStart]) {
+				tailStart--
+			}
+			tail := msg.Content[tailStart:]
 			newContent := head + ToolResultTruncateMsg + tail
 
 			result[i] = &turnagent.Message{
