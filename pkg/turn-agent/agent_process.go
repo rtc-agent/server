@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/cloudwego/eino/adk"
@@ -122,6 +123,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
 			"error":      pErr.Error(),
+			"stack":      string(debug.Stack()),
 		})
 		if turnID != "" {
 			func() {

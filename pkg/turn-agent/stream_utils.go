@@ -3,6 +3,7 @@ package turnagent
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/cloudwego/eino/schema"
@@ -37,7 +38,7 @@ func RecvWithTimeout(
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				ch <- StreamRecvResult{Err: fmt.Errorf("stream recv panic: %v", r)}
+				ch <- StreamRecvResult{Err: fmt.Errorf("stream recv panic: %v\nstack: %s", r, string(debug.Stack()))}
 			}
 		}()
 		msg, err := recv()
