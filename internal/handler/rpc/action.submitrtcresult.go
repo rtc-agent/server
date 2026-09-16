@@ -42,7 +42,6 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		zap.String("rtc", req.RtcId),
 		zap.Bool("success", req.Success))
 
-	// 加载 RTC 并校验存在
 	rtc, err := h.deps.Deps.RtcRepo.GetByID(ctx, rtcUUID)
 	if err != nil {
 		if repo.IsNotFound(err) {
@@ -51,46 +50,15 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
 	}
 
-	// 幂等校验（spec Section 8）
-	switch protocol.RtcStatus(rtc.Status) {
-	case protocol.RtcStatusCompleted, protocol.RtcStatusFailed,
-		protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
-		// 终态 + 同一 ClientID → 视为重复上报，接受并返回成功
-		if req.ClientId != nil && *req.ClientId == rtc.ClientID {
-			logger.Info(ctx, "[SubmitRtcResult] idempotent repeat",
-				zap.String("rtc", req.RtcId),
-				zap.String("status", rtc.Status),
-				zap.String("client_id", rtc.ClientID))
-			return &protocol.SubmitRtcResultResponse{
-				Result: protocol.SubmitRtcResultResult{Success: true},
-			}, nil
-		}
-		// 终态 + 不同 ClientID → 冲突，返回已有状态
-		ups := make([]protocol.Update, 0, 1)
-		ups = append(ups, protocol.Update{
-			DataList: new([]interface{}{
-				model.ToProtocolRtc(rtc),
-			}),
-			Id: uuid.Must(uuid.NewV7()).String(),
-			Items: []protocol.UpdateItem{{
-				Action:   protocol.ActionUpdated,
-				Entity:   protocol.EntityRtc,
-				EntityId: rtc.ID.String(),
-			}},
-			Offset: 0,
-		})
-		return &protocol.SubmitRtcResultResponse{
-			Result:  protocol.SubmitRtcResultResult{Success: true},
-			Updates: &ups,
-		}, nil
+	// Idempotency check for terminal-state RTCs.
+	if idempotentResp, isIdempotent := h.checkIdempotentSubmit(ctx, rtc, req); isIdempotent {
+		return idempotentResp, nil
 	}
 
-	// 归属校验：通过 RTC 的 sessionID 校验用户权限
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, rtc.SessionID, creator); err != nil {
 		return nil, h.ownershipError(ctx, err)
 	}
 
-	// ClientID 校验：如果客户端传了 ClientID，必须与 RTC 的 ClientID 匹配
 	if req.ClientId != nil && *req.ClientId != rtc.ClientID {
 		return nil, &APIError{
 			Code:    "rtc.client_id_mismatch",
@@ -98,131 +66,30 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		}
 	}
 
-	// 计算目标状态：成功 → completed，失败 → failed
 	targetStatus := protocol.RtcStatusCompleted
 	if !req.Success {
 		targetStatus = protocol.RtcStatusFailed
 	}
 
-	// 序列化 result 为 JSON 字符串（dbmodel 层存储为 jsonb）
-	// 使用 *string 以便在 result 为空时存储 NULL（jsonb 不接受空字符串）
 	var resultJSON *string
 	if req.Result != nil {
-		b, err := json.Marshal(req.Result)
-		if err != nil {
-			return nil, &APIError{Code: "rtc.invalid_result", Message: fmt.Sprintf("marshal result: %v", err)}
+		b, marshalErr := json.Marshal(req.Result)
+		if marshalErr != nil {
+			return nil, &APIError{Code: "rtc.invalid_result", Message: fmt.Sprintf("marshal result: %v", marshalErr)}
 		}
 		s := string(b)
 		resultJSON = &s
 	}
 
-	// Load session BEFORE the transaction for event publishing.
-	//
-	// Why old data? Event publishing is best-effort — the update items only
-	// need the session's OwnerRefID to route the update to the correct user
-	// topic. If we reload the session inside the transaction and the reload
-	// fails (transient DB error), we would fail the entire transaction for
-	// a non-critical concern.
-	//
-	// Using pre-transaction data is fine: the frontend will reload the
-	// latest state when it receives the event anyway. The OwnerRefID (used
-	// for routing) never changes after session creation.
-	//
-	// If the pre-load itself fails, we still proceed with the update — we
-	// just won't have OwnerRefID for routing and the event won't be
-	// published. The frontend can poll for the latest state.
+	// Pre-load session for event routing (best-effort, not critical).
 	sessionBefore, sessionLoadErr := h.deps.SessionRepo.GetByID(ctx, rtc.SessionID)
 	if sessionLoadErr != nil {
 		logger.Warn(ctx, "[SubmitRtcResult] pre-load session failed (will use best-effort event publishing)",
-			zap.String("session", rtc.SessionID.String()),
-			zap.Error(sessionLoadErr))
+			zap.String("session", rtc.SessionID.String()), zap.Error(sessionLoadErr))
 	}
 
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
-		if err := primitives.UpdateRtcResult(txCtx, h.deps.Deps, rtcUUID, targetStatus, resultJSON, model.DerefStr(req.Error)); err != nil {
-			return nil, err
-		}
-
-		// 查找 toolcall_input 消息以获取 ToolCall.Id（即 eino 的 tool_call_id）
-		inputMsg, err := h.deps.Deps.MessageRepo.GetByID(txCtx, rtc.MessageID)
-		if err != nil {
-			return nil, fmt.Errorf("get toolcall_input message %s: %w", rtc.MessageID, err)
-		}
-		inputContentData, err := primitives.ParseContentData(inputMsg.Content)
-		if err != nil {
-			return nil, fmt.Errorf("parse toolcall_input content: %w", err)
-		}
-		inputToolCall, err := primitives.ParseContentDataToolCall(inputContentData.Data)
-		if err != nil {
-			return nil, fmt.Errorf("parse toolcall_input data: %w", err)
-		}
-
-		// 构造 toolcall_output ContentData
-		toolOutput := ""
-		if resultJSON != nil {
-			toolOutput = *resultJSON
-		} else if req.Error != nil {
-			toolOutput = *req.Error
-		}
-		targetStatusStr := string(targetStatus)
-		outputToolCall := protocol.ToolCall{
-			Id:       inputToolCall.Id, // 与 toolcall_input 保持一致的 tool_call_id
-			ToolName: rtc.ToolName,
-			Input:    inputToolCall.Input,
-			Output:   &toolOutput,
-			Status:   &targetStatusStr,
-		}
-		outputContentData := protocol.ContentData{
-			Type: protocol.ContentTypeToolCallOutput,
-			Data: outputToolCall,
-		}
-
-		// 创建 toolcall_output Message
-		// Note: Token usage is intentionally NOT recorded on tool messages.
-		// See Message struct comments in model/message.go for design rationale.
-		parentMsgID := rtc.MessageID
-		outputMsg, createErr := primitives.CreateMessage(
-			txCtx, h.deps.Deps,
-			rtc.SessionID, &rtc.TurnID,
-			protocol.MessageRoleTool,
-			usecase.SystemCreator{}, // system-generated
-			outputContentData,
-			protocol.MessageStreamingCompleted,
-			"",           // system-generated
-			&parentMsgID, // parent message is toolcall_input
-		)
-		if createErr != nil {
-			return nil, fmt.Errorf("create toolcall_output message: %w", createErr)
-		}
-
-		// 回填 RTC 的 OutputMessageID
-		if err := h.deps.Deps.RtcRepo.UpdateOutputMessageID(txCtx, rtcUUID, outputMsg.ID); err != nil {
-			logger.Error(txCtx, "[SubmitRtcResult] update output_message_id",
-				zap.String("rtc", rtcUUID.String()),
-				zap.Error(err))
-			// 不阻塞主流程
-		}
-
-		// Use the session loaded BEFORE the transaction for event publishing.
-		// If pre-load failed, we can still build updates with a nil session —
-		// the update publisher will skip publishing for nil sessions.
-		//
-		// We deliberately do NOT reload the session here inside the
-		// transaction: the reload is for routing metadata (OwnerRefID), which
-		// never changes after session creation. A transient reload failure
-		// must not abort the RTC result update.
-		session := sessionBefore
-
-		// 构建 updates：RTC result + toolcall_output message created
-		items := primitives.BuildRtcResultUpdates(session, rtcUUID)
-		if len(items) > 0 {
-			items[0].Items = append(items[0].Items, protocol.UpdateItem{
-				Entity:   protocol.EntityMessage,
-				Action:   protocol.ActionCreated,
-				EntityId: outputMsg.ID.String(),
-			})
-		}
-		return items, nil
+		return h.updateRtcAndCreateOutput(txCtx, rtc, rtcUUID, targetStatus, resultJSON, req.Error, sessionBefore)
 	})
 	if err != nil {
 		if errors.Is(err, updates.ErrPushAfterCommit) {
@@ -232,25 +99,120 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		}
 	}
 
-	// === Script Execution 记录（异步，不影响主流程）===
 	if rtc.ToolName == "script" {
-		// 使用 context.WithoutCancel 解耦 RPC handler 生命周期
-		// 添加超时防止下游操作挂起导致 goroutine 泄漏
 		recorderCtx, recorderCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer recorderCancel()
 		h.recorder.submit(recorderCtx, rtc, req)
 	}
 
-	// Resume the interrupted turn via rtc-queue. The old architecture used
-	// Redis SET+PUBLISH to wake a handleInterrupt goroutine; in the new
-	// architecture we publish a Resume work item that the turn-agent picks
-	// up via rtc-queue's claim loop.
 	h.resumeTurnAfterRtc(ctx, rtc)
 
 	return &protocol.SubmitRtcResultResponse{
 		Result:  protocol.SubmitRtcResultResult{Success: true},
 		Updates: updates.DerefUpdates(pushUpdates),
 	}, nil
+}
+
+// checkIdempotentSubmit handles the idempotency check for RTCs already in a terminal state.
+// Returns (response, true) if the request was handled idempotently, or (nil, false) to continue.
+func (h *Handler) checkIdempotentSubmit(ctx context.Context, rtc *model.Rtc, req *protocol.SubmitRtcResultRequest) (*protocol.SubmitRtcResultResponse, bool) {
+	switch protocol.RtcStatus(rtc.Status) {
+	case protocol.RtcStatusCompleted, protocol.RtcStatusFailed,
+		protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
+		if req.ClientId != nil && *req.ClientId == rtc.ClientID {
+			logger.Info(ctx, "[SubmitRtcResult] idempotent repeat",
+				zap.String("rtc", req.RtcId),
+				zap.String("status", rtc.Status),
+				zap.String("client_id", rtc.ClientID))
+			return &protocol.SubmitRtcResultResponse{
+				Result: protocol.SubmitRtcResultResult{Success: true},
+			}, true
+		}
+		ups := []protocol.Update{{
+			DataList: new([]interface{}{model.ToProtocolRtc(rtc)}),
+			Id:       uuid.Must(uuid.NewV7()).String(),
+			Items: []protocol.UpdateItem{{
+				Action:   protocol.ActionUpdated,
+				Entity:   protocol.EntityRtc,
+				EntityId: rtc.ID.String(),
+			}},
+			Offset: 0,
+		}}
+		return &protocol.SubmitRtcResultResponse{
+			Result:  protocol.SubmitRtcResultResult{Success: true},
+			Updates: &ups,
+		}, true
+	}
+	return nil, false
+}
+
+// updateRtcAndCreateOutput performs the transactional update: marks the RTC result,
+// creates the toolcall_output message, and builds update items for event publishing.
+func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc, rtcUUID uuid.UUID, targetStatus protocol.RtcStatus, resultJSON *string, reqError *string, session *model.Session) ([]updates.UpdatePublishItem, error) {
+	if err := primitives.UpdateRtcResult(txCtx, h.deps.Deps, rtcUUID, targetStatus, resultJSON, model.DerefStr(reqError)); err != nil {
+		return nil, err
+	}
+
+	inputMsg, err := h.deps.Deps.MessageRepo.GetByID(txCtx, rtc.MessageID)
+	if err != nil {
+		return nil, fmt.Errorf("get toolcall_input message %s: %w", rtc.MessageID, err)
+	}
+	inputContentData, err := primitives.ParseContentData(inputMsg.Content)
+	if err != nil {
+		return nil, fmt.Errorf("parse toolcall_input content: %w", err)
+	}
+	inputToolCall, err := primitives.ParseContentDataToolCall(inputContentData.Data)
+	if err != nil {
+		return nil, fmt.Errorf("parse toolcall_input data: %w", err)
+	}
+
+	toolOutput := ""
+	if resultJSON != nil {
+		toolOutput = *resultJSON
+	} else if reqError != nil {
+		toolOutput = *reqError
+	}
+	targetStatusStr := string(targetStatus)
+	outputContentData := protocol.ContentData{
+		Type: protocol.ContentTypeToolCallOutput,
+		Data: protocol.ToolCall{
+			Id:       inputToolCall.Id,
+			ToolName: rtc.ToolName,
+			Input:    inputToolCall.Input,
+			Output:   &toolOutput,
+			Status:   &targetStatusStr,
+		},
+	}
+
+	parentMsgID := rtc.MessageID
+	outputMsg, createErr := primitives.CreateMessage(
+		txCtx, h.deps.Deps,
+		rtc.SessionID, &rtc.TurnID,
+		protocol.MessageRoleTool,
+		usecase.SystemCreator{},
+		outputContentData,
+		protocol.MessageStreamingCompleted,
+		"",
+		&parentMsgID,
+	)
+	if createErr != nil {
+		return nil, fmt.Errorf("create toolcall_output message: %w", createErr)
+	}
+
+	if err := h.deps.Deps.RtcRepo.UpdateOutputMessageID(txCtx, rtcUUID, outputMsg.ID); err != nil {
+		logger.Error(txCtx, "[SubmitRtcResult] update output_message_id",
+			zap.String("rtc", rtcUUID.String()), zap.Error(err))
+	}
+
+	items := primitives.BuildRtcResultUpdates(session, rtcUUID)
+	if len(items) > 0 {
+		items[0].Items = append(items[0].Items, protocol.UpdateItem{
+			Entity:   protocol.EntityMessage,
+			Action:   protocol.ActionCreated,
+			EntityId: outputMsg.ID.String(),
+		})
+	}
+	return items, nil
 }
 
 // resumeTurnAfterRtc publishes a Resume work item to rtc-queue so the
@@ -293,88 +255,13 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 	}
 
 	// === Batch Resume Logic ===
-	// Check if this RTC is part of a batch. If so, atomically store the result,
-	// remove the RTC from the pending set, and check if all RTCs have completed.
-	// Only publish Resume when the pending set becomes empty.
-	var batchResumeItems []turnagent.BatchResumeItem
-	if h.deps.Deps.Redis != nil {
-		batchKey := cache.RtcBatchPending(rtc.TurnID.String())
-		resultsKey := cache.RtcBatchResults(rtc.TurnID.String())
-		interruptMapKey := cache.RtcBatchInterruptMap(rtc.TurnID.String())
-
-		// Build the result string for this RTC
-		resultStr := string(rtc.Result)
-		if rtc.Status == string(protocol.RtcStatusFailed) && rtc.ErrorMessage != "" {
-			resultStr = rtc.ErrorMessage
-		}
-
-		// Atomically: check batch exists, store result, remove from pending, get remaining count.
-		// Returns -1 if batch key doesn't exist (TTL expired or never created).
-		remaining, scriptErr := cache.BatchComplete.Run(
-			ctx, h.deps.Deps.Redis,
-			[]string{batchKey, resultsKey},
-			rtc.ID.String(), resultStr, 600, // 600s = 10min TTL on results key
-		).Int64()
-
-		if scriptErr != nil {
-			logger.Warn(ctx, "[resumeTurnAfterRtc] batch complete script failed",
-				zap.String("rtc", rtc.ID.String()),
-				zap.String("turn", rtc.TurnID.String()),
-				zap.Error(scriptErr))
-			// Fall through to non-batch resume path
-		} else if remaining == -1 {
-			// Batch key doesn't exist (TTL expired or never created) — skip batch logic
-		} else {
-			logger.Info(ctx, "[resumeTurnAfterRtc] batch progress",
-				zap.String("rtc", rtc.ID.String()),
-				zap.String("turn", rtc.TurnID.String()),
-				zap.Int64("remaining", remaining))
-
-			if remaining > 0 {
-				// More RTCs to go, don't resume yet
-				return
-			}
-
-			// All RTCs completed! Build BatchResumeItems from stored data
-			// Errors are logged but tolerated: if these reads fail, batchResumeItems
-			// remains empty and we fall through to single-resume (graceful degradation).
-			results, resultsErr := h.deps.Deps.Redis.HGetAll(ctx, resultsKey).Result()
-			if resultsErr != nil {
-				logger.Warn(ctx, "[resumeTurnAfterRtc] batch results read failed (degrading to single resume)",
-					zap.String("turn", rtc.TurnID.String()),
-					zap.Error(resultsErr))
-			}
-			interruptMap, mapErr := h.deps.Deps.Redis.HGetAll(ctx, interruptMapKey).Result()
-			if mapErr != nil {
-				logger.Warn(ctx, "[resumeTurnAfterRtc] batch interrupt map read failed (degrading to single resume)",
-					zap.String("turn", rtc.TurnID.String()),
-					zap.Error(mapErr))
-			}
-
-			// Build BatchResumeItems: map each RTC ID to its interrupt ID and result
-			for rtcID, interruptID := range interruptMap {
-				result := results[rtcID]
-				batchResumeItems = append(batchResumeItems, turnagent.BatchResumeItem{
-					InterruptID: interruptID,
-					Result:      result,
-				})
-				logger.Info(ctx, "[resumeTurnAfterRtc] batch item",
-					zap.String("rtc_id", rtcID),
-					zap.String("interrupt_id", interruptID),
-					zap.Int("result_len", len(result)))
-			}
-
-			// Clean up all batch-related keys
-			h.deps.Deps.Redis.Del(ctx, batchKey, resultsKey, interruptMapKey)
-			logger.Info(ctx, "[resumeTurnAfterRtc] batch complete, resuming turn",
-				zap.String("turn", rtc.TurnID.String()),
-				zap.String("session", rtc.SessionID.String()),
-				zap.Int("batch_size", len(batchResumeItems)))
-			// Continue to the resume logic below with batchResumeItems populated
-		}
+	batchResumeItems, batchDone := h.tryCollectBatchResume(ctx, rtc)
+	if batchDone {
+		// Batch still has pending RTCs; resume will happen when the last one completes.
+		return
 	}
 
-	// 0. 前置检查：session 已 closed 则不触发新 turn
+	// 前置检查：session 已 closed 则不触发新 turn
 	session, err := h.deps.SessionRepo.GetByID(ctx, rtc.SessionID)
 	if err != nil {
 		logger.Error(ctx, "[resumeTurnAfterRtc] get session",
@@ -388,7 +275,7 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 		return
 	}
 
-	// 1. Check if there's an active turn for this session.
+	// Check if there's an active turn for this session.
 	activeTurns, err := h.deps.Deps.TurnRepo.FindActiveBySession(ctx, rtc.SessionID)
 	if err != nil {
 		logger.Error(ctx, "[resumeTurnAfterRtc] find active turns",
@@ -398,139 +285,207 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 	}
 
 	if len(activeTurns) > 0 {
-		// Happy path: there's an active (most likely interrupted) turn.
-		// Publish a Resume work item at high priority so it's claimed before
-		// any pending Submit items.
-		//
-		// Find the interrupted turn to get its InterruptID for ResumeParams.
-		// If the turn is still "running" (interruptTurn hasn't executed yet),
-		// wait briefly for the InterruptID to be persisted.
-		var interruptID string
-		var interruptResult *string
-		var interruptedTurnID uuid.UUID
-
-		// First pass: look for an interrupted turn
-		for _, t := range activeTurns {
-			if protocol.TurnStatus(t.Status) == protocol.TurnStatusInterrupted {
-				interruptID = t.InterruptID
-				interruptedTurnID = t.ID
-				// Convert RTC result to string for the interrupt result.
-				// Even if rtc.Result is empty, we set interruptResult to a non-nil
-				// value (empty string) so the interrupted tool knows it was resumed.
-				// A nil result would make compose.GetResumeContext unable to distinguish
-				// between "no result provided" and "not resumed yet".
-				resultStr := string(rtc.Result)
-				interruptResult = &resultStr
-				break
-			}
-		}
-
-		// If no interrupted turn found, the turn may still be "running"
-		// (interruptTurn hasn't persisted InterruptID yet). Wait briefly.
-		if interruptID == "" {
-			for _, t := range activeTurns {
-				if protocol.TurnStatus(t.Status) == protocol.TurnStatusRunning ||
-					protocol.TurnStatus(t.Status) == protocol.TurnStatusPending {
-					interruptedTurnID = t.ID
-					break
-				}
-			}
-
-			if interruptedTurnID != uuid.Nil {
-				// Retry with exponential backoff, waiting for interruptTurn to persist InterruptID.
-				retryBO := backoff.NewExponentialBackOff()
-				retryBO.InitialInterval = 20 * time.Millisecond
-				retryBO.MaxInterval = 200 * time.Millisecond
-				gotID, err := backoff.Retry(ctx, func() (string, error) {
-					updatedTurn, repoErr := h.deps.Deps.TurnRepo.GetByID(ctx, interruptedTurnID)
-					if repoErr != nil {
-						// DB errors are not transient — stop retrying
-						return "", backoff.Permanent(repoErr)
-					}
-					if protocol.TurnStatus(updatedTurn.Status) == protocol.TurnStatusInterrupted && updatedTurn.InterruptID != "" {
-						return updatedTurn.InterruptID, nil
-					}
-					return "", errors.New("interrupt not ready")
-				},
-					backoff.WithBackOff(retryBO),
-					backoff.WithMaxTries(10),
-				)
-				if err == nil && gotID != "" {
-					interruptID = gotID
-					// Always set interruptResult (even if empty) so the tool
-					// receives a non-nil resume result.
-					resultStr := string(rtc.Result)
-					interruptResult = &resultStr
-				}
-				if interruptID == "" {
-					logger.Warn(ctx, "[resumeTurnAfterRtc] InterruptID not available after retry",
-						zap.String("turn", interruptedTurnID.String()),
-						zap.String("session", rtc.SessionID.String()))
-				}
-			}
-		}
-
-		// Dedup check: if a Resume work item is already pending or processing
-		// for this session, skip publishing another one. Without this check,
-		// concurrent SubmitRtcResult calls (e.g. network retries) would each
-		// publish a Resume work item, causing the AI to load the same
-		// conversation history and execute the same task multiple times.
-		if h.deps.Queue != nil {
-			hasPending, checkErr := h.deps.Queue.HasPendingWorkByKind(
-				ctx, rtc.SessionID.String(), string(turnagent.WorkKindResume),
-			)
-			if checkErr != nil {
-				logger.Warn(ctx, "[resumeTurnAfterRtc] dedup check failed (proceeding anyway)",
-					zap.String("rtc", rtc.ID.String()),
-					zap.String("session", rtc.SessionID.String()),
-					zap.Error(checkErr))
-			} else if hasPending {
-				logger.Info(ctx, "[resumeTurnAfterRtc] skip: resume work already pending",
-					zap.String("rtc", rtc.ID.String()),
-					zap.String("session", rtc.SessionID.String()),
-					zap.String("turn", activeTurns[len(activeTurns)-1].ID.String()))
-				return
-			}
-		}
-
-		payload, marshalErr := json.Marshal(turnagent.WorkPayload{
-			Kind:             turnagent.WorkKindResume,
-			SessionID:        rtc.SessionID.String(),
-			InterruptID:      interruptID,
-			InterruptResult:  interruptResult,
-			BatchResumeItems: batchResumeItems, // Use batch items if available
-		})
-		if marshalErr != nil {
-			logger.Error(ctx, "[resumeTurnAfterRtc] marshal resume payload", zap.Error(marshalErr))
-			return
-		}
-		if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), rtcqueue.ResumeWorkPriority); err != nil {
-			logger.Error(ctx, "[resumeTurnAfterRtc] Queue.Publish resume failed",
-				zap.String("rtc", rtc.ID.String()),
-				zap.String("session", rtc.SessionID.String()),
-				zap.Error(err))
-		} else {
-			logMsg := "[resumeTurnAfterRtc] resume published"
-			if len(batchResumeItems) > 0 {
-				logMsg = "[resumeTurnAfterRtc] batch resume published"
-			}
-			logger.Info(ctx, logMsg,
-				zap.String("rtc", rtc.ID.String()),
-				zap.String("session", rtc.SessionID.String()),
-				zap.String("turn", activeTurns[len(activeTurns)-1].ID.String()),
-				zap.Int("batch_size", len(batchResumeItems)))
-		}
+		h.resumeActiveTurn(ctx, rtc, activeTurns, batchResumeItems)
 		return
 	}
 
-	// 2. Orphan path: no active turn (worker crash or turn already terminal).
-	// Use SETNX idempotency to ensure we only trigger one orphan recovery per RTC.
+	// Orphan path: no active turn (worker crash or turn already terminal).
+	h.publishOrphanSubmit(ctx, rtc)
+}
+
+// tryCollectBatchResume attempts to collect batch resume items via Redis.
+// Returns (items, true) if the batch is still in progress (caller should return),
+// or (items, false) if the caller should continue with normal resume logic.
+func (h *Handler) tryCollectBatchResume(ctx context.Context, rtc *model.Rtc) ([]turnagent.BatchResumeItem, bool) {
+	if h.deps.Deps.Redis == nil {
+		return nil, false
+	}
+
+	batchKey := cache.RtcBatchPending(rtc.TurnID.String())
+	resultsKey := cache.RtcBatchResults(rtc.TurnID.String())
+	interruptMapKey := cache.RtcBatchInterruptMap(rtc.TurnID.String())
+
+	resultStr := string(rtc.Result)
+	if rtc.Status == string(protocol.RtcStatusFailed) && rtc.ErrorMessage != "" {
+		resultStr = rtc.ErrorMessage
+	}
+
+	remaining, scriptErr := cache.BatchComplete.Run(
+		ctx, h.deps.Deps.Redis,
+		[]string{batchKey, resultsKey},
+		rtc.ID.String(), resultStr, 600,
+	).Int64()
+
+	if scriptErr != nil {
+		logger.Warn(ctx, "[resumeTurnAfterRtc] batch complete script failed",
+			zap.String("rtc", rtc.ID.String()),
+			zap.String("turn", rtc.TurnID.String()),
+			zap.Error(scriptErr))
+		return nil, false
+	}
+	if remaining == -1 {
+		// Batch key doesn't exist (TTL expired or never created).
+		return nil, false
+	}
+
+	logger.Info(ctx, "[resumeTurnAfterRtc] batch progress",
+		zap.String("rtc", rtc.ID.String()),
+		zap.String("turn", rtc.TurnID.String()),
+		zap.Int64("remaining", remaining))
+
+	if remaining > 0 {
+		return nil, true // More RTCs to go.
+	}
+
+	// All RTCs completed — build BatchResumeItems from stored data.
+	return h.buildBatchResumeItems(ctx, rtc, resultsKey, interruptMapKey, batchKey), false
+}
+
+// buildBatchResumeItems reads batch results and interrupt map from Redis,
+// then cleans up all batch-related keys.
+func (h *Handler) buildBatchResumeItems(ctx context.Context, rtc *model.Rtc, resultsKey, interruptMapKey, batchKey string) []turnagent.BatchResumeItem {
+	results, resultsErr := h.deps.Deps.Redis.HGetAll(ctx, resultsKey).Result()
+	if resultsErr != nil {
+		logger.Warn(ctx, "[resumeTurnAfterRtc] batch results read failed (degrading to single resume)",
+			zap.String("turn", rtc.TurnID.String()), zap.Error(resultsErr))
+	}
+	interruptMap, mapErr := h.deps.Deps.Redis.HGetAll(ctx, interruptMapKey).Result()
+	if mapErr != nil {
+		logger.Warn(ctx, "[resumeTurnAfterRtc] batch interrupt map read failed (degrading to single resume)",
+			zap.String("turn", rtc.TurnID.String()), zap.Error(mapErr))
+	}
+
+	items := make([]turnagent.BatchResumeItem, 0, len(interruptMap))
+	for rtcID, interruptID := range interruptMap {
+		result := results[rtcID]
+		items = append(items, turnagent.BatchResumeItem{
+			InterruptID: interruptID,
+			Result:      result,
+		})
+		logger.Info(ctx, "[resumeTurnAfterRtc] batch item",
+			zap.String("rtc_id", rtcID),
+			zap.String("interrupt_id", interruptID),
+			zap.Int("result_len", len(result)))
+	}
+
+	h.deps.Deps.Redis.Del(ctx, batchKey, resultsKey, interruptMapKey)
+	logger.Info(ctx, "[resumeTurnAfterRtc] batch complete, resuming turn",
+		zap.String("turn", rtc.TurnID.String()),
+		zap.String("session", rtc.SessionID.String()),
+		zap.Int("batch_size", len(items)))
+	return items
+}
+
+// resumeActiveTurn publishes a Resume work item for the active (interrupted) turn.
+func (h *Handler) resumeActiveTurn(ctx context.Context, rtc *model.Rtc, activeTurns []*model.Turn, batchResumeItems []turnagent.BatchResumeItem) {
+	interruptID, interruptResult := h.resolveInterruptID(ctx, rtc, activeTurns)
+
+	// Dedup check: skip if a Resume work item is already pending.
+	if h.deps.Queue != nil {
+		hasPending, checkErr := h.deps.Queue.HasPendingWorkByKind(
+			ctx, rtc.SessionID.String(), string(turnagent.WorkKindResume),
+		)
+		if checkErr != nil {
+			logger.Warn(ctx, "[resumeTurnAfterRtc] dedup check failed (proceeding anyway)",
+				zap.String("rtc", rtc.ID.String()),
+				zap.String("session", rtc.SessionID.String()),
+				zap.Error(checkErr))
+		} else if hasPending {
+			logger.Info(ctx, "[resumeTurnAfterRtc] skip: resume work already pending",
+				zap.String("rtc", rtc.ID.String()),
+				zap.String("session", rtc.SessionID.String()),
+				zap.String("turn", activeTurns[len(activeTurns)-1].ID.String()))
+			return
+		}
+	}
+
+	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
+		Kind:             turnagent.WorkKindResume,
+		SessionID:        rtc.SessionID.String(),
+		InterruptID:      interruptID,
+		InterruptResult:  interruptResult,
+		BatchResumeItems: batchResumeItems,
+	})
+	if marshalErr != nil {
+		logger.Error(ctx, "[resumeTurnAfterRtc] marshal resume payload", zap.Error(marshalErr))
+		return
+	}
+	if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), rtcqueue.ResumeWorkPriority); err != nil {
+		logger.Error(ctx, "[resumeTurnAfterRtc] Queue.Publish resume failed",
+			zap.String("rtc", rtc.ID.String()),
+			zap.String("session", rtc.SessionID.String()),
+			zap.Error(err))
+	} else {
+		logMsg := "[resumeTurnAfterRtc] resume published"
+		if len(batchResumeItems) > 0 {
+			logMsg = "[resumeTurnAfterRtc] batch resume published"
+		}
+		logger.Info(ctx, logMsg,
+			zap.String("rtc", rtc.ID.String()),
+			zap.String("session", rtc.SessionID.String()),
+			zap.String("turn", activeTurns[len(activeTurns)-1].ID.String()),
+			zap.Int("batch_size", len(batchResumeItems)))
+	}
+}
+
+// resolveInterruptID finds the interrupted turn's InterruptID, retrying with
+// exponential backoff if the turn is still in "running" state.
+func (h *Handler) resolveInterruptID(ctx context.Context, rtc *model.Rtc, activeTurns []*model.Turn) (string, *string) {
+	// First pass: look for an already-interrupted turn.
+	for _, t := range activeTurns {
+		if protocol.TurnStatus(t.Status) == protocol.TurnStatusInterrupted {
+			resultStr := string(rtc.Result)
+			return t.InterruptID, &resultStr
+		}
+	}
+
+	// Second pass: turn may still be "running" (interruptTurn hasn't persisted yet).
+	var pendingTurnID uuid.UUID
+	for _, t := range activeTurns {
+		if protocol.TurnStatus(t.Status) == protocol.TurnStatusRunning ||
+			protocol.TurnStatus(t.Status) == protocol.TurnStatusPending {
+			pendingTurnID = t.ID
+			break
+		}
+	}
+	if pendingTurnID == uuid.Nil {
+		return "", nil
+	}
+
+	// Retry with exponential backoff, waiting for interruptTurn to persist InterruptID.
+	retryBO := backoff.NewExponentialBackOff()
+	retryBO.InitialInterval = 20 * time.Millisecond
+	retryBO.MaxInterval = 200 * time.Millisecond
+	gotID, err := backoff.Retry(ctx, func() (string, error) {
+		updatedTurn, repoErr := h.deps.Deps.TurnRepo.GetByID(ctx, pendingTurnID)
+		if repoErr != nil {
+			return "", backoff.Permanent(repoErr)
+		}
+		if protocol.TurnStatus(updatedTurn.Status) == protocol.TurnStatusInterrupted && updatedTurn.InterruptID != "" {
+			return updatedTurn.InterruptID, nil
+		}
+		return "", errors.New("interrupt not ready")
+	},
+		backoff.WithBackOff(retryBO),
+		backoff.WithMaxTries(10),
+	)
+	if err != nil || gotID == "" {
+		logger.Warn(ctx, "[resumeTurnAfterRtc] InterruptID not available after retry",
+			zap.String("turn", pendingTurnID.String()),
+			zap.String("session", rtc.SessionID.String()))
+		return "", nil
+	}
+	resultStr := string(rtc.Result)
+	return gotID, &resultStr
+}
+
+// publishOrphanSubmit publishes a Submit work item when no active turn exists.
+func (h *Handler) publishOrphanSubmit(ctx context.Context, rtc *model.Rtc) {
 	orphanKey := cache.RtcOrphanTriggered(rtc.ID.String())
 	ok, setnxErr := h.deps.Deps.Redis.SetNX(ctx, orphanKey, "1", h.deps.Deps.WorkerConfig.OrphanTriggerTTL).Result()
 	if setnxErr != nil {
 		logger.Error(ctx, "[resumeTurnAfterRtc] setnx orphan key",
-			zap.String("rtc", rtc.ID.String()),
-			zap.Error(setnxErr))
+			zap.String("rtc", rtc.ID.String()), zap.Error(setnxErr))
 		return
 	}
 	if !ok {
@@ -539,15 +494,6 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 		return
 	}
 
-	// Do NOT pre-create the turn here. The turn is created by turn-agent's
-	// CreateTurn callback when the worker picks up the work item from rtc-queue.
-	// This ensures the turn lifecycle is managed by turn-agent, not the API layer.
-	//
-	// The RTC result message is already in the DB (created earlier in this function).
-	// When turn-agent loads messages (via LoadMessages callback), it will see the
-	// RTC result. The tool can then check the RTC status and proceed accordingly.
-
-	// Publish Submit work item. turn-agent will create the turn when processing it.
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: rtc.SessionID.String(),
@@ -557,11 +503,9 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 		return
 	}
 	if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), 0); err != nil {
-		// Roll back orphan key to allow retry
 		if delErr := h.deps.Deps.Redis.Del(ctx, orphanKey).Err(); delErr != nil {
 			logger.Warn(ctx, "[resumeTurnAfterRtc] failed to del orphan key",
-				zap.String("key", orphanKey),
-				zap.Error(delErr))
+				zap.String("key", orphanKey), zap.Error(delErr))
 		}
 		logger.Error(ctx, "[resumeTurnAfterRtc] Queue.Publish submit failed",
 			zap.String("rtc", rtc.ID.String()),
