@@ -355,6 +355,7 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 				}
 			}
 			if len(args) > 0 {
+				pairCount := len(args) / 2                           // number of RtcID→InterruptCtx.ID pairs
 				args = append(args, int(10*time.Minute/time.Second)) // TTL as last ARGV
 				if err := hsetExpireScript.Run(ctx, h.deps.Redis, []string{interruptMapKey}, args...).Err(); err != nil {
 					h.logger.Warn(ctx, "interruptTurn.batch_interrupt_mapping_failed", map[string]any{
@@ -364,7 +365,7 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 				} else {
 					h.logger.Info(ctx, "interruptTurn.batch_interrupt_mapping_stored", map[string]any{
 						"turn_id":         turnID,
-						"interrupt_count": len(args) / 2, // exclude TTL arg
+						"interrupt_count": pairCount,
 					})
 				}
 			}

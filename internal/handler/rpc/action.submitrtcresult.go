@@ -336,8 +336,20 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 			}
 
 			// All RTCs completed! Build BatchResumeItems from stored data
-			results, _ := h.deps.Deps.Redis.HGetAll(ctx, resultsKey).Result()
-			interruptMap, _ := h.deps.Deps.Redis.HGetAll(ctx, interruptMapKey).Result()
+			// Errors are logged but tolerated: if these reads fail, batchResumeItems
+			// remains empty and we fall through to single-resume (graceful degradation).
+			results, resultsErr := h.deps.Deps.Redis.HGetAll(ctx, resultsKey).Result()
+			if resultsErr != nil {
+				logger.Warn(ctx, "[resumeTurnAfterRtc] batch results read failed (degrading to single resume)",
+					zap.String("turn", rtc.TurnID.String()),
+					zap.Error(resultsErr))
+			}
+			interruptMap, mapErr := h.deps.Deps.Redis.HGetAll(ctx, interruptMapKey).Result()
+			if mapErr != nil {
+				logger.Warn(ctx, "[resumeTurnAfterRtc] batch interrupt map read failed (degrading to single resume)",
+					zap.String("turn", rtc.TurnID.String()),
+					zap.Error(mapErr))
+			}
 
 			// Build BatchResumeItems: map each RTC ID to its interrupt ID and result
 			for rtcID, interruptID := range interruptMap {
