@@ -177,9 +177,23 @@ func (h *helpers) beginTurn(ctx context.Context, turnID string) error {
 	// when it reacts to the event), then publish both events together.
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
+		// Fallback: extract sessionID from context (set by agent_process.go
+		// via WithSessionID before calling BeginTurn). This ensures session
+		// activation and event publishing still work even when DB lookup fails.
+		sessionIDStr := turnagent.SessionIDFromContext(ctx)
+		if sid, parseErr := uuid.Parse(sessionIDStr); parseErr == nil {
+			if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusActive); err != nil {
+				h.logger.Info(ctx, "beginTurn.update_session_status_failed_fallback", map[string]any{
+					"session_id": sid.String(),
+					"error":      err.Error(),
+				})
+			}
+			h.batchLifecyclePublish(ctx, tid, sid, "begin")
+		}
 		h.logger.Info(ctx, "beginTurn.load_turn_failed", map[string]any{
-			"turn_id": turnID,
-			"error":   lookupErr.Error(),
+			"turn_id":    turnID,
+			"error":      lookupErr.Error(),
+			"fallback":   sessionIDStr != "",
 		})
 		return nil
 	}

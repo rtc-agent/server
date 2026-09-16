@@ -192,7 +192,10 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 
 	// If this is a new manager, begin the turn.
 	if isNew {
-		if err := a.beginTurn(turnCtx, turnSpan, p.SessionID, turnID, p.Kind); err != nil {
+		// Enrich context with sessionID so callbacks can use it as a fallback
+		// when DB lookups fail (e.g., beginTurn session activation).
+		beginCtx := WithSessionID(turnCtx, p.SessionID)
+		if err := a.beginTurn(beginCtx, turnSpan, p.SessionID, turnID, p.Kind); err != nil {
 			return err
 		}
 	}

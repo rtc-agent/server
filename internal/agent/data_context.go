@@ -113,7 +113,8 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// Scenarios are injected as a system message after command prompts but
 	// before attachments are prepended, so the final order is:
 	// [system] Attachments → [system] Scenarios → [system] Command prompts → [conversation]
-	messages = h.injectScenarioPrompts(ctx, sid, messages)
+	// Pass the already-loaded dbMsgs to avoid a redundant DB query.
+	messages = h.injectScenarioPrompts(ctx, sid, messages, dbMsgs)
 
 	// Build and inject all attachments (TodoList, SessionMemory, UserMemory).
 	// Attachments are dynamic content that provides the LLM with persistent
@@ -564,6 +565,10 @@ func wrapWithTag(name, content string) string {
 // 从最后一条 user 消息的 ContentData 中提取 scenarios，将每个 scenario 的 FileContent
 // 包裹为 <scenario> 标签，作为 system message 注入到消息数组开头。
 //
+// dbMsgs is the already-loaded DB messages from loadMessages, passed to avoid
+// a redundant DB query. The scenarios field is only available in the raw
+// model.Message (lost during convertDBMessage).
+//
 // 注入顺序（最终）：
 // [system] Attachments (TodoList, SessionMemory, UserMemory)
 // [system] Scenarios (本函数注入)
@@ -573,15 +578,15 @@ func (h *helpers) injectScenarioPrompts(
 	ctx context.Context,
 	sessionID uuid.UUID,
 	messages []*turnagent.Message,
+	dbMsgs []*model.Message,
 ) []*turnagent.Message {
 	if len(messages) == 0 {
 		return messages
 	}
 
-	// 从数据库加载最近的消息，找到最后一条 user 消息
-	// 不能从 messages 中获取，因为 convertDBMessage 已经丢失了 scenarios 信息
-	dbMsgs, err := h.deps.MessageRepo.ListRecentBySession(ctx, sessionID, 10)
-	if err != nil || len(dbMsgs) == 0 {
+	// 复用调用方已加载的 dbMsgs，避免重复查询数据库。
+	// scenarios 信息仅在原始 model.Message 中可用（convertDBMessage 转换后丢失）。
+	if len(dbMsgs) == 0 {
 		return messages
 	}
 

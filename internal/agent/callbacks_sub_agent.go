@@ -409,6 +409,15 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 // updateSubAgentInvocationStatus updates the status field of a
 // sub_agent_invocation message. This is used to track the sub agent's
 // execution state (pending/running/failed/completed).
+//
+// NOTE: This is a read-modify-write operation without atomicity guarantees.
+// A race could occur if two concurrent calls read the same content, modify
+// the status, and write back (last writer wins). In practice this is safe
+// because: (1) status transitions are sequential per sub-agent lifecycle
+// (pending → running → completed/failed), (2) each transition is triggered
+// by a different turn callback which runs sequentially per session. If this
+// becomes a concern, a JSON-aware SQL UPDATE (e.g., jsonb_set) would be the
+// proper fix.
 func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID uuid.UUID, status string) {
 	// Load the message.
 	msg, err := h.deps.MessageRepo.GetByID(ctx, messageID)
