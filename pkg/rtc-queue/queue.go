@@ -327,51 +327,6 @@ func (q *Queue) RenewLockWithCredential(ctx context.Context, sessionID, workerID
 	return n == 1, nil
 }
 
-// CompleteAndClaimNext atomically completes the current work item and claims
-// the next work item from the session queue if available. This enables "hold
-// lock" mode where a worker can process multiple work items without releasing
-// and re-acquiring the session lock.
-//
-// Deprecated: This method uses HGET on the session lock (KEYS[4]), but the
-// non-credential lock (created by claimScript) is a Redis string, not a hash.
-// Calling this method would produce a WRONGTYPE Redis error. Use
-// CompleteWorkAndClaimNext instead, which correctly handles hash-based locks
-// with credential verification. This method is retained only for backward
-// compatibility and is not used by any caller in the codebase.
-//
-// Returns (nil, nil) if there is no next work item in the queue.
-// Returns (*ClaimResult, nil) if the next work was successfully claimed.
-// Returns (nil, error) on Redis errors.
-func (q *Queue) CompleteAndClaimNext(ctx context.Context, workID, sessionID, workerID string, credential string) (*ClaimResult, error) {
-	now := time.Now().Unix()
-	result, err := completeAndClaimNextScript.Run(ctx, q.rdb, []string{
-		keyWork(workID),
-		keyQueue(sessionID),
-		keyActive(sessionID),
-		keyLock(sessionID),
-	}, now, workerID, DefaultLockTTLSeconds).Result()
-	if errors.Is(err, redis.Nil) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("rtcqueue: complete and claim next: %w", err)
-	}
-	arr, ok := result.([]interface{})
-	if !ok || len(arr) < 2 {
-		return nil, nil
-	}
-	nextWorkID, _ := arr[0].(string)
-	newCred, _ := arr[1].(string)
-	if nextWorkID == "" {
-		return nil, nil
-	}
-	return &ClaimResult{
-		SessionID:  sessionID,
-		WorkID:     nextWorkID,
-		Credential: newCred,
-	}, nil
-}
-
 // CompleteWorkAndClaimNext atomically completes the current work item and
 // attempts to claim the next pending work item for the same session.
 // It verifies credential ownership via the hash-based session lock before

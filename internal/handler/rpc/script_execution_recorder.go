@@ -74,6 +74,14 @@ func (r *scriptExecutionRecorder) shutdown() {
 // 从 tasks channel 消费任务，quit 信号触发后排空剩余任务再退出。
 func (r *scriptExecutionRecorder) worker(id int) {
 	defer r.wg.Done()
+	defer func() {
+		if rv := recover(); rv != nil {
+			logger.Error(context.Background(), "[scriptExecutionRecorder] worker goroutine panic",
+				zap.Int("worker_id", id),
+				zap.Any("panic", rv),
+			)
+		}
+	}()
 
 	for {
 		select {
