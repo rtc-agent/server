@@ -204,82 +204,12 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		showRawErrors:                   cfg.ShowRawErrors,
 	}
 
-	if h.contextTokensLimit <= 0 {
-		h.contextTokensLimit = 25000
-	}
-	if h.autoCompactBufferTokens <= 0 {
-		h.autoCompactBufferTokens = 13000
-	}
-	// Default cache hit rate threshold: 88%. Negative disables the alert.
-	if h.cacheHitRateWarnThreshold == 0 {
-		h.cacheHitRateWarnThreshold = 0.88
-	}
-	if h.maxOutputTokensForSummary <= 0 {
-		h.maxOutputTokensForSummary = 20000
-	}
-	if h.microcompactGapMinutes <= 0 {
-		h.microcompactGapMinutes = 60
-	}
-	if h.microcompactKeepRecent <= 0 {
-		h.microcompactKeepRecent = 5
-	}
-	if h.toolResultBudgetMaxTokens <= 0 {
-		h.toolResultBudgetMaxTokens = DefaultToolResultMaxTokens
-	}
+	applyHelperDefaults(h)
 
-	// Default strategic cache breakpoints: enabled.
-	// This improves cache hit rate from 0% to 75% after microcompact.
-	// Set to false to disable (e.g., for debugging or if cache performance degrades).
-
-	// Token 预估相关初始化
-	h.tokenEstimator = NewTokenEstimator(h.contextTokensLimit, h.autoCompactBufferTokens, cfg.Deps.SessionRepo)
-	h.tokenUpdateThrottle = NewThrottle(500 * time.Millisecond)
-	h.modelPricing = NewModelPricing(cfg.ModelPricing)
-
-	// Register built-in slash commands into the command registry.
-	// GoalWorkflow closes over helpers (for DB/queue access and tool construction).
-	registerGoalCommand(cfg.Deps.CommandRegistry, h)
-	registerLoopCommand(cfg.Deps.CommandRegistry, h)
-	if cfg.Deps.CommandRegistry != nil {
-		for _, cmd := range builtinCommands() {
-			cfg.Deps.CommandRegistry.Register(cmd)
-		}
+	// Initialize helpers subsystems (token estimator, commands, attachments, etc.)
+	if err := h.initialize(cfg); err != nil {
+		return nil, err
 	}
-
-	// Build the attachment manager. It coordinates the building and injection
-	// of all dynamic attachments (AgentPrompt, TodoList, SessionMemory, UserMemory).
-	// Attachments are built in order: AgentPrompt first (highest priority),
-	// then TodoList, SessionMemory, UserMemory.
-	h.attachmentManager = NewAttachmentManager(
-		[]Attachment{
-			//NewAgentPromptAttachment(h), // 已经注入到了Agent.Instruction
-			NewTodoListAttachment(h),
-			NewSessionMemoryAttachment(h),
-			NewUserMemoryAttachment(h),
-		},
-		cfg.Metrics,
-		h.logger,
-		AttachmentManagerConfig{
-			MaxTokensPerAttachment: 5000,
-			TotalBudget:            15000,
-		},
-	)
-
-	// Build summarization middleware
-	summarizeMW, err := h.buildSummarizationMiddleware()
-	if err != nil {
-		return nil, fmt.Errorf("agent: build summarization middleware: %w", err)
-	}
-	h.summarizeMW = summarizeMW
-
-	// Build the token usage callback handler once and store it on helpers.
-	// This allows the compact flow (which bypasses the turn loop) to initialize
-	// the same callbacks in its context, so compact's LLM calls are tracked.
-	h.tokenCallbackHandler = h.newTokenUsageCallbackHandler()
-
-	// Share the token callback handler with the RPC layer so background LLM calls
-	// (title summarization, session memory extraction) can also track token usage.
-	cfg.Deps.TokenCallbackHandler = h.tokenCallbackHandler
 
 	// Build the turnagent.Config with all callbacks.
 	taCfg := turnagent.Config{
@@ -427,6 +357,80 @@ type helpers struct {
 	// When false (default), sanitized RawError is still stored but the frontend
 	// is instructed not to render it.
 	showRawErrors bool
+}
+
+// applyHelperDefaults fills in zero-value fields on helpers with sensible
+// defaults. Extracted from New() to reduce its length.
+func applyHelperDefaults(h *helpers) {
+	if h.contextTokensLimit <= 0 {
+		h.contextTokensLimit = 25000
+	}
+	if h.autoCompactBufferTokens <= 0 {
+		h.autoCompactBufferTokens = 13000
+	}
+	// Default cache hit rate threshold: 88%. Negative disables the alert.
+	if h.cacheHitRateWarnThreshold == 0 {
+		h.cacheHitRateWarnThreshold = 0.88
+	}
+	if h.maxOutputTokensForSummary <= 0 {
+		h.maxOutputTokensForSummary = 20000
+	}
+	if h.microcompactGapMinutes <= 0 {
+		h.microcompactGapMinutes = 60
+	}
+	if h.microcompactKeepRecent <= 0 {
+		h.microcompactKeepRecent = 5
+	}
+	if h.toolResultBudgetMaxTokens <= 0 {
+		h.toolResultBudgetMaxTokens = DefaultToolResultMaxTokens
+	}
+}
+
+// initialize sets up the helpers subsystems: token estimator, slash commands,
+// attachment manager, summarization middleware, and token callback handler.
+// Extracted from New() to reduce its length.
+func (h *helpers) initialize(cfg Config) error {
+	// Token estimation
+	h.tokenEstimator = NewTokenEstimator(h.contextTokensLimit, h.autoCompactBufferTokens, cfg.Deps.SessionRepo)
+	h.tokenUpdateThrottle = NewThrottle(500 * time.Millisecond)
+	h.modelPricing = NewModelPricing(cfg.ModelPricing)
+
+	// Register built-in slash commands
+	registerGoalCommand(cfg.Deps.CommandRegistry, h)
+	registerLoopCommand(cfg.Deps.CommandRegistry, h)
+	if cfg.Deps.CommandRegistry != nil {
+		for _, cmd := range builtinCommands() {
+			cfg.Deps.CommandRegistry.Register(cmd)
+		}
+	}
+
+	// Attachment manager
+	h.attachmentManager = NewAttachmentManager(
+		[]Attachment{
+			NewTodoListAttachment(h),
+			NewSessionMemoryAttachment(h),
+			NewUserMemoryAttachment(h),
+		},
+		cfg.Metrics,
+		h.logger,
+		AttachmentManagerConfig{
+			MaxTokensPerAttachment: 5000,
+			TotalBudget:            15000,
+		},
+	)
+
+	// Summarization middleware
+	summarizeMW, err := h.buildSummarizationMiddleware()
+	if err != nil {
+		return fmt.Errorf("agent: build summarization middleware: %w", err)
+	}
+	h.summarizeMW = summarizeMW
+
+	// Token callback handler
+	h.tokenCallbackHandler = h.newTokenUsageCallbackHandler()
+	cfg.Deps.TokenCallbackHandler = h.tokenCallbackHandler
+
+	return nil
 }
 
 // defaultCheckpointTTL returns the configured checkpoint TTL, defaulting to 24h.

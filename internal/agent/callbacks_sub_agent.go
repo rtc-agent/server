@@ -496,3 +496,44 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 		"status":     status,
 	})
 }
+
+// notifyParentAfterSubAgentSession is the shared helper for notifying a parent
+// session after a sub-agent session reaches a terminal state (completed, failed,
+// or cancelled). It handles both async and sync sub-agent modes.
+//
+// This extracts the duplicated sub-agent notification logic from completeTurn,
+// failTurn, and cancelTurn into a single place.
+//
+// Parameters:
+//   - session: the sub session that reached a terminal state
+//   - lastMessage: the sub agent's last message (nil if failed/cancelled)
+//   - status: "completed", "failed", or "cancelled"
+//   - errorMessage: error/cancellation message if status is not "completed"
+func (h *helpers) notifyParentAfterSubAgentSession(
+	ctx context.Context,
+	session *model.Session,
+	lastMessage *turnagent.Message,
+	status string,
+	errorMessage *string,
+) {
+	if session == nil || session.ParentServerSessionID == uuid.Nil {
+		return
+	}
+
+	if session.SubAgentMode == "async" {
+		// Async mode: toolcall_output was already created when the tool returned.
+		// Create a notification message and trigger a new turn via Submit.
+		h.notifyParentAfterAsyncSubAgent(ctx, session, lastMessage, status, errorMessage)
+		return
+	}
+
+	// Sync mode: create toolcall_output and resume parent from checkpoint.
+	if session.SubAgentParentMessageID != uuid.Nil {
+		var resultPtr *string
+		if lastMessage != nil {
+			resultPtr = &lastMessage.Content
+		}
+		h.resumeParentAfterSubAgentNewToolCallOutput(ctx, session.SubAgentParentMessageID, status, errorMessage, resultPtr)
+	}
+	h.resumeParentAfterSubAgent(ctx, session, lastMessage)
+}

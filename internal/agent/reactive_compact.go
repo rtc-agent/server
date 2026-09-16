@@ -264,28 +264,5 @@ func (h *helpers) forceCompressContext(ctx context.Context, msgs []*schema.Messa
 		return nil, fmt.Errorf("force compress: summarize: %w", err)
 	}
 
-	summaryContent := formatCompactUserMessage(formatCompactSummary(summary))
-	summaryMsg := &schema.Message{
-		Role:    schema.User,
-		Content: summaryContent,
-	}
-
-	// Preserve system messages from the discarded portion (same rationale as
-	// compressContext): they carry dynamic attachments (AgentPrompt, TodoList,
-	// etc.) that must survive compression.
-	var systemMsgs []*schema.Message
-	for _, msg := range msgs[:retentionIndex] {
-		if msg.Role == schema.System {
-			systemMsgs = append(systemMsgs, msg)
-		}
-	}
-
-	result := make([]*schema.Message, 0, 1+len(systemMsgs)+len(msgs)-retentionIndex)
-	result = append(result, summaryMsg)
-	result = append(result, systemMsgs...)
-	if retentionIndex < len(msgs) {
-		result = append(result, msgs[retentionIndex:]...)
-	}
-
-	return result, nil
+	return buildCompressedResult(msgs, retentionIndex, summary), nil
 }

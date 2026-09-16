@@ -292,23 +292,7 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 	h.logger.Info(ctx, "completeTurn.done", map[string]any{"turn_id": turnID, "session_id": sessionID})
 
 	// Sub Agent support: if this is a sub session, notify the parent.
-	if session != nil && session.ParentServerSessionID != uuid.Nil {
-		if session.SubAgentMode == "async" {
-			// Async mode: toolcall_output was already created when the tool returned.
-			// Create a notification message and trigger a new turn via Submit.
-			h.notifyParentAfterAsyncSubAgent(ctx, session, lastMessage, "completed", nil)
-		} else {
-			// Sync mode: create toolcall_output and resume parent from checkpoint.
-			if session.SubAgentParentMessageID != uuid.Nil {
-				var resultPtr *string
-				if lastMessage != nil {
-					resultPtr = &lastMessage.Content
-				}
-				h.resumeParentAfterSubAgentNewToolCallOutput(ctx, session.SubAgentParentMessageID, "completed", nil, resultPtr)
-			}
-			h.resumeParentAfterSubAgent(ctx, session, lastMessage)
-		}
-	}
+	h.notifyParentAfterSubAgentSession(ctx, session, lastMessage, "completed", nil)
 
 	// Slash-command framework: notify active commands of turn completion.
 	// The /goal execution loop is now handled by GoalWorkflow.OnTurnComplete
@@ -524,19 +508,13 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 
 	// Sub Agent support: if this is a sub session, notify the parent.
 	session, sessErr := h.deps.SessionRepo.GetByID(ctx, turn.SessionID)
-	if sessErr == nil && session.ParentServerSessionID != uuid.Nil {
-		if session.SubAgentMode == "async" {
-			errMsgPtr := &errMsg
-			h.notifyParentAfterAsyncSubAgent(ctx, session, nil, "failed", errMsgPtr)
-		} else {
-			// Sync mode: create toolcall_output and resume parent from checkpoint.
-			if session.SubAgentParentMessageID != uuid.Nil {
-				errMsgPtr := &errMsg
-				h.resumeParentAfterSubAgentNewToolCallOutput(ctx, session.SubAgentParentMessageID, "failed", errMsgPtr, nil)
-			}
-			h.resumeParentAfterSubAgent(ctx, session, nil)
-		}
+	if sessErr != nil {
+		h.logger.Warn(ctx, "failTurn.load_session_failed", map[string]any{
+			"session_id": turn.SessionID.String(),
+			"error":      sessErr.Error(),
+		})
 	}
+	h.notifyParentAfterSubAgentSession(ctx, session, nil, "failed", &errMsg)
 
 	return nil
 }
@@ -582,19 +560,13 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 
 	// Sub Agent support: if this is a sub session, notify the parent.
 	session, sessErr := h.deps.SessionRepo.GetByID(ctx, turn.SessionID)
-	if sessErr == nil && session.ParentServerSessionID != uuid.Nil {
-		if session.SubAgentMode == "async" {
-			reasonPtr := &reason
-			h.notifyParentAfterAsyncSubAgent(ctx, session, nil, "cancelled", reasonPtr)
-		} else {
-			// Sync mode: create toolcall_output and resume parent from checkpoint.
-			if session.SubAgentParentMessageID != uuid.Nil {
-				reasonPtr := &reason
-				h.resumeParentAfterSubAgentNewToolCallOutput(ctx, session.SubAgentParentMessageID, "cancelled", reasonPtr, nil)
-			}
-			h.resumeParentAfterSubAgent(ctx, session, nil)
-		}
+	if sessErr != nil {
+		h.logger.Warn(ctx, "cancelTurn.load_session_failed", map[string]any{
+			"session_id": turn.SessionID.String(),
+			"error":      sessErr.Error(),
+		})
 	}
+	h.notifyParentAfterSubAgentSession(ctx, session, nil, "cancelled", &reason)
 
 	// Cascade cancel: if this session has active child sessions (sub agents),
 	// cancel them as well. This prevents orphaned sub agents from continuing
