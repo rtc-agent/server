@@ -54,7 +54,7 @@ func TestTruncateToTokens(t *testing.T) {
 	t.Run("preserves UTF-8 boundaries for emoji", func(t *testing.T) {
 		// Emoji are 4 bytes each in UTF-8.
 		emoji := strings.Repeat("😀", 50) // 200 bytes
-		maxTokens := 10                     // maxChars ≈ 30
+		maxTokens := 10                  // maxChars ≈ 30
 		result := truncateToTokens(emoji, maxTokens)
 
 		if !utf8.ValidString(result) {
@@ -65,7 +65,7 @@ func TestTruncateToTokens(t *testing.T) {
 	t.Run("mixed ASCII and multi-byte", func(t *testing.T) {
 		// Mix of ASCII and CJK: "hello 你好 world 世界 ..."
 		s := strings.Repeat("hello 你好 world 世界 ", 10) // ~230 bytes
-		maxTokens := 10                                     // maxChars ≈ 30
+		maxTokens := 10                               // maxChars ≈ 30
 		result := truncateToTokens(s, maxTokens)
 
 		if !utf8.ValidString(result) {

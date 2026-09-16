@@ -265,12 +265,11 @@ func truncateToTokens(s string, maxTokens int) string {
 	headChars := int(float64(maxChars) * 0.6)
 	tailChars := int(float64(maxChars) * 0.2)
 
-	head := s[:headChars]
 	// Walk backward from headChars to find a valid UTF-8 rune boundary.
 	for headChars > 0 && !utf8.RuneStart(s[headChars]) {
 		headChars--
 	}
-	head = s[:headChars]
+	head := s[:headChars]
 
 	// For the tail, walk backward from the end to find a valid UTF-8 rune boundary.
 	tailStart := len(s) - tailChars

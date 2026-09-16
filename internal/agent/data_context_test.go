@@ -334,8 +334,8 @@ func TestFilterMeaninglessThinking(t *testing.T) {
 			name: "mixed scenario",
 			input: []*turnagent.Message{
 				{Role: turnagent.RoleUser, Content: "question"},
-				{Role: turnagent.RoleAssistant, ReasoningContent: "...", Content: ""},           // filtered
-				{Role: turnagent.RoleAssistant, ReasoningContent: "[no content]", Content: ""},   // filtered
+				{Role: turnagent.RoleAssistant, ReasoningContent: "...", Content: ""},                   // filtered
+				{Role: turnagent.RoleAssistant, ReasoningContent: "[no content]", Content: ""},          // filtered
 				{Role: turnagent.RoleAssistant, ReasoningContent: "valid reasoning here!", Content: ""}, // kept (>= 20 chars)
 				{Role: turnagent.RoleAssistant, Content: "answer"},
 			},
