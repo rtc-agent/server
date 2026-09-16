@@ -90,12 +90,14 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	messages = microcompactMessages(messages, h.microcompactConfig())
 
 	// Slash-command framework. Detect any command prefix on the last user
-	// message, update per-session activation state, and append the
+	// message, update per-session activation state, and inject the
 	// commands' prompt contributions. The /goal command is now handled by
 	// GoalWorkflow registered in the registry (see goal_workflow.go).
-	// NOTE: This is done BEFORE attachments so that command system prompts
-	// (like /goal) appear after attachments in the final message order:
-	// [system] Attachments → [system] Command prompts → [conversation]
+	//
+	// Injection timing: command prompts and scenario prompts are injected
+	// BEFORE attachments are prepended, so the final message order is:
+	//   [system] Attachments → [system] Scenarios → [system] Command prompts → [conversation]
+	// (Attachments win the front position because they are prepended last.)
 	messages = h.injectCommandPrompts(ctx, sid, messages)
 
 	// Inject scenario prompts from the last user message's scenarios field.
