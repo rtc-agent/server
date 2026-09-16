@@ -383,6 +383,13 @@ func (w *Worker) processWorkHoldLock(ctx context.Context, claim *ClaimResult) {
 	w.processWorkInternal(ctx, claim, true, claim.Credential)
 }
 
+// maxConsecutiveRenewFailures is the threshold for consecutive Redis errors
+// during lock renewal before the lock is considered lost. This matches the
+// SessionTurnManager's approach (in pkg/turn-agent/session_manager.go) to
+// prevent split-brain scenarios where transient network errors cause the lock
+// TTL to expire while the worker continues processing.
+const maxConsecutiveRenewFailures = 3
+
 // processWorkInternal is the shared implementation for both normal and hold-lock modes.
 func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, holdLock bool, credential string) {
 	w.log("worker.processing_work", map[string]any{
@@ -502,8 +509,12 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 		}
 	}
 
-	// lock renewal ticker — tracks whether we still own the lock
+	// lock renewal ticker — tracks whether we still own the lock.
+	// Uses a consecutive failure counter to tolerate transient Redis errors
+	// (network blips, connection pool exhaustion) while still detecting genuine
+	// lock loss promptly. Matches SessionTurnManager.runLockRenewal behavior.
 	var lockLost atomic.Bool
+	var consecutiveRenewFailures atomic.Int64
 	renewDone := make(chan struct{})
 	go func() {
 		defer func() {
@@ -531,9 +542,30 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 					ok, err = w.q.RenewLock(workCtx, claim.SessionID, w.cfg.WorkerID)
 				}
 				if err != nil {
-					w.cfg.OnError(fmt.Errorf("renew lock: %w", err))
+					// Transient Redis error: increment counter, log warning.
+					// Do NOT set lockLost immediately — tolerate up to N consecutive failures
+					// to survive network blips without triggering split-brain.
+					failures := consecutiveRenewFailures.Add(1)
+					w.log("worker.renewal_transient_error", map[string]any{
+						"session_id":           claim.SessionID,
+						"consecutive_failures": failures,
+						"error":                err.Error(),
+					})
+					if failures >= maxConsecutiveRenewFailures {
+						w.logError("worker.renewal_giving_up",
+							"session", claim.SessionID,
+							"consecutive_failures", failures,
+						)
+						lockLost.Store(true)
+						workCancel()
+						return
+					}
+					continue
 				}
+				// Redis responded successfully — reset failure counter.
+				consecutiveRenewFailures.Store(0)
 				if !ok {
+					// Definitive lock loss (TTL expired or preempted by another worker).
 					lockLost.Store(true)
 					workCancel() // abort OnWork — we no longer own this work
 					return
