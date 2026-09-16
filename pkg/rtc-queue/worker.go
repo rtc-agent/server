@@ -581,11 +581,14 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 		"session_id": work.SessionID,
 	})
 	err = w.cfg.OnWork(workCtx, work, cancelCh)
-	w.log("worker.onwork_returned", map[string]any{
+	onworkFields := map[string]any{
 		"work_id":    work.ID,
 		"session_id": work.SessionID,
-		"error":      fmt.Sprintf("%v", err),
-	})
+	}
+	if err != nil {
+		onworkFields["error"] = err.Error()
+	}
+	w.log("worker.onwork_returned", onworkFields)
 	if lockLost.Load() {
 		// another worker took over; do NOT call Complete (it would release
 		// someone else's lock). The lock will expire naturally.

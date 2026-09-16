@@ -488,14 +488,17 @@ func (a *Agent) recordTurnEnd(
 	if err != nil {
 		span.RecordError(err)
 	}
-	a.log(ctx, LogLevelInfo, "turn.end", map[string]any{
+	fields := map[string]any{
 		"session_id":  sessionID,
 		"turn_id":     turnID,
 		"work_kind":   workKind,
 		"status":      status,
 		"duration_ms": duration.Milliseconds(),
-		"error":       fmt.Sprintf("%v", err),
-	})
+	}
+	if err != nil {
+		fields["error"] = err.Error()
+	}
+	a.log(ctx, LogLevelInfo, "turn.end", fields)
 	a.recordMetricIfEnabled(ctx, func(m Metrics) {
 		m.RecordTurn(ctx, TurnMetricsAttrs{
 			SessionID:  sessionID,
