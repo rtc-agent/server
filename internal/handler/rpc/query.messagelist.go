@@ -48,7 +48,7 @@ func (h *Handler) MessageList(ctx context.Context, req *protocol.MessageListRequ
 
 	logger.Info(ctx, "[MessageList]",
 		zap.String("user", userID.String()),
-		zap.String("session", string(req.SessionId)),
+		zap.String("session", req.SessionId),
 		zap.Int("count", len(items)),
 		zap.Bool("has_next", nextCursor != nil))
 	return &protocol.MessageListResponse{

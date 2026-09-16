@@ -287,7 +287,7 @@ func (h *helpers) handleMessage(ctx context.Context, sessionID uuid.UUID, turnID
 		var allItems []protocol.UpdateItem
 		for _, msg := range createdMsgs {
 			allItems = append(allItems, protocol.UpdateItem{
-				Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: protocol.UUID(msg.ID.String()),
+				Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: msg.ID.String(),
 			})
 		}
 		return []updates.UpdatePublishItem{{Channel: ch, Items: allItems}}, nil

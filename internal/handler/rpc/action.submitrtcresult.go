@@ -39,7 +39,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 
 	logger.Info(ctx, "[SubmitRtcResult]",
 		zap.String("user", userID.String()),
-		zap.String("rtc", string(req.RtcId)),
+		zap.String("rtc", req.RtcId),
 		zap.Bool("success", req.Success))
 
 	// 加载 RTC 并校验存在
@@ -58,7 +58,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		// 终态 + 同一 ClientID → 视为重复上报，接受并返回成功
 		if req.ClientId != nil && *req.ClientId == rtc.ClientID {
 			logger.Info(ctx, "[SubmitRtcResult] idempotent repeat",
-				zap.String("rtc", string(req.RtcId)),
+				zap.String("rtc", req.RtcId),
 				zap.String("status", rtc.Status),
 				zap.String("client_id", rtc.ClientID))
 			return &protocol.SubmitRtcResultResponse{
@@ -72,7 +72,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 				model.ToProtocolRtc(rtc),
 			}),
 			Id: uuid.Must(uuid.NewV7()).String(),
-			Items: []protocol.UpdateItem{protocol.UpdateItem{
+			Items: []protocol.UpdateItem{{
 				Action:   protocol.ActionUpdated,
 				Entity:   protocol.EntityRtc,
 				EntityId: rtc.ID.String(),
@@ -219,7 +219,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 			items[0].Items = append(items[0].Items, protocol.UpdateItem{
 				Entity:   protocol.EntityMessage,
 				Action:   protocol.ActionCreated,
-				EntityId: protocol.UUID(outputMsg.ID.String()),
+				EntityId: outputMsg.ID.String(),
 			})
 		}
 		return items, nil

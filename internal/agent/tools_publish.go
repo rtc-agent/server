@@ -48,7 +48,7 @@ func publishToolMessages(ctx context.Context, in publishToolMessagesInput) error
 	}
 
 	inputToolCall := protocol.ToolCall{
-		Id:       protocol.UUID(callID),
+		Id:       callID,
 		ToolName: in.ToolName,
 		Input:    in.ArgumentsInJSON,
 	}
@@ -58,7 +58,7 @@ func publishToolMessages(ctx context.Context, in publishToolMessagesInput) error
 	}
 
 	outputToolCall := protocol.ToolCall{
-		Id:       protocol.UUID(callID),
+		Id:       callID,
 		ToolName: in.ToolName,
 		Input:    in.ArgumentsInJSON,
 		Output:   &resultJSON,
@@ -107,12 +107,12 @@ func publishToolMessages(ctx context.Context, in publishToolMessagesInput) error
 					{
 						Entity:   protocol.EntityMessage,
 						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(inputMsgID.String()),
+						EntityId: inputMsgID.String(),
 					},
 					{
 						Entity:   protocol.EntityMessage,
 						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(outputMsg.ID.String()),
+						EntityId: outputMsg.ID.String(),
 					},
 				},
 			},
@@ -151,7 +151,7 @@ func publishOutputOnly(ctx context.Context, in publishOutputOnlyInput) error {
 	}
 
 	outputToolCall := protocol.ToolCall{
-		Id:       protocol.UUID(callID),
+		Id:       callID,
 		ToolName: in.ToolName,
 		Input:    in.ArgumentsInJSON,
 		Output:   &in.Output,
@@ -185,7 +185,7 @@ func publishOutputOnly(ctx context.Context, in publishOutputOnlyInput) error {
 					{
 						Entity:   protocol.EntityMessage,
 						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(outputMsg.ID.String()),
+						EntityId: outputMsg.ID.String(),
 					},
 				},
 			},

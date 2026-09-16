@@ -247,7 +247,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 				}
 			}
 			tc := protocol.ToolCall{
-				Id:       protocol.UUID(state.ToolCallID),
+				Id:       state.ToolCallID,
 				ToolName: dbRtc.ToolName,
 				Output:   &toolOutput,
 				Status:   &dbRtc.Status,
@@ -287,7 +287,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 
 	// 4. Build toolcall_input ContentData.
 	toolCallData := protocol.ToolCall{
-		Id:       protocol.UUID(callID),
+		Id:       callID,
 		ToolName: toolName,
 		Input:    argumentsInJSON,
 	}
@@ -345,7 +345,7 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 			items[0].Items = append(items[0].Items, protocol.UpdateItem{
 				Entity:   protocol.EntityMessage,
 				Action:   protocol.ActionCreated,
-				EntityId: protocol.UUID(msgID.String()),
+				EntityId: msgID.String(),
 			})
 		}
 		return items, nil

@@ -398,7 +398,7 @@ func (h *OAuth2Handler) issueTokenPair(ctx context.Context, userID uuid.UUID, de
 		AccessToken:  accessToken,
 		RefreshToken: rtPlain,
 		ExpiresIn:    int64(h.signer.AccessTTL().Seconds()),
-		UserId:       protocol.UUID(userID.String()),
+		UserId:       userID.String(),
 	}, nil
 }
 

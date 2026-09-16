@@ -211,11 +211,11 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 
 	return &protocol.SendMessageResponse{
 		Result: protocol.SendMessageResult{
-			SessionId: protocol.UUID(session.ID.String()),
+			SessionId: session.ID.String(),
 			// TurnId is empty — the turn is created asynchronously by
 			// turn-agent after the worker picks up the work item.
-			TurnId:    protocol.UUID(""),
-			MessageId: protocol.UUID(createdMessage.ID.String()),
+			TurnId:    "",
+			MessageId: createdMessage.ID.String(),
 		},
 		Updates: updates.DerefUpdates(pushUpdates),
 	}, nil

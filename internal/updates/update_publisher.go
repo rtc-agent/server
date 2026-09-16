@@ -283,7 +283,7 @@ func (u *UpdatePublisher) publishUpdates(ctx context.Context, items []UpdatePubl
 			}
 			logger.Debug(ctx, "[UpdatePublisher] published update",
 				zap.String("channel", item.Channel),
-				zap.Uint32("offset", uint32(update.Offset)),
+				zap.Uint32("offset", update.Offset),
 				zap.Int("items", len(update.Items)))
 		}
 	}

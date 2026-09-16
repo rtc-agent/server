@@ -55,9 +55,9 @@ func ToProtocolTurn(t *Turn) protocol.Turn {
 		return protocol.Turn{}
 	}
 	return protocol.Turn{
-		Id:           protocol.UUID(t.ID.String()),
+		Id:           t.ID.String(),
 		ClientId:     StrPtr(t.ClientID),
-		SessionId:    protocol.UUID(t.SessionID.String()),
+		SessionId:    t.SessionID.String(),
 		Status:       protocol.TurnStatus(t.Status),
 		CreatedAt:    t.CreatedAt,
 		StartedAt:    t.StartedAt,

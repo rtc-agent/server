@@ -102,7 +102,7 @@ func (h *helpers) insertErrorMessage(
 			allItems = append(allItems, protocol.UpdateItem{
 				Entity:   protocol.EntityMessage,
 				Action:   protocol.ActionCreated,
-				EntityId: protocol.UUID(msg.ID.String()),
+				EntityId: msg.ID.String(),
 			})
 		}
 		return []updates.UpdatePublishItem{{Channel: ch, Items: allItems}}, nil

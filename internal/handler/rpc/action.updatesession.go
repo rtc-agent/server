@@ -29,7 +29,7 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 
 	logger.Info(ctx, "[UpdateSession]",
 		zap.String("user", userID.String()),
-		zap.String("session", string(req.SessionId)))
+		zap.String("session", req.SessionId))
 
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, sessionUUID, creator); err != nil {
 		return nil, h.ownershipError(ctx, err)

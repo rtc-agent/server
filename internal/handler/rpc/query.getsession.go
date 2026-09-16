@@ -28,7 +28,7 @@ func (h *Handler) GetSession(ctx context.Context, req *protocol.GetSessionReques
 
 	logger.Info(ctx, "[GetSession]",
 		zap.String("user", userID.String()),
-		zap.String("session", string(req.SessionId)))
+		zap.String("session", req.SessionId))
 	return &protocol.GetSessionResponse{
 		Item: model.ToProtocolSession(session),
 	}, nil

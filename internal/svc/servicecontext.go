@@ -16,7 +16,7 @@ import (
 	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/memory"
-	"github.com/rtc-agent/server/pkg/turn-agent"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // ServiceContext 服务上下文，用于依赖注入

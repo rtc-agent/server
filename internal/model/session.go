@@ -155,7 +155,7 @@ func ToProtocolSession(m *Session) protocol.Session {
 	}
 	var parentServerSessionID *protocol.UUID
 	if m.ParentServerSessionID != uuid.Nil {
-		pid := protocol.UUID(m.ParentServerSessionID.String())
+		pid := m.ParentServerSessionID.String()
 		parentServerSessionID = &pid
 	}
 	var rootClientSessionID *string
@@ -164,16 +164,16 @@ func ToProtocolSession(m *Session) protocol.Session {
 	}
 	var rootServerSessionID *protocol.UUID
 	if m.RootServerSessionID != uuid.Nil {
-		rid := protocol.UUID(m.RootServerSessionID.String())
+		rid := m.RootServerSessionID.String()
 		rootServerSessionID = &rid
 	}
 	var subAgentParentMessageID *protocol.UUID
 	if m.SubAgentParentMessageID != uuid.Nil {
-		mid := protocol.UUID(m.SubAgentParentMessageID.String())
+		mid := m.SubAgentParentMessageID.String()
 		subAgentParentMessageID = &mid
 	}
 	return protocol.Session{
-		Id:                      protocol.UUID(m.ID.String()),
+		Id:                      m.ID.String(),
 		ClientId:                StrPtr(m.ClientID),
 		OwnerKind:               m.OwnerKind,
 		OwnerRefId:              m.OwnerRefID,

@@ -103,7 +103,7 @@ func collectEntityRefs(uus []*model.UserUpdate, resolvers map[string]EntityResol
 
 	for _, uu := range uus {
 		for _, item := range uu.Items {
-			entityUUID, parseErr := uuid.Parse(string(item.EntityId))
+			entityUUID, parseErr := uuid.Parse(item.EntityId)
 			if parseErr != nil {
 				return nil, nil, fmt.Errorf("parse entity ID %s: %w", item.EntityId, parseErr)
 			}
@@ -132,7 +132,7 @@ func buildUpdates(uus []*model.UserUpdate, allRefs []entityRef, resolved map[str
 
 	for _, uu := range uus {
 		update := &protocol.Update{
-			Id:     protocol.UUID(uu.ID.String()),
+			Id:     uu.ID.String(),
 			Items:  make([]protocol.UpdateItem, len(uu.Items)),
 			Offset: uu.Offset,
 		}

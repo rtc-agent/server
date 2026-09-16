@@ -14,8 +14,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
-	"github.com/rtc-agent/server/internal/handler/http"
-	"github.com/rtc-agent/server/internal/handler/rpc"
+	httphandler "github.com/rtc-agent/server/internal/handler/http"
+	rpchandler "github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/model"

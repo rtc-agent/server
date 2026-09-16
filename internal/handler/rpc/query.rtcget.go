@@ -40,7 +40,7 @@ func (h *Handler) RtcGet(ctx context.Context, req *protocol.RtcGetRequest) (*pro
 
 	logger.Info(ctx, "[RtcGet]",
 		zap.String("user", userID.String()),
-		zap.String("rtc", string(req.RtcId)))
+		zap.String("rtc", req.RtcId))
 	return &protocol.RtcGetResponse{
 		Item: model.ToProtocolRtc(rtc),
 	}, nil

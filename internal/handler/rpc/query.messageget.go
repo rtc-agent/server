@@ -40,7 +40,7 @@ func (h *Handler) MessageGet(ctx context.Context, req *protocol.MessageGetReques
 
 	logger.Info(ctx, "[MessageGet]",
 		zap.String("user", userID.String()),
-		zap.String("message", string(req.MessageId)))
+		zap.String("message", req.MessageId))
 	return &protocol.MessageGetResponse{
 		Item: model.ToProtocolMessage(msg),
 	}, nil

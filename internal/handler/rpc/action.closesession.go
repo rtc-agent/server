@@ -33,7 +33,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		return nil, apiErr
 	}
 
-	logger.Info(ctx, "[CloseSession]", zap.String("user", userID.String()), zap.String("session", string(req.SessionId)))
+	logger.Info(ctx, "[CloseSession]", zap.String("user", userID.String()), zap.String("session", req.SessionId))
 
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionUUID)
 	if err != nil {

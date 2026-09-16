@@ -74,7 +74,7 @@ func (h *helpers) createAndPublishMessage(
 		return []updates.UpdatePublishItem{{
 			Channel: topicCh,
 			Items: []protocol.UpdateItem{
-				{Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: protocol.UUID(newMsg.ID.String())},
+				{Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: newMsg.ID.String()},
 			},
 		}}, nil
 	})
@@ -176,7 +176,7 @@ func (h *helpers) appendStreamChunk(
 		if _, pubErr := h.deps.UpdatePublisher.Publish(ctx, updates.UpdatePublishItem{
 			Channel: liveCh,
 			Items: []protocol.UpdateItem{
-				{Entity: protocol.EntityMessage, Action: protocol.ActionUpdated, EntityId: protocol.UUID(msgIDStr)},
+				{Entity: protocol.EntityMessage, Action: protocol.ActionUpdated, EntityId: msgIDStr},
 			},
 		}); pubErr != nil {
 			h.logger.Warn(ctx, "appendStreamChunk.live_publish_failed", map[string]any{
@@ -259,7 +259,7 @@ func (h *helpers) appendStreamChunk(
 		return []updates.UpdatePublishItem{{
 			Channel: topicCh,
 			Items: []protocol.UpdateItem{
-				{Entity: protocol.EntityMessage, Action: protocol.ActionUpdated, EntityId: protocol.UUID(msgIDStr)},
+				{Entity: protocol.EntityMessage, Action: protocol.ActionUpdated, EntityId: msgIDStr},
 			},
 		}}, nil
 	}); pubErr != nil {

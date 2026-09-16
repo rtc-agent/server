@@ -83,9 +83,9 @@ func ToProtocolMessage(m *Message) protocol.Message {
 		return protocol.Message{}
 	}
 	result := protocol.Message{
-		Id:              protocol.UUID(m.ID.String()),
+		Id:              m.ID.String(),
 		ClientId:        StrPtr(m.ClientID),
-		SessionId:       protocol.UUID(m.SessionID.String()),
+		SessionId:       m.SessionID.String(),
 		GlobalOffset:    m.GlobalOffset,
 		TurnOffset:      m.TurnOffset,
 		Role:            protocol.MessageRole(m.Role),
@@ -101,11 +101,11 @@ func ToProtocolMessage(m *Message) protocol.Message {
 		result.Content = &content
 	}
 	if m.TurnID != nil {
-		tid := protocol.UUID(m.TurnID.String())
+		tid := m.TurnID.String()
 		result.TurnId = &tid
 	}
 	if m.ParentMessageID != nil {
-		pid := protocol.UUID(m.ParentMessageID.String())
+		pid := m.ParentMessageID.String()
 		result.ParentMessageId = &pid
 	}
 	result.InputTokens = m.InputTokens

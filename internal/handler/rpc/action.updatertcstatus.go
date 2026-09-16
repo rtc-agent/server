@@ -31,7 +31,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 
 	logger.Info(ctx, "[UpdateRtcStatus]",
 		zap.String("user", userID.String()),
-		zap.String("rtc", string(req.RtcId)),
+		zap.String("rtc", req.RtcId),
 		zap.String("status", string(req.Status)))
 
 	// 校验目标状态合法性

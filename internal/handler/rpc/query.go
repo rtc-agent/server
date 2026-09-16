@@ -16,7 +16,7 @@ import (
 // parseUUID 将 protocol.UUID 转换为 uuid.UUID。
 // protocol.UUID 底层为 string，线上保证合法；解析失败时返回 invalid_argument APIError。
 func parseUUID(id protocol.UUID, fieldName string) (uuid.UUID, *APIError) {
-	parsed, err := uuid.Parse(string(id))
+	parsed, err := uuid.Parse(id)
 	if err != nil {
 		return uuid.Nil, &APIError{
 			Code:    "invalid_argument",

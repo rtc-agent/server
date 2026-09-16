@@ -100,7 +100,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	now := time.Now()
 	newSession := &model.Session{
 		ID:          uuid.Must(uuid.NewV7()),
-		ClientID:    string(req.NewClientSessionId),
+		ClientID:    req.NewClientSessionId,
 		OwnerKind:   string(creator.Kind()),
 		OwnerRefID:  creator.ReferenceID(),
 		DeviceID:    deviceID,
@@ -233,15 +233,15 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	// 11. 构建响应
 	messageIDs := make([]protocol.UUID, len(createdMessages))
 	for i, msg := range createdMessages {
-		messageIDs[i] = protocol.UUID(msg.ID.String())
+		messageIDs[i] = msg.ID.String()
 	}
 
 	return &protocol.ForkSessionResponse{
 		Result: protocol.ForkSessionResult{
-			SessionId: protocol.UUID(newSession.ID.String()),
+			SessionId: newSession.ID.String(),
 			// TurnId is empty — the turn is created asynchronously by
 			// turn-agent when the worker picks up the work item.
-			TurnId:     protocol.UUID(""),
+			TurnId:     "",
 			MessageIds: messageIDs,
 		},
 		Updates: updates.DerefUpdates(pushUpdates),

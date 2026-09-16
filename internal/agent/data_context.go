@@ -263,7 +263,7 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 		return []*turnagent.Message{{
 			Role: string(schema.Assistant),
 			ToolCalls: []turnagent.ToolCall{{
-				ID:        string(toolCall.Id),
+				ID:        toolCall.Id,
 				Name:      toolCall.ToolName,
 				Arguments: toolCall.Input,
 			}},
@@ -280,7 +280,7 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 			Role:       string(schema.Tool),
 			Content:    content,
 			ToolName:   toolCall.ToolName,
-			ToolCallID: string(toolCall.Id),
+			ToolCallID: toolCall.Id,
 			CreatedAt:  msg.CreatedAt,
 		}}
 

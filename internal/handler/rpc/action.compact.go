@@ -35,7 +35,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 
 	logger.Info(ctx, "[CompactSession]",
 		zap.String("user", userID.String()),
-		zap.String("session", string(req.SessionId)))
+		zap.String("session", req.SessionId))
 
 	// 1. Session 存在性校验
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionUUID)

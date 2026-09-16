@@ -119,7 +119,7 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 					{
 						Entity:   protocol.EntityMessage,
 						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(outputMsg.ID.String()),
+						EntityId: outputMsg.ID.String(),
 					},
 				},
 			},
@@ -363,7 +363,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 					{
 						Entity:   protocol.EntityMessage,
 						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(msg.ID.String()),
+						EntityId: msg.ID.String(),
 					},
 				},
 			},
@@ -478,7 +478,7 @@ func (h *helpers) updateSubAgentInvocationStatus(ctx context.Context, messageID 
 					{
 						Entity:   protocol.EntityMessage,
 						Action:   protocol.ActionUpdated,
-						EntityId: protocol.UUID(messageID.String()),
+						EntityId: messageID.String(),
 					},
 				},
 			},

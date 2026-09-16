@@ -51,15 +51,15 @@ func BuildSendMessageUpdates(
 		sessionAction = protocol.ActionCreated
 	}
 	items := []protocol.UpdateItem{
-		{Entity: protocol.EntitySession, Action: sessionAction, EntityId: protocol.UUID(session.ID.String())},
+		{Entity: protocol.EntitySession, Action: sessionAction, EntityId: session.ID.String()},
 	}
 	if turnID != nil {
 		items = append(items, protocol.UpdateItem{
-			Entity: protocol.EntityTurn, Action: protocol.ActionCreated, EntityId: protocol.UUID(turnID.String()),
+			Entity: protocol.EntityTurn, Action: protocol.ActionCreated, EntityId: turnID.String(),
 		})
 	}
 	items = append(items, protocol.UpdateItem{
-		Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: protocol.UUID(messageID.String()),
+		Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: messageID.String(),
 	})
 	return []updates.UpdatePublishItem{{
 		Channel: channel.UserTopic(session.OwnerRefID),
@@ -76,7 +76,7 @@ func BuildMessageUpdate(session *model.Session, messageID uuid.UUID) []updates.U
 	return []updates.UpdatePublishItem{{
 		Channel: channel.UserTopic(session.OwnerRefID),
 		Items: []protocol.UpdateItem{{
-			Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: protocol.UUID(messageID.String()),
+			Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: messageID.String(),
 		}},
 	}}
 }
@@ -90,7 +90,7 @@ func BuildSessionUpdateUpdates(session *model.Session) []updates.UpdatePublishIt
 	return []updates.UpdatePublishItem{{
 		Channel: channel.UserTopic(session.OwnerRefID),
 		Items: []protocol.UpdateItem{{
-			Entity: protocol.EntitySession, Action: protocol.ActionUpdated, EntityId: protocol.UUID(session.ID.String()),
+			Entity: protocol.EntitySession, Action: protocol.ActionUpdated, EntityId: session.ID.String(),
 		}},
 	}}
 }
@@ -109,7 +109,7 @@ func BuildTurnStopUpdates(session *model.Session, turnID uuid.UUID) []updates.Up
 	return []updates.UpdatePublishItem{{
 		Channel: channel.UserTopic(session.OwnerRefID),
 		Items: []protocol.UpdateItem{{
-			Entity: protocol.EntityTurn, Action: protocol.ActionUpdated, EntityId: protocol.UUID(turnID.String()),
+			Entity: protocol.EntityTurn, Action: protocol.ActionUpdated, EntityId: turnID.String(),
 		}},
 	}}
 }
@@ -123,7 +123,7 @@ func BuildRtcStatusUpdates(session *model.Session, rtcID uuid.UUID) []updates.Up
 	return []updates.UpdatePublishItem{{
 		Channel: channel.UserTopic(session.OwnerRefID),
 		Items: []protocol.UpdateItem{{
-			Entity: protocol.EntityRtc, Action: protocol.ActionUpdated, EntityId: protocol.UUID(rtcID.String()),
+			Entity: protocol.EntityRtc, Action: protocol.ActionUpdated, EntityId: rtcID.String(),
 		}},
 	}}
 }
@@ -143,8 +143,8 @@ func BuildOrphanTurnUpdates(session *model.Session, turnID, messageID uuid.UUID)
 	return []updates.UpdatePublishItem{{
 		Channel: channel.UserTopic(session.OwnerRefID),
 		Items: []protocol.UpdateItem{
-			{Entity: protocol.EntityTurn, Action: protocol.ActionCreated, EntityId: protocol.UUID(turnID.String())},
-			{Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: protocol.UUID(messageID.String())},
+			{Entity: protocol.EntityTurn, Action: protocol.ActionCreated, EntityId: turnID.String()},
+			{Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: messageID.String()},
 		},
 	}}
 }
@@ -160,7 +160,7 @@ func BuildTurnCreatedUpdates(session *model.Session, turnID uuid.UUID) []updates
 	return []updates.UpdatePublishItem{{
 		Channel: channel.UserTopic(session.OwnerRefID),
 		Items: []protocol.UpdateItem{{
-			Entity: protocol.EntityTurn, Action: protocol.ActionCreated, EntityId: protocol.UUID(turnID.String()),
+			Entity: protocol.EntityTurn, Action: protocol.ActionCreated, EntityId: turnID.String(),
 		}},
 	}}
 }
@@ -190,14 +190,14 @@ func BuildForkSessionUpdates(
 		return nil
 	}
 	items := []protocol.UpdateItem{
-		{Entity: protocol.EntitySession, Action: protocol.ActionCreated, EntityId: protocol.UUID(newSession.ID.String())},
+		{Entity: protocol.EntitySession, Action: protocol.ActionCreated, EntityId: newSession.ID.String()},
 	}
 	// 添加所有消息的 created update
 	for _, msg := range messages {
 		items = append(items, protocol.UpdateItem{
 			Entity:   protocol.EntityMessage,
 			Action:   protocol.ActionCreated,
-			EntityId: protocol.UUID(msg.ID.String()),
+			EntityId: msg.ID.String(),
 		})
 	}
 	return []updates.UpdatePublishItem{{

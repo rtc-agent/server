@@ -40,7 +40,7 @@ func (h *Handler) TurnGet(ctx context.Context, req *protocol.TurnGetRequest) (*p
 
 	logger.Info(ctx, "[TurnGet]",
 		zap.String("user", userID.String()),
-		zap.String("turn", string(req.TurnId)))
+		zap.String("turn", req.TurnId))
 	return &protocol.TurnGetResponse{
 		Item: model.ToProtocolTurn(turn),
 	}, nil

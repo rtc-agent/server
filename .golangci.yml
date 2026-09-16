@@ -46,7 +46,10 @@ linters:
       threshold: 100
 
     misspell:
-      locale: US
+      # Accept both British and American English. The project uses British English
+      # consistently (e.g., "cancelled", "centralised"). Setting locale to empty
+      # string accepts both variants while still catching genuine typos.
+      locale: ""
 
     revive:
       rules:

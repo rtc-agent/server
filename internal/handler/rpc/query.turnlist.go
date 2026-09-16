@@ -48,7 +48,7 @@ func (h *Handler) TurnList(ctx context.Context, req *protocol.TurnListRequest) (
 
 	logger.Info(ctx, "[TurnList]",
 		zap.String("user", userID.String()),
-		zap.String("session", string(req.SessionId)),
+		zap.String("session", req.SessionId),
 		zap.Int("count", len(items)),
 		zap.Bool("has_next", nextCursor != nil))
 	return &protocol.TurnListResponse{

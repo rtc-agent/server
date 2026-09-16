@@ -60,10 +60,10 @@ func ToProtocolRtc(r *Rtc) protocol.Rtc {
 		return protocol.Rtc{}
 	}
 	result := protocol.Rtc{
-		Id:           protocol.UUID(r.ID.String()),
+		Id:           r.ID.String(),
 		ClientId:     StrPtr(r.ClientID),
-		SessionId:    protocol.UUID(r.SessionID.String()),
-		TurnId:       protocol.UUID(r.TurnID.String()),
+		SessionId:    r.SessionID.String(),
+		TurnId:       r.TurnID.String(),
 		Offset:       r.Offset,
 		ToolName:     r.ToolName,
 		Status:       protocol.RtcStatus(r.Status),
@@ -74,11 +74,11 @@ func ToProtocolRtc(r *Rtc) protocol.Rtc {
 		DeletedAt:    r.DeletedAt,
 	}
 	if r.MessageID != uuid.Nil {
-		msgId := protocol.UUID(r.MessageID.String())
+		msgId := r.MessageID.String()
 		result.MessageId = &msgId
 	}
 	if r.OutputMessageID != nil {
-		outMsgId := protocol.UUID(r.OutputMessageID.String())
+		outMsgId := r.OutputMessageID.String()
 		result.OutputMessageId = &outMsgId
 	}
 	if r.Parameters != "" {

@@ -246,7 +246,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 	var subSessionMsgID uuid.UUID
 
 	toolCallData := protocol.ToolCall{
-		Id:       protocol.UUID(callID),
+		Id:       callID,
 		ToolName: "sub_agent",
 		Input:    argumentsInJSON,
 	}
@@ -334,12 +334,12 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 					{
 						Entity:   protocol.EntitySession,
 						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(t.session.ID.String()),
+						EntityId: t.session.ID.String(),
 					},
 					{
 						Entity:   protocol.EntityMessage,
 						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(parentMessageID.String()),
+						EntityId: parentMessageID.String(),
 					},
 				},
 			},
@@ -349,12 +349,12 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 					{
 						Entity:   protocol.EntitySession,
 						Action:   protocol.ActionUpdated,
-						EntityId: protocol.UUID(subSessionID.String()),
+						EntityId: subSessionID.String(),
 					},
 					{
 						Entity:   protocol.EntityMessage,
 						Action:   protocol.ActionCreated,
-						EntityId: protocol.UUID(subSessionMsgID.String()),
+						EntityId: subSessionMsgID.String(),
 					},
 				},
 			},

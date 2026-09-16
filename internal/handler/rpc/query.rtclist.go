@@ -48,7 +48,7 @@ func (h *Handler) RtcList(ctx context.Context, req *protocol.RtcListRequest) (*p
 
 	logger.Info(ctx, "[RtcList]",
 		zap.String("user", userID.String()),
-		zap.String("session", string(req.SessionId)),
+		zap.String("session", req.SessionId),
 		zap.Int("count", len(items)),
 		zap.Bool("has_next", nextCursor != nil))
 	return &protocol.RtcListResponse{
