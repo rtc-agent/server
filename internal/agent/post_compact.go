@@ -164,14 +164,18 @@ func (h *helpers) createPostCompactAttachments(
 
 // truncateForPostCompact applies the head-60% + tail-20% strategy, matching
 // tool_budget.go's approach.
+//
+// Uses rune-based indexing (not byte-based) to avoid splitting multi-byte
+// UTF-8 characters, which is particularly important for CJK content.
 func truncateForPostCompact(content string, maxTokens int) string {
 	maxChars := maxTokens * 4
-	if len(content) <= maxChars {
+	runes := []rune(content)
+	if len(runes) <= maxChars {
 		return content
 	}
 	headChars := int(float64(maxChars) * 0.6)
 	tailChars := int(float64(maxChars) * 0.2)
-	return content[:headChars] + postCompactTruncateMsg + content[len(content)-tailChars:]
+	return string(runes[:headChars]) + postCompactTruncateMsg + string(runes[len(runes)-tailChars:])
 }
 
 // formatPostCompactAttachment wraps a recovered file's content in a

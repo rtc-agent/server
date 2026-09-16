@@ -452,7 +452,7 @@ streamLoop:
 				stream.Close()
 				return "", nil, res.Err
 			}
-			if res.Err == io.EOF {
+			if errors.Is(res.Err, io.EOF) {
 				break streamLoop
 			}
 			return "", nil, fmt.Errorf("stream recv: %w", res.Err)

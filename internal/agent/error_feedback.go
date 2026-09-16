@@ -352,6 +352,11 @@ const (
 // for the given session. Uses Redis INCR + EXPIRE for atomic counting.
 // Returns true if allowed, false if rate limited.
 // On Redis failure, degrades to allowing all (fail-open).
+//
+// TTL is refreshed on every call (not just the first) to prevent a key from
+// persisting indefinitely if the process crashes between INCR and EXPIRE.
+// The sliding TTL also means the rate limit window naturally resets after
+// 1 hour of inactivity.
 func (h *helpers) checkErrorMessageRateLimit(ctx context.Context, sessionID uuid.UUID) bool {
 	if h.rdb == nil {
 		return true
@@ -368,17 +373,17 @@ func (h *helpers) checkErrorMessageRateLimit(ctx context.Context, sessionID uuid
 		return true
 	}
 
-	// Set TTL on first increment.
-	if count == 1 {
-		if err := h.rdb.Expire(ctx, key, errorMsgRateLimitTTL).Err(); err != nil {
-			// EXPIRE failure means the key will persist indefinitely.
-			// Log a warning for monitoring; this is rare but should be investigated.
-			h.logger.Info(ctx, "checkErrorMessageRateLimit.expire_failed", map[string]any{
-				"session_id": sessionID.String(),
-				"key":        key,
-				"error":      err.Error(),
-			})
-		}
+	// Refresh TTL on every increment.
+	// This prevents permanent key persistence if a previous EXPIRE failed
+	// (e.g., due to a process crash between INCR and EXPIRE), and ensures
+	// the rate limit window resets naturally after 1 hour of inactivity.
+	// The extra Redis round-trip is negligible compared to the safety benefit.
+	if expErr := h.rdb.Expire(ctx, key, errorMsgRateLimitTTL).Err(); expErr != nil {
+		h.logger.Info(ctx, "checkErrorMessageRateLimit.expire_failed", map[string]any{
+			"session_id": sessionID.String(),
+			"key":        key,
+			"error":      expErr.Error(),
+		})
 	}
 
 	return count <= errorMsgRateLimitPerSession
