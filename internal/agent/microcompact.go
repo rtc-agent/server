@@ -15,12 +15,13 @@ import (
 // This is a variable (not const) to allow runtime configuration if needed.
 // It lives in an internal package and is not exposed via any public API, so
 // external mutation is not a concern.
-var CompactableTools = map[string]bool{
-	"read":   true,
-	"write":  true,
-	"grep":   true,
-	"find":   true,
-	"script": true,
+// Uses map[string]struct{} — the idiomatic Go set type (zero memory per value).
+var CompactableTools = map[string]struct{}{
+	"read":   {},
+	"write":  {},
+	"grep":   {},
+	"find":   {},
+	"script": {},
 }
 
 // MCClearedMessage is the placeholder text that replaces the content of a
@@ -165,7 +166,7 @@ func collectCompactableToolCallIDs(messages []*turnagent.Message) []string {
 	for _, msg := range messages {
 		if msg.Role == turnagent.RoleAssistant {
 			for _, tc := range msg.ToolCalls {
-				if CompactableTools[tc.Name] {
+				if _, ok := CompactableTools[tc.Name]; ok {
 					ids = append(ids, tc.ID)
 				}
 			}

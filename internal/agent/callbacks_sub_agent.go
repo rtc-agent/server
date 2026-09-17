@@ -104,11 +104,12 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context
 		// Load session for event publishing.
 		session, sessErr := h.deps.SessionRepo.GetByID(txCtx, inputMsg.SessionID)
 		if sessErr != nil {
-			h.logger.Warn(ctx, "resumeParentAfterSubAgentNewToolCallOutput.load_session_failed", map[string]any{
-				"session_id": inputMsg.SessionID.String(),
-				"error":      sessErr.Error(),
-			})
-			return nil, nil
+			// Return error to rollback the transaction. Without the session we
+			// cannot determine the Centrifuge channel, and publishing the message
+			// without notifying the frontend would leave the DB and UI out of sync.
+			// The normalizer's repairToolPairing handles the resulting orphaned
+			// tool call gracefully on the next loadMessages invocation.
+			return nil, fmt.Errorf("load session for event publishing: %w", sessErr)
 		}
 
 		// Build updates for the new message.
