@@ -6,38 +6,38 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// llmPayloadLog 是独立的 LLM payload 日志记录器。
-// 当 log.llm_payload=true 时，将每次 LLM API 调用的完整请求/响应
-// 以 JSON Lines 格式写入 logs/llm-payload.log。
+// llmPayloadLog is a separate LLM payload logger.
+// When log.llm_payload=true, writes the full LLM API request/response
+// in JSON Lines format to logs/llm-payload.log.
 //
-// 与主 logger（log）分离，原因：
-//  1. LLM payload 体积大（完整 prompt/completion），会淹没常规日志
-//  2. JSON Lines 格式便于 jq / 日志分析工具处理
-//  3. 仅开发环境开启，生产环境保持零开销
+// Separated from the main logger (log) because:
+//  1. LLM payloads are large (full prompt/completion) and would overwhelm regular logs.
+//  2. JSON Lines format is easy to process with jq and log analysis tools.
+//  3. Only enabled in development; zero overhead in production.
 //
-// 日志轮转：使用 lumberjack 按大小自动切分（默认 100MB/文件，保留 3 个旧文件，
-// 最多 7 天，旧文件 gzip 压缩），避免磁盘占满。
+// Log rotation: uses lumberjack for automatic size-based splitting (default 100MB/file, keep 3 old files,
+// max 7 days, old files gzip compressed) to prevent disk exhaustion.
 var llmPayloadLog *zap.Logger
 
-// LLMPayloadConfig 控制 LLM payload 日志行为。
+// LLMPayloadConfig controls LLM payload logging behavior.
 type LLMPayloadConfig struct {
-	Enabled    bool   // 是否启用
-	FilePath   string // 日志文件路径，默认 "logs/llm-payload.log"
-	MaxSizeMB  int    // 单个文件最大 MB，默认 100
-	MaxBackups int    // 保留旧文件数，默认 3
-	MaxAgeDays int    // 保留天数，默认 7
-	Compress   bool   // 旧文件是否 gzip 压缩，默认 true
+	Enabled    bool   // Whether to enable.
+	FilePath   string // Log file path, default "logs/llm-payload.log".
+	MaxSizeMB  int    // Max MB per file, default 100.
+	MaxBackups int    // Number of old files to retain, default 3.
+	MaxAgeDays int    // Retention in days, default 7.
+	Compress   bool   // Whether to gzip compress old files, default true.
 	LogLevel   string
 }
 
-// InitLLMPayloadLogger 初始化 LLM payload 日志。
-// 仅在 cfg.Enabled=true 时创建文件输出，否则 llmPayloadLog 保持 nil。
+// InitLLMPayloadLogger initializes the LLM payload logger.
+// Only creates file output when cfg.Enabled=true; otherwise llmPayloadLog remains nil.
 func InitLLMPayloadLogger(cfg LLMPayloadConfig) {
 	if !cfg.Enabled {
 		return
 	}
 
-	// 默认值
+	// Defaults.
 	if cfg.FilePath == "" {
 		cfg.FilePath = "logs/llm-payload.log"
 	}
@@ -50,7 +50,7 @@ func InitLLMPayloadLogger(cfg LLMPayloadConfig) {
 	if cfg.MaxAgeDays <= 0 {
 		cfg.MaxAgeDays = 7
 	}
-	// Compress 默认 true（零值时设为 true）
+	// Compress defaults to true (set to true when zero value).
 	if !cfg.Compress {
 		cfg.Compress = true
 	}
@@ -58,7 +58,7 @@ func InitLLMPayloadLogger(cfg LLMPayloadConfig) {
 		cfg.LogLevel = "info"
 	}
 
-	// lumberjack 轮转 writer
+	// Lumberjack rotating writer.
 	lj := &lumberjack.Logger{
 		Filename:   cfg.FilePath,
 		MaxSize:    cfg.MaxSizeMB,
@@ -67,7 +67,7 @@ func InitLLMPayloadLogger(cfg LLMPayloadConfig) {
 		Compress:   cfg.Compress,
 	}
 
-	// JSON Lines 编码——每行一个完整 JSON 对象，便于 jq 处理
+	// JSON Lines encoding -- one complete JSON object per line, easy for jq processing.
 	encoderConfig := zapcore.EncoderConfig{
 		TimeKey:       "time",
 		LevelKey:      "level",
@@ -94,13 +94,13 @@ func InitLLMPayloadLogger(cfg LLMPayloadConfig) {
 	llmPayloadLog = zap.New(core)
 }
 
-// LLMPayload 返回 LLM payload 日志记录器。
-// 如果未启用，返回 nil——调用方应在使用前检查。
+// LLMPayload returns the LLM payload logger.
+// Returns nil if not enabled -- callers should check before use.
 func LLMPayload() *zap.Logger {
 	return llmPayloadLog
 }
 
-// SyncLLMPayload 刷新 LLM payload 日志缓冲。
+// SyncLLMPayload flushes the LLM payload log buffer.
 func SyncLLMPayload() {
 	if llmPayloadLog != nil {
 		_ = llmPayloadLog.Sync()

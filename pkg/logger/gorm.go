@@ -84,11 +84,11 @@ func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (stri
 		zap.Int64("rows", rows),
 	}
 
-	// 根据错误和耗时选择日志级别
+	// Choose log level based on error and duration.
 	if err != nil {
-		// 检查是否是 ErrRecordNotFound 且需要忽略
+		// Check if this is ErrRecordNotFound and should be ignored.
 		if l.ignoreRecordNotFound && errors.Is(err, gorm.ErrRecordNotFound) {
-			// 忽略 ErrRecordNotFound，不输出日志
+			// Ignore ErrRecordNotFound, suppress log output.
 			return
 		}
 
@@ -96,12 +96,12 @@ func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (stri
 		return
 	}
 
-	// 慢查询警告
+	// Slow query warning.
 	if l.slowThreshold > 0 && elapsed > l.slowThreshold {
 		Warn(ctx, "[gorm] Slow query", fields...)
 		return
 	}
 
-	// 普通查询信息（Debug 级别）
+	// Normal query info (Debug level).
 	Debug(ctx, "[gorm] SQL executed", fields...)
 }

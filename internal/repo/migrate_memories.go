@@ -12,16 +12,17 @@ import (
 	"github.com/rtc-agent/server/pkg/memory"
 )
 
-// MigrateToUnifiedMemory 将旧表 (session_memories + user_memories) 数据迁移到统一 memories 表。
-// 该函数是幂等的——应在空的新表上运行，或仅在确认无重复后调用。
-// 旧表不会被删除，以便回滚。
+// MigrateToUnifiedMemory migrates data from the legacy tables (session_memories
+// and user_memories) into the unified memories table. This function is
+// idempotent — it should run on an empty new table, or only after confirming
+// there are no duplicates. The legacy tables are not dropped, allowing rollback.
 func MigrateToUnifiedMemory(ctx context.Context, db *gorm.DB) error {
-	// 迁移 session_memories
+	// Migrate session_memories.
 	if err := migrateSessionMemories(ctx, db); err != nil {
 		return fmt.Errorf("migrate session_memories: %w", err)
 	}
 
-	// 迁移 user_memories
+	// Migrate user_memories.
 	if err := migrateUserMemories(ctx, db); err != nil {
 		return fmt.Errorf("migrate user_memories: %w", err)
 	}
@@ -29,27 +30,27 @@ func MigrateToUnifiedMemory(ctx context.Context, db *gorm.DB) error {
 	return nil
 }
 
-// ─── SessionMemory 迁移 ───
+// ─── SessionMemory migration ───
 
 func migrateSessionMemories(ctx context.Context, db *gorm.DB) error {
 	var oldMemories []model.SessionMemory
 	if err := db.WithContext(ctx).Unscoped().Find(&oldMemories).Error; err != nil {
-		// 表不存在时跳过（首次部署可能没有旧数据）
+		// Skip if the table does not exist (first deployment may have no legacy data).
 		return nil
 	}
 
 	for _, old := range oldMemories {
-		// 检查是否已迁移（幂等性保护）
+		// Check if already migrated (idempotency guard).
 		var existing memory.Memory
 		err := db.WithContext(ctx).Unscoped().First(&existing, "id = ?", old.ID).Error
 		if err == nil {
-			continue // 已存在，跳过
+			continue // Already exists, skip.
 		}
 		if err != gorm.ErrRecordNotFound {
 			return fmt.Errorf("check existing memory %s: %w", old.ID, err)
 		}
 
-		// 转换 Metadata: JSONB[any] (JSON array) -> JSONBString (JSON object or raw)
+		// Convert Metadata: JSONB[any] (JSON array) -> JSONBString (JSON object or raw).
 		var metadataStr memory.JSONBString
 		if len(old.Metadata) > 0 {
 			b, err := json.Marshal([]any(old.Metadata))
@@ -58,7 +59,7 @@ func migrateSessionMemories(ctx context.Context, db *gorm.DB) error {
 			}
 		}
 
-		// TokenCount: *int -> int
+		// TokenCount: *int -> int.
 		tokenCount := 0
 		if old.TokenCount != nil {
 			tokenCount = *old.TokenCount
@@ -73,12 +74,12 @@ func migrateSessionMemories(ctx context.Context, db *gorm.DB) error {
 			Content:    old.Content,
 			Metadata:   metadataStr,
 			TokenCount: tokenCount,
-			Timestamp:  old.CreatedAt, // 无独立 timestamp，使用 CreatedAt
+			Timestamp:  old.CreatedAt, // no separate timestamp field, use CreatedAt
 			CreatedAt:  old.CreatedAt,
 			UpdatedAt:  old.UpdatedAt,
 		}
 
-		// DeletedAt: *time.Time -> gorm.DeletedAt
+		// DeletedAt: *time.Time -> gorm.DeletedAt.
 		if old.DeletedAt != nil {
 			newMem.DeletedAt = gorm.DeletedAt{Time: *old.DeletedAt, Valid: true}
 		}
@@ -91,37 +92,37 @@ func migrateSessionMemories(ctx context.Context, db *gorm.DB) error {
 	return nil
 }
 
-// ─── UserMemory 迁移 ───
+// ─── UserMemory migration ───
 
 func migrateUserMemories(ctx context.Context, db *gorm.DB) error {
 	var oldMemories []model.UserMemory
 	if err := db.WithContext(ctx).Unscoped().Find(&oldMemories).Error; err != nil {
-		// 表不存在时跳过
+		// Skip if the table does not exist.
 		return nil
 	}
 
 	for _, old := range oldMemories {
-		// 检查是否已迁移（幂等性保护）
+		// Check if already migrated (idempotency guard).
 		var existing memory.Memory
 		err := db.WithContext(ctx).Unscoped().First(&existing, "id = ?", old.ID).Error
 		if err == nil {
-			continue // 已存在，跳过
+			continue // Already exists, skip.
 		}
 		if err != gorm.ErrRecordNotFound {
 			return fmt.Errorf("check existing memory %s: %w", old.ID, err)
 		}
 
-		// Tags: model.StringArray (JSONB[string]) -> memory.StringArray (JSONB []string)
-		// 底层都是 JSON 数组，直接转换
+		// Tags: model.StringArray (JSONB[string]) -> memory.StringArray (JSONB []string).
+		// Both are JSON arrays under the hood, so convert directly.
 		tags := memory.StringArray(old.Tags)
 
-		// 构建 OKF 兼容的 Metadata
+		// Build OKF-compatible Metadata.
 		metadataStr := buildUserMemoryMetadata(old)
 
-		// TokenCount: 估算
+		// TokenCount: estimate.
 		tokenCount := estimateTokens(old.Content)
 
-		// Description: *string -> string
+		// Description: *string -> string.
 		description := ""
 		if old.Description != nil {
 			description = *old.Description
@@ -143,7 +144,7 @@ func migrateUserMemories(ctx context.Context, db *gorm.DB) error {
 			UpdatedAt:   old.UpdatedAt,
 		}
 
-		// DeletedAt: *time.Time -> gorm.DeletedAt
+		// DeletedAt: *time.Time -> gorm.DeletedAt.
 		if old.DeletedAt != nil {
 			newMem.DeletedAt = gorm.DeletedAt{Time: *old.DeletedAt, Valid: true}
 		}
@@ -156,9 +157,10 @@ func migrateUserMemories(ctx context.Context, db *gorm.DB) error {
 	return nil
 }
 
-// ─── 辅助函数 ───
+// ─── Helper functions ───
 
-// buildUserMemoryMetadata 将 UserMemory 的扩展字段构建为 OKF Metadata JSONB
+// buildUserMemoryMetadata converts the extended fields of UserMemory into
+// OKF-compatible Metadata JSONB.
 func buildUserMemoryMetadata(old model.UserMemory) memory.JSONBString {
 	metadata := map[string]any{
 		"importance":   old.Importance,
@@ -182,9 +184,10 @@ func buildUserMemoryMetadata(old model.UserMemory) memory.JSONBString {
 	return memory.JSONBString(b)
 }
 
-// estimateTokens 估算文本的 token 数。
-// 按 rune 计算：非 ASCII 字符（如中文）约 1-2 token/rune，ASCII 字符约 0.25 token/rune。
-// 简单策略：非 ASCII 按 1 token/rune，ASCII 按 0.5 token/4chars，取平均值。
+// estimateTokens estimates the token count for a text string.
+// Approximation: non-ASCII characters (e.g., Chinese) are ~1-2 tokens/rune,
+// ASCII characters are ~0.25 tokens/rune. Simple strategy: non-ASCII = 2
+// tokens/rune, ASCII = 1 token/rune, then halve for the average.
 func estimateTokens(content string) int {
 	if len(content) == 0 {
 		return 0
@@ -192,10 +195,10 @@ func estimateTokens(content string) int {
 	count := 0
 	for _, r := range content {
 		if r > 127 {
-			count += 2 // 非 ASCII（中文等）约 1-2 token
+			count += 2 // non-ASCII (Chinese, etc.) ~1-2 tokens
 		} else {
 			count += 1 // ASCII
 		}
 	}
-	return count / 2 // 平均估算
+	return count / 2 // average estimate
 }
