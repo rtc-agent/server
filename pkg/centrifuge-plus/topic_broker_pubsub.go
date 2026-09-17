@@ -247,11 +247,11 @@ func (b *TopicBroker) Unsubscribe(channels ...string) error {
 			span.End()
 			continue // Not subscribed
 		}
-		client := b.pubSubClient // 保存引用，锁外使用
+		client := b.pubSubClient // Save reference for use outside the lock.
 		delete(b.subscribedChans, pubSubKey)
 		b.pubSubMu.Unlock()
 
-		// Redis 网络操作在锁外执行，避免阻塞其他 Subscribe/Unsubscribe
+		// Redis network operations execute outside the lock to avoid blocking other Subscribe/Unsubscribe.
 		if err := client.Do(ctx, client.B().Unsubscribe().Channel(pubSubKey).Build()).Error(); err != nil {
 			cancel()
 			recordError(span, err)
