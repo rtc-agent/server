@@ -252,7 +252,14 @@ func (e *SessionMemoryExtractor) extractMemories(
 	// Parse tool call arguments directly (JSON schema constrained, 100% reliable).
 	tc := resp.ToolCalls[0]
 	if tc.Function.Name != "save_session_memories" {
-		return nil, fmt.Errorf("unexpected tool call: %s", tc.Function.Name)
+		// LLM called an unexpected tool (hallucination from conversation history).
+		// Log a warning and return nil (non-fatal: extraction failed, will retry later).
+		e.log(ctx, "extractor.unexpected_tool_call", map[string]any{
+			"session_id":    sessionID.String(),
+			"tool_name":     tc.Function.Name,
+			"expected_tool": "save_session_memories",
+		})
+		return nil, nil
 	}
 
 	var args struct {

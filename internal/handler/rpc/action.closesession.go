@@ -93,11 +93,14 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	// If synchronous behavior is needed in the future, this can be changed
 	// to block until Queue.CancelSession completes. The trade-off is higher
 	// API latency vs. stronger consistency guarantees on close.
-	// Add timeout to prevent goroutine leak if downstream operations hang.
-	detachedCtx, detachedCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer detachedCancel()
+	// Add timeout inside the goroutine to prevent goroutine leak if downstream
+	// operations hang. The timeout must be created inside the goroutine, not
+	// here, because defer would cancel it when the RPC handler returns.
+	detachedCtx := context.WithoutCancel(ctx)
 	logger.SafeGo("stop-active-turns", func() {
-		h.stopActiveTurns(detachedCtx, session.ID)
+		timeoutCtx, cancel := context.WithTimeout(detachedCtx, 30*time.Second)
+		defer cancel()
+		h.stopActiveTurns(timeoutCtx, session.ID)
 
 		// Cleanup CommandRegistry activated entries for this session.
 		// The CommandRegistry is a process-level singleton; its activated map

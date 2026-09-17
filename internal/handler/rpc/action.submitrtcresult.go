@@ -96,8 +96,10 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	}
 
 	if rtc.ToolName == "script" {
-		recorderCtx, recorderCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer recorderCancel()
+		// Use context.WithoutCancel because submit is async — the task may be
+		// processed by a worker long after this RPC handler returns. The worker
+		// will create its own timeout context for the DB operation.
+		recorderCtx := context.WithoutCancel(ctx)
 		h.recorder.submit(recorderCtx, rtc, req)
 	}
 
