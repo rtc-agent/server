@@ -258,8 +258,12 @@ func TestAppendPostCompactAttachments(t *testing.T) {
 	if got[0].Content != "summary" {
 		t.Errorf("first message should be preserved summary, got %q", got[0].Content)
 	}
-	if !strings.Contains(got[2].Content, "<system-reminder>") {
-		t.Errorf("last message should be attachment, got %q", got[2].Content)
+	// Attachment is inserted after the summary but before retained messages.
+	if !strings.Contains(got[1].Content, "<system-reminder>") {
+		t.Errorf("second message should be attachment, got %q", got[1].Content)
+	}
+	if got[2].Content != "continuing" {
+		t.Errorf("third message should be preserved retained message, got %q", got[2].Content)
 	}
 }
 
@@ -270,5 +274,38 @@ func TestAppendPostCompactAttachments_NoAttachments(t *testing.T) {
 	got := appendPostCompactAttachments(context.Background(), h, compressed, discarded)
 	if len(got) != 1 {
 		t.Errorf("expected original compressed unchanged, got len %d", len(got))
+	}
+}
+
+func TestAppendPostCompactAttachments_InsertAfterSystemMessages(t *testing.T) {
+	// Verify that attachments are inserted after system messages but before
+	// retained conversation messages, maintaining the Claude API invariant
+	// that system messages appear at the start.
+	compressed := []*schema.Message{
+		{Role: schema.User, Content: "summary"},
+		{Role: schema.System, Content: "system-attachment-1"},
+		{Role: schema.System, Content: "system-attachment-2"},
+		{Role: schema.User, Content: "retained-user-msg"},
+		{Role: schema.Assistant, Content: "retAssistant-msg"},
+	}
+	discarded := []*schema.Message{
+		newReadCall("tc1", "/workspace/foo.go"),
+		newToolResult("tc1", "foo content"),
+	}
+	h := &helpers{}
+	got := appendPostCompactAttachments(context.Background(), h, compressed, discarded)
+	if len(got) != 6 {
+		t.Fatalf("expected 6 messages (5 compressed + 1 attachment), got %d", len(got))
+	}
+	// Attachment should be at index 3 (after summary + 2 system messages).
+	if !strings.Contains(got[3].Content, "<system-reminder>") {
+		t.Errorf("fourth message should be attachment, got %q", got[3].Content)
+	}
+	// Retained messages should follow.
+	if got[4].Content != "retained-user-msg" {
+		t.Errorf("fifth message should be retained user message, got %q", got[4].Content)
+	}
+	if got[5].Content != "retAssistant-msg" {
+		t.Errorf("sixth message should be retained assistant message, got %q", got[5].Content)
 	}
 }

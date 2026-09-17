@@ -197,7 +197,17 @@ func formatPostCompactAttachment(path, content string) string {
 }
 
 // appendPostCompactAttachments is a convenience used by compressContext to
-// append post-compact attachments after the compressed message list.
+// insert post-compact attachments after the leading system messages but before
+// the retained conversation messages.
+//
+// The compressed message list has the structure:
+//
+//	[summaryMsg, systemMsgs_from_discarded, retainedMsgs...]
+//
+// Post-compact attachments (system-reminder messages) must be inserted right
+// after the system messages from the discarded portion, not at the end, to
+// maintain the Claude API invariant that system messages appear at the start
+// of the message array (before any user/assistant messages).
 func appendPostCompactAttachments(
 	ctx context.Context,
 	h *helpers,
@@ -208,15 +218,34 @@ func appendPostCompactAttachments(
 	if len(attachments) == 0 {
 		return compressed
 	}
+
+	// Find the insertion point: after the summary and all leading system messages.
+	// The compressed list structure is: [summaryMsg (user), systemMsgs..., retainedMsgs...]
+	// We want to insert after all system messages but before any user/assistant messages.
+	insertIdx := 0
+	for insertIdx < len(compressed) {
+		msg := compressed[insertIdx]
+		// Skip the first message (summary, user role) and any system messages.
+		if insertIdx == 0 || msg.Role == schema.System {
+			insertIdx++
+			continue
+		}
+		// Found the first non-system message after the summary.
+		break
+	}
+
+	// Insert attachments at the calculated position.
 	out := make([]*schema.Message, 0, len(compressed)+len(attachments))
-	out = append(out, compressed...)
+	out = append(out, compressed[:insertIdx]...)
 	out = append(out, attachments...)
+	out = append(out, compressed[insertIdx:]...)
 
 	if h.enableLLMLogging {
 		sessionID := getSessionIDFromContext(ctx)
 		h.logger.Info(ctx, "postCompact.attachments", map[string]any{
 			"session_id":       sessionID.String(),
 			"attachment_count": len(attachments),
+			"insert_position":  insertIdx,
 		})
 	}
 	return out
