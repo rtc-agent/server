@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"regexp"
@@ -229,6 +230,17 @@ func classifyError(err error) (category protocol.ErrorCategory, title, message s
 			false
 	}
 
+	// 4b. Stream-level EOF errors: connection dropped mid-stream.
+	// These occur when the LLM connection closes unexpectedly (e.g., server-side
+	// disconnect, proxy timeout). Classify as network (retryable) rather than
+	// falling through to the default "system error" category.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return protocol.ErrorCategoryNetwork,
+			"连接中断",
+			"与 AI 服务的连接意外断开，系统正在自动重试。",
+			true
+	}
+
 	// 5. Default — unknown system error.
 	return protocol.ErrorCategorySystem,
 		"系统错误",
@@ -257,7 +269,7 @@ type sanitizationRule struct {
 //  5. GitHub/GitLab/VCS tokens
 //  6. PEM private key blocks
 //  7. Generic password/secret parameters
-//  8. Internal IP addresses and hostnames
+//  8. Internal IP addresses and hostnames (RFC1918, loopback, link-local, .internal)
 //  9. Go stack traces
 //  10. Email addresses
 //  11. Phone numbers
@@ -279,7 +291,10 @@ var (
 	// 7. Generic password/secret parameters (case-insensitive)
 	rePassword = regexp.MustCompile(`(?i)(password|passwd|secret|api[_-]?key|token)\s*[=:]\s*\S+`)
 	// 8. Internal IPs and hostnames
-	reInternalAddr = regexp.MustCompile(`\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|[a-z0-9-]+\.internal)\b`)
+	// Includes RFC1918 private ranges, loopback (127.x.x.x, localhost),
+	// link-local (169.254.x.x — AWS IMDS at 169.254.169.254 is a common
+	// SSRF target), IPv6 loopback (::1), and .internal hostnames.
+	reInternalAddr = regexp.MustCompile(`\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3}|localhost|::1|[a-z0-9-]+\.internal)\b`)
 	// 9. Go stack trace pattern
 	reGoStackTrace = regexp.MustCompile(`goroutine \d+ \[[^\]]+\]:\n\s+[\w/.]+\.go:\d+`)
 	// 10. Email addresses

@@ -109,6 +109,10 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 		if event.Content == "" {
 			// No content in this chunk, but we need to finalize the stream
 			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", event.TokenUsage); err != nil {
+				// Clean up stream state to prevent sync.Map leaks.
+				// On this path handleStreamEnd may not be called (error aborts
+				// the stream), so we must clean up here.
+				h.streamState.remove(turnID.String())
 				return err
 			}
 		}
@@ -118,6 +122,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 		if event.ReasoningContent == "" {
 			// No reasoning content in this chunk, but we need to finalize the stream
 			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); err != nil {
+				h.streamState.remove(turnID.String())
 				return err
 			}
 		}
@@ -177,6 +182,12 @@ func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turn
 		tokenTargetKind = "thinking"
 	}
 
+	// Track whether the token target was already finalized by handleStreamChunk
+	// (via FinishReason). If so, tokens are already set and UpdateTokenUsage
+	// below can be skipped to avoid a redundant DB write.
+	tokenTargetAlreadyFinalized := (tokenTargetKind == "markdown" && state.markdownFinalized) ||
+		(tokenTargetKind == "thinking" && state.thinkingFinalized)
+
 	// Finalize thinking if pending.
 	if state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
 		// When thinking is the token target (no markdown exists), pass tokenUsage
@@ -200,16 +211,11 @@ func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turn
 	}
 
 	// If the token target was already finalized (by handleStreamChunk via FinishReason),
-	// update its token usage from the aggregated data. This is defense-in-depth:
-	// handleStreamChunk sets tokens from the final chunk, while handleStreamEnd uses
-	// the max-of-all-chunks aggregation. Both produce identical values (due to
-	// MergeMaxTokenUsage accumulating across chunks), so this is a redundant DB write
-	// that ensures correctness if the aggregation logic ever diverges. The call is
-	// idempotent — setting the same values twice is safe.
-	//
-	// This also covers thinking-only messages (intermediate ChatModel calls) that were
-	// just finalized above — UpdateTokenUsage is idempotent, so a redundant call is safe.
-	if tokenTargetID != uuid.Nil && event.TokenUsage != nil {
+	// its tokens are already set in the DB. Skip the UpdateTokenUsage call to avoid
+	// a redundant DB write. Both finalizeStreamMessage (called above or by
+	// handleStreamChunk) and UpdateTokenUsage set the same token values (due to
+	// MergeMaxTokenUsage accumulating across chunks), so the result is identical.
+	if tokenTargetID != uuid.Nil && event.TokenUsage != nil && !tokenTargetAlreadyFinalized {
 		h.logger.Info(ctx, "handleStreamEnd.update_token_usage", map[string]any{
 			"session_id":       sessionID.String(),
 			"turn_id":          turnID.String(),

@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"go.uber.org/zap"
@@ -95,7 +94,13 @@ func (s *Server) handleClosedSessionTurn(ctx context.Context, turn *model.Turn, 
 }
 
 // markAndPublishStaleTurn marks a stale turn as interrupted and publishes a
-// resume work item so a Worker can pick it up after restart.
+// submit work item so a Worker can pick it up after restart.
+//
+// Uses kind="submit" (not "resume") because stale turns from startup recovery
+// may not have a valid checkpoint or InterruptID (e.g., turns that were
+// "running" or "pending" when the server crashed). Submit creates a fresh
+// turn, avoiding checkpoint lookup failures. This matches the runtime scanner
+// (periodicRecoverStaleTurns) which also uses submit.
 func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, sessionID string) {
 	if turn.Status != string(model.TurnStatusInterrupted) {
 		if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusInterrupted, "server restart recovery"); err != nil {
@@ -110,27 +115,17 @@ func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, 
 		return
 	}
 
-	payloadBytes, err := json.Marshal(&resumeWorkPayload{
-		Kind:        "resume",
-		SessionID:   turn.SessionID.String(),
-		InterruptID: turn.InterruptID,
-	})
-	if err != nil {
-		logger.Error(ctx, "[Server] recoverStaleTurns: marshal resume payload",
-			zap.String("turn_id", turn.ID.String()),
-			zap.Error(err))
-		return
-	}
-
-	if _, err := s.queue.Publish(ctx, sessionID, string(payloadBytes), rtcqueue.ResumeWorkPriority); err != nil {
-		logger.Error(ctx, "[Server] recoverStaleTurns: publish resume",
+	// Use submit payload (not resume) — see function docstring for rationale.
+	// Priority 100 matches ResumeWorkPriority (same as runtime scanner's submit recovery).
+	payload := string(turnagent.MarshalSubmitPayload(sessionID, 0))
+	if _, err := s.queue.Publish(ctx, sessionID, payload, 100); err != nil {
+		logger.Error(ctx, "[Server] recoverStaleTurns: publish submit",
 			zap.String("turn_id", turn.ID.String()),
 			zap.Error(err))
 	} else {
-		logger.Info(ctx, "[Server] recoverStaleTurns: published resume",
+		logger.Info(ctx, "[Server] recoverStaleTurns: published submit",
 			zap.String("turn_id", turn.ID.String()),
-			zap.String("session_id", sessionID),
-			zap.String("interrupt_id", turn.InterruptID))
+			zap.String("session_id", sessionID))
 	}
 }
 
@@ -159,6 +154,17 @@ func (s *Server) cleanupGhostWorksAndLocks(ctx context.Context, sessionIDs map[s
 	}
 
 	for _, sessionID := range sessionIDList {
+		// Check worker liveness before releasing the lock. During a rolling
+		// deployment, a new Worker may have already acquired the lock after
+		// the previous server instance crashed. Unconditionally releasing
+		// would delete that Worker's lock, causing a split-brain scenario.
+		// The runtime scanner (periodicRecoverStaleTurns) performs the same
+		// check via isWorkerAliveForSession.
+		if s.isWorkerAliveForSession(ctx, sessionID) {
+			logger.Info(ctx, "[Server] recoverStaleTurns: skip lock release — worker alive",
+				zap.String("session_id", sessionID))
+			continue
+		}
 		if err := s.queue.ReleaseSession(ctx, sessionID); err != nil {
 			logger.Warn(ctx, "[Server] recoverStaleTurns: release session lock",
 				zap.String("session_id", sessionID),

@@ -70,13 +70,28 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// types; skip those to prevent nil entries from reaching the LLM adapter
 	// (which would produce nil schema.Message entries and risk a panic).
 	var messages []*turnagent.Message
+	var droppedCount int
 	for _, msg := range dbMsgs {
 		converted := convertDBMessage(msg)
+		if len(converted) == 0 {
+			droppedCount++
+			continue
+		}
 		for _, cm := range converted {
 			if cm != nil {
 				messages = append(messages, cm)
 			}
 		}
+	}
+	// Log dropped messages for observability. Without this, data loss from
+	// malformed content is invisible — operators cannot diagnose why the LLM
+	// sees fewer messages than expected.
+	if droppedCount > 0 {
+		h.logger.Warn(ctx, "loadMessages.dropped_unparseable", map[string]any{
+			"session_id":    sid.String(),
+			"dropped_count": droppedCount,
+			"total_db_msgs": len(dbMsgs),
+		})
 	}
 
 	// Filter out meaningless thinking messages (e.g., "...\\n") from interrupt/resume.

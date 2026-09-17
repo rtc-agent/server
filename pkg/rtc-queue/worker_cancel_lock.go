@@ -32,10 +32,17 @@ func (w *Worker) setupCancelListener(
 			"session_id": work.SessionID,
 			"message":    "work was cancelled before cancel subscription was set up; triggering cancel now",
 		})
-		cancelCh <- CancelMessage{
+		// Non-blocking send: cancelCh has buffer 1, but use select to prevent
+		// a theoretical deadlock if the buffer is already full (e.g., from a
+		// concurrent safety-net 2 delivery). Mirrors the subscription handler's
+		// non-blocking pattern at lines 63-66.
+		select {
+		case cancelCh <- CancelMessage{
 			WorkID:    claim.WorkID,
 			Reason:    "cancelled_before_subscribe",
 			Timestamp: time.Now().Unix(),
+		}:
+		default:
 		}
 		adminCancelled.Store(true)
 		workCancel()
