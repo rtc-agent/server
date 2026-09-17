@@ -301,15 +301,17 @@ func (r *SessionManagerRegistry) Replace(
 		// returns nil when the old lock is still held. This is by design: we MUST wait
 		// for the old manager's cleanup to complete (via oldMgr.Done()) before creating
 		// a new manager.
+		//
+		// Release the mutex before the Redis call to avoid blocking all other sessions
+		// during a potentially slow network operation (Bug 25 fix).
+		r.mu.Unlock()
 		claim, err := queue.ClaimWithCredential(ctx, sessionID, workerID, "")
 		if err != nil {
-			r.mu.Unlock()
 			return nil, false, fmt.Errorf("turnagent: claim: %w", err)
 		}
 		if claim == nil {
 			// Lock still held by old manager. Wait for it to finish.
 			oldDone := oldMgr.Done()
-			r.mu.Unlock()
 
 			select {
 			case <-oldDone:
@@ -324,24 +326,22 @@ func (r *SessionManagerRegistry) Replace(
 			// (normal case), so this creates a new lock with a fresh credential.
 			// In the lockLost case, another worker holds the lock and this correctly
 			// fails.
-			r.mu.Lock()
-			// Double-check: another goroutine may have created a manager via GetOrCreate
-			// while we were waiting for oldDone (TOCTOU fix).
-			if existing := r.managers[sessionID]; existing != nil {
-				r.mu.Unlock()
-				return existing, false, nil
-			}
 			claim, err = queue.ClaimWithCredential(ctx, sessionID, workerID, "")
 			if err != nil {
-				r.mu.Unlock()
 				return nil, false, fmt.Errorf("turnagent: claim retry: %w", err)
 			}
 			if claim == nil {
-				r.mu.Unlock()
 				return nil, false, fmt.Errorf("turnagent: claim retry returned nil")
 			}
 		}
 		credential = claim.Credential
+
+		// Re-acquire mutex for manager registration (double-check for TOCTOU).
+		r.mu.Lock()
+		if existing := r.managers[sessionID]; existing != nil {
+			r.mu.Unlock()
+			return existing, false, nil
+		}
 	} else {
 		// Credential provided (Worker already claimed work).
 		// Wait for old manager to finish cleanup.

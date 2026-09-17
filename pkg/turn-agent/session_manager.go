@@ -82,6 +82,12 @@ type SessionTurnManager struct {
 
 	// checkpointID is the eino checkpoint key for this session.
 	checkpointID string
+
+	// resumeCancelMu protects resumeCancel, which holds the cancel function from
+	// the most recent GenResume context.WithTimeout call. doCleanup calls it to
+	// prevent timer goroutine leaks when the manager exits before the next resume.
+	resumeCancelMu sync.Mutex
+	resumeCancel   context.CancelFunc
 }
 
 // NewSessionTurnManager creates a SessionTurnManager with an existing lock credential.
@@ -205,6 +211,12 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 					"panic":      fmt.Sprintf("%v", r),
 					"stack":      string(debug.Stack()),
 				})
+				// Treat panic as lock loss to prevent split-brain: the lock TTL
+				// will expire while we can no longer renew it. Without this, the
+				// turn loop would continue running without lock-loss detection,
+				// potentially conflicting with a new worker that claims the session.
+				mgr.lockLost.Store(true)
+				mgr.loop.Stop(adk.WithSkipCheckpoint())
 			}
 		}()
 		mgr.runLockRenewal(renewCtx)
@@ -307,6 +319,13 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 		mgr.renewCancel()
 	}
 
+	// Step 2b: Cancel any pending resume context timer to prevent goroutine leak.
+	mgr.resumeCancelMu.Lock()
+	if mgr.resumeCancel != nil {
+		mgr.resumeCancel()
+	}
+	mgr.resumeCancelMu.Unlock()
+
 	// Step 3: Release the session lock — but ONLY if we still hold it.
 	// If the lock was lost (detected by runLockRenewal), another worker may have
 	// already acquired a new lock at the same Redis key. Calling ReleaseSession
@@ -348,8 +367,8 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 		// cancelled (which is what triggered cleanup). Redis operations need
 		// a live context to succeed. Mirrors the ReleaseSession pattern above.
 		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer notifyCancel() // defer ensures cancel runs even if notifyPendingWork panics
 		mgr.notifyPendingWork(notifyCtx)
-		notifyCancel()
 	}
 
 	// Step 5: Remove from registry.

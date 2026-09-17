@@ -12,14 +12,9 @@ import (
 
 // buildEinoConfig constructs the eino TurnLoopConfig for this manager.
 func (mgr *SessionTurnManager) buildEinoConfig() adk.TurnLoopConfig[TurnWorkItem, *schema.Message] {
-	// prevResumeCancel tracks the cancel function from the most recent GenResume call.
-	// Each GenResume creates a fresh context.WithTimeout; the previous one must be
-	// cancelled to release its timer resources.
-	var prevResumeCancel context.CancelFunc
-
 	return adk.TurnLoopConfig[TurnWorkItem, *schema.Message]{
 		GenInput:      mgr.genInput,
-		GenResume:     mgr.genResume(&prevResumeCancel),
+		GenResume:     mgr.genResume(),
 		PrepareAgent:  mgr.prepareAgent,
 		OnAgentEvents: mgr.onAgentEvents,
 		Store:         mgr.cfg.CheckpointStore,
@@ -95,9 +90,9 @@ func (mgr *SessionTurnManager) genInput(
 	}, nil
 }
 
-// genResume returns a GenResume callback that captures prevResumeCancel by
-// pointer so it can cancel the previous resume context on each new call.
-func (mgr *SessionTurnManager) genResume(prevResumeCancel *context.CancelFunc) func(
+// genResume returns a GenResume callback that stores the cancel function on the
+// manager so doCleanup can cancel it to prevent timer goroutine leaks.
+func (mgr *SessionTurnManager) genResume() func(
 	ctx context.Context,
 	loop *adk.TurnLoop[TurnWorkItem, *schema.Message],
 	interrupted, unhandled, newItems []TurnWorkItem,
@@ -107,18 +102,18 @@ func (mgr *SessionTurnManager) genResume(prevResumeCancel *context.CancelFunc) f
 		loop *adk.TurnLoop[TurnWorkItem, *schema.Message],
 		interrupted, unhandled, newItems []TurnWorkItem,
 	) (*adk.GenResumeResult[TurnWorkItem, *schema.Message], error) {
-		return mgr.genResumeImpl(interrupted, unhandled, newItems, prevResumeCancel)
+		return mgr.genResumeImpl(interrupted, unhandled, newItems)
 	}
 }
 
 // genResumeImpl builds the resume input for a checkpoint recovery.
 func (mgr *SessionTurnManager) genResumeImpl(
 	interrupted, unhandled, newItems []TurnWorkItem,
-	prevResumeCancel *context.CancelFunc,
 ) (*adk.GenResumeResult[TurnWorkItem, *schema.Message], error) {
 	// Cancel the previous resume context to release its timer.
-	if *prevResumeCancel != nil {
-		(*prevResumeCancel)()
+	mgr.resumeCancelMu.Lock()
+	if mgr.resumeCancel != nil {
+		mgr.resumeCancel()
 	}
 
 	var turnID string
@@ -132,7 +127,8 @@ func (mgr *SessionTurnManager) genResumeImpl(
 
 	// Create a fresh context with timeout for this resume attempt.
 	resumeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	*prevResumeCancel = cancel
+	mgr.resumeCancel = cancel
+	mgr.resumeCancelMu.Unlock()
 
 	mgr.log(resumeCtx, LogLevelInfo, "gen_resume.called", map[string]any{
 		"session_id":        mgr.sessionID,
