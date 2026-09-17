@@ -26,7 +26,7 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
-// Server HTTP + WebSocket 服务器
+// Server HTTP + WebSocket server.
 type Server struct {
 	cfg              *config.Config
 	svcCtx           *svc.ServiceContext
@@ -50,7 +50,7 @@ type Server struct {
 	metrics            *turnagent.PrometheusMetrics // Prometheus metrics (may be nil)
 }
 
-// BuildProviderClients 根据配置构造 Provider 列表
+// BuildProviderClients constructs the Provider list from config.
 func BuildProviderClients(cfg *config.Config) []*oauth.ProviderConfig {
 	var list []*oauth.ProviderConfig
 	if cfg.Providers.Mock.Enabled {
@@ -93,9 +93,9 @@ func BuildProviderClients(cfg *config.Config) []*oauth.ProviderConfig {
 	return list
 }
 
-// Start 启动服务器
+// Start starts the server.
 func (s *Server) Start() error {
-	// 启动 goroutine 指标采集（每 10s 采样 goroutine 数量与状态分布）
+	// Start goroutine metrics collection (samples goroutine count and state distribution every 10s).
 	if s.cfg.Debug.Enabled {
 		s.goroutineCancel = middleware.StartGoroutineCollector(s.cfg.Debug.GoroutineLeakThreshold)
 	}
@@ -120,7 +120,7 @@ func (s *Server) Start() error {
 		}
 	}
 
-	// 启动 rtc-queue Worker（分布式 turn 执行）
+	// Start rtc-queue Worker (distributed turn execution).
 	if logger.IsDebugMode() {
 		logger.Debug(context.Background(), "[Server] starting rtc-queue Worker...")
 	}
@@ -149,13 +149,13 @@ func (s *Server) Start() error {
 		}
 	}
 
-	// 启动 HTTP 服务器
+	// Start HTTP server.
 	mux := http.NewServeMux()
 
-	// 注册路由
+	// Register routes.
 	s.registerRoutes(mux)
 
-	// 挂载中间件（Chain 模式：第一个最外层，最后一个最接近 handler）
+	// Mount middleware (Chain mode: first is outermost, last is closest to handler).
 	isDev := s.cfg.Server.Env == "development"
 	rateLimiter := middleware.NewRateLimiter(50, 100) // 50 req/s per user, burst 100
 	handler := middleware.Chain(
@@ -180,7 +180,7 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
 }
 
-// Stop 停止服务器
+// Stop stops the server.
 func (s *Server) Stop() {
 	if logger.IsDebugMode() {
 		logger.Debug(context.Background(), "[Server] stopping...")
@@ -188,7 +188,7 @@ func (s *Server) Stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Server.ShutdownTimeout)
 	defer cancel()
 
-	// 停止 rtc-queue Worker
+	// Stop rtc-queue Worker.
 	if logger.IsDebugMode() {
 		logger.Debug(ctx, "[Server] stopping rtc-queue Worker...")
 	}
@@ -225,7 +225,7 @@ func (s *Server) Stop() {
 		s.goroutineCancel()
 	}
 
-	// 关闭 RPC Handler（停止 recorder worker）
+	// Close RPC Handler (stops recorder worker).
 	if s.rpcHandler != nil {
 		s.rpcHandler.Close()
 	}
@@ -237,19 +237,19 @@ func (s *Server) Stop() {
 		logger.Error(ctx, "broker close failed", zap.Error(err))
 	}
 
-	// 关闭 HTTP Server
+	// Close HTTP Server.
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		logger.Error(ctx, "Server shutdown error", zap.Error(err))
 	}
 }
 
-// registerRoutes 注册所有路由
+// registerRoutes registers all routes.
 func (s *Server) registerRoutes(mux *http.ServeMux) {
-	// 公开端点（无需鉴权）
+	// Public endpoints (no auth required).
 	mux.HandleFunc("GET /healthz", s.httpHandler.Healthz)
 	mux.HandleFunc("GET /readyz", s.httpHandler.Readyz)
 
-	// Prometheus 指标端点（可选 basic auth）
+	// Prometheus metrics endpoint (optional basic auth).
 	metricsHandler := promhttp.Handler()
 	if s.cfg.Metrics.User != "" && s.cfg.Metrics.Password != "" {
 		metricsHandler = basicAuth(metricsHandler, s.cfg.Metrics.User, s.cfg.Metrics.Password)
@@ -258,23 +258,23 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	}
 	mux.Handle("GET /metrics", metricsHandler)
 
-	// Debug 端点：pprof + goroutine 监控（可选 basic auth）
+	// Debug endpoints: pprof + goroutine monitoring (optional basic auth).
 	if s.cfg.Debug.Enabled {
 		s.registerDebugRoutes(mux)
 	}
 
-	// OAuth2 端点
+	// OAuth2 endpoints.
 	s.oauth2Handler.RegisterRoutes(mux)
 
-	// Interrupt 端点（前端提交 interrupt 答案）
+	// Interrupt endpoints (frontend submits interrupt answers).
 	isDevInterrupt := s.cfg.Server.Env == "development"
 	s.interruptHandler.RegisterRoutes(mux, isDevInterrupt)
 
-	// Memories 端点（Memory 导出）
+	// Memories endpoints (Memory export).
 	isDevMemories := s.cfg.Server.Env == "development"
 	s.memoriesHandler.RegisterRoutes(mux, isDevMemories)
 
-	// Centrifuge WebSocket 端点
+	// Centrifuge WebSocket endpoint.
 	wsHandler := centrifuge.NewWebsocketHandler(s.svcCtx.CentrifugeNode, centrifuge.WebsocketConfig{
 		CheckOrigin: func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
@@ -285,7 +285,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 			)
 
 			if s.cfg.Server.Env == "development" && len(s.cfg.CORS.AllowOrigins) == 0 {
-				// 仅开发模式回退：允许任意 origin
+				// Development-only fallback: allow any origin.
 				logger.Info(r.Context(), "CheckOrigin: development mode, allowing all origins")
 				return true
 			}
@@ -306,12 +306,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.Handle("/connection/websocket", wsHandler)
 }
 
-// registerDebugRoutes 注册 /debug/* 路由（pprof + goroutines）。
-// 生产环境应配置 debug.user/password 启用 basic auth 保护。
+// registerDebugRoutes registers /debug/* routes (pprof + goroutines).
+// In production, configure debug.user/password to enable basic auth protection.
 func (s *Server) registerDebugRoutes(mux *http.ServeMux) {
 	hasAuth := s.cfg.Debug.User != "" && s.cfg.Debug.Password != ""
 
-	// goroutines 端点
+	// goroutines endpoint
 	goroutinesHandler := middleware.GoroutinesHandler()
 	if hasAuth {
 		mux.Handle("GET /debug/goroutines", middleware.BasicAuth(goroutinesHandler, s.cfg.Debug.User, s.cfg.Debug.Password))
@@ -319,7 +319,7 @@ func (s *Server) registerDebugRoutes(mux *http.ServeMux) {
 		mux.Handle("GET /debug/goroutines", goroutinesHandler)
 	}
 
-	// pprof 端点
+	// pprof endpoints
 	if hasAuth {
 		mux.Handle("/debug/pprof/", middleware.PprofHandler(s.cfg.Debug.User, s.cfg.Debug.Password))
 		logger.Info(context.Background(), "[Server] debug endpoints protected with basic auth")
@@ -336,8 +336,8 @@ func (s *Server) registerDebugRoutes(mux *http.ServeMux) {
 	)
 }
 
-// NewWithDeps 创建服务器（Wire 兼容版本）。
-// 所有依赖由调用方提供，便于 Wire 注入。
+// NewWithDeps creates the server (Wire-compatible).
+// All dependencies are provided by the caller for Wire injection.
 func NewWithDeps(
 	cfg *config.Config,
 	svcCtx *svc.ServiceContext,
@@ -393,17 +393,17 @@ var staleTurnStatuses = []string{
 	string(model.TurnStatusInterrupted),
 }
 
-// resumeWorkPayload 是 recoverStaleTurns 发布的 resume 工作项 JSON 载体。
-// 使用 struct + json.Marshal 替代 fmt.Sprintf 拼接 JSON，
-// 避免字符串转义风险并保证字段类型安全。
+// resumeWorkPayload is the JSON carrier for resume work items published by
+// recoverStaleTurns. Uses struct + json.Marshal instead of fmt.Sprintf JSON
+// concatenation to avoid string escaping risks and ensure field type safety.
 type resumeWorkPayload struct {
 	Kind        string `json:"kind"`
 	SessionID   string `json:"session_id"`
 	InterruptID string `json:"interrupt_id"`
 }
 
-// basicAuth HTTP Basic Authentication 中间件。
-// 用于保护 /metrics 等内部管理端点。
+// basicAuth is an HTTP Basic Authentication middleware.
+// Used to protect internal admin endpoints such as /metrics.
 func basicAuth(next http.Handler, user, password string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()
