@@ -147,15 +147,9 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 	}
 
 	// Extract sessionID from context — try both custom key (set by createAgent)
-	// and turnagent key (set by eino GenInput).
-	sessionID := getSessionIDFromContext(ctx)
-	if sessionID == uuid.Nil {
-		if sidStr := turnagent.SessionIDFromContext(ctx); sidStr != "" {
-			if sid, err := uuid.Parse(sidStr); err == nil {
-				sessionID = sid
-			}
-		}
-	}
+	// and turnagent key (set by eino GenInput). Uses the shared helper to
+	// avoid duplicating the fallback logic.
+	sessionID := extractSessionIDFromContext(ctx)
 	if sessionID == uuid.Nil {
 		h.logger.Info(ctx, "persistCompressedMessages.skip_no_session_id", map[string]any{
 			"compressed_count": len(compressed),
@@ -314,4 +308,23 @@ func withSessionID(ctx context.Context, sessionID uuid.UUID) context.Context {
 func getSessionIDFromContext(ctx context.Context) uuid.UUID {
 	id, _ := ctx.Value(sessionIDKey{}).(uuid.UUID)
 	return id
+}
+
+// extractSessionIDFromContext tries both the custom key (set by createAgent's
+// withSessionID) and the turnagent key (set by eino GenInput's WithSessionID).
+// Returns uuid.Nil if neither key is present or the value cannot be parsed.
+//
+// The middleware may receive context from different call paths, so both keys
+// must be checked to handle all scenarios.
+func extractSessionIDFromContext(ctx context.Context) uuid.UUID {
+	sessionID := getSessionIDFromContext(ctx)
+	if sessionID != uuid.Nil {
+		return sessionID
+	}
+	if sidStr := turnagent.SessionIDFromContext(ctx); sidStr != "" {
+		if sid, err := uuid.Parse(sidStr); err == nil {
+			return sid
+		}
+	}
+	return uuid.Nil
 }

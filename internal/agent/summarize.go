@@ -329,15 +329,9 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, c
 	// The middleware may receive context from different paths:
 	//   - createAgent's withSessionID (custom key)
 	//   - eino GenInput's WithSessionID (turnagent key)
-	// Try both to handle all call paths.
-	sessionID := getSessionIDFromContext(ctx)
-	if sessionID == uuid.Nil {
-		if sidStr := turnagent.SessionIDFromContext(ctx); sidStr != "" {
-			if sid, err := uuid.Parse(sidStr); err == nil {
-				sessionID = sid
-			}
-		}
-	}
+	// Try both to handle all call paths. Uses the shared helper to
+	// avoid duplicating the fallback logic (see extractSessionIDFromContext).
+	sessionID := extractSessionIDFromContext(ctx)
 
 	summary, summaryMsgID, summaryFinalized, sessionMemoryUsed, err := h.runCompressionSummary(ctx, msgs, retentionIndex, sessionID, customInstruction)
 	if err != nil {
