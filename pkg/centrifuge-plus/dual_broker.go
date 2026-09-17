@@ -53,13 +53,13 @@ func (d *DualBroker) TopicBroker() *TopicBroker {
 }
 
 // getChannelType returns the channel type for a given channel.
-// 返回 error 而非默认值，避免未注册的频道被静默路由到 Live 导致消息丢失。
-// 当 channel type 未显式注册时，根据频道名前缀自动推断并注册（处理发布先于订阅的场景）。
+// Returns an error instead of a default value to prevent unregistered channels from being silently routed to Live, causing message loss.
+// When the channel type is not explicitly registered, infers and registers it based on channel name prefix (handles publish-before-subscribe scenarios).
 func (d *DualBroker) getChannelType(ch string) (ChannelType, error) {
 	if v, ok := d.channelTypes.Load(ch); ok {
 		return v.(ChannelType), nil
 	}
-	// Fallback: 根据前缀推断 channel type（topic: → Topic, live: → Live）
+	// Fallback: infer channel type by prefix (topic: -> Topic, live: -> Live).
 	switch {
 	case len(ch) > 6 && ch[:6] == "topic:":
 		d.channelTypes.Store(ch, Topic)

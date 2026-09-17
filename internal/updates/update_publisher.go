@@ -171,43 +171,49 @@ func NewUpdatePublisher(
 	return u
 }
 
-// SetBroker 注入 broker（解决循环依赖：broker 创建时需要 UpdatePublisher 作为 HistoryStore）
+// SetBroker injects the broker (breaks cyclic dependency: broker creation
+// needs UpdatePublisher as HistoryStore).
 func (u *UpdatePublisher) SetBroker(broker Broker) {
 	u.mu.Lock()
 	u.broker = broker
 	u.mu.Unlock()
 }
 
-// SetStreamStore 注入 StreamStoreAccessor（用于读取 streaming 状态消息的 chunks）。
-// 可选调用：未调用时 streaming 消息返回 DB 原始数据（content 可能不完整）。
+// SetStreamStore injects the StreamStoreAccessor (for reading chunks of
+// streaming-status messages). Optional: if not called, streaming messages
+// return raw DB data (content may be incomplete).
 func (u *UpdatePublisher) SetStreamStore(s StreamStoreAccessor) {
 	u.mu.Lock()
 	u.streamStore = s
 	u.mu.Unlock()
 }
 
-// SetCompressionThreshold 设置压缩触发阈值（contextTokensLimit - autoCompactBufferTokens）。
-// 用于计算 Token 预估字段（compression_progress, rounds_until_compression, estimated_next_round_tokens）。
+// SetCompressionThreshold sets the compression trigger threshold
+// (contextTokensLimit - autoCompactBufferTokens). Used for computing
+// token estimate fields (compression_progress, rounds_until_compression,
+// estimated_next_round_tokens).
 func (u *UpdatePublisher) SetCompressionThreshold(threshold int64) {
 	u.compressionThreshold.Store(threshold)
 }
 
-// UpdatePublishItem 一条更新事件，描述一批实体变化
+// UpdatePublishItem represents a single update event describing a batch of entity changes.
 type UpdatePublishItem struct {
 	Channel string
 	Items   []protocol.UpdateItem
 }
 
-// ========== 两阶段发布（推荐） ==========
+// ========== Two-phase publish (recommended) ==========
 
-// Save 在事务内保存 UserUpdate 记录（生成 offset + 写入 DB）。
-// 调用方负责管理事务：Begin → WithTx(ctx) → Save → Commit。
+// Save persists UserUpdate records within a transaction (generates offset +
+// writes to DB). The caller manages the transaction:
+// Begin -> WithTx(ctx) -> Save -> Commit.
 func (u *UpdatePublisher) Save(ctx context.Context, items ...UpdatePublishItem) ([]*model.UserUpdate, error) {
 	return u.save(ctx, items...)
 }
 
-// Push 将已保存的 UserUpdate 转换成富内容并推送到 Centrifuge。
-// 应在事务提交之后调用，确保订阅者查询时能看到已提交的数据。
+// Push converts saved UserUpdate records into rich content and pushes them
+// to Centrifuge. Should be called after the transaction commits, so that
+// subscribers can see the committed data when querying.
 func (u *UpdatePublisher) Push(ctx context.Context, items []UpdatePublishItem, savedUpdates []*model.UserUpdate) ([]*protocol.Update, error) {
 	pushUpdates, err := u.convertUpdates(ctx, savedUpdates)
 	if err != nil {
@@ -216,13 +222,15 @@ func (u *UpdatePublisher) Push(ctx context.Context, items []UpdatePublishItem, s
 	return u.publishUpdates(ctx, items, pushUpdates)
 }
 
-// RunAndPublish 在事务内执行 fn，收集要发布的 UpdatePublishItem，
-// 提交后统一推送到 Centrifuge。fn 内的所有 DB 写入应使用传入的 txCtx。
+// RunAndPublish executes fn within a transaction, collects the
+// UpdatePublishItems to publish, then pushes them to Centrifuge after
+// commit. All DB writes within fn should use the provided txCtx.
 //
-// 流程：Begin tx → fn(txCtx) 返回 items → save(items) → commit → push。
-// 任何一步失败都会回滚事务并返回错误；commit 成功后 push 失败返回
-// ErrPushAfterCommit 包装的错误，调用方通过 errors.Is 检测后可安全忽略
-// （数据已持久化，客户端将通过重连同步获取最新状态）。
+// Flow: Begin tx -> fn(txCtx) returns items -> save(items) -> commit -> push.
+// Any failure rolls back the transaction and returns an error. If commit
+// succeeds but push fails, the error is wrapped with ErrPushAfterCommit;
+// callers can detect it with errors.Is and safely ignore it (data is
+// persisted, and the client will sync via reconnect).
 func (u *UpdatePublisher) RunAndPublish(
 	ctx context.Context,
 	fn func(txCtx context.Context) ([]UpdatePublishItem, error),
@@ -252,7 +260,7 @@ func (u *UpdatePublisher) RunAndPublish(
 		return nil, fmt.Errorf("commit transaction: %w", err)
 	}
 
-	// 事务提交成功后推送；推送失败通过 ErrPushAfterCommit 告知调用方
+	// Push after successful commit; wrap push failure with ErrPushAfterCommit.
 	pushUpdates, pushErr := u.Push(ctx, items, saved)
 	if pushErr != nil {
 		logger.Error(ctx, "[UpdatePublisher] push failed (data already committed)", zap.Error(pushErr))
@@ -261,7 +269,8 @@ func (u *UpdatePublisher) RunAndPublish(
 	return pushUpdates, nil
 }
 
-// publishUpdates 把已转好的 []*protocol.Update 按 items 顺序发布到对应频道。
+// publishUpdates publishes the converted []*protocol.Update to the
+// corresponding channels in items order.
 func (u *UpdatePublisher) publishUpdates(ctx context.Context, items []UpdatePublishItem, pushUpdates []*protocol.Update) ([]*protocol.Update, error) {
 	u.mu.RLock()
 	broker := u.broker
@@ -298,9 +307,9 @@ func (u *UpdatePublisher) publishUpdates(ctx context.Context, items []UpdatePubl
 	return pushUpdates, nil
 }
 
-// ========== 一体化发布（兼容旧调用） ==========
+// ========== Single-shot publish (legacy compatibility) ==========
 
-// Publish 发布更新事件（事务外调用）。
+// Publish publishes update events (called outside a transaction).
 func (u *UpdatePublisher) Publish(ctx context.Context, items ...UpdatePublishItem) ([]*protocol.Update, error) {
 	topicItems, liveItems := routePublishItems(items)
 
