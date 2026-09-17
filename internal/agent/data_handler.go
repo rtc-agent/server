@@ -86,6 +86,11 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	// exclusive phases).
 	if event.Content != "" && state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
 		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); err != nil {
+			// Clean up stream state to prevent sync.Map leaks.
+			// On this path handleStreamEnd may not be called (error aborts
+			// the stream), so we must clean up here to avoid orphaned entries.
+			// Mirrors the cleanup at lines 79, 115, 125 in the same function.
+			h.streamState.remove(turnID.String())
 			return err
 		}
 		state.thinkingFinalized = true
