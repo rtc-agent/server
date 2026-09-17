@@ -141,7 +141,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	}()
 
 	sub := w.q.SubscribeNew(ctx)
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 	ch := sub.Channel()
 
 	for {
@@ -353,7 +353,10 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 			// from being released and leave the session locked until TTL expires.
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer releaseCancel()
-			w.q.ReleaseSession(releaseCtx, sessionID)
+			if err := w.q.ReleaseSession(releaseCtx, sessionID); err != nil {
+				w.logError("worker.release_session_failed",
+					"session", sessionID, "error", err.Error())
+			}
 			return
 		}
 		if nextClaim == nil {
@@ -364,7 +367,10 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 			w.log("worker.queue_empty_releasing_lock", map[string]any{
 				"session_id": sessionID,
 			})
-			w.q.ReleaseSession(releaseCtx, sessionID)
+			if err := w.q.ReleaseSession(releaseCtx, sessionID); err != nil {
+				w.logError("worker.release_session_failed",
+					"session", sessionID, "error", err.Error())
+			}
 			return
 		}
 
@@ -426,14 +432,49 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	workCtx, workCancel := context.WithCancel(ctx)
 	defer workCancel()
 
-	// Safety-net: check if the work was already cancelled (e.g. by CancelSession)
-	// before we subscribed to cancel notifications. The cancel Pub/Sub message
-	// may have been lost if CancelSession published before our SubscribeCancel.
-	// The cancelSessionActiveScript persists the cancelled status to the work hash,
-	// so we can detect it here. If cancelled, trigger the cancel immediately.
-	//
-	// NOTE: workCtx is already created (line above). We send to cancelCh, set
-	// adminCancelled, and call workCancel() to abort OnWork promptly.
+	// Safety-net check + cancel subscription setup (extracted for complexity).
+	w.setupCancelListener(workCtx, claim, work, cancelCh, &adminCancelled, workCancel)
+
+	// Lock renewal goroutine (extracted for complexity).
+	lockLost := w.startLockRenewal(workCtx, claim, holdLock, credential, workCancel)
+	defer close(lockLost.done)
+
+	// call the user's callback
+	w.log("worker.calling_onwork", map[string]any{
+		"work_id":    work.ID,
+		"session_id": work.SessionID,
+	})
+	err = w.cfg.OnWork(workCtx, work, cancelCh)
+	onworkFields := map[string]any{
+		"work_id":    work.ID,
+		"session_id": work.SessionID,
+	}
+	if err != nil {
+		onworkFields["error"] = err.Error()
+	}
+	w.log("worker.onwork_returned", onworkFields)
+
+	// Handle completion (extracted for complexity).
+	w.handleWorkCompletion(claim, err, holdLock, lockLost.lost, &adminCancelled)
+}
+
+// lockRenewalState tracks whether the lock has been lost during work processing.
+type lockRenewalState struct {
+	lost *atomic.Bool
+	done chan struct{}
+}
+
+// setupCancelListener configures cancel notification subscription with
+// dual safety-net checks to prevent missed cancel signals.
+func (w *Worker) setupCancelListener(
+	workCtx context.Context,
+	claim *ClaimResult,
+	work *Work,
+	cancelCh chan CancelMessage,
+	adminCancelled *atomic.Bool,
+	workCancel context.CancelFunc,
+) {
+	// Safety-net 1: check if work was already cancelled before subscribing.
 	if work.Status == StatusCancelled {
 		w.log("worker.cancelled_before_subscribe", map[string]any{
 			"work_id":    claim.WorkID,
@@ -449,16 +490,12 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 		workCancel()
 	}
 
-	// subscribe to cancel notifications
-	//
-	// IMPORTANT: If the safety-net check above already triggered the cancel
-	// (work.Status == StatusCancelled), workCtx is already cancelled. The
-	// SubscribeCancel call may return a subscription that's already closed
-	// or won't deliver messages. This is fine — the cancel message is already
-	// in cancelCh and adminCancelled is already set. The cancel listener
-	// goroutine will simply exit quickly because workCtx is done.
+	// Subscribe to cancel notifications.
+	// If safety-net 1 already triggered cancel, workCtx is already cancelled.
+	// SubscribeCancel returns a subscription that won't deliver messages, but
+	// the cancel is already in cancelCh and adminCancelled is already set.
 	cancelSub := w.q.SubscribeCancel(workCtx, claim.SessionID)
-	defer cancelSub.Close()
+	defer func() { _ = cancelSub.Close() }()
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -477,19 +514,14 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 				default:
 				}
 				adminCancelled.Store(true)
-				workCancel() // abort OnWork
+				workCancel()
 				return
 			}
 		}
 	}()
 
-	// Second safety-net: re-check work status after subscribing.
-	// This covers the race window where CancelSession runs AFTER our first
-	// LoadWork (which returned "processing") but BEFORE our SubscribeCancel.
-	// In that case, the Pub/Sub message was silently lost because we had no
-	// subscriber yet. By re-reading the work hash, we detect the cancelled
-	// status that cancelSessionActiveScript persisted and trigger the cancel
-	// ourselves — closing the gap that Pub/Sub alone cannot cover.
+	// Safety-net 2: re-check after subscribing to cover the race window
+	// where CancelSession runs between LoadWork and SubscribeCancel.
 	if !adminCancelled.Load() {
 		recheck, recheckErr := w.q.LoadWork(workCtx, claim.WorkID)
 		if recheckErr == nil && recheck != nil && recheck.Status == StatusCancelled {
@@ -507,14 +539,24 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 			workCancel()
 		}
 	}
+}
 
-	// lock renewal ticker — tracks whether we still own the lock.
-	// Uses a consecutive failure counter to tolerate transient Redis errors
-	// (network blips, connection pool exhaustion) while still detecting genuine
-	// lock loss promptly. Matches SessionTurnManager.runLockRenewal behavior.
-	var lockLost atomic.Bool
+// startLockRenewal launches the background lock renewal goroutine.
+// Returns a state struct with a lost flag and done channel for cleanup.
+func (w *Worker) startLockRenewal(
+	workCtx context.Context,
+	claim *ClaimResult,
+	holdLock bool,
+	credential string,
+	workCancel context.CancelFunc,
+) lockRenewalState {
+	var lost atomic.Bool
+	state := lockRenewalState{
+		lost: &lost,
+		done: make(chan struct{}),
+	}
 	var consecutiveRenewFailures atomic.Int64
-	renewDone := make(chan struct{})
+
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -526,7 +568,7 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 		defer t.Stop()
 		for {
 			select {
-			case <-renewDone:
+			case <-state.done:
 				return
 			case <-workCtx.Done():
 				return
@@ -534,16 +576,11 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 				var ok bool
 				var err error
 				if holdLock && credential != "" {
-					// Hold-lock mode: use hash-based lock renewal
 					ok, err = w.q.RenewLockWithCredential(workCtx, claim.SessionID, w.cfg.WorkerID, credential)
 				} else {
-					// Normal mode: use string-based lock renewal
 					ok, err = w.q.RenewLock(workCtx, claim.SessionID, w.cfg.WorkerID)
 				}
 				if err != nil {
-					// Transient Redis error: increment counter, log warning.
-					// Do NOT set lockLost immediately — tolerate up to N consecutive failures
-					// to survive network blips without triggering split-brain.
 					failures := consecutiveRenewFailures.Add(1)
 					w.log("worker.renewal_transient_error", map[string]any{
 						"session_id":           claim.SessionID,
@@ -555,43 +592,36 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 							"session", claim.SessionID,
 							"consecutive_failures", failures,
 						)
-						lockLost.Store(true)
+						state.lost.Store(true)
 						workCancel()
 						return
 					}
 					continue
 				}
-				// Redis responded successfully — reset failure counter.
 				consecutiveRenewFailures.Store(0)
 				if !ok {
-					// Definitive lock loss (TTL expired or preempted by another worker).
 					w.log("worker.lock_lost", map[string]any{
 						"session_id": claim.SessionID,
 						"work_id":    claim.WorkID,
 					})
-					lockLost.Store(true)
-					workCancel() // abort OnWork — we no longer own this work
+					state.lost.Store(true)
+					workCancel()
 					return
 				}
 			}
 		}
 	}()
-	defer close(renewDone)
+	return state
+}
 
-	// call the user's callback
-	w.log("worker.calling_onwork", map[string]any{
-		"work_id":    work.ID,
-		"session_id": work.SessionID,
-	})
-	err = w.cfg.OnWork(workCtx, work, cancelCh)
-	onworkFields := map[string]any{
-		"work_id":    work.ID,
-		"session_id": work.SessionID,
-	}
-	if err != nil {
-		onworkFields["error"] = err.Error()
-	}
-	w.log("worker.onwork_returned", onworkFields)
+// handleWorkCompletion processes the result of OnWork callback.
+func (w *Worker) handleWorkCompletion(
+	claim *ClaimResult,
+	onworkErr error,
+	holdLock bool,
+	lockLost *atomic.Bool,
+	adminCancelled *atomic.Bool,
+) {
 	if lockLost.Load() {
 		// another worker took over; do NOT call Complete (it would release
 		// someone else's lock). The lock will expire naturally.
@@ -602,25 +632,21 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 		// and released the lock. Do NOT call Complete.
 		return
 	}
-	if err != nil {
-		w.cfg.OnError(fmt.Errorf("onwork %s: %w", claim.WorkID, err))
+	if onworkErr != nil {
+		w.cfg.OnError(fmt.Errorf("onwork %s: %w", claim.WorkID, onworkErr))
 		// leave work in "processing" state for manual recovery
 		return
 	}
 
 	// success — complete the work.
-	// Use a fresh context so the Complete call succeeds even if the
-	// parent ctx was cancelled (e.g. during graceful shutdown).
 	completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer completeCancel()
 
 	if holdLock {
-		// Hold-lock mode: complete work without releasing session lock
 		if err := w.q.CompleteWork(completeCtx, claim.WorkID); err != nil {
 			w.cfg.OnError(fmt.Errorf("complete work %s: %w", claim.WorkID, err))
 		}
 	} else {
-		// Normal mode: complete work and release session lock
 		if err := w.q.Complete(completeCtx, claim.WorkID); err != nil {
 			w.cfg.OnError(fmt.Errorf("complete %s: %w", claim.WorkID, err))
 		}

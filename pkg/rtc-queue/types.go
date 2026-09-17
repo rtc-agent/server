@@ -5,11 +5,16 @@ import "time"
 // WorkStatus represents the lifecycle state of a Work item.
 type WorkStatus string
 
+// Work status constants define the valid states for a Work item.
 const (
-	StatusPending    WorkStatus = "pending"
+	// StatusPending indicates the work is enqueued and awaiting a worker.
+	StatusPending WorkStatus = "pending"
+	// StatusProcessing indicates the work has been claimed by a worker.
 	StatusProcessing WorkStatus = "processing"
-	StatusCompleted  WorkStatus = "completed"
-	StatusCancelled  WorkStatus = "cancelled"
+	// StatusCompleted indicates the work finished successfully.
+	StatusCompleted WorkStatus = "completed"
+	// StatusCancelled indicates the work was cancelled before completion.
+	StatusCancelled WorkStatus = "cancelled"
 )
 
 // Work is a single unit of enqueued labor, scoped to a Session.
@@ -47,6 +52,8 @@ const (
 	ChannelSessionCancelPrefix = "session:cancel:"
 )
 
+// ChannelSessionCancel returns the Pub/Sub channel name for cancel
+// notifications scoped to the given session.
 func ChannelSessionCancel(sessionID string) string {
 	return ChannelSessionCancelPrefix + sessionID
 }

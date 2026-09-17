@@ -24,7 +24,8 @@ var ErrAlreadyTerminal = fmt.Errorf("rtcqueue: work already completed or cancell
 
 // Queue is the entry point to the distributed queue. A Queue is safe for
 // concurrent use and is expected to be shared across an application.
-
+// It provides atomic publish, claim, complete, and cancel operations
+// backed by Redis Lua scripts.
 type Queue struct {
 	rdb *redis.Client
 }

@@ -8,24 +8,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 )
 
-func newTestWorker(t *testing.T, onWork func(context.Context, *rtcqueue.Work, <-chan rtcqueue.CancelMessage) error) (*rtcqueue.Worker, *rtcqueue.Queue, *miniredis.Miniredis) {
+func newTestWorker(t *testing.T, onWork func(context.Context, *rtcqueue.Work, <-chan rtcqueue.CancelMessage) error) (*rtcqueue.Worker, *rtcqueue.Queue) {
 	t.Helper()
-	q, mr := newTestQueue(t)
+	q, _ := newTestQueue(t)
 	cfg := rtcqueue.WorkerConfig{
 		WorkerID: "test-worker",
 		OnWork:   onWork,
 	}
 	w := rtcqueue.NewWorker(q, cfg)
-	return w, q, mr
+	return w, q
 }
 
 func TestWorkerBasic(t *testing.T) {
-	w, q, _ := newTestWorker(t, func(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) error {
+	w, q := newTestWorker(t, func(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) error {
 		return nil
 	})
 
@@ -56,7 +54,7 @@ func TestWorkerBasic(t *testing.T) {
 
 func TestWorkerCancelDuringProcessing(t *testing.T) {
 	started := make(chan struct{})
-	w, q, _ := newTestWorker(t, func(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) error {
+	w, q := newTestWorker(t, func(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) error {
 		close(started)
 		select {
 		case cm := <-cancel:
@@ -137,7 +135,7 @@ func TestWorkerProcessesMultipleSessions(t *testing.T) {
 	var processed []string
 	var mu sync.Mutex
 
-	w, q, _ := newTestWorker(t, func(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) error {
+	w, q := newTestWorker(t, func(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) error {
 		mu.Lock()
 		processed = append(processed, work.Data)
 		mu.Unlock()
@@ -223,7 +221,7 @@ func TestWorkerGracefulShutdown(t *testing.T) {
 	workStarted := make(chan struct{})
 	workDone := make(chan struct{})
 
-	w, q, _ := newTestWorker(t, func(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) error {
+	w, q := newTestWorker(t, func(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) error {
 		close(workStarted)
 		time.Sleep(200 * time.Millisecond) // simulate real work
 		close(workDone)
