@@ -154,7 +154,14 @@ func NewUpdatePublisher(
 						v.Data = strings.Join(chunks, "")
 						if tmp, marshalErr := json.Marshal(v); marshalErr != nil {
 							logger.Warn(ctx, "[UpdatePublisher] marshal content with chunks failed", zap.Error(marshalErr))
-							m.Content = strings.Join(chunks, "")
+							// Fallback: preserve ContentData structure with raw chunk
+							// text as Data. Bare strings break the protocol contract.
+							fallback := protocol.ContentData{Type: v.Type, Data: v.Data}
+							if fb, fbErr := json.Marshal(fallback); fbErr == nil {
+								m.Content = string(fb)
+							} else {
+								m.Content = strings.Join(chunks, "")
+							}
 						} else {
 							m.Content = string(tmp)
 						}
