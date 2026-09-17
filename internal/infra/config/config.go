@@ -357,10 +357,10 @@ func Load(cfgFile string) (*Config, error) {
 	}
 
 	v.AutomaticEnv()
-	// 环境变量映射：DATABASE__DSN → database.dsn, REDIS__ADDR → redis.addr
+	// Environment variable mapping: DATABASE__DSN -> database.dsn, REDIS__ADDR -> redis.addr.
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
 
-	// 默认值（必须在 ReadInConfig 之前设置）
+	// Defaults (must be set before ReadInConfig).
 	v.SetDefault("server.env", "production")
 	v.SetDefault("auth.access_token_ttl_seconds", 3600)
 	v.SetDefault("auth.refresh_token_ttl", 30*24*time.Hour)
@@ -404,7 +404,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("llm.reasoning_effort", "medium")
 	v.SetDefault("llm.retry_max_attempts", 0)
 	v.SetDefault("llm.retry_base_delay", 1*time.Second)
-	// 默认定价：Claude 3.5 Sonnet（USD per million tokens）
+	// Default pricing: Claude 3.5 Sonnet (USD per million tokens).
 	v.SetDefault("llm.pricing.input_per_million", 3.0)
 	v.SetDefault("llm.pricing.output_per_million", 15.0)
 	v.SetDefault("llm.pricing.cached_read_per_million", 0.3)
@@ -429,7 +429,7 @@ func Load(cfgFile string) (*Config, error) {
 		return nil, err
 	}
 
-	// 无 --config 时，自动合并 etc/config.local.yaml（若存在）
+	// When --config is not specified, auto-merge etc/config.local.yaml (if it exists).
 	if cfgFile == "" {
 		localV := viper.New()
 		localV.AddConfigPath("etc")
@@ -447,8 +447,8 @@ func Load(cfgFile string) (*Config, error) {
 		return nil, err
 	}
 
-	// 展开敏感配置项中的环境变量引用（${VAR_NAME} 形式）。
-	// 仅对敏感字段生效，避免其他配置项误用环境变量引入安全隐患。
+	// Expand environment variable references in sensitive configuration fields (${VAR_NAME} form).
+	// Only applies to sensitive fields to prevent other config items from inadvertently using environment variables.
 	expandEnvVars(&cfg)
 
 	return &cfg, nil

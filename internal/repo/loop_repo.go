@@ -12,23 +12,23 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 )
 
-// LoopRepo Loop 仓储接口
+// LoopRepo provides Loop persistence operations.
 type LoopRepo interface {
-	// Create 创建新 Loop 记录
+	// Create stores a new Loop record.
 	Create(ctx context.Context, loop *model.Loop) error
-	// GetByID 根据 ID 查询 Loop
+	// GetByID looks up a Loop by ID.
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Loop, error)
-	// FindActive 查找指定 session 的 active loop
+	// FindActive returns the active loop for a session, or (nil, nil) if none.
 	FindActive(ctx context.Context, sessionID uuid.UUID) (*model.Loop, error)
-	// Update 更新 Loop 的指定字段
+	// Update modifies specific fields of a Loop.
 	Update(ctx context.Context, id uuid.UUID, fields map[string]any) error
-	// ListBySession 按 session 分页查询 Loop 列表
+	// ListBySession lists Loops for a session with cursor pagination.
 	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Loop, error)
-	// FindStaleLoops 查找 stale loops（active 且需要 recovery 的）
-	// Stale 条件：status='active' AND (asynq_task_id IS NULL OR asynq_task_id='') AND last_run_at IS NOT NULL AND last_run_at < staleThreshold
+	// FindStaleLoops returns active loops that lack an asynq task and have not
+	// run recently (before staleThreshold). These are loops whose scheduled
+	// task was lost (e.g., after server restart).
 	FindStaleLoops(ctx context.Context, staleThreshold time.Time) ([]*model.Loop, error)
-	// FindExpiredLoops 查找过期 loops
-	// Expired 条件：status='active' AND expires_at IS NOT NULL AND expires_at < now
+	// FindExpiredLoops returns active loops whose expires_at has passed.
 	FindExpiredLoops(ctx context.Context) ([]*model.Loop, error)
 }
 
@@ -36,7 +36,7 @@ type loopRepo struct {
 	db *gorm.DB
 }
 
-// NewLoopRepo 创建 LoopRepo
+// NewLoopRepo creates a new LoopRepo.
 func NewLoopRepo(db *gorm.DB) LoopRepo {
 	return &loopRepo{db: db}
 }
@@ -60,7 +60,7 @@ func (r *loopRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Loop, erro
 	return &loop, nil
 }
 
-// FindActive 查找指定 session 的 active loop，不存在返回 (nil, nil)
+// FindActive returns the active loop for a session, or (nil, nil) if none exists.
 func (r *loopRepo) FindActive(ctx context.Context, sessionID uuid.UUID) (*model.Loop, error) {
 	var loop model.Loop
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
@@ -92,7 +92,9 @@ func (r *loopRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, curso
 	return listBySessionPaged[model.Loop](ctx, r.db, sessionID, cursor, limit, "created_at DESC, id DESC", "id", "<", "loops")
 }
 
-// FindStaleLoops 查找 stale loops（active 且缺少 asynq task 的）
+// FindStaleLoops returns active loops that lack an asynq task and have not
+// run recently (before staleThreshold). These are loops whose scheduled
+// task was lost (e.g., after server restart).
 func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time) ([]*model.Loop, error) {
 	var loops []*model.Loop
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
@@ -105,7 +107,7 @@ func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time)
 	return loops, nil
 }
 
-// FindExpiredLoops 查找过期 loops
+// FindExpiredLoops returns active loops whose expires_at has passed.
 func (r *loopRepo) FindExpiredLoops(ctx context.Context) ([]*model.Loop, error) {
 	var loops []*model.Loop
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
@@ -118,5 +120,5 @@ func (r *loopRepo) FindExpiredLoops(ctx context.Context) ([]*model.Loop, error) 
 	return loops, nil
 }
 
-// ensure interfaces
+// Ensure interface compliance.
 var _ LoopRepo = (*loopRepo)(nil)

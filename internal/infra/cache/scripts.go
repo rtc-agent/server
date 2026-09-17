@@ -1,21 +1,21 @@
-// Package redisscript 统一管理所有 Redis Lua 脚本。
+// Package cache manages all Redis Lua scripts centrally.
 //
-// 规范：
-//   - 所有 Lua 脚本以 *redis.NewScript 形式集中注册在此文件。
-//   - 业务代码禁止直接拼接 Lua 字符串，必须通过本包获取已注册的脚本对象。
-//   - 新增脚本时在此文件添加变量 + 简要注释（说明 KEYS/ARGV 约定和返回值）。
-//   - go-redis 会自动对脚本做 SCRIPT LOAD + EVALSHA 缓存，无需手动管理。
+// Conventions:
+//   - All Lua scripts are registered as *redis.NewScript in this file.
+//   - Business code must not construct Lua strings directly; use this package to obtain registered script objects.
+//   - When adding a new script, add a variable here with a brief comment (documenting KEYS/ARGV conventions and return values).
+//   - go-redis automatically handles SCRIPT LOAD + EVALSHA caching; no manual management needed.
 package cache
 
 import "github.com/redis/go-redis/v9"
 
-// GetDel 原子获取并删除 key。
+// GetDel atomically gets and deletes a key.
 //
-//	KEYS[1] = 目标 key
-//	返回：key 的值（string），不存在时返回 nil。
+//	KEYS[1] = target key
+//	Returns: the key's value (string), nil if it does not exist.
 //
-// 用途：OAuth2 state 验证后一次性消费，防止重放攻击。
-// 相比 Redis 6.2 内置 GETDEL，此脚本兼容更低版本 Redis。
+// Use case: one-time consumption of OAuth2 state after validation, preventing replay attacks.
+// Compared to Redis 6.2 built-in GETDEL, this script is compatible with older Redis versions.
 var GetDel = redis.NewScript(`
 local val = redis.call('GET', KEYS[1])
 if val then
@@ -24,14 +24,14 @@ end
 return val
 `)
 
-// SetNX 原子设置 key（仅在不存在时写入），带 TTL。
+// SetNX atomically sets a key (only when it does not exist), with TTL.
 //
-//	KEYS[1] = 目标 key
+//	KEYS[1] = target key
 //	ARGV[1] = value
-//	ARGV[2] = TTL（秒）
-//	返回：1 表示设置成功，0 表示 key 已存在。
+//	ARGV[2] = TTL (seconds)
+//	Returns: 1 if set successfully, 0 if key already exists.
 //
-// 用途：幂等标记、分布式锁等场景。
+// Use case: idempotent markers, distributed locks, etc.
 var SetNX = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 0 then
     redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
@@ -41,14 +41,14 @@ else
 end
 `)
 
-// BatchIncrOffset 批量原子递增多个频道的 offset 计数器。
+// BatchIncrOffset atomically increments offset counters for multiple channels in a batch.
 //
-//	KEYS = [channel1, channel2, ...]  频道 offset 计数器 key 列表
-//	ARGV = [count1, count2, ...]      每个频道的增量（与 KEYS 一一对应）
-//	返回：每个频道递增后的最大 offset 值列表（顺序与 KEYS 相同）。
+//	KEYS = [channel1, channel2, ...]  channel offset counter key list
+//	ARGV = [count1, count2, ...]      increment for each channel (corresponds to KEYS one-to-one)
+//	Returns: list of max offset values after increment for each channel (same order as KEYS).
 //
-// 用途：一次 Redis 调用为多个频道批量生成连续 offset，减少网络往返。
-// 单 key 递增也可通过本脚本实现（KEYS 传 1 个、ARGV 传对应增量）。
+// Use case: generate consecutive offsets for multiple channels in a single Redis call, reducing network round trips.
+// Single-key increment can also use this script (pass 1 KEYS and corresponding ARGV increment).
 var BatchIncrOffset = redis.NewScript(`
 local results = {}
 for i, key in ipairs(KEYS) do
@@ -58,7 +58,7 @@ end
 return results
 `)
 
-// WorkerRegister 注册一个新的 Worker 或重新注册已失效的 Worker。
+// WorkerRegister registers a new Worker or re-registers an expired Worker.
 //
 //	KEYS[1] = worker:{workerID}
 //	KEYS[2] = workers:active
@@ -66,7 +66,7 @@ return results
 //	ARGV[1] = workerID, ARGV[2] = host, ARGV[3] = version
 //	ARGV[4] = current_timestamp, ARGV[5] = ttl_seconds
 //
-// 返回：{ok = 1} 成功；若 Worker 已处于 running 状态则返回错误。
+// Returns: {ok = 1} on success; returns error if Worker is already running.
 var WorkerRegister = redis.NewScript(`
 local worker_key = KEYS[1]
 local active_key = KEYS[2]
@@ -90,13 +90,13 @@ redis.call('SADD', active_key, worker_id)
 return {ok = 1}
 `)
 
-// WorkerHeartbeat 更新 Worker 心跳与会话计数，并刷新 TTL。
+// WorkerHeartbeat updates Worker heartbeat and session count, and refreshes TTL.
 //
 //	KEYS[1] = worker:{workerID}, KEYS[2] = worker:{workerID}:sessions
 //	ARGV[1] = timestamp, ARGV[2] = session_count
 //	ARGV[3] = ttl_seconds
 //
-// 返回：{ok = 1} 成功；若 Worker 不存在则返回错误。
+// Returns: {ok = 1} on success; returns error if Worker does not exist.
 var WorkerHeartbeat = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 0 then
     return {err = "Worker not found"}
@@ -108,13 +108,13 @@ redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3]))
 return {ok = 1}
 `)
 
-// WorkerDeregister 注销 Worker，清理其所有 key，返回需要重新分配的 session 列表。
+// WorkerDeregister deregisters a Worker, cleans up all its keys, and returns the session list that needs reassignment.
 //
 //	KEYS[1] = worker:{workerID}, KEYS[2] = workers:active
 //	KEYS[3] = worker:{workerID}:sessions, KEYS[4] = worker:{workerID}:queue
 //	ARGV[1] = workerID
 //
-// 返回：需要重新分配的 sessions 列表。
+// Returns: list of sessions that need reassignment.
 var WorkerDeregister = redis.NewScript(`
 local sessions = redis.call('HKEYS', KEYS[3])
 redis.call('SREM', KEYS[2], ARGV[1])

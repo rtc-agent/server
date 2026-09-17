@@ -12,22 +12,23 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
-// TurnRepo Turn 仓储接口
+// TurnRepo provides Turn persistence operations.
 type TurnRepo interface {
-	// Create 创建新 Turn 记录
+	// Create stores a new Turn record.
 	Create(ctx context.Context, turn *model.Turn) error
-	// GetByID 根据 ID 查询 Turn
+	// GetByID looks up a Turn by ID.
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Turn, error)
-	// FindByClientID 根据 clientID 查询 Turn
+	// FindByClientID looks up a Turn by client-assigned ID.
 	FindByClientID(ctx context.Context, clientID string) (*model.Turn, error)
-	// ListBySession 按 session 分页查询 Turn 列表
+	// ListBySession lists Turns for a session with cursor pagination.
 	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Turn, error)
+	// FindActiveBySession returns all non-terminal Turns for a session.
 	FindActiveBySession(ctx context.Context, sessionID uuid.UUID) ([]*model.Turn, error)
 	// FindStaleTurns finds all turns in the given statuses that are "stale"
 	// (i.e., left over from a previous server crash or restart). Used for
 	// crash recovery on startup.
 	FindStaleTurns(ctx context.Context, statuses []string) ([]*model.Turn, error)
-	// UpdateStatus 更新 Turn 状态及错误信息
+	// UpdateStatus updates the Turn status and error message.
 	UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, errMsg string) error
 	// UpdateStatusBySession batch-updates all turns for a session that are in
 	// any of the given statuses to the target status. Returns the number of
@@ -38,7 +39,7 @@ type TurnRepo interface {
 	// in a single DB write. This prevents a race condition where SubmitRtcResult
 	// could read the interrupted status before InterruptID is persisted.
 	UpdateStatusAndInterruptID(ctx context.Context, id uuid.UUID, status protocol.TurnStatus, interruptID string) error
-	// GetByIDs 批量查询 Turn，返回 map[id]*Turn。未找到的 ID 不会出现在 map 中。
+	// GetByIDs batch-fetches Turns, returning map[id]*Turn. Missing IDs are omitted.
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Turn, error)
 	// CountBySessionAndStatus counts turns for a session with the given status.
 	// Used by stale scanner to check if other running turns exist before
@@ -54,7 +55,7 @@ type turnRepo struct {
 	db *gorm.DB
 }
 
-// NewTurnRepo 创建 TurnRepo
+// NewTurnRepo creates a new TurnRepo.
 func NewTurnRepo(db *gorm.DB) TurnRepo {
 	return &turnRepo{db: db}
 }
@@ -99,7 +100,7 @@ func (r *turnRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, curso
 
 // FindActiveBySession returns all pending, running, or interrupted turns for a session.
 // Used by CloseSession/StopTurn to stop active turns before closing.
-// 🔧 Fix: Include "interrupted" status — turns waiting for RTC/webchat answers
+// Include "interrupted" status — turns waiting for RTC/webchat answers
 // were invisible to the stop flow, leaving them stuck in DB after stop.
 func (r *turnRepo) FindActiveBySession(ctx context.Context, sessionID uuid.UUID) ([]*model.Turn, error) {
 	var turns []*model.Turn
