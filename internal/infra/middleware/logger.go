@@ -15,7 +15,7 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
-// responseWriter 包装 http.ResponseWriter 以捕获状态码和错误响应体
+// responseWriter wraps http.ResponseWriter to capture status codes and error response bodies.
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode  int
@@ -29,34 +29,34 @@ func (rw *responseWriter) WriteHeader(code int) {
 }
 
 func (rw *responseWriter) Write(b []byte) (int, error) {
-	// 如果是错误响应且需要捕获body，则复制到buffer
+	// If this is an error response and body capture is enabled, copy to buffer.
 	if rw.captureBody && rw.statusCode >= 400 {
 		rw.body.Write(b)
 	}
 	return rw.ResponseWriter.Write(b)
 }
 
-// RequestLogger 请求日志中间件
-// 为每个请求创建 trace span，记录 trace_id 到日志，并记录请求耗时和状态码。
-// 对于错误响应（状态码 >= 400），会捕获并记录响应体中的错误信息。
-// 注意：WebSocket 升级请求不会被包装，以避免干扰协议升级。
-// 注意：/healthz 和 /metrics 路径不会记录日志，避免日志噪音。
+// RequestLogger middleware creates a trace span for each request,
+// records the trace_id in logs, and logs request duration and status code.
+// For error responses (status >= 400), captures and logs the response body.
+// Note: WebSocket upgrade requests are not wrapped to avoid interfering with protocol upgrade.
+// Note: /healthz and /metrics paths are not logged to avoid noise.
 func RequestLogger(next http.Handler) http.Handler {
 	tracer := otel.Tracer("http")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 跳过 /healthz 和 /metrics 路径的日志记录
+		// Skip logging for /healthz and /metrics paths.
 		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// 检测是否是 WebSocket 升级请求
+		// Detect WebSocket upgrade requests.
 		isWebSocketUpgrade := strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 
 		start := time.Now()
 
-		// 创建 trace span
+		// Create trace span.
 		ctx, span := tracer.Start(r.Context(), r.Method+" "+r.URL.Path,
 			trace.WithAttributes(
 				attribute.String("http.method", r.Method),
@@ -66,8 +66,8 @@ func RequestLogger(next http.Handler) http.Handler {
 		)
 		defer span.End()
 
-		// 对于 WebSocket 升级请求，不包装 ResponseWriter，直接传递原始的
-		// 这样可以避免干扰 WebSocket 协议升级
+		// For WebSocket upgrade requests, pass the raw ResponseWriter without wrapping
+		// to avoid interfering with the WebSocket protocol upgrade.
 		if isWebSocketUpgrade {
 			next.ServeHTTP(w, r.WithContext(ctx))
 
@@ -83,7 +83,7 @@ func RequestLogger(next http.Handler) http.Handler {
 			return
 		}
 
-		// 普通 HTTP 请求：包装 ResponseWriter 以捕获状态码和错误响应体
+		// Regular HTTP requests: wrap ResponseWriter to capture status code and error body.
 		rw := &responseWriter{
 			ResponseWriter: w,
 			statusCode:     http.StatusOK,
@@ -95,13 +95,13 @@ func RequestLogger(next http.Handler) http.Handler {
 
 		duration := time.Since(start)
 
-		// 记录 span 状态
+		// Record span status.
 		span.SetAttributes(attribute.Int("http.status_code", rw.statusCode))
 		if rw.statusCode >= 500 {
 			span.SetStatus(codes.Error, "server error")
 		}
 
-		// 构建日志字段
+		// Build log fields.
 		fields := []zap.Field{
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
@@ -110,17 +110,17 @@ func RequestLogger(next http.Handler) http.Handler {
 			zap.String("trace_id", span.SpanContext().TraceID().String()),
 		}
 
-		// 如果是错误响应且捕获到了body，添加错误信息
+		// If this is an error response with a captured body, add error info.
 		if rw.statusCode >= 400 && rw.body.Len() > 0 {
 			errorBody := rw.body.String()
-			// 限制错误信息长度，避免日志过大
+			// Limit error body length to avoid oversized logs.
 			if len(errorBody) > 500 {
 				errorBody = errorBody[:500] + "...(truncated)"
 			}
 			fields = append(fields, zap.String("error_response", errorBody))
 		}
 
-		// 根据状态码选择日志级别
+		// Choose log level based on status code.
 		if rw.statusCode >= 500 {
 			logger.Error(ctx, "HTTP request failed", fields...)
 		} else if rw.statusCode >= 400 {

@@ -6,20 +6,20 @@ import (
 	"net/http/pprof"
 )
 
-// RegisterPprofRoutes 在给定 mux 上注册 /debug/pprof/* 路由。
+// RegisterPprofRoutes registers /debug/pprof/* routes on the given mux.
 //
-// 注册的路径：
-//   - /debug/pprof/          索引页（列出可用 profiles）
-//   - /debug/pprof/cmdline   命令行参数
-//   - /debug/pprof/profile   CPU profile（默认 30s）
-//   - /debug/pprof/symbol    符号查找
-//   - /debug/pprof/trace     执行 trace
-//   - /debug/pprof/{name}    任意已注册 profile（heap, goroutine, allocs 等）
+// Registered paths:
+//   - /debug/pprof/          Index page (lists available profiles)
+//   - /debug/pprof/cmdline   Command-line arguments
+//   - /debug/pprof/profile   CPU profile (default 30s)
+//   - /debug/pprof/symbol    Symbol lookup
+//   - /debug/pprof/trace     Execution trace
+//   - /debug/pprof/{name}    Any registered profile (heap, goroutine, allocs, etc.)
 //
-// 注意：调用方应在路由注册前包裹认证中间件（如 BasicAuth），
-// 避免生产环境暴露内部状态。
+// NOTE: callers should wrap an authentication middleware (e.g. BasicAuth)
+// before registering these routes to avoid exposing internal state in production.
 func RegisterPprofRoutes(mux *http.ServeMux) {
-	// 索引页使用 pprof.Index（标准库自带索引，列出所有 profile）
+	// Index page uses pprof.Index (standard library index, lists all profiles).
 	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
 	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
@@ -27,10 +27,10 @@ func RegisterPprofRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
 }
 
-// PprofHandler 返回一个包裹了认证中间件的 pprof HTTP handler。
-// 用于在生产环境中为 /debug/pprof/ 前缀下的所有请求添加 basic auth。
+// PprofHandler returns a pprof HTTP handler wrapped with authentication middleware.
+// Used to add basic auth to all /debug/pprof/ requests in production.
 //
-// 用法示例（在 server.go 中）：
+// Usage example (in server.go):
 //
 //	mux.Handle("/debug/pprof/", middleware.PprofHandler(user, password))
 func PprofHandler(user, password string) http.Handler {
@@ -39,8 +39,8 @@ func PprofHandler(user, password string) http.Handler {
 	return BasicAuth(pprofMux, user, password)
 }
 
-// BasicAuth HTTP Basic Authentication 中间件（导出函数）。
-// 使用常量时间比较防止时序攻击。
+// BasicAuth is an HTTP Basic Authentication middleware.
+// Uses constant-time comparison to prevent timing attacks.
 func BasicAuth(next http.Handler, user, password string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()

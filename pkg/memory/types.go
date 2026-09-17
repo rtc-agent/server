@@ -6,9 +6,9 @@ import (
 	"fmt"
 )
 
-// StringArray 是 []string 的 JSONB 序列化类型。
-// 与 model.StringArray 行为一致，但在 pkg/memory 包内独立定义，
-// 避免 pkg 层依赖 internal 层的架构违规。
+// StringArray is a JSONB-serializable []string type.
+// Behavior matches model.StringArray but is defined independently in
+// pkg/memory to avoid an architectural violation (pkg depending on internal).
 type StringArray []string
 
 // Value implements driver.Valuer, serializing the string slice to JSON.
@@ -46,13 +46,15 @@ func (s *StringArray) Scan(src any) error {
 	return nil
 }
 
-// JSONBString 是可选 JSONB 列的字符串类型。
-// 空字符串 -> SQL NULL（避免 PostgreSQL 拒绝 "" 作为无效 JSONB），
-// 非空字符串 -> 原样写入（调用方须保证是合法 JSON）。
-// 读取时 SQL NULL -> 空字符串，非 NULL -> 原始 JSON 文本。
+// JSONBString is a string type for optional JSONB columns.
+// Empty string maps to SQL NULL (avoiding PostgreSQL rejecting "" as
+// invalid JSONB); non-empty strings are written as-is (the caller must
+// ensure valid JSON). On read, SQL NULL maps to empty string and non-NULL
+// maps to the raw JSON text.
 type JSONBString string
 
-// Value 实现 driver.Valuer：空字符串返回 nil（SQL NULL），否则返回原字符串。
+// Value implements driver.Valuer: empty string returns nil (SQL NULL),
+// otherwise returns the raw string.
 func (j JSONBString) Value() (driver.Value, error) {
 	if j == "" {
 		return nil, nil
@@ -60,7 +62,8 @@ func (j JSONBString) Value() (driver.Value, error) {
 	return string(j), nil
 }
 
-// Scan 实现 sql.Scanner：SQL NULL -> 空字符串，否则转为 string。
+// Scan implements sql.Scanner: SQL NULL maps to empty string, otherwise
+// converts to string.
 func (j *JSONBString) Scan(src any) error {
 	if src == nil {
 		*j = ""

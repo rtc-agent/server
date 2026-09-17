@@ -1,5 +1,5 @@
-// Package contextx 提供跨层共享的 context key 定义。
-// 解耦 middleware / svc / rpchandler 之间的直接依赖。
+// Package contextx provides shared context key definitions across layers.
+// Decouples direct dependencies between middleware / svc / rpchandler.
 package contextx
 
 import (
@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// contextKey 使用 unexported struct 类型，防止外部包构造碰撞 key。
+// contextKey uses an unexported struct type to prevent external packages from creating colliding keys.
 type contextKey struct{ name string }
 
 var (
@@ -16,19 +16,19 @@ var (
 	deviceIDKey = contextKey{"device_id"}
 )
 
-// GetUserID 从 context 获取用户 ID
+// GetUserID retrieves the user ID from the context.
 func GetUserID(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := ctx.Value(userIDKey).(uuid.UUID)
 	return id, ok
 }
 
-// GetDeviceID 从 context 获取设备 ID
+// GetDeviceID retrieves the device ID from the context.
 func GetDeviceID(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(deviceIDKey).(string)
 	return id, ok
 }
 
-// WithClientInfo 向 context 注入用户身份信息
+// WithClientInfo injects user identity information into the context.
 func WithClientInfo(ctx context.Context, userID uuid.UUID, deviceID string) context.Context {
 	ctx = context.WithValue(ctx, userIDKey, userID)
 	ctx = context.WithValue(ctx, deviceIDKey, deviceID)

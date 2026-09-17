@@ -11,7 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// HTTP 服务器 Prometheus 指标，与 grafana/dashboards/http-server.json 面板对齐。
+// HTTP server Prometheus metrics, aligned with grafana/dashboards/http-server.json panels.
 var (
 	httpRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -54,48 +54,48 @@ var (
 	)
 )
 
-// HTTPMetrics 返回一个 Prometheus HTTP 指标中间件。
+// HTTPMetrics returns a Prometheus HTTP metrics middleware.
 //
-// 使用 github.com/felixge/httpsnoop 透明包装 http.ResponseWriter，
-// 确保所有 ResponseWriter 接口（http.Hijacker、http.Flusher、http.Pusher 等）
-// 都被正确保留，避免 WebSocket 升级或流式响应因接口断言失败。
+// Uses github.com/felixge/httpsnoop to transparently wrap http.ResponseWriter,
+// ensuring all ResponseWriter interfaces (http.Hijacker, http.Flusher, http.Pusher, etc.)
+// are correctly preserved, avoiding WebSocket upgrade or streaming response failures due to interface assertion.
 //
-// 捕获的指标：
-//   - http_requests_total        请求计数（按 method/handler/code 分组）
-//   - http_request_duration_seconds 请求延迟分布
-//   - http_request_size_bytes    请求体大小分布
-//   - http_response_size_bytes   响应体大小分布
-//   - http_in_flight_requests    并发请求数
+// Captured metrics:
+//   - http_requests_total          request count (grouped by method/handler/code)
+//   - http_request_duration_seconds request latency distribution
+//   - http_request_size_bytes       request body size distribution
+//   - http_response_size_bytes      response body size distribution
+//   - http_in_flight_requests       concurrent request count
 //
-// 跳过 /healthz、/metrics 和 WebSocket 升级请求，避免噪音。
+// Skips /healthz, /metrics, and WebSocket upgrade requests to avoid noise.
 func HTTPMetrics() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 跳过 /healthz 和 /metrics 的指标记录，避免噪音
+			// Skip metrics recording for /healthz and /metrics to avoid noise.
 			if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// 跳过 WebSocket 升级请求（长连接，不应计入 HTTP 指标）
+			// Skip WebSocket upgrade requests (long-lived connections, should not be counted in HTTP metrics).
 			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// In-flight: 请求开始 +1，结束 -1
+			// In-flight: +1 on start, -1 on completion.
 			httpInFlightRequests.Inc()
 			defer httpInFlightRequests.Dec()
 
-			// 请求大小
+			// Request size.
 			if r.ContentLength > 0 {
 				httpRequestSize.Observe(float64(r.ContentLength))
 			}
 
 			start := time.Now()
 
-			// 使用 httpsnoop 透明包装 ResponseWriter，
-			// 保留 Hijacker/Flusher/Pusher 等所有接口。
+			// Use httpsnoop to transparently wrap ResponseWriter,
+			// preserving Hijacker/Flusher/Pusher and all other interfaces.
 			wrapped := httpsnoop.CaptureMetrics(next, w, r)
 
 			code := wrapped.Code
@@ -104,13 +104,13 @@ func HTTPMetrics() func(http.Handler) http.Handler {
 			handler := r.URL.Path
 			codeStr := strconv.Itoa(code)
 
-			// 请求计数
+			// Request count.
 			httpRequestsTotal.WithLabelValues(r.Method, handler, codeStr).Inc()
 
-			// 延迟
+			// Latency.
 			httpRequestDuration.WithLabelValues(handler).Observe(duration)
 
-			// 响应大小
+			// Response size.
 			if written > 0 {
 				httpResponseSize.Observe(float64(written))
 			}

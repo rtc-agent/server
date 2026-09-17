@@ -11,15 +11,15 @@ import (
 	"gorm.io/gorm"
 )
 
-// OAuth2UserRepo OAuth2 用户仓储接口
+// OAuth2UserRepo provides OAuth2 user persistence operations.
 type OAuth2UserRepo interface {
-	// Create 创建新 OAuth2 用户记录
+	// Create stores a new OAuth2 user record.
 	Create(ctx context.Context, user *model.OAuth2User) error
-	// FindByID 根据 ID 查询 OAuth2 用户
+	// FindByID looks up an OAuth2 user by ID.
 	FindByID(ctx context.Context, id uuid.UUID) (*model.OAuth2User, error)
-	// FindByProvider 按提供商和 sub 查询 OAuth2 用户
+	// FindByProvider looks up an OAuth2 user by provider name and subject.
 	FindByProvider(ctx context.Context, provider, sub string) (*model.OAuth2User, error)
-	// Update 更新 OAuth2 用户记录
+	// Update persists changes to an OAuth2 user record.
 	Update(ctx context.Context, user *model.OAuth2User) error
 }
 
@@ -27,7 +27,7 @@ type oauth2UserRepo struct {
 	db *gorm.DB
 }
 
-// NewOAuth2UserRepo 创建 OAuth2UserRepo
+// NewOAuth2UserRepo creates a new OAuth2UserRepo.
 func NewOAuth2UserRepo(db *gorm.DB) OAuth2UserRepo {
 	return &oauth2UserRepo{db: db}
 }

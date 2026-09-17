@@ -13,24 +13,24 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
 
-// Config OpenTelemetry 配置
+// Config holds OpenTelemetry configuration.
 type Config struct {
-	// ServiceName 服务名称
+	// ServiceName is the name of the service.
 	ServiceName string
-	// Endpoint OTLP endpoint (例如: "localhost:4317")
+	// Endpoint is the OTLP endpoint (e.g., "localhost:4317").
 	Endpoint string
-	// Insecure 是否使用非加密连接（开发环境）
+	// Insecure indicates whether to use an unencrypted connection (development only).
 	Insecure bool
-	// SampleRate 采样率 (0.0 - 1.0)
+	// SampleRate is the trace sampling rate (0.0 - 1.0).
 	SampleRate float64
 }
 
-// Init 初始化 OpenTelemetry tracer provider
-// 返回 shutdown 函数，用于在程序退出时刷新 span 数据
+// Init initializes the OpenTelemetry tracer provider.
+// Returns a shutdown function to flush span data on program exit.
 func Init(cfg Config) (func(context.Context) error, error) {
 	ctx := context.Background()
 
-	// 创建 OTLP exporter
+	// Create OTLP exporter.
 	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(cfg.Endpoint),
 	}
@@ -43,7 +43,7 @@ func Init(cfg Config) (func(context.Context) error, error) {
 		return nil, fmt.Errorf("create OTLP exporter: %w", err)
 	}
 
-	// 创建 resource（标识服务）
+	// Create resource (identifies the service).
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			semconv.ServiceName(cfg.ServiceName),
@@ -53,7 +53,7 @@ func Init(cfg Config) (func(context.Context) error, error) {
 		return nil, fmt.Errorf("create resource: %w", err)
 	}
 
-	// 创建 tracer provider
+	// Create tracer provider.
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter,
 			sdktrace.WithBatchTimeout(5*time.Second),
@@ -65,16 +65,16 @@ func Init(cfg Config) (func(context.Context) error, error) {
 		)),
 	)
 
-	// 设置为全局 tracer provider
+	// Set as global tracer provider.
 	otel.SetTracerProvider(tp)
 
-	// 设置全局 propagator（支持 W3C Trace Context）
+	// Set global propagator (supports W3C Trace Context).
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
 		propagation.Baggage{},
 	))
 
-	// 返回 shutdown 函数
+	// Return shutdown function.
 	shutdown := func(ctx context.Context) error {
 		return tp.Shutdown(ctx)
 	}

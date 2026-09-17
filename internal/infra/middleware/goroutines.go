@@ -15,8 +15,8 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
-// goroutineByState 按状态分类的 goroutine 数量（定时采样）。
-// 注意：go_goroutines 总数已由 Prometheus GoCollector 自动注册，无需重复。
+// goroutineByState tracks the number of goroutines by state (sampled periodically).
+// Note: total goroutine count is already registered by the Prometheus GoCollector, no need to duplicate.
 var goroutineByState = promauto.NewGaugeVec(
 	prometheus.GaugeOpts{
 		Name: "rtc_goroutines_by_state",
@@ -25,12 +25,12 @@ var goroutineByState = promauto.NewGaugeVec(
 	[]string{"state"},
 )
 
-// StartGoroutineCollector 启动后台 goroutine 指标采集。
-// 每 10 秒采样一次 goroutine 状态分布，写入 Prometheus 指标。
-// goroutine 总数由 Prometheus GoCollector 自动提供（go_goroutines 指标），
-// 此处仅额外采集按状态分类的细分指标。
-// 当 goroutine 数量超过 leakThreshold 时记录告警日志（threshold=0 禁用告警）。
-// 返回 cancel 函数，用于停止采集（通常在 Server.Stop 中调用）。
+// StartGoroutineCollector starts a background goroutine metrics collector.
+// It samples goroutine state distribution every 10 seconds and writes Prometheus metrics.
+// The total goroutine count is provided automatically by the Prometheus GoCollector (go_goroutines metric);
+// this collector only gathers the per-state breakdown.
+// When the goroutine count exceeds leakThreshold, a warning log is emitted (threshold=0 disables the alert).
+// Returns a cancel function to stop collecting (typically called in Server.Stop).
 func StartGoroutineCollector(leakThreshold int) (cancel func()) {
 	ticker := time.NewTicker(10 * time.Second)
 	done := make(chan struct{})
@@ -57,20 +57,20 @@ func StartGoroutineCollector(leakThreshold int) (cancel func()) {
 	return func() { close(done) }
 }
 
-// collectGoroutineMetrics 采集一次 goroutine 指标。
+// collectGoroutineMetrics collects a single snapshot of goroutine metrics.
 func collectGoroutineMetrics(leakThreshold int) {
 	n := runtime.NumGoroutine()
 
-	// 按状态统计 goroutine 分布
+	// Count goroutine distribution by state.
 	stacks := collectStacks()
 	stateCounts := countByState(stacks)
-	// 先重置再设置，避免 stale 数据
+	// Reset before setting to avoid stale data.
 	goroutineByState.Reset()
 	for state, count := range stateCounts {
 		goroutineByState.WithLabelValues(state).Set(float64(count))
 	}
 
-	// 泄漏告警
+	// Leak alert.
 	if leakThreshold > 0 && n > leakThreshold {
 		logger.Warn(context.Background(), "goroutine leak threshold exceeded",
 			zap.Int("current", n),
@@ -79,28 +79,28 @@ func collectGoroutineMetrics(leakThreshold int) {
 	}
 }
 
-// stackEntry 表示一个 goroutine 的堆栈摘要。
+// stackEntry represents a stack trace summary for a single goroutine.
 type stackEntry struct {
 	ID    int    `json:"id"`
 	State string `json:"state"`
 	TopFn string `json:"top_function"`
-	Stack string `json:"stack,omitempty"` // 仅在详细模式下填充
+	Stack string `json:"stack,omitempty"` // Only populated in detail mode.
 }
 
-// GoroutinesHandler 返回 /debug/goroutines HTTP 处理器。
+// GoroutinesHandler returns the /debug/goroutines HTTP handler.
 //
-// 查询参数：
-//   - detail=1：返回每个 goroutine 的完整堆栈（JSON 数组）
-//   - 默认：返回摘要信息（总数、状态分布、各 goroutine 的栈顶函数）
+// Query parameters:
+//   - detail=1: return the full stack trace for each goroutine (JSON array)
+//   - default: return a summary (total count, state distribution, top function per goroutine)
 //
-// 响应格式：application/json
+// Response format: application/json
 func GoroutinesHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		detail := r.URL.Query().Get("detail") == "1"
 		n := runtime.NumGoroutine()
 
 		if !detail {
-			// 摘要模式
+			// Summary mode.
 			stacks := collectStacks()
 			stateCounts := countByState(stacks)
 			resp := struct {
@@ -119,11 +119,11 @@ func GoroutinesHandler() http.HandlerFunc {
 			return
 		}
 
-		// 详细模式：返回所有 goroutine 堆栈
-		buf := make([]byte, 1<<20) // 1MB 初始缓冲区
+		// Detail mode: return all goroutine stacks.
+		buf := make([]byte, 1<<20) // 1MB initial buffer
 		nbytes := runtime.Stack(buf, true)
 		for nbytes == len(buf) {
-			// 缓冲区不够，翻倍重试
+			// Buffer too small, double and retry.
 			buf = make([]byte, len(buf)*2)
 			nbytes = runtime.Stack(buf, true)
 		}
@@ -134,14 +134,14 @@ func GoroutinesHandler() http.HandlerFunc {
 	}
 }
 
-// collectStacks 解析 runtime.Stack 输出，提取每个 goroutine 的 ID 和状态。
+// collectStacks parses runtime.Stack output, extracting each goroutine's ID and state.
 func collectStacks() []stackEntry {
 	buf := make([]byte, 1<<20)
 	n := runtime.Stack(buf, true)
 	return parseStackOutput(string(buf[:n]))
 }
 
-// parseStackOutput 解析 goroutine 堆栈文本为结构化数据。
+// parseStackOutput parses goroutine stack trace text into structured data.
 func parseStackOutput(output string) []stackEntry {
 	var entries []stackEntry
 	var current *stackEntry
@@ -182,10 +182,10 @@ func parseStackOutput(output string) []stackEntry {
 	return entries
 }
 
-// parseHeaderLine 解析 "goroutine N [state]:" 格式的行。
+// parseHeaderLine parses a "goroutine N [state]:" formatted line.
 func parseHeaderLine(line string) (id int, state, topFn string) {
-	// 格式: goroutine 123 [running]:
-	//        func.name(args)
+	// Format: goroutine 123 [running]:
+	//         func.name(args)
 	var n int
 	rest := line[len("goroutine "):]
 	for n < len(rest) && rest[n] >= '0' && rest[n] <= '9' {
@@ -193,7 +193,7 @@ func parseHeaderLine(line string) (id int, state, topFn string) {
 	}
 	id, _ = strconv.Atoi(rest[:n])
 
-	// 提取状态
+	// Extract state.
 	if i := indexByte(rest[n:], '['); i >= 0 {
 		if j := indexByte(rest[n+i:], ']'); j >= 0 {
 			state = rest[n+i+1 : n+i+j]
@@ -230,7 +230,7 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// countByState 统计各状态的 goroutine 数量。
+// countByState counts the number of goroutines in each state.
 func countByState(entries []stackEntry) map[string]int {
 	counts := make(map[string]int, len(entries))
 	for _, e := range entries {

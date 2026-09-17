@@ -11,13 +11,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// RefreshTokenRepo 刷新令牌仓储接口
+// RefreshTokenRepo provides refresh token persistence operations.
 type RefreshTokenRepo interface {
-	// Create 创建新刷新令牌记录
+	// Create stores a new refresh token record.
 	Create(ctx context.Context, rt *model.RefreshToken) error
-	// FindByHash 根据令牌哈希查询刷新令牌
+	// FindByHash looks up a refresh token by its hash.
 	FindByHash(ctx context.Context, hash string) (*model.RefreshToken, error)
-	// Revoke 撤销刷新令牌
+	// Revoke marks a refresh token as revoked.
 	Revoke(ctx context.Context, id uuid.UUID) error
 }
 
@@ -25,7 +25,7 @@ type refreshTokenRepo struct {
 	db *gorm.DB
 }
 
-// NewRefreshTokenRepo 创建 RefreshTokenRepo
+// NewRefreshTokenRepo creates a new RefreshTokenRepo.
 func NewRefreshTokenRepo(db *gorm.DB) RefreshTokenRepo {
 	return &refreshTokenRepo{db: db}
 }

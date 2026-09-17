@@ -1,4 +1,4 @@
-// Package auth 提供 JWT 令牌签发与验证实现。
+// Package auth provides JWT token signing and verification.
 package auth
 
 import (
@@ -10,23 +10,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// Claims JWT 载荷
+// Claims is the JWT payload.
 type Claims struct {
 	UserID   uuid.UUID `json:"user_id"`
 	DeviceID string    `json:"device_id"`
 	jwt.RegisteredClaims
 }
 
-// JWTSigner 基于 HMAC-SHA256 的 TokenSigner 实现
+// JWTSigner is an HMAC-SHA256 based token signer implementation.
 type JWTSigner struct {
 	secret    []byte
 	accessTTL time.Duration
 }
 
-// NewJWTSigner 创建 JWT 签名器
+// NewJWTSigner creates a JWT signer.
 //
-// secret 为 HMAC 密钥（建议 ≥ 32 字节随机字符串）；
-// accessTTL 为 access_token 默认有效期。
+// secret is the HMAC key (recommended >= 32 bytes random string);
+// accessTTL is the default validity period for access tokens.
 func NewJWTSigner(secret string, accessTTL time.Duration) (*JWTSigner, error) {
 	if secret == "" {
 		return nil, errors.New("auth: jwt secret is required")
@@ -40,7 +40,7 @@ func NewJWTSigner(secret string, accessTTL time.Duration) (*JWTSigner, error) {
 	}, nil
 }
 
-// SignAccessToken 签发 access_token（HMAC-SHA256）
+// SignAccessToken signs an access token (HMAC-SHA256).
 func (s *JWTSigner) SignAccessToken(userID uuid.UUID, deviceID string) (string, time.Time, error) {
 	expiresAt := time.Now().Add(s.accessTTL)
 	claims := Claims{
@@ -60,12 +60,12 @@ func (s *JWTSigner) SignAccessToken(userID uuid.UUID, deviceID string) (string, 
 	return signed, expiresAt, nil
 }
 
-// AccessTTL 返回 access_token 默认有效期
+// AccessTTL returns the default validity period for access tokens.
 func (s *JWTSigner) AccessTTL() time.Duration {
 	return s.accessTTL
 }
 
-// ParseAccessToken 解析并验证 access_token，返回 claims
+// ParseAccessToken parses and validates an access token, returning claims.
 func (s *JWTSigner) ParseAccessToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {

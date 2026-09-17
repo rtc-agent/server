@@ -15,12 +15,12 @@ type memoryRepo struct {
 	db *gorm.DB
 }
 
-// NewMemoryRepo 创建 memory.Repository 的 PostgreSQL 实现
+// NewMemoryRepo creates a PostgreSQL-backed implementation of memory.Repository.
 func NewMemoryRepo(db *gorm.DB) memory.Repository {
 	return &memoryRepo{db: db}
 }
 
-// ─── 创建 ───
+// ─── Create ───
 
 func (r *memoryRepo) Create(ctx context.Context, m *memory.Memory) error {
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(m).Error; err != nil {
@@ -39,7 +39,7 @@ func (r *memoryRepo) BatchCreate(ctx context.Context, memories []*memory.Memory)
 	return nil
 }
 
-// ─── 查询 ───
+// ─── Query ───
 
 func (r *memoryRepo) GetByID(ctx context.Context, id uuid.UUID) (*memory.Memory, error) {
 	var m memory.Memory
@@ -57,7 +57,7 @@ func (r *memoryRepo) ListByScope(ctx context.Context, scope memory.ScopeType, sc
 	query := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("scope = ? AND scope_id = ?", scope, scopeID)
 
-	// 应用过滤选项
+	// Apply type filter.
 	if len(opts.Types) > 0 {
 		query = query.Where("type IN ?", opts.Types)
 	} else if opts.Type != "" {
@@ -76,7 +76,7 @@ func (r *memoryRepo) ListByScope(ctx context.Context, scope memory.ScopeType, sc
 		query = query.Unscoped()
 	}
 
-	// 排序（白名单防止 SQL 注入）
+	// Sort (whitelist to prevent SQL injection).
 	orderBy := opts.OrderBy
 	if orderBy == "" {
 		orderBy = "created_at DESC"
@@ -95,7 +95,7 @@ func (r *memoryRepo) ListByScope(ctx context.Context, scope memory.ScopeType, sc
 	}
 	query = query.Order(orderBy)
 
-	// 分页
+	// Pagination.
 	if opts.Limit > 0 {
 		query = query.Limit(opts.Limit)
 	}
@@ -118,7 +118,7 @@ func (r *memoryRepo) ListRecentForInjection(ctx context.Context, scope memory.Sc
 		maxTokens = 12000
 	}
 
-	// 先查询最新的候选（多查一些用于 token 过滤）
+	// Fetch extra candidates for token-based filtering.
 	queryLimit := maxCount * 2
 	if queryLimit > 100 {
 		queryLimit = 100
@@ -134,14 +134,15 @@ func (r *memoryRepo) ListRecentForInjection(ctx context.Context, scope memory.Sc
 		return nil, fmt.Errorf("list recent memories for injection: %w", err)
 	}
 
-	// 按 token 预算过滤
+	// Filter by token budget.
 	var result []*memory.Memory
 	totalTokens := 0
 	for _, m := range candidates {
 		if len(result) >= maxCount {
 			break
 		}
-		// 如果单条就超出预算且尚无结果，仍加入（避免返回空）
+		// If a single item exceeds the budget and we have no results yet,
+		// include it to avoid returning an empty list.
 		if totalTokens+m.TokenCount > maxTokens && len(result) > 0 {
 			break
 		}
@@ -162,14 +163,14 @@ func (r *memoryRepo) Search(ctx context.Context, scope memory.ScopeType, scopeID
 	db := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("scope = ? AND scope_id = ?", scope, scopeID)
 
-	// 根据数据库方言选择大小写敏感的模糊匹配
+	// Choose case-insensitive pattern matching based on database dialect.
 	switch getDialectName(db) {
 	case "sqlite":
-		// SQLite 的 LIKE 默认大小写不敏感（ASCII）
+		// SQLite LIKE is case-insensitive for ASCII by default.
 		db = db.Where("title LIKE ? OR content LIKE ? OR description LIKE ?",
 			likeQuery, likeQuery, likeQuery)
 	default:
-		// PostgreSQL 使用 ILIKE 实现大小写不敏感匹配
+		// PostgreSQL uses ILIKE for case-insensitive matching.
 		db = db.Where("title ILIKE ? OR content ILIKE ? OR description ILIKE ?",
 			likeQuery, likeQuery, likeQuery)
 	}
@@ -181,7 +182,7 @@ func (r *memoryRepo) Search(ctx context.Context, scope memory.ScopeType, scopeID
 	return memories, nil
 }
 
-// ─── 更新 ───
+// ─── Update ───
 
 func (r *memoryRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]any) error {
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
@@ -195,7 +196,7 @@ func (r *memoryRepo) Update(ctx context.Context, id uuid.UUID, fields map[string
 	return nil
 }
 
-// ─── 删除（软删除）───
+// ─── Delete (soft delete) ───
 
 func (r *memoryRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	result := DBFromContext(ctx, r.db).WithContext(ctx).Delete(&memory.Memory{}, "id = ?", id)
@@ -217,7 +218,7 @@ func (r *memoryRepo) DeleteByScope(ctx context.Context, scope memory.ScopeType, 
 	return nil
 }
 
-// ─── 关系 ───
+// ─── Relations ───
 
 func (r *memoryRepo) GetLinked(ctx context.Context, id uuid.UUID, relation string) ([]*memory.Memory, error) {
 	var memories []*memory.Memory
@@ -255,7 +256,7 @@ func (r *memoryRepo) DeleteLink(ctx context.Context, fromID, toID uuid.UUID) err
 	return nil
 }
 
-// ─── 统计 ───
+// ─── Statistics ───
 
 func (r *memoryRepo) CountTokensByScope(ctx context.Context, scope memory.ScopeType, scopeID uuid.UUID) (int, error) {
 	var total int64
@@ -270,24 +271,24 @@ func (r *memoryRepo) CountTokensByScope(ctx context.Context, scope memory.ScopeT
 	return int(total), nil
 }
 
-// ─── 内部辅助 ───
+// ─── Internal helpers ───
 
-// applyTagsFilter 根据数据库方言应用 Tags JSONB 过滤。
-// PostgreSQL 使用 JSONB 包含操作符，SQLite 使用 LIKE 子串匹配。
+// applyTagsFilter applies Tags JSONB filtering based on database dialect.
+// PostgreSQL uses JSONB containment operator; SQLite falls back to LIKE substring match.
 func applyTagsFilter(query *gorm.DB, tags []string) *gorm.DB {
 	dialect := getDialectName(query)
 	if dialect == "postgres" || dialect == "postgresql" {
-		// PostgreSQL: JSONB 包含操作符（任一标签匹配）
+		// PostgreSQL: JSONB containment operator (any tag matches).
 		return query.Where("tags ?| array(?)", tags)
 	}
-	// SQLite fallback: JSONB 存储为文本，使用 LIKE 子串匹配
+	// SQLite fallback: JSONB stored as text, use LIKE substring match.
 	for _, tag := range tags {
 		query = query.Where(`tags LIKE ?`, `%"`+escapeLikePattern(tag)+`"%`)
 	}
 	return query
 }
 
-// getDialectName 返回 GORM 数据库方言名称
+// getDialectName returns the GORM database dialect name.
 func getDialectName(db *gorm.DB) string {
 	if db == nil || db.Dialector == nil {
 		return ""

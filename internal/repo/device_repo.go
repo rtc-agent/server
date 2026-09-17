@@ -12,11 +12,11 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// DeviceRepo 设备仓储接口
+// DeviceRepo provides device persistence operations.
 type DeviceRepo interface {
-	// Upsert 创建或更新设备记录
+	// Upsert creates or updates a device record.
 	Upsert(ctx context.Context, device *model.Device) error
-	// FindByUserAndDeviceID 按用户 ID 和设备 ID 查询设备
+	// FindByUserAndDeviceID looks up a device by user ID and device ID.
 	FindByUserAndDeviceID(ctx context.Context, userID uuid.UUID, deviceID string) (*model.Device, error)
 }
 
@@ -24,14 +24,13 @@ type deviceRepo struct {
 	db *gorm.DB
 }
 
-// NewDeviceRepo 创建 DeviceRepo
+// NewDeviceRepo creates a new DeviceRepo.
 func NewDeviceRepo(db *gorm.DB) DeviceRepo {
 	return &deviceRepo{db: db}
 }
 
 func (r *deviceRepo) Upsert(ctx context.Context, device *model.Device) error {
-	// 原子 upsert：ON CONFLICT (user_id, device_id) DO UPDATE
-	// 避免 find-then-create 的竞态条件
+	// Atomic upsert via ON CONFLICT to avoid find-then-create race conditions.
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "user_id"}, {Name: "device_id"}},

@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Config 应用顶层配置，聚合所有子模块配置。
+// Config is the top-level application configuration, aggregating all sub-module configs.
 type Config struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	Database  DatabaseConfig  `mapstructure:"database"`
@@ -25,11 +25,11 @@ type Config struct {
 	Debug     DebugConfig     `mapstructure:"debug"`
 }
 
-// MetricsConfig Prometheus /metrics 端点认证配置
+// MetricsConfig holds Prometheus /metrics endpoint authentication configuration.
 type MetricsConfig struct {
-	// User 基本认证用户名。为空时不启用认证（仅开发环境）
+	// User is the basic auth username. Empty disables authentication (development only).
 	User string `mapstructure:"user"`
-	// Password 基本认证密码
+	// Password is the basic auth password.
 	Password string `mapstructure:"password"`
 }
 

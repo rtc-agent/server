@@ -10,16 +10,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// JWTAuth JWT 鉴权中间件构造函数。
-// signer 为 JWT 签名器；allowDevBypass 仅在开发环境设为 true，
-// 允许通过 X-User-ID / X-Device-ID header 绕过 JWT 验证（生产环境必须为 false）。
+// JWTAuth creates a JWT authentication middleware.
+// signer is the JWT signer; allowDevBypass should only be true in development,
+// allowing X-User-ID / X-Device-ID headers to bypass JWT validation (must be false in production).
 func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var userID uuid.UUID
 			var deviceID string
 
-			// 1. 尝试从 Authorization header 解析 JWT
+			// 1. Try to parse JWT from Authorization header.
 			if token := extractBearerToken(r); token != "" {
 				claims, err := signer.ParseAccessToken(token)
 				if err != nil {
@@ -29,7 +29,7 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool) func(http.Handler) htt
 				userID = claims.UserID
 				deviceID = claims.DeviceID
 			} else if allowDevBypass {
-				// 2. 开发回退：从 header 直接读取（必须显式启用）
+				// 2. Dev fallback: read directly from headers (must be explicitly enabled).
 				uidStr := r.Header.Get("X-User-ID")
 				did := r.Header.Get("X-Device-ID")
 				if uidStr == "" || did == "" {
@@ -56,7 +56,7 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool) func(http.Handler) htt
 	}
 }
 
-// extractBearerToken 从 Authorization header 提取 token
+// extractBearerToken extracts the token from the Authorization header.
 func extractBearerToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	if strings.HasPrefix(auth, "Bearer ") {

@@ -5,39 +5,39 @@ import (
 	"regexp"
 )
 
-// expandEnvVars 展开配置中的敏感字段的环境变量引用。
-// 仅对包含敏感信息的字段（密码、密钥、DSN）生效。
+// expandEnvVars expands environment variable references in sensitive configuration fields.
+// Only applies to fields containing sensitive information (passwords, secrets, DSNs).
 func expandEnvVars(cfg *Config) {
-	// 数据库连接字符串（可能包含密码）
+	// Database connection string (may contain password).
 	cfg.Database.DSN = expandEnvRef(cfg.Database.DSN)
 
-	// Redis 密码
+	// Redis password.
 	cfg.Redis.Password = expandEnvRef(cfg.Redis.Password)
 
-	// Asynq Redis 密码
+	// Asynq Redis password.
 	cfg.Asynq.RedisPassword = expandEnvRef(cfg.Asynq.RedisPassword)
 
-	// LLM API 密钥
+	// LLM API key.
 	cfg.LLM.APIKey = expandEnvRef(cfg.LLM.APIKey)
 
-	// OAuth2 Provider 密钥
+	// OAuth2 provider secrets.
 	cfg.Providers.Mock.ClientSecret = expandEnvRef(cfg.Providers.Mock.ClientSecret)
 	cfg.Providers.GitHub.ClientSecret = expandEnvRef(cfg.Providers.GitHub.ClientSecret)
 	cfg.Providers.Google.ClientSecret = expandEnvRef(cfg.Providers.Google.ClientSecret)
 
-	// Auth 密钥
+	// Auth secrets.
 	cfg.Auth.JWTSecret = expandEnvRef(cfg.Auth.JWTSecret)
 
-	// Metrics 密码
+	// Metrics password.
 	cfg.Metrics.Password = expandEnvRef(cfg.Metrics.Password)
 	cfg.Debug.Password = expandEnvRef(cfg.Debug.Password)
 }
 
-// envRefPattern 匹配 ${VAR_NAME} 形式的环境变量引用。
+// envRefPattern matches environment variable references in ${VAR_NAME} form.
 var envRefPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
-// expandEnvRef 将字符串中的 ${VAR} 替换为对应环境变量值。
-// 若环境变量未设置则替换为空字符串。不含 ${...} 的字符串原样返回。
+// expandEnvRef replaces ${VAR} references in a string with the corresponding environment variable values.
+// If the environment variable is not set, it is replaced with an empty string. Strings without ${...} are returned unchanged.
 func expandEnvRef(s string) string {
 	return envRefPattern.ReplaceAllStringFunc(s, func(match string) string {
 		key := envRefPattern.FindStringSubmatch(match)[1]
@@ -49,7 +49,7 @@ func expandEnvRef(s string) string {
 	})
 }
 
-// ExpandEnvRef 导出供测试使用。
+// ExpandEnvRef is exported for testing.
 func ExpandEnvRef(s string) string {
 	return expandEnvRef(s)
 }

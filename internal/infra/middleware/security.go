@@ -5,12 +5,12 @@ import (
 	"strings"
 )
 
-// SecurityHeaders 安全响应头中间件。
-// 为所有响应添加通用的安全头部，防止常见 Web 攻击。
-// 注意：WebSocket 升级请求会被跳过，以避免干扰协议升级。
+// SecurityHeaders middleware adds common security headers to all responses,
+// protecting against common web attacks.
+// WebSocket upgrade requests are skipped to avoid interfering with protocol upgrade.
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 跳过 WebSocket 升级请求，避免干扰协议升级
+		// Skip WebSocket upgrade requests to avoid interfering with protocol upgrade.
 		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 			next.ServeHTTP(w, r)
 			return

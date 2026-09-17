@@ -11,15 +11,15 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 )
 
-// ScriptExecutionRepo 提供 script_executions 表的 CRUD 操作。
+// ScriptExecutionRepo provides CRUD operations on the script_executions table.
 type ScriptExecutionRepo interface {
-	// Create 创建新脚本执行记录
+	// Create stores a new script execution record.
 	Create(ctx context.Context, exec *model.ScriptExecution) error
-	// GetByRtcID 根据 RTC ID 查询脚本执行记录
+	// GetByRtcID looks up a script execution by its RTC ID.
 	GetByRtcID(ctx context.Context, rtcID uuid.UUID) (*model.ScriptExecution, error)
-	// ListBySession 按 session 分页查询脚本执行列表
+	// ListBySession lists script executions for a session with cursor pagination.
 	ListBySession(ctx context.Context, sessionID uuid.UUID, limit, offset int) ([]*model.ScriptExecution, int64, error)
-	// ListByUser 按用户分页查询脚本执行列表
+	// ListByUser lists script executions for a user with cursor pagination.
 	ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*model.ScriptExecution, int64, error)
 }
 
@@ -27,7 +27,7 @@ type scriptExecutionRepo struct {
 	db *gorm.DB
 }
 
-// NewScriptExecutionRepo 创建 ScriptExecutionRepo
+// NewScriptExecutionRepo creates a new ScriptExecutionRepo.
 func NewScriptExecutionRepo(db *gorm.DB) ScriptExecutionRepo {
 	return &scriptExecutionRepo{db: db}
 }

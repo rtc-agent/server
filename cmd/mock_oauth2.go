@@ -20,15 +20,15 @@ import (
 // mockOAuth2Cmd is the Mock OAuth2 server command.
 var mockOAuth2Cmd = &cobra.Command{
 	Use:   "mock-oauth2",
-	Short: "启动 Mock OAuth2 服务器",
-	Long: `启动一个简化的 Mock OAuth2 服务器，用于开发测试。
+	Short: "Start a mock OAuth2 server for development",
+	Long: `Start a simplified mock OAuth2 server for development and testing.
 
-功能：
-- HTML 授权页面（输入 User ID，点击授权）
-- 授权码生成与验证
-- 使用 client_id/client_secret 校验换取用户信息
+Features:
+- HTML authorization page (enter User ID, click authorize)
+- Authorization code generation and verification
+- Client ID / client secret validation for token exchange
 
-所有数据保存在内存中，重启后清空。仅供开发环境使用。`,
+All data is stored in memory and cleared on restart. Development environment only.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Override parent command's PersistentPreRunE: this command uses an independent
 		// viper instance to load config, avoiding coupling with the main server's global viper.
@@ -58,7 +58,7 @@ func runMockOAuth2(configPath string) {
 	v.SetDefault("client_secret", "test-client-secret")
 
 	if err := v.ReadInConfig(); err != nil {
-		log.Fatalf("读取配置失败: %v", err)
+		log.Fatalf("failed to read config: %v", err)
 	}
 
 	// Create Mock OAuth2 Provider.
@@ -104,9 +104,9 @@ func runMockOAuth2(configPath string) {
 				log.Printf("Mock OAuth2 Server panic: %v\n%s", r, debug.Stack())
 			}
 		}()
-		log.Printf("Mock OAuth2 Server 启动在 :%s", port)
+		log.Printf("Mock OAuth2 Server listening on :%s", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("监听失败: %v", err)
+			log.Fatalf("listen failed: %v", err)
 		}
 	}()
 
@@ -115,15 +115,15 @@ func runMockOAuth2(configPath string) {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Mock OAuth2 Server 正在关闭...")
+	log.Println("Mock OAuth2 Server shutting down...")
 
 	// Graceful shutdown.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("服务器关闭失败: %v", err)
+		log.Printf("server shutdown failed: %v", err)
 		return
 	}
 
-	log.Println("服务器已退出")
+	log.Println("Mock OAuth2 Server exited")
 }

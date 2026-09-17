@@ -52,7 +52,7 @@ func (h *helpers) compressContextWithSessionMemory(
 
 // buildSummaryFromMemories builds session memories into summary text.
 // Groups by category and formats as readable markdown. Template is defined in
-// prompts/attachments/session-memory-summary.md.tmpl。
+// prompts/attachments/session-memory-summary.md.tmpl.
 func buildSummaryFromMemories(memories []*model.SessionMemory) string {
 	return buildSummaryFromMemoriesTmpl(memories)
 }

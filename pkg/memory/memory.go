@@ -1,9 +1,11 @@
-// Package memory 定义统一 Memory 模型的领域层。
+// Package memory defines the domain layer for the unified Memory model.
 //
-// Memory 是 OKF (Open Knowledge Format) 兼容的知识单元，通过 Scope 字段区分作用域：
-// session（会话级）、user（用户级）、global（全局级）。
-// 本包包含领域模型、验证逻辑、Repository 接口定义和格式化器，
-// 不依赖具体存储实现，可由 agent、API、CLI 等多方消费。
+// Memory is an OKF (Open Knowledge Format) compatible knowledge unit,
+// distinguished by scope via the Scope field: session, user, or global.
+// This package contains domain models, validation logic, repository
+// interface definitions, and formatters. It does not depend on any
+// concrete storage implementation and can be consumed by agents, APIs,
+// CLIs, and other components.
 package memory
 
 import (
@@ -14,7 +16,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// ScopeType 定义 Memory 的作用域
+// ScopeType defines the persistence scope of a Memory.
 type ScopeType string
 
 // ScopeType constants define the memory persistence scope.
@@ -27,10 +29,10 @@ const (
 	ScopeGlobal ScopeType = "global"
 )
 
-// ValidScopeTypes 所有有效的作用域
+// ValidScopeTypes lists all valid scope types.
 var ValidScopeTypes = []ScopeType{ScopeSession, ScopeUser, ScopeGlobal}
 
-// IsValidScopeType 检查作用域是否有效
+// IsValidScopeType reports whether the given scope is a valid ScopeType.
 func IsValidScopeType(scope ScopeType) bool {
 	for _, s := range ValidScopeTypes {
 		if s == scope {
@@ -40,13 +42,13 @@ func IsValidScopeType(scope ScopeType) bool {
 	return false
 }
 
-// ValidMemoryTypes 所有有效的 Memory 类型
+// ValidMemoryTypes lists all valid memory type strings.
 var ValidMemoryTypes = []string{
 	"decision", "context", "progress", "issue", "learnings",
 	"user", "feedback", "project", "reference",
 }
 
-// IsValidMemoryType 检查类型是否有效
+// IsValidMemoryType reports whether the given type string is valid.
 func IsValidMemoryType(t string) bool {
 	for _, v := range ValidMemoryTypes {
 		if v == t {
@@ -56,49 +58,49 @@ func IsValidMemoryType(t string) bool {
 	return false
 }
 
-// Memory 是 OKF 兼容的知识单元
+// Memory is an OKF-compatible knowledge unit.
 type Memory struct {
 	ID uuid.UUID `json:"id" gorm:"type:uuid;primaryKey"`
 
-	// ─── 作用域 ───
+	// --- Scope ---
 	Scope   ScopeType `json:"scope" gorm:"type:varchar(20);not null;index"`
 	ScopeID uuid.UUID `json:"scopeId" gorm:"type:uuid;index"` // session_id / user_id / zero for global
 
-	// ─── OKF 标准字段 ───
+	// --- OKF standard fields ---
 	Type        string `json:"type" gorm:"type:varchar(50);not null;index"` // decision | context | progress | issue | learnings | ...
-	Title       string `json:"title" gorm:"type:varchar(200);not null"`     // 5-10 词摘要
-	Description string `json:"description" gorm:"type:varchar(500)"`        // 一句话描述
+	Title       string `json:"title" gorm:"type:varchar(200);not null"`     // 5-10 word summary
+	Description string `json:"description" gorm:"type:varchar(500)"`        // one-line description
 	Content     string `json:"content" gorm:"type:text;not null"`           // markdown body
-	// Tags 使用 JSONB 数组而非 PostgreSQL text[]，因为：
-	// 1. JSONB 更灵活，支持嵌套结构（未来扩展）
-	// 2. 与 Metadata 字段保持一致的存储策略
-	// 3. 查询性能差异在标签数量少的场景下可忽略
-	// 注意：与 UserMemory.Tags (text[]) 不一致，迁移时需要转换。
-	Tags      StringArray `json:"tags" gorm:"type:jsonb;default:'[]'"` // 标签数组
-	Resource  string      `json:"resource" gorm:"type:varchar(500)"`   // 外部链接
-	Timestamp time.Time   `json:"timestamp" gorm:"not null"`           // 知识时间戳
+	// Tags uses JSONB array instead of PostgreSQL text[] because:
+	// 1. JSONB is more flexible and supports nested structures (future extension)
+	// 2. Consistent storage strategy with the Metadata field
+	// 3. Query performance difference is negligible for small tag counts
+	// Note: Differs from UserMemory.Tags (text[]); conversion needed during migration.
+	Tags      StringArray `json:"tags" gorm:"type:jsonb;default:'[]'"` // tag array
+	Resource  string      `json:"resource" gorm:"type:varchar(500)"`   // external link
+	Timestamp time.Time   `json:"timestamp" gorm:"not null"`           // knowledge timestamp
 
-	// ─── 扩展 ───
+	// --- Extensions ---
 	Metadata   JSONBString `json:"metadata" gorm:"type:jsonb;default:'{}'"` // OKF Provenance/Trust/Lifecycle
-	TokenCount int         `json:"tokenCount" gorm:"default:0"`             // 预估 token
+	TokenCount int         `json:"tokenCount" gorm:"default:0"`             // estimated tokens
 
-	// ─── 审计 ───
+	// --- Audit ---
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
-	// DeletedAt 使用 gorm.DeletedAt 而非 *time.Time，因为：
-	// 1. GORM 自动处理软删除过滤，减少手动 WHERE 条件
-	// 2. 与 GORM 生态更一致，便于使用 Unscoped() 等 API
-	// 注意：与现有 SessionMemory/UserMemory 的 *time.Time 不一致，
-	// 迁移时需要统一或编写适配层。
+	// DeletedAt uses gorm.DeletedAt instead of *time.Time because:
+	// 1. GORM handles soft-delete filtering automatically, reducing manual WHERE clauses
+	// 2. More consistent with the GORM ecosystem, easier to use APIs like Unscoped()
+	// Note: Differs from existing SessionMemory/UserMemory *time.Time;
+	// migration needs unification or an adapter layer.
 	DeletedAt gorm.DeletedAt `json:"deletedAt" gorm:"index"`
 }
 
-// TableName 指定表名
+// TableName specifies the database table name.
 func (Memory) TableName() string {
 	return "memories"
 }
 
-// BeforeCreate 自动生成 UUID v7
+// BeforeCreate auto-generates a UUID v7 if the ID is nil.
 func (m *Memory) BeforeCreate(tx *gorm.DB) error {
 	if m.ID == uuid.Nil {
 		id, err := uuid.NewV7()
@@ -110,7 +112,7 @@ func (m *Memory) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// Validate 验证模型字段
+// Validate checks that all required model fields are populated.
 func (m *Memory) Validate() error {
 	if !IsValidScopeType(m.Scope) {
 		return fmt.Errorf("%w: %q", ErrInvalidScope, m.Scope)
@@ -127,16 +129,16 @@ func (m *Memory) Validate() error {
 	if m.Timestamp.IsZero() {
 		return fmt.Errorf("timestamp: %w", ErrRequiredField)
 	}
-	// ScopeID 要求：session 和 user scope 必须有 ScopeID
+	// ScopeID is required for session and user scopes.
 	if (m.Scope == ScopeSession || m.Scope == ScopeUser) && m.ScopeID == uuid.Nil {
 		return fmt.Errorf("scopeId is required for %s scope", m.Scope)
 	}
 	return nil
 }
 
-// ─── MemoryLink ───
+// --- MemoryLink ---
 
-// MemoryLink 表示概念间的语义关系
+// MemoryLink represents a semantic relationship between concepts.
 type MemoryLink struct {
 	ID       uuid.UUID `json:"id" gorm:"type:uuid;primaryKey"`
 	FromID   uuid.UUID `json:"fromId" gorm:"type:uuid;not null;index"`
@@ -146,12 +148,12 @@ type MemoryLink struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// TableName 指定表名
+// TableName specifies the database table name.
 func (MemoryLink) TableName() string {
 	return "memory_links"
 }
 
-// BeforeCreate 自动生成 UUID v7
+// BeforeCreate auto-generates a UUID v7 if the ID is nil.
 func (l *MemoryLink) BeforeCreate(tx *gorm.DB) error {
 	if l.ID == uuid.Nil {
 		id, err := uuid.NewV7()
@@ -163,10 +165,10 @@ func (l *MemoryLink) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// ValidRelations 所有有效的关系类型
+// ValidRelations lists all valid relation types.
 var ValidRelations = []string{"related", "depends_on", "supersedes", "derives_from"}
 
-// IsValidRelation 检查关系类型是否有效
+// IsValidRelation reports whether the given relation type is valid.
 func IsValidRelation(relation string) bool {
 	for _, r := range ValidRelations {
 		if r == relation {
@@ -176,7 +178,7 @@ func IsValidRelation(relation string) bool {
 	return false
 }
 
-// Validate 验证 link 字段
+// Validate checks that all link fields are valid.
 func (l *MemoryLink) Validate() error {
 	if l.FromID == uuid.Nil {
 		return fmt.Errorf("fromId is required")

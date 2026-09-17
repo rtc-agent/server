@@ -338,7 +338,7 @@ func TestSanitizeRawError_NoSensitiveData(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 补充的净化规则测试
+// Supplementary sanitization rule tests
 // ---------------------------------------------------------------------------
 
 func TestSanitizeRawError_CredentialURIRedaction(t *testing.T) {

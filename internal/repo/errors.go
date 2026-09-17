@@ -1,14 +1,15 @@
-// Package repo 提供数据访问层（Repository）实现。
+// Package repo provides data access layer (Repository) implementations.
 //
-// 所有 repo 方法必须通过 DBFromContext 获取数据库句柄，以支持事务透传。
-// 哨兵错误集中在 errors.go 中定义，调用方可通过 errors.Is 判断错误类型。
+// All repo methods must obtain the database handle via DBFromContext to support
+// transparent transaction propagation. Sentinel errors are defined centrally
+// in errors.go; callers can use errors.Is to determine error types.
 package repo
 
 import "errors"
 
-// Sentinel errors - 业务方可使用 errors.Is 判断
+// Sentinel errors for callers to check via errors.Is.
 var (
-	// 通用
+	// Generic
 	ErrNotFound      = errors.New("record not found")
 	ErrAlreadyExists = errors.New("record already exists")
 
@@ -49,7 +50,7 @@ var (
 	ErrPermissionDenied = errors.New("permission denied")
 )
 
-// IsNotFound 判断是否为 not found 类错误
+// IsNotFound checks whether the error is a "not found" variant.
 func IsNotFound(err error) bool {
 	return errors.Is(err, ErrNotFound) ||
 		errors.Is(err, ErrSessionNotFound) ||

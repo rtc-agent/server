@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// Formatter 将 Memory 格式化为不同用途的文本
+// Formatter formats Memory objects into text for various purposes.
 type Formatter struct{}
 
-// NewFormatter 创建格式化器
+// NewFormatter creates a new Formatter.
 func NewFormatter() *Formatter {
 	return &Formatter{}
 }
@@ -21,14 +21,17 @@ var typeOrder = []string{
 	"user", "feedback", "project", "reference",
 }
 
-// FormatForInjection 格式化为 LLM 注入格式
+// FormatForInjection formats memories for LLM context injection.
 //
-// 参考 formatSessionMemoriesForInjection，但适配统一 Memory 模型。
-// 使用 <system-reminder> 标签包裹，每类别最多 3 条，内容截断 200 字符。
-// language 参数预留用于未来多语言支持（当前未使用，始终输出英文标签）。
-// NOTE: language 参数当前预留未使用。未来如需多语言支持，可根据 language
-// 值切换标签文本（如中文"上下文"/"进展"/"决策"）。当前所有语言的 LLM 均
-// 理解英文标签，因此暂不实现切换。
+// Modeled after formatSessionMemoriesForInjection but adapted for the
+// unified Memory model. Wraps output in <system-reminder> tags, limits
+// each type to at most 3 entries, and truncates content at 200 runes.
+// The language parameter is reserved for future multilingual support
+// (currently unused; always emits English tags).
+// NOTE: The language parameter is reserved but unused. If multilingual
+// support is needed in the future, tag text can be switched based on
+// the language value (e.g., Chinese labels). All current LLMs understand
+// English tags, so switching is not implemented yet.
 func (f *Formatter) FormatForInjection(memories []*Memory, language string) string {
 	if len(memories) == 0 {
 		return ""
@@ -72,10 +75,11 @@ func (f *Formatter) FormatForInjection(memories []*Memory, language string) stri
 	return sb.String()
 }
 
-// FormatForSummary 格式化为压缩摘要格式
+// FormatForSummary formats memories for context compression summary.
 //
-// 参考 buildSummaryFromMemories，用于 context 压缩的零成本路径。
-// 按类型分组输出完整内容（不截断），markdown 格式。
+// Modeled after buildSummaryFromMemories; used as the zero-cost path
+// for context compression. Outputs full content (no truncation) grouped
+// by type in markdown format.
 func (f *Formatter) FormatForSummary(memories []*Memory) string {
 	if len(memories) == 0 {
 		return ""
@@ -203,16 +207,16 @@ func writeLifecycleBlock(sb *strings.Builder, metadata map[string]any) {
 	}
 }
 
-// FormatForExport 格式化为 OKF frontmatter + markdown
+// FormatForExport formats a Memory as OKF frontmatter + markdown body.
 //
-// 参考设计文档中的导出能力设计章节。
-// 生成符合 OKF v0.2 规范的 YAML frontmatter + markdown body。
-// 从 Metadata 中提取 Provenance (sources)、Trust (generated/verified)、
-// Lifecycle (status/stale_after) 字段并渲染到 frontmatter。
+// Produces YAML frontmatter + markdown body conforming to the OKF v0.2
+// specification. Extracts Provenance (sources), Trust (generated/verified),
+// and Lifecycle (status/stale_after) fields from Metadata and renders
+// them into the frontmatter.
 func (f *Formatter) FormatForExport(m *Memory) string {
 	var sb strings.Builder
 
-	// 解析 Metadata
+	// Parse Metadata
 	var metadata map[string]any
 	if m.Metadata != "" {
 		_ = json.Unmarshal([]byte(m.Metadata), &metadata)
@@ -260,9 +264,10 @@ func (f *Formatter) FormatForExport(m *Memory) string {
 	return sb.String()
 }
 
-// yamlQuote 对 YAML 标量值进行安全引用。
-// 当值包含 YAML 特殊字符（冒号、引号、#等）时，用双引号包裹并转义内部引号；
-// 否则原样返回，保持 frontmatter 的可读性。
+// yamlQuote safely quotes a YAML scalar value.
+// When the value contains YAML special characters (colons, quotes, #,
+// etc.), it wraps the value in double quotes and escapes internal quotes;
+// otherwise it returns the value as-is to keep the frontmatter readable.
 func yamlQuote(s string) string {
 	needsQuote := false
 	for _, c := range s {
@@ -274,7 +279,7 @@ func yamlQuote(s string) string {
 	if !needsQuote {
 		return s
 	}
-	// 双引号包裹，转义内部双引号和反斜杠
+	// Wrap in double quotes, escaping internal double quotes and backslashes.
 	escaped := strings.ReplaceAll(s, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
 	return `"` + escaped + `"`
