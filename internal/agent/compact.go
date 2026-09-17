@@ -38,7 +38,12 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 	})
 
 	// 1. Inject sessionID into context so compressContext can find it.
-	compactCtx := withSessionID(ctx, sid)
+	// Use WithoutCancel to decouple from the parent context lifecycle:
+	// compact is a background operation that should complete even if the
+	// triggering context (e.g., client connection) is canceled. The publish
+	// operations inside must persist state to the database/frontend regardless
+	// of the caller's lifecycle.
+	compactCtx := withSessionID(context.WithoutCancel(ctx), sid)
 	// Also set the turnagent sessionID key for downstream helpers.
 	compactCtx = turnagent.WithSessionID(compactCtx, sessionID)
 
