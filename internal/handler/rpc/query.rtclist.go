@@ -8,7 +8,7 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
-// RtcList 获取当前用户会话的 RTC 列表（按创建时间升序，游标分页）。
+// RtcList retrieves the RTC list for the current user's session (ordered by creation time ascending, cursor pagination).
 func (h *Handler) RtcList(ctx context.Context, req *protocol.RtcListRequest) (*protocol.RtcListResponse, error) {
 	items, nextCursor, err := listBySessionCursor(ctx, h,
 		req.SessionId, req.Limit, req.Cursor, "rtc",

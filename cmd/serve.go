@@ -73,7 +73,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		shutdownTracing, err = tracing.Init(tracing.Config{
 			ServiceName: "rtc-agent",
 			Endpoint:    cfg.Tracing.Endpoint,
-			Insecure:    true, // 开发环境使用非加密连接
+			Insecure:    true, // use unencrypted connection for dev environment
 			SampleRate:  cfg.Tracing.SampleRate,
 		})
 		if err != nil {
@@ -97,15 +97,15 @@ func runServe(cmd *cobra.Command, args []string) {
 	// Init database
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
 		Logger: logger.NewGormLogger(
-			true,                 // 忽略 ErrRecordNotFound
-			200*time.Millisecond, // 慢查询阈值
+			true,                 // ignore ErrRecordNotFound
+			200*time.Millisecond, // slow query threshold
 		),
 	})
 	if err != nil {
 		logger.Fatal(context.Background(), "Failed to connect database", zap.Error(err))
 	}
 
-	// 配置数据库连接池
+	// Configure database connection pool.
 	sqlDB, err := db.DB()
 	if err != nil {
 		logger.Fatal(context.Background(), "Failed to get underlying sql.DB", zap.Error(err))
@@ -114,7 +114,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	// 注意：schema 迁移请使用独立命令 `rtc-agent migrate`，不在 serve 中自动执行
+	// Note: schema migration should use the dedicated `rtc-agent migrate` command, not auto-execute in serve.
 
 	// Init Redis
 	rdb := redis.NewClient(&redis.Options{
@@ -122,7 +122,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
 	})
-	// 启动时验证 Redis 连接
+	// Verify Redis connection at startup.
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		logger.Fatal(context.Background(), "Failed to connect Redis", zap.Error(err))
 	}

@@ -8,7 +8,7 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
-// MessageGet 获取当前用户会话中的单个消息。
+// MessageGet retrieves a single message in the current user's session.
 func (h *Handler) MessageGet(ctx context.Context, req *protocol.MessageGetRequest) (*protocol.MessageGetResponse, error) {
 	msg, _, err := getOwnedByID(
 		ctx,

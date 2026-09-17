@@ -1,6 +1,6 @@
 // internal/handler/rpc/action.go
 //
-// RPC action 方法按领域拆分到独立文件：
+// RPC action methods are split into domain-specific files:
 //   - action.sendmessage.go
 //   - action.updatesession.go
 //   - action.closesession.go

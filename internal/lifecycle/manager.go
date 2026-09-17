@@ -1,5 +1,5 @@
-// Package lifecycle 提供应用生命周期管理能力。
-// 统一管理组件的启动、停止和健康检查，确保优雅关闭。
+// Package lifecycle provides application lifecycle management.
+// It uniformly manages component startup, shutdown, and health checks to ensure graceful shutdown.
 package lifecycle
 
 import (
@@ -13,37 +13,37 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
-// Component 定义可生命周期管理的组件接口。
+// Component defines a lifecycle-manageable interface.
 type Component interface {
-	// Start 启动组件。返回错误表示启动失败。
+	// Start starts the component. An error indicates startup failure.
 	Start(ctx context.Context) error
 
-	// Stop 停止组件。应优雅地释放资源。
+	// Stop stops the component. It should gracefully release resources.
 	Stop(ctx context.Context) error
 
-	// HealthCheck 检查组件健康状态。返回错误表示不健康。
+	// HealthCheck checks the component's health. An error indicates unhealthy state.
 	HealthCheck(ctx context.Context) error
 }
 
-// Manager 统一管理多个 Component 的生命周期。
-// 组件按注册顺序启动，按逆序停止。
+// Manager uniformly manages the lifecycle of multiple Components.
+// Components are started in registration order and stopped in reverse order.
 type Manager struct {
 	mu         sync.Mutex
 	components []namedComponent
 	shutdownCh chan struct{}
 	wg         sync.WaitGroup
 	started    bool
-	ctx        context.Context // 生命周期 context，Stop 时取消
+	ctx        context.Context // lifecycle context, cancelled on Stop
 	cancel     context.CancelFunc
 }
 
-// namedComponent 包装 Component 并记录名称，用于日志。
+// namedComponent wraps a Component with a name for logging.
 type namedComponent struct {
 	name string
 	c    Component
 }
 
-// NewManager 创建生命周期管理器。
+// NewManager creates a lifecycle manager.
 func NewManager() *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
@@ -53,7 +53,7 @@ func NewManager() *Manager {
 	}
 }
 
-// Register 注册组件。必须在 Start 之前调用。
+// Register registers a component. Must be called before Start.
 func (m *Manager) Register(name string, c Component) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -65,8 +65,8 @@ func (m *Manager) Register(name string, c Component) {
 	m.components = append(m.components, namedComponent{name: name, c: c})
 }
 
-// Start 按注册顺序启动所有组件。
-// 任一组件启动失败时，会停止已启动的组件并返回错误。
+// Start starts all components in registration order.
+// If any component fails to start, already-started components are stopped and an error is returned.
 func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -81,7 +81,7 @@ func (m *Manager) Start(ctx context.Context) error {
 				zap.String("component", nc.name),
 				zap.Error(err))
 
-			// 逆序停止已启动的组件
+			// Stop already-started components in reverse order.
 			for j := i - 1; j >= 0; j-- {
 				if stopErr := m.components[j].c.Stop(context.Background()); stopErr != nil {
 					logger.Error(ctx, "[lifecycle.Manager] stop component during rollback",
@@ -100,9 +100,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop 按逆序停止所有组件。
-// 即使某个组件停止失败，也会继续停止其他组件。
-// 等待所有通过 Go 启动的 goroutine 结束，或 context 超时。
+// Stop stops all components in reverse order.
+// Even if a component fails to stop, other components continue to be stopped.
+// Waits for all goroutines launched via Go to finish, or until context timeout.
 func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	if !m.started {
@@ -113,12 +113,12 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 	close(m.shutdownCh)
 
-	// 取消生命周期 context，通知所有 Go() 启动的 goroutine 退出
+	// Cancel the lifecycle context to signal all Go()-launched goroutines to exit.
 	if m.cancel != nil {
 		m.cancel()
 	}
 
-	// 逆序停止组件
+	// Stop components in reverse order.
 	for i := len(m.components) - 1; i >= 0; i-- {
 		nc := m.components[i]
 		if err := nc.c.Stop(ctx); err != nil {
@@ -131,7 +131,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 		}
 	}
 
-	// 等待所有 goroutine 结束
+	// Wait for all goroutines to finish.
 	done := make(chan struct{})
 	go func() {
 		defer func() {
@@ -154,8 +154,8 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 }
 
-// HealthCheck 检查所有组件的健康状态。
-// 返回第一个发现的错误。
+// HealthCheck checks the health of all components.
+// Returns the first error found.
 func (m *Manager) HealthCheck(ctx context.Context) error {
 	m.mu.Lock()
 	components := make([]namedComponent, len(m.components))
@@ -170,9 +170,9 @@ func (m *Manager) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// Go 启动一个后台 goroutine，并在 Stop 时等待其结束。
-// goroutine 内部应监听 ctx.Done() 以优雅退出。
-// name 用于日志标识。
+// Go launches a background goroutine and waits for it to finish on Stop.
+// The goroutine should listen on ctx.Done() for graceful shutdown.
+// name is used for log identification.
 func (m *Manager) Go(name string, fn func(ctx context.Context)) {
 	m.wg.Add(1)
 	go func() {
@@ -189,8 +189,8 @@ func (m *Manager) Go(name string, fn func(ctx context.Context)) {
 	}()
 }
 
-// ShutdownCh 返回一个 channel，在 Stop 调用时关闭。
-// 组件可监听此 channel 以提前感知关闭信号。
+// ShutdownCh returns a channel that is closed when Stop is called.
+// Components can listen on this channel to detect shutdown signals early.
 func (m *Manager) ShutdownCh() <-chan struct{} {
 	return m.shutdownCh
 }

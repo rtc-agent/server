@@ -17,7 +17,7 @@ import (
 	"github.com/rtc-agent/server/internal/oauth"
 )
 
-// mockOAuth2Cmd Mock OAuth2 服务器命令
+// mockOAuth2Cmd is the Mock OAuth2 server command.
 var mockOAuth2Cmd = &cobra.Command{
 	Use:   "mock-oauth2",
 	Short: "启动 Mock OAuth2 服务器",
@@ -30,12 +30,12 @@ var mockOAuth2Cmd = &cobra.Command{
 
 所有数据保存在内存中，重启后清空。仅供开发环境使用。`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		// 覆盖父命令的 PersistentPreRunE：本命令使用独立的 viper 实例加载配置，
-		// 避免与主 server 的全局 viper 耦合。
+		// Override parent command's PersistentPreRunE: this command uses an independent
+		// viper instance to load config, avoiding coupling with the main server's global viper.
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		// 配置文件路径：默认 mock-oauth2 专属配置，--config 显式指定时使用指定路径
+		// Config file path: defaults to mock-oauth2-specific config; uses explicit path when --config is set.
 		configPath := "etc/mock-oauth2.yaml"
 		if f := cmd.Flags().Lookup("config"); f != nil && f.Changed {
 			configPath = cfgFile
@@ -48,9 +48,9 @@ func init() {
 	rootCmd.AddCommand(mockOAuth2Cmd)
 }
 
-// runMockOAuth2 启动 Mock OAuth2 服务器
+// runMockOAuth2 starts the Mock OAuth2 server.
 func runMockOAuth2(configPath string) {
-	// 加载配置（独立 viper 实例）
+	// Load config (independent viper instance).
 	v := viper.New()
 	v.SetConfigFile(configPath)
 	v.SetDefault("server.port", "10060")
@@ -61,28 +61,28 @@ func runMockOAuth2(configPath string) {
 		log.Fatalf("读取配置失败: %v", err)
 	}
 
-	// 创建 Mock OAuth2 Provider
+	// Create Mock OAuth2 Provider.
 	provider := oauth.NewProvider(oauth.Config{
 		ClientID:     v.GetString("client_id"),
 		ClientSecret: v.GetString("client_secret"),
 	})
 
-	// 注册路由
+	// Register routes.
 	mux := http.NewServeMux()
 	provider.RegisterRoutes(mux)
 
-	// 健康检查端点
+	// Health check endpoint.
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, "OK")
 	})
 
-	// CORS 中间件：开放所有来源（仅 Mock 环境使用）
+	// CORS middleware: allow all origins (Mock environment only).
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "*")
-		// 预检请求直接返回 204
+		// Preflight requests return 204 directly.
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -90,14 +90,14 @@ func runMockOAuth2(configPath string) {
 		mux.ServeHTTP(w, r)
 	})
 
-	// 创建 HTTP Server
+	// Create HTTP Server.
 	port := v.GetString("server.port")
 	srv := &http.Server{
 		Addr:    "0.0.0.0:" + port,
 		Handler: handler,
 	}
 
-	// 启动 HTTP Server
+	// Start HTTP Server.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -110,14 +110,14 @@ func runMockOAuth2(configPath string) {
 		}
 	}()
 
-	// 等待退出信号
+	// Wait for shutdown signal.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	log.Println("Mock OAuth2 Server 正在关闭...")
 
-	// 优雅关闭
+	// Graceful shutdown.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {

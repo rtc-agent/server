@@ -77,7 +77,7 @@ func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Sessio
 	})
 }
 
-// SendMessage 发送消息（自动创建 session + turn）。
+// SendMessage sends a message (auto-creates session + turn).
 func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequest) (*protocol.SendMessageResponse, error) {
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {

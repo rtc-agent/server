@@ -16,7 +16,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// UpdateRtcStatus 更新 RTC 执行状态（executing/failed/timeout/rejected）。
+// UpdateRtcStatus updates RTC execution status (executing/failed/timeout/rejected).
 func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcStatusRequest) (*protocol.UpdateRtcStatusResponse, error) {
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
@@ -34,7 +34,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		zap.String("rtc", req.RtcId),
 		zap.String("status", string(req.Status)))
 
-	// 校验目标状态合法性
+	// Validate target status.
 	switch req.Status {
 	case protocol.RtcStatusExecuting, protocol.RtcStatusFailed,
 		protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
@@ -46,7 +46,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		}
 	}
 
-	// 加载 RTC 并校验存在
+	// Load RTC and verify existence.
 	rtc, err := h.deps.Deps.RtcRepo.GetByID(ctx, rtcUUID)
 	if err != nil {
 		if repo.IsNotFound(err) {
@@ -55,7 +55,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
 	}
 
-	// 状态校验：终态不允许再变更（幂等：目标状态与当前一致时直接返回成功）
+	// State validation: terminal states cannot be changed (idempotent: if target matches current, return success).
 	switch protocol.RtcStatus(rtc.Status) {
 	case protocol.RtcStatusCompleted, protocol.RtcStatusFailed,
 		protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
@@ -70,7 +70,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		}
 	}
 
-	// 归属校验：通过 RTC 的 sessionID 校验用户权限
+	// Ownership check: verify user permissions via RTC's sessionID.
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, rtc.SessionID, creator); err != nil {
 		return nil, h.ownershipError(ctx, err)
 	}

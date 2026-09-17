@@ -8,7 +8,7 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
-// RtcGet 获取当前用户会话中的单个 RTC。
+// RtcGet retrieves a single RTC in the current user's session.
 func (h *Handler) RtcGet(ctx context.Context, req *protocol.RtcGetRequest) (*protocol.RtcGetResponse, error) {
 	rtc, _, err := getOwnedByID(
 		ctx,

@@ -1,4 +1,3 @@
-// Package rpchandler 提供 Centrifuge RPC 接口的协议适配层。
 package rpchandler
 
 import (
@@ -17,25 +16,25 @@ import (
 	"go.uber.org/zap"
 )
 
-// scriptExecutionRecorder 异步记录 script 执行详情。
-// 使用固定数量的 worker goroutine 从带缓冲 channel 中消费任务，
-// 避免高并发场景下产生大量 goroutine。
+// scriptExecutionRecorder asynchronously records script execution details.
+// It uses a fixed number of worker goroutines consuming from a buffered channel,
+// avoiding the creation of many goroutines under high concurrency.
 type scriptExecutionRecorder struct {
-	deps  *Dependencies // rpchandler.Dependencies，持有 ScriptExecutionRepo 和 Metrics
+	deps  *Dependencies // rpchandler.Dependencies, holds ScriptExecutionRepo and Metrics
 	tasks chan scriptRecordTask
 	wg    sync.WaitGroup
 	quit  chan struct{}
 }
 
-// scriptRecordTask 是 recorder channel 中传递的任务单元。
+// scriptRecordTask is the task unit passed through the recorder channel.
 type scriptRecordTask struct {
-	ctx context.Context // 使用 context.WithoutCancel 创建，独立于 RPC handler
+	ctx context.Context // created with context.WithoutCancel, independent of RPC handler
 	rtc *model.Rtc
 	req *protocol.SubmitRtcResultRequest
 }
 
-// newScriptExecutionRecorder 创建并启动 recorder。
-// workerCount 控制并发写入数，bufferSize 控制任务队列容量。
+// newScriptExecutionRecorder creates and starts the recorder.
+// workerCount controls the number of concurrent writers, bufferSize controls the task queue capacity.
 func newScriptExecutionRecorder(deps *Dependencies, workerCount, bufferSize int) *scriptExecutionRecorder {
 	r := &scriptExecutionRecorder{
 		deps:  deps,
@@ -43,7 +42,7 @@ func newScriptExecutionRecorder(deps *Dependencies, workerCount, bufferSize int)
 		quit:  make(chan struct{}),
 	}
 
-	// 启动固定数量的 worker
+	// Start a fixed number of workers.
 	for i := 0; i < workerCount; i++ {
 		r.wg.Add(1)
 		go r.worker(i)
@@ -52,26 +51,26 @@ func newScriptExecutionRecorder(deps *Dependencies, workerCount, bufferSize int)
 	return r
 }
 
-// submit 提交一个异步记录任务。非阻塞，channel 满时丢弃。
+// submit submits an asynchronous recording task. Non-blocking; drops the task if the channel is full.
 func (r *scriptExecutionRecorder) submit(ctx context.Context, rtc *model.Rtc, req *protocol.SubmitRtcResultRequest) {
 	select {
 	case r.tasks <- scriptRecordTask{ctx: ctx, rtc: rtc, req: req}:
-		// 成功提交
+		// Successfully submitted.
 	default:
-		// channel 已满，丢弃任务（非关键路径，不影响主流程）
+		// Channel is full, drop the task (non-critical path, does not affect main flow).
 		logger.Warn(ctx, "[scriptExecutionRecorder] task queue full, dropping record",
 			zap.String("rtc", rtc.ID.String()))
 	}
 }
 
-// shutdown 优雅关闭，等待所有 worker 完成。
+// shutdown gracefully shuts down, waiting for all workers to finish.
 func (r *scriptExecutionRecorder) shutdown() {
 	close(r.quit)
 	r.wg.Wait()
 }
 
-// worker 是 recorder 的工作循环。
-// 从 tasks channel 消费任务，quit 信号触发后排空剩余任务再退出。
+// worker is the recorder's work loop.
+// It consumes tasks from the tasks channel; on quit signal, drains remaining tasks before exiting.
 func (r *scriptExecutionRecorder) worker(id int) {
 	defer r.wg.Done()
 	defer func() {
@@ -86,7 +85,7 @@ func (r *scriptExecutionRecorder) worker(id int) {
 	for {
 		select {
 		case <-r.quit:
-			// 排空 channel 中剩余任务
+			// Drain remaining tasks in the channel.
 			for {
 				select {
 				case task := <-r.tasks:
@@ -101,8 +100,8 @@ func (r *scriptExecutionRecorder) worker(id int) {
 	}
 }
 
-// safeProcessTask 包装 processTask，捕获 panic 防止 worker 永久退出。
-// 设计参考：设计文档 Section 9.4.1
+// safeProcessTask wraps processTask with panic recovery to prevent permanent worker exit.
+// Design reference: design doc Section 9.4.1
 func (r *scriptExecutionRecorder) safeProcessTask(task scriptRecordTask) {
 	defer func() {
 		if rv := recover(); rv != nil {
@@ -113,14 +112,14 @@ func (r *scriptExecutionRecorder) safeProcessTask(task scriptRecordTask) {
 	r.processTask(task)
 }
 
-// processTask 执行 script 执行记录的核心逻辑。
-// 从 RTC Parameters 和提交结果中提取信息，构建 ScriptExecution 记录并写入 DB。
+// processTask executes the core logic of script execution recording.
+// It extracts information from RTC Parameters and submission results, builds a ScriptExecution record, and writes it to the DB.
 func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 	ctx := task.ctx
 	rtc := task.rtc
 	req := task.req
 
-	// 1. 从 RTC.Parameters 中提取 title、action、name、code
+	// 1. Extract title, action, name, code from RTC.Parameters.
 	var params struct {
 		Title  string `json:"title"`
 		Action string `json:"action"`
@@ -135,16 +134,16 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 		}
 	}
 	if params.Action == "" {
-		params.Action = "eval" // 默认 action
+		params.Action = "eval" // default action
 	}
 
-	// 2. 从 req.Result 中提取前端报告的执行元数据
+	// 2. Extract frontend-reported execution metadata from req.Result.
 	var durationMs int64
 	var resultSize int64
 	var logsList, warningsList, errorsList model.StringArray
 
 	if req.Result != nil {
-		// 计算 result 大小（仍需 Marshal）
+		// Calculate result size (still requires Marshal).
 		resultBytes, err := json.Marshal(req.Result)
 		if err != nil {
 			logger.Warn(ctx, "[scriptExecutionRecorder] marshal result failed",
@@ -153,7 +152,7 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 		}
 		resultSize = int64(len(resultBytes))
 
-		// 直接从 map 中提取字段，避免二次 JSON 解析
+		// Extract fields directly from the map to avoid a second JSON parse.
 		if resultData, ok := req.Result.(map[string]interface{}); ok {
 			if v, ok := resultData["duration_ms"]; ok {
 				switch d := v.(type) {
@@ -177,7 +176,7 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 		}
 	}
 
-	// 3. 计算代码大小和 SHA-256 哈希
+	// 3. Calculate code size and SHA-256 hash.
 	var codeSize int64
 	var codeHash string
 	if params.Code != "" {
@@ -186,20 +185,20 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 		codeHash = hex.EncodeToString(sum[:])
 	}
 
-	// 4. 确定执行状态
+	// 4. Determine execution status.
 	status := "success"
 	if !req.Success {
 		status = "failed"
 	}
 
-	// 5. 获取 user_id（防御性日志，设计文档 Section 9.4）
+	// 5. Retrieve user_id (defensive logging, design doc Section 9.4).
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		logger.Warn(ctx, "[scriptExecutionRecorder] missing user_id in context",
 			zap.String("rtc", rtc.ID.String()))
 	}
 
-	// 6. 构建 ScriptExecution 记录
+	// 6. Build the ScriptExecution record.
 	now := time.Now()
 	exec := &model.ScriptExecution{
 		RtcID:        rtc.ID,
@@ -222,7 +221,7 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 		CompletedAt:  &now,
 	}
 
-	// 7. 写入数据库（设置超时防止连接池满时无限阻塞）
+	// 7. Write to the database (with timeout to prevent indefinite blocking when connection pool is full).
 	dbCtx, dbCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer dbCancel()
 	if err := r.deps.ScriptExecutionRepo.Create(dbCtx, exec); err != nil {
@@ -232,7 +231,7 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 		return
 	}
 
-	// 8. 记录 Loki 结构化日志
+	// 8. Log structured Loki entry.
 	logger.Info(ctx, "script.execution_completed",
 		zap.String("rtc_id", rtc.ID.String()),
 		zap.String("session_id", rtc.SessionID.String()),
@@ -245,7 +244,7 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 		zap.Int64("code_size", codeSize),
 	)
 
-	// 9. 记录 Prometheus 指标（Metrics 可能为 nil）
+	// 9. Record Prometheus metrics (Metrics may be nil).
 	if r.deps.Metrics != nil {
 		r.deps.Metrics.RecordScriptExecution(ctx, turnagent.ScriptExecutionMetricsAttrs{
 			Action:     params.Action,
@@ -257,9 +256,9 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 	}
 }
 
-// extractStringSlice 从 interface{} 安全提取 model.StringArray。
-// JSON 反序列化后 string slice 通常为 []interface{}，
-// 但也可能是 []string（直接构造时）。
+// extractStringSlice safely extracts a model.StringArray from an interface{}.
+// After JSON deserialization, a string slice is typically []interface{},
+// but it may also be []string (when constructed directly).
 func extractStringSlice(v interface{}) model.StringArray {
 	switch s := v.(type) {
 	case []interface{}:

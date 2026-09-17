@@ -13,8 +13,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// parseUUID 将 protocol.UUID 转换为 uuid.UUID。
-// protocol.UUID 底层为 string，线上保证合法；解析失败时返回 invalid_argument APIError。
+// parseUUID converts a protocol.UUID to uuid.UUID.
+// protocol.UUID is backed by string and is guaranteed valid in production;
+// returns an invalid_argument APIError on parse failure.
 func parseUUID(id protocol.UUID, fieldName string) (uuid.UUID, *APIError) {
 	parsed, err := uuid.Parse(id)
 	if err != nil {
@@ -26,7 +27,7 @@ func parseUUID(id protocol.UUID, fieldName string) (uuid.UUID, *APIError) {
 	return parsed, nil
 }
 
-// parseUUIDPtr 将 *protocol.UUID 转换为 *uuid.UUID。nil 输入返回 nil。
+// parseUUIDPtr converts a *protocol.UUID to *uuid.UUID. Returns nil for nil input.
 func parseUUIDPtr(id *protocol.UUID, fieldName string) (*uuid.UUID, *APIError) {
 	if id == nil {
 		return nil, nil
@@ -38,8 +39,8 @@ func parseUUIDPtr(id *protocol.UUID, fieldName string) (*uuid.UUID, *APIError) {
 	return &parsed, nil
 }
 
-// loadOwnedSession 加载 session 并校验归属当前用户。
-// 返回的 session 保证非 nil；失败时返回已包装的 APIError。
+// loadOwnedSession loads a session and verifies ownership by the current user.
+// The returned session is guaranteed non-nil; on failure, a wrapped APIError is returned.
 func (h *Handler) loadOwnedSession(ctx context.Context, sessionID uuid.UUID, userID uuid.UUID) (*model.Session, error) {
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionID)
 	if err != nil {
@@ -61,7 +62,7 @@ func (h *Handler) loadOwnedSession(ctx context.Context, sessionID uuid.UUID, use
 	return session, nil
 }
 
-// requireUserID 从 context 提取 userID，缺失时返回 unauthorized APIError。
+// requireUserID extracts the userID from context, returning an unauthorized APIError if missing.
 func (h *Handler) requireUserID(ctx context.Context) (uuid.UUID, error) {
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
@@ -70,7 +71,7 @@ func (h *Handler) requireUserID(ctx context.Context) (uuid.UUID, error) {
 	return userID, nil
 }
 
-// clampLimit 校验并规整 limit 参数：0 表示使用默认值，超过 max 时返回 APIError。
+// clampLimit validates and normalizes the limit argument: 0 means use default; exceeding max returns an APIError.
 func clampLimit(reqLimit *int, defaultLimit, maxLimit int) (int, *APIError) {
 	if reqLimit == nil {
 		return defaultLimit, nil

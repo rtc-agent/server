@@ -44,7 +44,7 @@ func init() {
 }
 
 func getDevComposePath() (string, error) {
-	// 优先使用当前工作目录（兼容从仓库根目录执行）
+	// Prefer current working directory (compatible with execution from repo root).
 	cwd, err := os.Getwd()
 	if err == nil {
 		composePath := filepath.Join(cwd, "etc", "dev", "docker-compose.yml")
@@ -53,10 +53,10 @@ func getDevComposePath() (string, error) {
 		}
 	}
 
-	// 回退：使用源码文件位置定位（开发时有效）
+	// Fallback: use source file location (works during development).
 	_, currentFile, _, ok := runtime.Caller(0)
 	if ok {
-		// cmd/dev.go → 项目根目录
+		// cmd/dev.go -> project root directory.
 		projectRoot := filepath.Dir(filepath.Dir(currentFile))
 		composePath := filepath.Join(projectRoot, "etc", "dev", "docker-compose.yml")
 		if _, err := os.Stat(composePath); err == nil {

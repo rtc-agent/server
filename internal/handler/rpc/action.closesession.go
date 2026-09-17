@@ -20,7 +20,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// CloseSession 关闭会话。
+// CloseSession closes a session.
 func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRequest) (*protocol.CloseSessionResponse, error) {
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
@@ -93,7 +93,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	// If synchronous behavior is needed in the future, this can be changed
 	// to block until Queue.CancelSession completes. The trade-off is higher
 	// API latency vs. stronger consistency guarantees on close.
-	// 添加超时防止下游操作挂起导致 goroutine 泄漏
+	// Add timeout to prevent goroutine leak if downstream operations hang.
 	detachedCtx, detachedCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer detachedCancel()
 	logger.SafeGo("stop-active-turns", func() {

@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// UpdateSession 更新会话（目前仅支持标题）。
+// UpdateSession updates a session (currently only supports title).
 func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSessionRequest) (*protocol.UpdateSessionResponse, error) {
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {

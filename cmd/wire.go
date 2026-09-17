@@ -132,12 +132,12 @@ func provideJWTSigner(cfg *config.Config) (*auth.JWTSigner, error) {
 
 func provideCentrifugeNode() (*centrifuge.Node, error) {
 	return centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelDebug, // 提高到 Debug 级别
+		LogLevel:   centrifuge.LogLevelDebug, // elevated to Debug level
 		LogHandler: newCentrifugeLogHandler(),
 	})
 }
 
-// centrifugeLogHandler 将 Centrifuge 的日志转发到 zap logger
+// centrifugeLogHandler forwards Centrifuge logs to the zap logger.
 type centrifugeLogHandler struct{}
 
 func newCentrifugeLogHandler() centrifuge.LogHandler {
@@ -148,17 +148,17 @@ func (h *centrifugeLogHandler) handle(entry centrifuge.LogEntry) {
 	ctx := context.Background()
 	fields := make([]zap.Field, 0, len(entry.Fields)+1)
 
-	// 添加 Centrifuge 的字段
+	// Add Centrifuge fields.
 	for k, v := range entry.Fields {
 		fields = append(fields, zap.Any(k, v))
 	}
 
-	// 添加错误信息（如果有）
+	// Add error info (if present).
 	if entry.Error != nil {
 		fields = append(fields, zap.Error(entry.Error))
 	}
 
-	// 根据 Centrifuge 的日志级别映射到 zap 的日志级别
+	// Map Centrifuge log level to zap log level.
 	switch entry.Level {
 	case centrifuge.LogLevelTrace, centrifuge.LogLevelDebug:
 		logger.Debug(ctx, "[centrifuge] "+entry.Message, fields...)
@@ -263,7 +263,7 @@ func provideAgent(
 	})
 }
 
-// convertModelPricing 将配置层的 ModelPricingConfig 转换为 agent 层的 ModelPricingConfig
+// convertModelPricing converts the config-layer ModelPricingConfig to the agent-layer ModelPricingConfig.
 func convertModelPricing(cfg *config.ModelPricingConfig) *agent.ModelPricingConfig {
 	if cfg == nil {
 		return nil
@@ -277,7 +277,7 @@ func convertModelPricing(cfg *config.ModelPricingConfig) *agent.ModelPricingConf
 	}
 }
 
-// provideMetrics 创建 Prometheus 指标收集器
+// provideMetrics creates a Prometheus metrics collector.
 func provideMetrics() *turnagent.PrometheusMetrics {
 	return turnagent.NewPrometheusMetrics()
 }

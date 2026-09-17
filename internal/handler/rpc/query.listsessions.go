@@ -9,11 +9,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// ListSessions 默认分页大小（最大复用 queryMaxLimit）。
+// listSessionsDefaultLimit is the default page size (reuses queryMaxLimit as maximum).
 const listSessionsDefaultLimit = 20
 
-// ListSessions 获取当前用户的会话列表（按创建时间倒序，游标分页）。
-// RPC 专属查询，不共享给 LLM，业务逻辑直接实现在此。
+// ListSessions retrieves the current user's session list (ordered by creation time descending, cursor pagination).
+// RPC-specific query, not shared with LLM; business logic is implemented directly here.
 func (h *Handler) ListSessions(ctx context.Context, req *protocol.ListSessionsRequest) (*protocol.ListSessionsResponse, error) {
 	userID, err := h.requireUserID(ctx)
 	if err != nil {
@@ -35,7 +35,7 @@ func (h *Handler) ListSessions(ctx context.Context, req *protocol.ListSessionsRe
 		items = append(items, model.ToProtocolSession(s))
 	}
 
-	// 当返回数量等于 limit 时，认为可能还有下一页，以最后一条 ID 作为游标
+	// When returned count equals limit, assume there may be a next page; use the last ID as cursor.
 	var nextCursor *string
 	if len(sessions) == limit {
 		last := sessions[len(sessions)-1].ID.String()

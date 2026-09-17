@@ -13,8 +13,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// StopTurn 停止正在执行的 Turn（取消 LLM 调用）。
-// 停止 session 的所有活跃 turn（支持跨节点）。
+// StopTurn stops a running Turn (cancels the LLM call).
+// Stops all active turns for the session (supports cross-node operation).
 func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (*protocol.StopTurnResponse, error) {
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
@@ -40,7 +40,7 @@ func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (
 	// This mirrors CloseSession's approach: detaching from the RPC context
 	// ensures multi-step cleanup (DB queries, Redis publish) is not aborted
 	// by an early context cancellation (e.g. rpc_timeout).
-	// 添加超时防止下游操作挂起导致 goroutine 泄漏
+	// Add timeout to prevent goroutine leak if downstream operations hang.
 	detachedCtx, detachedCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer detachedCancel()
 	logger.SafeGo("stop-active-turns", func() {

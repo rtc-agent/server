@@ -37,7 +37,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		zap.String("user", userID.String()),
 		zap.String("session", req.SessionId))
 
-	// 1. Session 存在性校验
+	// 1. Verify session existence.
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionUUID)
 	if err != nil {
 		if repo.IsNotFound(err) {
@@ -49,7 +49,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
 
-	// 2. 权限校验
+	// 2. Permission check.
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
 		return nil, &APIError{
 			Code:    "permission_denied",
@@ -57,7 +57,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		}
 	}
 
-	// 3. 防重入：检查队列中是否已有该 session 的 compact 任务
+	// 3. Dedup: check if a compact task for this session is already in the queue.
 	if h.deps.Queue != nil {
 		hasPending, checkErr := h.deps.Queue.HasPendingWorkByKind(ctx, session.ID.String(), string(turnagent.WorkKindCompact))
 		if checkErr != nil {
@@ -71,7 +71,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		}
 	}
 
-	// 4. 构造 payload 并入队
+	// 4. Build payload and enqueue.
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:              turnagent.WorkKindCompact,
 		SessionID:         session.ID.String(),

@@ -40,7 +40,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
 		Logger: logger.NewGormLogger(
-			false, // 迁移时不忽略 ErrRecordNotFound
+			false, // do not ignore ErrRecordNotFound during migration
 			200*time.Millisecond,
 		),
 	})
@@ -48,7 +48,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("connect database: %w", err)
 	}
 
-	// 确保 pgvector 扩展已创建（pgvector/pgvector:pg17 镜像已安装扩展，但需显式启用）
+	// Ensure pgvector extension is created (pgvector/pgvector:pg17 image has it installed, but it must be explicitly enabled).
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
 		logger.Warn(context.Background(), "Failed to create pgvector extension (vector search may not work)", zap.Error(err))
 	}

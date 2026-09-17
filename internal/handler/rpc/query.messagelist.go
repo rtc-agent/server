@@ -9,7 +9,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// MessageList 获取当前用户会话的消息列表（按 global_offset 升序，游标分页）。
+// MessageList retrieves the message list for the current user's session (ordered by global_offset ascending, cursor pagination).
 func (h *Handler) MessageList(ctx context.Context, req *protocol.MessageListRequest) (*protocol.MessageListResponse, error) {
 	userID, err := h.requireUserID(ctx)
 	if err != nil {

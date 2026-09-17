@@ -9,7 +9,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// GetSession 获取当前用户拥有的单个会话详情。
+// GetSession retrieves a single session owned by the current user.
 func (h *Handler) GetSession(ctx context.Context, req *protocol.GetSessionRequest) (*protocol.GetSessionResponse, error) {
 	userID, err := h.requireUserID(ctx)
 	if err != nil {

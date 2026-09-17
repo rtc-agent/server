@@ -20,7 +20,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// SubmitRtcResult 提交 RTC 执行结果，标记 RTC 完成并继续 LLM 流程。
+// SubmitRtcResult submits an RTC execution result, marks the RTC as completed, and continues the LLM flow.
 func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcResultRequest) (*protocol.SubmitRtcResultResponse, error) {
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
@@ -235,7 +235,7 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 	// Detach from the RPC handler's context. The RTC result is already
 	// persisted; the resume is fire-and-forget and must not be aborted
 	// by the RPC context timeout/cancellation.
-	// 添加超时防止下游操作挂起导致 goroutine 泄漏
+	// Add timeout to prevent goroutine leak if downstream operations hang.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(callerCtx), 30*time.Second)
 	defer cancel()
 	if h.deps.Queue == nil {
@@ -257,7 +257,7 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 		return
 	}
 
-	// 前置检查：session 已 closed 则不触发新 turn
+	// Pre-check: skip triggering a new turn if session is already closed.
 	session, err := h.deps.SessionRepo.GetByID(ctx, rtc.SessionID)
 	if err != nil {
 		logger.Error(ctx, "[resumeTurnAfterRtc] get session",

@@ -8,7 +8,7 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
-// TurnGet 获取当前用户会话中的单个 Turn。
+// TurnGet retrieves a single Turn in the current user's session.
 func (h *Handler) TurnGet(ctx context.Context, req *protocol.TurnGetRequest) (*protocol.TurnGetResponse, error) {
 	turn, _, err := getOwnedByID(
 		ctx,

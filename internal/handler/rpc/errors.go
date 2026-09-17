@@ -10,10 +10,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// internalError 记录完整错误到日志，返回对客户端安全的通用 API 错误。
+// internalError logs the full error and returns a generic API error safe for clients.
 //
-// 用于数据库、Redis、事务等内部错误——这些错误的 err.Error() 可能包含
-// 表名、SQL 语句、连接信息等内部细节，绝不应该暴露给客户端。
+// Used for internal errors such as database, Redis, and transaction failures —
+// err.Error() from these may contain table names, SQL statements, connection info,
+// and other internal details that must never be exposed to clients.
 func (h *Handler) internalError(ctx context.Context, code, publicMsg string, err error) *APIError {
 	logger.Error(ctx, publicMsg,
 		zap.String("error_code", code),
@@ -21,12 +22,12 @@ func (h *Handler) internalError(ctx context.Context, code, publicMsg string, err
 	return &APIError{Code: code, Message: publicMsg}
 }
 
-// ownershipError 将 CheckSessionOwnership 返回的错误分类为安全的 API 错误。
+// ownershipError classifies errors from CheckSessionOwnership into safe API errors.
 //
-// CheckSessionOwnership 可能返回三类错误：
-//   - ErrPermissionDenied：归属校验失败 → "permission_denied"
-//   - repo.IsNotFound：session 不存在 → "session.not_found"
-//   - 其他（数据库错误等） → 记录日志，返回通用 "internal_error"
+// CheckSessionOwnership may return three categories of errors:
+//   - ErrPermissionDenied: ownership check failed -> "permission_denied"
+//   - repo.IsNotFound: session does not exist -> "session.not_found"
+//   - Other (database errors, etc.) -> log and return generic "internal_error"
 func (h *Handler) ownershipError(ctx context.Context, err error) *APIError {
 	if errors.Is(err, repo.ErrPermissionDenied) {
 		return &APIError{Code: "permission_denied", Message: "permission denied"}

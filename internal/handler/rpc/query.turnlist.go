@@ -8,7 +8,7 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
-// TurnList 获取当前用户会话的 Turn 列表（按创建时间升序，游标分页）。
+// TurnList retrieves the Turn list for the current user's session (ordered by creation time ascending, cursor pagination).
 func (h *Handler) TurnList(ctx context.Context, req *protocol.TurnListRequest) (*protocol.TurnListResponse, error) {
 	items, nextCursor, err := listBySessionCursor(ctx, h,
 		req.SessionId, req.Limit, req.Cursor, "turn",

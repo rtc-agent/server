@@ -1,7 +1,7 @@
-// Package rpchandler 提供 Centrifuge RPC 接口的协议适配层。
+// Package rpchandler provides the protocol adaptation layer for Centrifuge RPC interfaces.
 //
-// 每个 RPC 方法对应一个 handler 函数，通过 registerRoutes 统一注册。
-// 所有对外返回的错误必须使用 APIError 类型，确保不泄露内部细节。
+// Each RPC method corresponds to a handler function, registered via registerRoutes.
+// All externally returned errors must use the APIError type to avoid leaking internal details.
 package rpchandler
 
 import (
@@ -23,49 +23,49 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
-// Dependencies RPC Handler 所需的依赖
+// Dependencies required by the RPC Handler.
 type Dependencies struct {
 	Deps                *usecase.Dependencies
 	SessionRepo         repo.SessionRepo
 	Queue               *rtcqueue.Queue // rtc-queue for publishing/cancelling work items
 	API                 config.APIConfig
-	ScriptExecutionRepo repo.ScriptExecutionRepo     // script execution 持久化
-	Metrics             *turnagent.PrometheusMetrics // Prometheus 指标
+	ScriptExecutionRepo repo.ScriptExecutionRepo     // script execution persistence
+	Metrics             *turnagent.PrometheusMetrics // Prometheus metrics
 	AsynqInspector      *hibikenasynq.Inspector      // asynq inspector for loop task cleanup
 }
 
-// Handler RPC 处理器
+// Handler is the RPC handler.
 type Handler struct {
 	deps     *Dependencies
 	routes   map[protocol.RpcMethod]routeHandler
-	recorder *scriptExecutionRecorder // 异步记录 script 执行详情
+	recorder *scriptExecutionRecorder // asynchronously records script execution details
 }
 
-// routeHandler 单条路由的处理函数
+// routeHandler is the handler function for a single route.
 type routeHandler func(ctx context.Context, data []byte) (any, error)
 
-// NewHandler 创建 RPC 处理器
+// NewHandler creates an RPC handler.
 func NewHandler(deps *Dependencies) *Handler {
 	h := &Handler{
 		deps: deps,
 		recorder: newScriptExecutionRecorder(deps,
-			4,    // workerCount: 4 个并发 writer
-			1000, // bufferSize: 队列容量 1000
+			4,    // workerCount: 4 concurrent writers
+			1000, // bufferSize: queue capacity 1000
 		),
 	}
 	h.registerRoutes()
 	return h
 }
 
-// Close 关闭 Handler 持有的资源（停止 recorder worker）。
+// Close releases resources held by the Handler (stops recorder workers).
 func (h *Handler) Close() {
 	if h.recorder != nil {
 		h.recorder.shutdown()
 	}
 }
 
-// registerRoutes 注册所有 RPC 路由。
-// 新增 RPC 只需在此处添加一行，无需修改 HandleRPC。
+// registerRoutes registers all RPC routes.
+// To add a new RPC, just add one line here; no need to modify HandleRPC.
 func (h *Handler) registerRoutes() {
 	h.routes = map[protocol.RpcMethod]routeHandler{
 		// Session
@@ -94,8 +94,8 @@ func (h *Handler) registerRoutes() {
 	}
 }
 
-// dispatch 泛型分发辅助：反序列化请求 → 调用 handler → 返回结果。
-// 消除每个 case 中重复的 Unmarshal 样板代码。
+// dispatch is a generic dispatch helper: deserializes request -> calls handler -> returns result.
+// Eliminates repetitive Unmarshal boilerplate in each case.
 func dispatch[Req any, Resp any](fn func(context.Context, *Req) (*Resp, error)) routeHandler {
 	return func(ctx context.Context, data []byte) (any, error) {
 		var req Req
@@ -110,28 +110,28 @@ func dispatch[Req any, Resp any](fn func(context.Context, *Req) (*Resp, error)) 
 	}
 }
 
-// ========== APIError 统一错误响应 ==========
+// ========== APIError unified error response ==========
 
-// APIError 结构化 API 错误，HTTP 和 RPC 统一使用
+// APIError is a structured API error, used uniformly by both HTTP and RPC.
 type APIError struct {
-	Code    string `json:"code"`              // 机器可读错误码，如 "session.not_found"
-	Message string `json:"message"`           // 人类可读描述
-	Details any    `json:"details,omitempty"` // 可选附加信息
+	Code    string `json:"code"`              // machine-readable error code, e.g. "session.not_found"
+	Message string `json:"message"`           // human-readable description
+	Details any    `json:"details,omitempty"` // optional additional information
 }
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
-// SafeMessage 返回对客户端安全的错误描述（不含内部细节）。
-// 用于 svc 层在不导入 rpchandler 的前提下提取安全的错误消息。
+// SafeMessage returns an error description safe for clients (without internal details).
+// Used by the svc layer to extract a safe error message without importing rpchandler.
 func (e *APIError) SafeMessage() string {
 	return e.Error()
 }
 
 // ========== HandleRPC ==========
 
-// HandleRPC RPC 路由分发入口
+// HandleRPC is the RPC routing dispatch entry point.
 func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]byte, error) {
 	start := time.Now()
 

@@ -82,13 +82,14 @@ func buildForkMessages(
 	return result
 }
 
-// ForkSession 分叉对话：基于旧 session 创建新 session，批量复制消息并替换指定消息。
+// ForkSession forks a conversation: creates a new session based on an old one,
+// batch-copies messages and replaces a specified message.
 //
-// 业务逻辑：
-//   - 从 old_server_message_id 开始往前查询最多 limit 条消息
-//   - 创建新 session，批量复制消息到新 session
-//   - 最后一条消息用新的 content_data 替换
-//   - 触发 AI 流程（通过 rtc-queue Publish）
+// Business logic:
+//   - Query at most `limit` messages backwards from old_server_message_id
+//   - Create a new session and batch-copy messages to it
+//   - Replace the last message with the new content_data
+//   - Trigger the AI flow (via rtc-queue Publish)
 func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequest) (*protocol.ForkSessionResponse, error) {
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
