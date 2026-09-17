@@ -52,11 +52,25 @@ type StreamIdleTimeoutError struct {
 	SessionID string
 	TurnID    string
 	Timeout   time.Duration
+	AgentName string // agent producing the stream (aids diagnosis)
+	Role      string // message role: "assistant" or "tool"
+	ToolName  string // tool name (empty for assistant messages)
 }
 
 func (e *StreamIdleTimeoutError) Error() string {
-	return fmt.Sprintf("stream idle timeout after %v (session=%s, turn=%s)",
-		e.Timeout, e.SessionID, e.TurnID)
+	var b strings.Builder
+	fmt.Fprintf(&b, "stream idle timeout after %v (session=%s, turn=%s", e.Timeout, e.SessionID, e.TurnID)
+	if e.AgentName != "" {
+		fmt.Fprintf(&b, ", agent=%s", e.AgentName)
+	}
+	if e.Role != "" {
+		fmt.Fprintf(&b, ", role=%s", e.Role)
+	}
+	if e.ToolName != "" {
+		fmt.Fprintf(&b, ", tool=%s", e.ToolName)
+	}
+	b.WriteString(")")
+	return b.String()
 }
 
 // IsStreamIdleTimeout checks whether the error is a stream idle timeout.

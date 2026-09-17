@@ -28,13 +28,14 @@ type Component interface {
 // Manager uniformly manages the lifecycle of multiple Components.
 // Components are started in registration order and stopped in reverse order.
 type Manager struct {
-	mu         sync.Mutex
-	components []namedComponent
-	shutdownCh chan struct{}
-	wg         sync.WaitGroup
-	started    bool
-	ctx        context.Context // lifecycle context, cancelled on Stop
-	cancel     context.CancelFunc
+	mu           sync.Mutex
+	components   []namedComponent
+	shutdownCh   chan struct{}
+	wg           sync.WaitGroup
+	started      bool
+	ctx          context.Context // lifecycle context, cancelled on Stop
+	cancel       context.CancelFunc
+	shutdownOnce sync.Once // ensures Stop's destructive actions run exactly once
 }
 
 // namedComponent wraps a Component with a name for logging.
@@ -103,35 +104,43 @@ func (m *Manager) Start(ctx context.Context) error {
 // Stop stops all components in reverse order.
 // Even if a component fails to stop, other components continue to be stopped.
 // Waits for all goroutines launched via Go to finish, or until context timeout.
+// Safe for concurrent use — only the first caller performs the shutdown;
+// subsequent callers block until shutdown completes.
 func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	if !m.started {
 		m.mu.Unlock()
 		return nil
 	}
+	// Mark as stopped immediately so concurrent callers skip the shutdown sequence.
+	m.started = false
 	m.mu.Unlock()
 
-	close(m.shutdownCh)
+	// Use sync.Once to ensure destructive actions (channel close, context cancel,
+	// component shutdown) run exactly once, even under concurrent Stop() calls.
+	m.shutdownOnce.Do(func() {
+		close(m.shutdownCh)
 
-	// Cancel the lifecycle context to signal all Go()-launched goroutines to exit.
-	if m.cancel != nil {
-		m.cancel()
-	}
-
-	// Stop components in reverse order.
-	for i := len(m.components) - 1; i >= 0; i-- {
-		nc := m.components[i]
-		if err := nc.c.Stop(ctx); err != nil {
-			logger.Error(ctx, "[lifecycle.Manager] stop component failed",
-				zap.String("component", nc.name),
-				zap.Error(err))
-		} else {
-			logger.Info(ctx, "[lifecycle.Manager] component stopped",
-				zap.String("component", nc.name))
+		// Cancel the lifecycle context to signal all Go()-launched goroutines to exit.
+		if m.cancel != nil {
+			m.cancel()
 		}
-	}
 
-	// Wait for all goroutines to finish.
+		// Stop components in reverse order.
+		for i := len(m.components) - 1; i >= 0; i-- {
+			nc := m.components[i]
+			if err := nc.c.Stop(ctx); err != nil {
+				logger.Error(ctx, "[lifecycle.Manager] stop component failed",
+					zap.String("component", nc.name),
+					zap.Error(err))
+			} else {
+				logger.Info(ctx, "[lifecycle.Manager] component stopped",
+					zap.String("component", nc.name))
+			}
+		}
+	})
+
+	// Wait for all goroutines to finish (all callers wait, even concurrent ones).
 	done := make(chan struct{})
 	go func() {
 		defer func() {

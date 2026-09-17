@@ -430,3 +430,44 @@ redis.call("HSET", KEYS[1],
 redis.call("ZADD", KEYS[2], 0 - priority, work_id)
 return 1
 `)
+
+// hasPendingWorkByKindScript atomically checks whether any pending or active
+// work item for a session has the given kind. KEYS[1] = queue key (zset),
+// KEYS[2] = active key, ARGV[1] = kind string. Returns 1 if found, 0 otherwise.
+//
+// This replaces the N+1 Redis round-trip pattern (ZRange + per-item HGet)
+// with a single atomic call.
+var hasPendingWorkByKindScript = redis.NewScript(`
+local queue_key = KEYS[1]
+local active_key = KEYS[2]
+local kind = ARGV[1]
+
+-- Check pending items in the sorted set
+local work_ids = redis.call("ZRANGE", queue_key, 0, -1)
+for _, wid in ipairs(work_ids) do
+    local data = redis.call("HGET", "rtc:work:" .. wid, "data")
+    if data then
+        -- Simple JSON substring match: look for "kind":"<value>" pattern
+        -- This avoids a full JSON parser in Lua while being safe for our
+        -- controlled payload format (kind is always a simple string).
+        local pattern = '"kind":"' .. kind .. '"'
+        if string.find(data, pattern, 1, true) then
+            return 1
+        end
+    end
+end
+
+-- Check the active (processing) work item
+local active_id = redis.call("GET", active_key)
+if active_id and active_id ~= "" then
+    local data = redis.call("HGET", "rtc:work:" .. active_id, "data")
+    if data then
+        local pattern = '"kind":"' .. kind .. '"'
+        if string.find(data, pattern, 1, true) then
+            return 1
+        end
+    end
+end
+
+return 0
+`)

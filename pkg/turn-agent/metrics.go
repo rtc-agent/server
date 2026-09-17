@@ -67,6 +67,10 @@ type Metrics interface {
 	// RecordLLMHTTPRequest records HTTP-level metrics for an LLM API request.
 	// This is called from the HTTP transport layer, ensuring 100% coverage.
 	RecordLLMHTTPRequest(ctx context.Context, attrs LLMHTTPMetricsAttrs)
+
+	// RecordStaleTurnRecovery records a stale turn recovery event.
+	// Called by the server's stale turn scanner when a stuck turn is recovered.
+	RecordStaleTurnRecovery(ctx context.Context, attrs StaleTurnRecoveryAttrs)
 }
 
 // TurnMetricsAttrs contains attributes for a turn event.
@@ -174,4 +178,10 @@ type LLMHTTPMetricsAttrs struct {
 	OutputTokens int
 	// DurationMs is the HTTP request duration in milliseconds.
 	DurationMs int64
+}
+
+// StaleTurnRecoveryAttrs contains attributes for a stale turn recovery event.
+type StaleTurnRecoveryAttrs struct {
+	// Status is the original stale turn status: "running", "pending", or "interrupted".
+	Status string
 }

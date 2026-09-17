@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
@@ -75,6 +77,24 @@ func (h *helpers) createTurn(ctx context.Context, sessionID string, workID strin
 		Status:    string(model.TurnStatusPending),
 	}
 	if err := h.deps.TurnRepo.Create(ctx, turn); err != nil {
+		// Handle unique constraint violation (TOCTOU race): another goroutine
+		// created the same turn between our FindByClientID and Create. Re-query
+		// to return the existing turn instead of failing.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			existing, lookupErr := h.deps.TurnRepo.FindByClientID(ctx, workID)
+			if lookupErr != nil {
+				return "", fmt.Errorf("createTurn: duplicate key but re-lookup failed: %w", lookupErr)
+			}
+			if existing != nil {
+				h.logger.Info(ctx, "createTurn.idempotent_hit_race", map[string]any{
+					"session_id": sessionID,
+					"work_id":    workID,
+					"turn_id":    existing.ID.String(),
+				})
+				return existing.ID.String(), nil
+			}
+		}
 		return "", fmt.Errorf("createTurn: create turn: %w", err)
 	}
 
@@ -292,7 +312,10 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 	}
 
 	// DB update session status before publishing events.
-	if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusIdle); err != nil {
+	// Skip the update if session is already idle (avoid redundant DB write).
+	if session != nil && session.Status == string(protocol.SessionStatusIdle) {
+		// Already idle — nothing to update.
+	} else if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusIdle); err != nil {
 		h.logger.Warn(ctx, "completeTurn.update_session_status_failed", map[string]any{
 			"session_id": sessionID,
 			"error":      err.Error(),

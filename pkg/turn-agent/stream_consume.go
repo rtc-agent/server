@@ -46,11 +46,17 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 				"session_id": mgr.sessionID,
 				"turn_id":    turnID,
 				"timeout":    StreamIdleTimeout.String(),
+				"agent_name": agentName,
+				"role":       role,
+				"tool_name":  toolName,
 			})
 			return &StreamIdleTimeoutError{
 				SessionID: mgr.sessionID,
 				TurnID:    turnID,
 				Timeout:   StreamIdleTimeout,
+				AgentName: agentName,
+				Role:      role,
+				ToolName:  toolName,
 			}
 		}
 

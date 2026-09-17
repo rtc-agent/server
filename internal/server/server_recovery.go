@@ -122,7 +122,7 @@ func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, 
 		return
 	}
 
-	if _, err := s.queue.Publish(ctx, sessionID, string(payloadBytes), 100); err != nil {
+	if _, err := s.queue.Publish(ctx, sessionID, string(payloadBytes), rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[Server] recoverStaleTurns: publish resume",
 			zap.String("turn_id", turn.ID.String()),
 			zap.Error(err))

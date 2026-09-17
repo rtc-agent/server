@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -76,8 +77,11 @@ func (a *Agent) handleNonOwnerCompletion(
 				"work_id": workID,
 				"error":   reErr.Error(),
 			})
+			return fmt.Errorf("turnagent: work %s abandoned AND requeue failed: %w", workID, reErr)
 		}
-		return fmt.Errorf("turnagent: work %s abandoned: manager shut down before processing", workID)
+		// Requeue succeeded — work will be picked up by another worker.
+		// Return nil so rtc-queue does not treat this as a failure.
+		return nil
 	}
 
 	return nil
@@ -437,7 +441,7 @@ func (a *Agent) tryReactiveCompactRecovery(
 	// Step 4: publish submit work item to trigger a new Process lifecycle.
 	// Use context.Background() because ctx may be cancelled.
 	payload := string(MarshalSubmitPayload(p.SessionID, attempt))
-	if _, err := a.queue.Publish(context.Background(), p.SessionID, payload, 100); err != nil {
+	if _, err := a.queue.Publish(context.Background(), p.SessionID, payload, rtcqueue.ResumeWorkPriority); err != nil {
 		a.log(ctx, LogLevelError, "turn.submit_publish_failed", map[string]any{
 			"error":   err.Error(),
 			"attempt": attempt,

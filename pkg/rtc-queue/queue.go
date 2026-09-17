@@ -392,52 +392,24 @@ func (q *Queue) ReleaseSession(ctx context.Context, sessionID string) error {
 	return q.rdb.Del(ctx, keyLock(sessionID), keyActive(sessionID)).Err()
 }
 
-// RequeueGhostWork checks if a session has a ghost work item (processing but
-// lock expired) and requeues it atomically via Lua script. Returns the work ID
-// if requeued, empty string if no ghost work found.
-//
-// A ghost work occurs when a worker crashes after claiming a work item but
-
 // HasPendingWorkByKind returns true if the session's queue contains a pending
 // work item whose Data field, when JSON-decoded, has the given WorkKind.
 // It also checks the currently-active work item (if any) for the same session.
 //
 // This is used for dedup: e.g., before publishing a compact work item, the
 // caller checks whether a compact is already pending or processing.
+//
+// Implemented as a single Lua script to avoid N+1 Redis round-trips
+// (ZRange + per-item HGet) and ensure atomicity.
 func (q *Queue) HasPendingWorkByKind(ctx context.Context, sessionID string, kind string) (bool, error) {
-	// 1. Check pending items in the session queue (zset members = work IDs).
-	workIDs, err := q.rdb.ZRange(ctx, keyQueue(sessionID), 0, -1).Result()
+	n, err := hasPendingWorkByKindScript.Run(ctx, q.rdb, []string{
+		keyQueue(sessionID),
+		keyActive(sessionID),
+	}, kind).Int()
 	if err != nil {
-		return false, fmt.Errorf("rtcqueue: zrange queue: %w", err)
+		return false, fmt.Errorf("rtcqueue: has pending work by kind: %w", err)
 	}
-	for _, wid := range workIDs {
-		data, err := q.rdb.HGet(ctx, keyWork(wid), "data").Result()
-		if err != nil {
-			continue
-		}
-		var p struct {
-			Kind string `json:"kind"`
-		}
-		if json.Unmarshal([]byte(data), &p) == nil && p.Kind == kind {
-			return true, nil
-		}
-	}
-
-	// 2. Check the active (processing) work item, if any.
-	activeID, err := q.rdb.Get(ctx, keyActive(sessionID)).Result()
-	if err == nil && activeID != "" {
-		data, err := q.rdb.HGet(ctx, keyWork(activeID), "data").Result()
-		if err == nil {
-			var p struct {
-				Kind string `json:"kind"`
-			}
-			if json.Unmarshal([]byte(data), &p) == nil && p.Kind == kind {
-				return true, nil
-			}
-		}
-	}
-
-	return false, nil
+	return n == 1, nil
 }
 
 // SubscribeNew returns a Pub/Sub subscribed to the session:new channel.

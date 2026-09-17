@@ -304,14 +304,7 @@ func (m *PrometheusMetrics) RecordScriptExecution(ctx context.Context, attrs Scr
 	}
 }
 
-// StaleTurnRecoveryAttrs contains attributes for a stale turn recovery event.
-type StaleTurnRecoveryAttrs struct {
-	// Status is the original stale turn status: "running", "pending", or "interrupted".
-	Status string
-}
-
 // RecordStaleTurnRecovery records a stale turn recovery event.
-// Defined on concrete type, not the Metrics interface (see design doc rationale).
 func (m *PrometheusMetrics) RecordStaleTurnRecovery(ctx context.Context, attrs StaleTurnRecoveryAttrs) {
 	status := attrs.Status
 	if status == "" {

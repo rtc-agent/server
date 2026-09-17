@@ -189,7 +189,9 @@ func (w *Worker) Stop(ctx context.Context) error {
 	}
 	// cancel all active sessions
 	for _, cancel := range w.sessions {
-		cancel()
+		if cancel != nil { // guard against nil during processSession startup race
+			cancel()
+		}
 	}
 	w.mu.Unlock()
 
