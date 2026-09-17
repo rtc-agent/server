@@ -137,7 +137,7 @@ func (p *Provider) handleAuthorizeConfirm(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 生成授权码
+	// Generate authorization code.
 	code := generateCode()
 
 	p.mu.Lock()
@@ -147,11 +147,11 @@ func (p *Provider) handleAuthorizeConfirm(w http.ResponseWriter, r *http.Request
 	}
 	p.mu.Unlock()
 
-	// 重定向回客户端（携带 code 和 state）
+	// Redirect back to the client (with code and state).
 	if redirectURI != "" {
 		sep := "?"
 		if strings.Contains(redirectURI, "?") {
-			sep = "&" // URI 已含查询参数，用 & 拼接
+			sep = "&" // URI already contains query params, use & to append
 		}
 		redirectURL := fmt.Sprintf("%s%scode=%s&state=%s&username=%s&email=%s",
 			redirectURI, sep, url.QueryEscape(code), url.QueryEscape(state),
@@ -160,7 +160,7 @@ func (p *Provider) handleAuthorizeConfirm(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 没有 redirect_uri，直接返回 JSON
+	// No redirect_uri, return JSON directly.
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{
 		"code":  code,
 		"state": state,
