@@ -28,7 +28,7 @@ import (
 // 3. A sub_agent_invocation message in the parent session (for frontend rendering)
 // 4. Submits a work item to the sub session's rtc-queue
 //
-// In **sync** mode (legacy default):
+// In **sync** mode:
 // 5. Interrupts the parent turn
 // When the sub session completes, its final result is returned to the parent
 // via the resume mechanism (WorkPayload.SubAgentResult).
@@ -166,7 +166,23 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 	}
 
 	if mode == "async" {
-		return t.handleAsyncSubAgent(ctx, subSessionID, args.Title, parentMessageID, turnUUID, argumentsInJSON)
+		result, err := t.handleAsyncSubAgent(ctx, subSessionID, args.Title, parentMessageID, turnUUID, argumentsInJSON)
+		if err != nil {
+			// The sub-session is already running (work item published above).
+			// Do NOT close it — the sub-agent will complete and deliver its
+			// result via notifyParentAfterAsyncSubAgent. The toolcall_input in
+			// the parent session will remain unpaired with a toolcall_output,
+			// but the async notification will still be delivered. Log the error
+			// for observability.
+			t.helpers.logger.Warn(ctx, "subAgent.async.publish_output_failed", map[string]any{
+				"sub_session_id":    subSessionID.String(),
+				"parent_message_id": parentMessageID.String(),
+				"error":             err.Error(),
+			})
+			// Return a degraded result so the LLM can continue.
+			return formatSubAgentAsyncResult(subSessionID.String(), args.Title), nil
+		}
+		return result, nil
 	}
 
 	// Sync mode: build interrupt state and pause the turn.

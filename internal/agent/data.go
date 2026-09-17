@@ -266,8 +266,15 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 			baseDelay := h.deps.LLMConfig.RetryBaseDelay
 			retryConfig.BackoffFunc = func(ctx context.Context, attempt int) time.Duration {
 				// Exponential backoff: baseDelay * 2^(attempt-1)
-				// attempt starts at 1 for the first retry
-				return baseDelay * time.Duration(1<<uint(attempt-1))
+				// attempt starts at 1 for the first retry.
+				// Cap shift at 30 to prevent overflow (2^30 * baseDelay ≈ 17 min
+				// for a 1s base). Without the cap, attempt > 63 would wrap to
+				// negative durations.
+				shift := uint(attempt - 1)
+				if shift > 30 {
+					shift = 30
+				}
+				return baseDelay * time.Duration(1<<shift)
 			}
 		}
 	}

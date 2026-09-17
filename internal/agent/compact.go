@@ -2,7 +2,7 @@
 //
 // processCompactWorker is the CompactContext callback for explicit /compact
 // commands. It loads messages, compresses the context (via compressContext),
-// and pushes compression stats to the Live channel.
+// and logs compression stats.
 package agent
 
 import (
@@ -25,7 +25,7 @@ import (
 //  5. Call compressContext (handles LLM summarization + persistence).
 //  6. Count tokens after compression.
 //  7. Re-estimate token usage and publish fresh estimate to frontend.
-//  8. Push compression stats to the Live channel.
+//  8. Log compression stats.
 func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, customInstruction *string) error {
 	sid, err := uuid.Parse(sessionID)
 	if err != nil {
@@ -127,7 +127,7 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 		}
 	}
 
-	// 7. Push stats to Live channel.
+	// 7. Log compression stats.
 	duration := time.Since(start)
 	ratio := 0.0
 	if tokensBefore > 0 {

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -59,51 +58,10 @@ func TestAsyncSubAgentNotificationFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			notificationText := buildTestNotification(tt.status, subSession, tt.lastMessage, tt.errorMessage)
+			// Call the production function directly so template changes are caught.
+			notificationText := buildAsyncSubAgentNotificationText(subSession, tt.lastMessage, tt.status, tt.errorMessage)
 			tt.validate(t, notificationText)
 		})
-	}
-}
-
-// buildTestNotification mirrors the logic in notifyParentAfterAsyncSubAgent.
-func buildTestNotification(status string, subSession *model.Session, lastMsg *turnagent.Message, errMsg *string) string {
-	switch status {
-	case "completed":
-		result := "(no output)"
-		if lastMsg != nil {
-			result = lastMsg.Content
-		}
-		content := fmt.Sprintf(
-			"The async sub agent task has completed.\n- Session ID: %s\n- Title: %s\n- Status: completed\n\nResult:\n%s",
-			subSession.ID.String(), subSession.Title, result,
-		)
-		return turnagent.FormatSystemReminder(content)
-	case "failed":
-		err := "(unknown error)"
-		if errMsg != nil {
-			err = *errMsg
-		}
-		content := fmt.Sprintf(
-			"The async sub agent task has failed.\n- Session ID: %s\n- Title: %s\n- Status: failed\n\nError:\n%s",
-			subSession.ID.String(), subSession.Title, err,
-		)
-		return turnagent.FormatSystemReminder(content)
-	case "cancelled":
-		reason := "(no reason given)"
-		if errMsg != nil {
-			reason = *errMsg
-		}
-		content := fmt.Sprintf(
-			"The async sub agent task has been cancelled.\n- Session ID: %s\n- Title: %s\n- Status: cancelled\n\nReason:\n%s",
-			subSession.ID.String(), subSession.Title, reason,
-		)
-		return turnagent.FormatSystemReminder(content)
-	default:
-		content := fmt.Sprintf(
-			"The async sub agent task has ended with status: %s.\n- Session ID: %s\n- Title: %s",
-			status, subSession.ID.String(), subSession.Title,
-		)
-		return turnagent.FormatSystemReminder(content)
 	}
 }
 

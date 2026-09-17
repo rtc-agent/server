@@ -103,7 +103,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 			return nil, fmt.Errorf("create async notification message: %w", createErr)
 		}
 
-		ch := channel.UserTopic(subSession.OwnerRefID)
+		ch := channel.UserTopic(parentSession.OwnerRefID)
 		return []updates.UpdatePublishItem{
 			{
 				Channel: ch,
