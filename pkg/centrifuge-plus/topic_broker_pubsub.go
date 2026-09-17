@@ -41,7 +41,7 @@ func (b *TopicBroker) ensurePubSubClient() error {
 
 // handlePubSubMessage processes incoming PUB/SUB messages and forwards them to centrifuge.
 func (b *TopicBroker) handlePubSubMessage(msg rueidis.PubSubMessage) {
-	// 原子快照：加载一次，整个函数使用同一个 handler，避免并发 Store 导致的不一致
+	// Atomic snapshot: load once, use the same handler throughout the function, avoiding inconsistency from concurrent Store.
 	h := b.eventHandler.Load()
 	if h == nil {
 		return
@@ -56,9 +56,9 @@ func (b *TopicBroker) handlePubSubMessage(msg rueidis.PubSubMessage) {
 		return
 	}
 
-	// 根据消息前缀判断类型，只对 publication 消息提取 trace parent
+	// Determine message type by prefix; only extract trace parent for publication messages.
 	if strings.HasPrefix(rawPayload, "__p1:") {
-		// Publication 消息：提取 trace parent 并创建 span
+		// Publication message: extract trace parent and create span.
 		payload, traceparentStr := extractTraceParentFromPayload(rawPayload)
 
 		var sc trace.SpanContext
@@ -109,7 +109,7 @@ func (b *TopicBroker) handlePubSubMessage(msg rueidis.PubSubMessage) {
 		data := encodedData[:dataLen]
 
 		span.SetAttributes(
-			AttributeOffset.Int64(int64(offset)), //nolint:gosec // offset 不会超过 int64 范围
+			AttributeOffset.Int64(int64(offset)), //nolint:gosec // offset will not exceed int64 range
 			AttributeEpoch.String(epoch),
 		)
 
@@ -128,7 +128,7 @@ func (b *TopicBroker) handlePubSubMessage(msg rueidis.PubSubMessage) {
 		return
 	}
 
-	// Join/Leave 消息：无需提取 trace parent，直接处理
+	// Join/Leave messages: no need to extract trace parent, process directly.
 	if strings.HasPrefix(rawPayload, "__j1:") {
 		_, span := b.tracer.Start(context.Background(), "centrifugeplus.topicbroker.pubsub",
 			trace.WithAttributes(
@@ -177,14 +177,14 @@ func (b *TopicBroker) handlePubSubMessage(msg rueidis.PubSubMessage) {
 // Subscribe subscribes node to channels.
 func (b *TopicBroker) Subscribe(channels ...string) error {
 	for _, ch := range channels {
-		// 接口方法无法接受 context，内部使用带超时的 context 防止 Redis 命令无限阻塞
+		// Interface methods cannot accept context; use an internal context with timeout to prevent Redis commands from blocking indefinitely.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
 		_, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.subscribe",
 			trace.WithAttributes(AttributeChannel.String(ch)),
 		)
 
-		// 锁内只做检查和保存引用，释放锁后再执行 Redis 网络操作
+		// Only check and save reference inside the lock; execute Redis network operations after releasing the lock.
 		b.pubSubMu.Lock()
 		if err := b.ensurePubSubClient(); err != nil {
 			b.pubSubMu.Unlock()
@@ -201,10 +201,10 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 			span.End()
 			continue // Already subscribed
 		}
-		client := b.pubSubClient // 保存引用，锁外使用
+		client := b.pubSubClient // Save reference for use outside the lock.
 		b.pubSubMu.Unlock()
 
-		// Redis 网络操作在锁外执行，避免阻塞其他 Subscribe/Unsubscribe
+		// Redis network operations execute outside the lock to avoid blocking other Subscribe/Unsubscribe.
 		if err := client.Do(ctx, client.B().Subscribe().Channel(pubSubKey).Build()).Error(); err != nil {
 			cancel()
 			recordError(span, err)
@@ -212,7 +212,7 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 			return fmt.Errorf("failed to subscribe to %s: %w", pubSubKey, err)
 		}
 
-		// 重新获取锁更新状态
+		// Re-acquire lock to update state.
 		b.pubSubMu.Lock()
 		b.subscribedChans[pubSubKey] = true
 		b.pubSubMu.Unlock()
