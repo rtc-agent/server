@@ -308,7 +308,13 @@ func (a *Agent) handleOwnerLifecycleEnd(
 
 	if mgr.IsCancelledByQueue() {
 		a.recordTurnEnd(ctx, span, p.SessionID, turnID, string(p.Kind), turnDuration, "cancel", nil)
-		_ = a.cfg.CancelTurn(ctx, turnID, mgr.CancelReason())
+		if err := a.cfg.CancelTurn(ctx, turnID, mgr.CancelReason()); err != nil {
+			a.log(ctx, LogLevelError, "turn.cancel_callback_failed", map[string]any{
+				"session_id": p.SessionID,
+				"turn_id":    turnID,
+				"error":      err.Error(),
+			})
+		}
 		return nil
 	}
 
@@ -403,11 +409,17 @@ func (a *Agent) tryReactiveCompactRecovery(
 
 	// Step 2: insert "compressing" feedback message.
 	if a.cfg.InsertFeedbackMessage != nil {
-		_ = a.cfg.InsertFeedbackMessage(ctx, p.SessionID, turnID,
+		if err := a.cfg.InsertFeedbackMessage(ctx, p.SessionID, turnID,
 			"context",
 			"上下文超出限制",
 			"对话内容太长，系统正在自动压缩后重试。请稍等片刻。",
-			true, "")
+			true, ""); err != nil {
+			a.log(ctx, LogLevelWarn, "turn.insert_feedback_message_failed", map[string]any{
+				"session_id": p.SessionID,
+				"turn_id":    turnID,
+				"error":      err.Error(),
+			})
+		}
 	}
 
 	// Step 3: end current Turn (FailTurn must be before Publish).

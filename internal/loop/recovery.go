@@ -66,9 +66,14 @@ func recoverExpired(ctx context.Context, deps RecoveryDeps) {
 	}
 
 	for _, loop := range expired {
-		// Cancel asynq task if present (best effort)
+		// Cancel asynq task if present (best effort — task may already be gone)
 		if loop.AsynqTaskID != "" {
-			_ = deps.Inspector.DeleteTask(taskscheduler.LoopQueue, loop.AsynqTaskID)
+			if err := deps.Inspector.DeleteTask(taskscheduler.LoopQueue, loop.AsynqTaskID); err != nil {
+				logger.Debug(ctx, "[loop.Recovery] delete asynq task failed (best effort)",
+					zap.String("loop_id", loop.ID.String()),
+					zap.String("task_id", loop.AsynqTaskID),
+					zap.Error(err))
+			}
 		}
 
 		// Mark as cancelled

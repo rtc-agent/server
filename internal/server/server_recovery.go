@@ -69,7 +69,12 @@ func (s *Server) recoverStaleTurns(ctx context.Context) {
 				zap.String("session_id", sessionID))
 			// Still mark the turn as failed/interrupted so it leaves the stale state.
 			if turn.Status != string(model.TurnStatusInterrupted) {
-				_ = s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusFailed, "server restart recovery (session closed)")
+				if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusFailed, "server restart recovery (session closed)"); err != nil {
+					logger.Error(ctx, "[Server] recoverStaleTurns: update stale turn failed (session closed)",
+						zap.String("turn_id", turn.ID.String()),
+						zap.String("session_id", sessionID),
+						zap.Error(err))
+				}
 			}
 			continue
 		}

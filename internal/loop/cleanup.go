@@ -42,9 +42,14 @@ func cancelActiveLoop(ctx context.Context, loopRepo repo.LoopRepo, inspector *hi
 		return
 	}
 
-	// Cancel asynq task (best-effort)
+	// Cancel asynq task (best-effort — task may already be completed or gone)
 	if loop.AsynqTaskID != "" && inspector != nil {
-		_ = inspector.DeleteTask(taskscheduler.LoopQueue, loop.AsynqTaskID)
+		if err := inspector.DeleteTask(taskscheduler.LoopQueue, loop.AsynqTaskID); err != nil {
+			logger.Debug(ctx, "[loop.Cleanup] delete asynq task failed (best effort)",
+				zap.String("loop_id", loop.ID.String()),
+				zap.String("task_id", loop.AsynqTaskID),
+				zap.Error(err))
+		}
 	}
 
 	// Update status to cancelled
