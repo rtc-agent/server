@@ -440,13 +440,14 @@ func formatMessagesForMemoryExtract(messages []*schema.Message) string {
 
 		case schema.Tool:
 			fmt.Fprintf(&sb, "## %s (result for %s)\n\n", role, msg.ToolName)
-			// 截断过长的工具结果
-			content := msg.Content
-			if len(content) > 2000 {
-				content = content[:2000] + "... [truncated]"
+			// 截断过长的工具结果。使用 UTF-8 安全的截断方法，
+			// 避免在多字节字符（如 CJK 字符）中间切断。
+			if len(msg.Content) > 2000 {
+				fmt.Fprintf(&sb, "%s\n\n", stringutil.TruncateByByte(msg.Content, 2000))
+			} else {
+				sb.WriteString(msg.Content)
+				sb.WriteString("\n\n")
 			}
-			sb.WriteString(content)
-			sb.WriteString("\n\n")
 
 		case schema.User:
 			if msg.Content != "" {
