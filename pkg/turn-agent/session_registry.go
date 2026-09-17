@@ -3,6 +3,7 @@ package turnagent
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -66,6 +67,7 @@ func (r *SessionManagerRegistry) Remove(sessionID string) {
 					mgr.log(context.Background(), LogLevelError, "session_registry.cleanup_panic", map[string]any{
 						"session_id": mgr.sessionID,
 						"panic":      fmt.Sprintf("%v", rv),
+						"stack":      string(debug.Stack()),
 					})
 				}
 			}()
@@ -173,6 +175,7 @@ func (r *SessionManagerRegistry) GetOrCreate(
 				mgr.log(ctx, LogLevelError, "session-registry-run-panic", map[string]any{
 					"session_id": mgr.sessionID,
 					"panic":      fmt.Sprintf("%v", rv),
+					"stack":      string(debug.Stack()),
 				})
 			}
 		}()
@@ -254,6 +257,7 @@ func (r *SessionManagerRegistry) Replace(
 					oldMgr.log(context.Background(), LogLevelError, "session_registry.replace_cleanup_panic", map[string]any{
 						"session_id": oldMgr.sessionID,
 						"panic":      fmt.Sprintf("%v", rv),
+						"stack":      string(debug.Stack()),
 					})
 				}
 			}()
@@ -364,6 +368,7 @@ func (r *SessionManagerRegistry) Replace(
 				mgr.log(ctx, LogLevelError, "session-registry-run-panic", map[string]any{
 					"session_id": mgr.sessionID,
 					"panic":      fmt.Sprintf("%v", rv),
+					"stack":      string(debug.Stack()),
 					"source":     "Replace",
 				})
 			}

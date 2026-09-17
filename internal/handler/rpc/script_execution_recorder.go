@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -78,6 +79,7 @@ func (r *scriptExecutionRecorder) worker(id int) {
 			logger.Error(context.Background(), "[scriptExecutionRecorder] worker goroutine panic",
 				zap.Int("worker_id", id),
 				zap.Any("panic", rv),
+				zap.String("stack", string(debug.Stack())),
 			)
 		}
 	}()
@@ -106,7 +108,8 @@ func (r *scriptExecutionRecorder) safeProcessTask(task scriptRecordTask) {
 	defer func() {
 		if rv := recover(); rv != nil {
 			logger.Error(task.ctx, "[scriptExecutionRecorder] worker panic recovered",
-				zap.Any("panic", rv))
+				zap.Any("panic", rv),
+				zap.String("stack", string(debug.Stack())))
 		}
 	}()
 	r.processTask(task)

@@ -24,6 +24,7 @@ package agent
 
 import (
 	"context"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -345,6 +346,7 @@ func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.Strea
 		if r := recover(); r != nil {
 			logger.Error(context.Background(), "token_callback.stream_drain_panic",
 				zap.Any("recover", r),
+				zap.String("stack", string(debug.Stack())),
 			)
 		}
 	}()

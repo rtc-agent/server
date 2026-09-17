@@ -40,6 +40,20 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 				})
 			}
 			h.batchLifecyclePublish(ctx, tid, sid, "cancel")
+			// Sub Agent support: query session by sessionID (not turnID) to
+			// check if this is a sub-session and notify the parent. Even though
+			// Turn lookup failed, Session lookup may succeed (different table).
+			// Without this, a sub-agent cancellation with a Turn DB lookup error
+			// leaves the parent session stuck at "active" until the stale turn
+			// scanner runs (5-30 minutes).
+			session, sessErr := h.deps.SessionRepo.GetByID(ctx, sid)
+			if sessErr != nil {
+				h.logger.Warn(ctx, "cancelTurn.load_session_fallback_failed", map[string]any{
+					"session_id": sid.String(),
+					"error":      sessErr.Error(),
+				})
+			}
+			h.notifyParentAfterSubAgentSession(ctx, session, nil, "cancelled", &reason)
 			// Cascade cancel: propagate to active child sessions even when
 			// GetByID failed. This prevents orphaned sub agents.
 			h.cascadeCancelChildren(ctx, turnID, sid)

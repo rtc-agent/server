@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/cloudwego/eino/adk"
@@ -101,6 +102,7 @@ func (mgr *SessionTurnManager) onAgentEvents(
 					"session_id": mgr.sessionID,
 					"turn_id":    turnID,
 					"panic":      fmt.Sprintf("%v", r),
+					"stack":      string(debug.Stack()),
 				})
 			}
 		}()

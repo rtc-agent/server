@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/cloudwego/eino/schema"
@@ -71,6 +72,7 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 				h.logger.Error(bgCtx, "[triggerSessionMemoryExtraction] panic recovered", map[string]any{
 					"session_id": sessionID.String(),
 					"panic":      fmt.Sprintf("%v", r),
+					"stack":      string(debug.Stack()),
 				})
 			}
 		}()

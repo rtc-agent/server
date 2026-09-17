@@ -328,6 +328,16 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 	h.logger.Info(ctx, "completeTurn.done", map[string]any{"turn_id": turnID, "session_id": sessionID})
 
 	// Sub Agent support: if this is a sub session, notify the parent.
+	// If session is nil (load failed above), notifyParentAfterSubAgentSession
+	// returns early and the parent is NOT notified. The stale turn scanner
+	// will eventually clean up, but with a 5-30 minute delay.
+	if session == nil {
+		h.logger.Warn(ctx, "completeTurn.skip_parent_notification_session_nil", map[string]any{
+			"session_id": sessionID,
+			"turn_id":    turnID,
+			"message":    "session load failed earlier, parent notification skipped — stale turn scanner will recover",
+		})
+	}
 	h.notifyParentAfterSubAgentSession(ctx, session, lastMessage, "completed", nil)
 
 	// Cascade cancel: if this completed session has active child sessions (sub agents),

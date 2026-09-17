@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/cloudwego/eino/adk"
@@ -96,7 +97,16 @@ func (a *Agent) recordTurnEnd(
 	status string,
 	err error,
 ) {
-	defer func() { _ = recover() }()
+	defer func() {
+		if r := recover(); r != nil {
+			a.log(ctx, LogLevelError, "turn.end_panic", map[string]any{
+				"session_id": sessionID,
+				"turn_id":    turnID,
+				"panic":      fmt.Sprintf("%v", r),
+				"stack":      string(debug.Stack()),
+			})
+		}
+	}()
 	span.SetAttributes(
 		attribute.String("turn.status", status),
 		attribute.Int64("turn.duration_ms", duration.Milliseconds()),

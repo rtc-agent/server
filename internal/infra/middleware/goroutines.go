@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -40,6 +41,7 @@ func StartGoroutineCollector(leakThreshold int) (cancel func()) {
 			if r := recover(); r != nil {
 				logger.Error(context.Background(), "StartGoroutineCollector panic recovered",
 					zap.Any("panic", r),
+					zap.String("stack", string(debug.Stack())),
 				)
 			}
 		}()
