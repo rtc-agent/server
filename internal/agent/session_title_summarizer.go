@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
@@ -179,20 +180,29 @@ func (s *SessionTitleSummarizer) generateTitle(ctx context.Context, conversation
 	}
 	defer stream.Close()
 
+	// Per-read idle timeout to prevent goroutine hangs if the LLM stream stalls.
+	// Aligned with consumeStream and summarizeMessagesStreaming which use the same
+	// RecvWithTimeout wrapper. Use a short timeout since title generation is a quick
+	// operation and the caller already has a 30s overall context deadline.
+	const titleStreamIdleTimeout = 30 * time.Second
+
 	// 消费流以构建完整响应
 	var contentBuilder strings.Builder
 	for {
-		msg, recvErr := stream.Recv()
-		if recvErr != nil {
-			if errors.Is(recvErr, io.EOF) {
+		res, timedOut := turnagent.RecvWithTimeout(ctx, stream.Recv, titleStreamIdleTimeout)
+		if timedOut {
+			return "", fmt.Errorf("title stream idle timeout after %s", titleStreamIdleTimeout)
+		}
+		if res.Err != nil {
+			if errors.Is(res.Err, io.EOF) {
 				break
 			}
-			return "", fmt.Errorf("stream recv: %w", recvErr)
+			return "", fmt.Errorf("stream recv: %w", res.Err)
 		}
-		if msg == nil {
+		if res.Msg == nil {
 			continue
 		}
-		contentBuilder.WriteString(msg.Content)
+		contentBuilder.WriteString(res.Msg.Content)
 	}
 
 	content := contentBuilder.String()
