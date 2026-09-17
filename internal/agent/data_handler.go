@@ -81,43 +81,39 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 		}
 	}
 
+	// Finalize pending messages on phase transition or stream end.
+	if err := h.finalizePendingStreamMessages(ctx, sessionID, turnID, event, state); err != nil {
+		h.streamState.remove(turnID.String())
+		return err
+	}
+
+	return nil
+}
+
+// finalizePendingStreamMessages handles all finalization logic triggered by
+// phase transitions (thinking → markdown) or FinishReason. Extracted from
+// handleStreamChunk to reduce cyclomatic complexity.
+func (h *helpers) finalizePendingStreamMessages(ctx context.Context, sessionID uuid.UUID, turnID uuid.UUID, event *turnagent.Event, state *turnStreamState) error {
 	// When markdown content arrives and thinking hasn't been finalized,
 	// finalize the thinking message (thinking and content are mutually
 	// exclusive phases).
 	if event.Content != "" && state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
 		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); err != nil {
-			// Clean up stream state to prevent sync.Map leaks.
-			// On this path handleStreamEnd may not be called (error aborts
-			// the stream), so we must clean up here to avoid orphaned entries.
-			// Mirrors the cleanup at lines 79, 115, 125 in the same function.
-			h.streamState.remove(turnID.String())
 			return err
 		}
 		state.thinkingFinalized = true
 	}
 
 	// Finalize markdown if FinishReason is set.
-	// IMPORTANT: If FinishReason is set but Content is empty, we still need to
-	// call appendStreamChunk (via finalizeStreamMessage) to trigger the finalization
-	// path that updates the DB status to "completed".
+	// If FinishReason is set but Content is empty, we still need to finalize
+	// to update the DB status to "completed".
 	//
 	// The markdownMsgID != uuid.Nil guard handles the edge case where only reasoning
 	// content was streamed (no markdown). In that case, handleStreamEnd finalizes
 	// the thinking message and routes token usage to it instead.
-	//
-	// NOTE: When event.Content != "" AND FinishReason is set, appendStreamChunk
-	// (called above) already finalized and set state.markdownFinalized=true.
-	// The assignment below is therefore redundant in that path but provides
-	// defense-in-depth for the Content=="" path where finalizeStreamMessage
-	// handles the finalization. The redundant assignment is harmless (idempotent).
 	if event.FinishReason != "" && state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
 		if event.Content == "" {
-			// No content in this chunk, but we need to finalize the stream
 			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", event.TokenUsage); err != nil {
-				// Clean up stream state to prevent sync.Map leaks.
-				// On this path handleStreamEnd may not be called (error aborts
-				// the stream), so we must clean up here.
-				h.streamState.remove(turnID.String())
 				return err
 			}
 		}
@@ -125,9 +121,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	}
 	if event.FinishReason != "" && state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
 		if event.ReasoningContent == "" {
-			// No reasoning content in this chunk, but we need to finalize the stream
 			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); err != nil {
-				h.streamState.remove(turnID.String())
 				return err
 			}
 		}

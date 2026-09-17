@@ -330,6 +330,11 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 	// Sub Agent support: if this is a sub session, notify the parent.
 	h.notifyParentAfterSubAgentSession(ctx, session, lastMessage, "completed", nil)
 
+	// Cascade cancel: if this completed session has active child sessions (sub agents),
+	// cancel them as well. This prevents orphaned sub agents from continuing to run
+	// after the parent has completed. Mirrors failTurn and cancelTurn.
+	h.cascadeCancelChildren(ctx, turnID, sid)
+
 	// Slash-command framework: notify active commands of turn completion.
 	// The /goal execution loop is now handled by GoalWorkflow.OnTurnComplete
 	// (see goal_workflow.go) via the registry.

@@ -225,7 +225,7 @@ func TestConvertDBMessage_EmptyContent(t *testing.T) {
 		Content: "",
 		Role:    "assistant",
 	}
-	result := convertDBMessage(msg)
+	result, _ := convertDBMessage(msg)
 	if result != nil {
 		t.Errorf("expected nil for empty content, got %v", result)
 	}
@@ -237,7 +237,7 @@ func TestConvertDBMessage_UnknownType(t *testing.T) {
 		Content: `{"type":"unknown_type","data":"something"}`,
 		Role:    "assistant",
 	}
-	result := convertDBMessage(msg)
+	result, _ := convertDBMessage(msg)
 	if result != nil {
 		t.Errorf("expected nil for unknown type, got %v", result)
 	}
@@ -254,7 +254,7 @@ func TestConvertDBMessage_SkipsErrorType(t *testing.T) {
 		Content: content,
 		Role:    "assistant",
 	}
-	result := convertDBMessage(msg)
+	result, _ := convertDBMessage(msg)
 	if result != nil {
 		t.Errorf("expected nil for error content type (must not enter LLM context), got %d messages", len(result))
 	}

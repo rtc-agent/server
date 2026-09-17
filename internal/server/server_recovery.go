@@ -67,10 +67,17 @@ func (s *Server) handleClosedSessionTurn(ctx context.Context, turn *model.Turn, 
 				zap.String("turn_id", turn.ID.String()),
 				zap.String("session_id", sessionID),
 				zap.Error(sessErr))
+			// Do NOT cache on failure — the next stale turn for this session
+			// should retry the lookup. Caching empty status would silently treat
+			// all subsequent turns for the same session as non-closed, even if
+			// the session was actually closed (transient DB error masking).
 		} else if session != nil {
 			status = session.Status
+			cache[sessionID] = status
+		} else {
+			// Session does not exist — cache empty to avoid repeated misses.
+			cache[sessionID] = ""
 		}
-		cache[sessionID] = status
 	}
 
 	if status != string(model.SessionStatusClosed) {

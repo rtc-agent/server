@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -27,10 +28,14 @@ import (
 // A single DB message may produce multiple turnagent messages (e.g., a
 // toolcall_input produces an assistant message with tool calls; a summary
 // may expand into multiple messages).
-func convertDBMessage(msg *model.Message) []*turnagent.Message {
+//
+// Returns (nil, nil) for unrecognized content types (silently skipped).
+// Returns (nil, err) for parse errors — callers can log the error for
+// observability while still skipping the unparseable message.
+func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 	contentData, err := primitives.ParseContentData(msg.Content)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("parse content data: %w", err)
 	}
 
 	// Build TokenUsage from DB fields (populated for assistant messages).
@@ -56,14 +61,14 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 	case protocol.ContentTypeUserMessage:
 		umc, err := primitives.ParseUserMessageContent(contentData.Data)
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("parse user message content: %w", err)
 		}
 		return []*turnagent.Message{{
 			Role:       msg.Role,
 			Content:    umc.Text,
 			TokenUsage: tokenUsage,
 			CreatedAt:  msg.CreatedAt,
-		}}
+		}}, nil
 
 	case protocol.ContentTypeText, protocol.ContentTypeMarkdown:
 		text, _ := primitives.ContentDataString(contentData.Data)
@@ -78,7 +83,7 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 			Content:    text,
 			TokenUsage: tokenUsage,
 			CreatedAt:  msg.CreatedAt,
-		}}
+		}}, nil
 
 	case protocol.ContentTypeThinking:
 		tk, _ := primitives.ContentDataString(contentData.Data)
@@ -86,12 +91,12 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 			Role:             msg.Role,
 			ReasoningContent: tk,
 			CreatedAt:        msg.CreatedAt,
-		}}
+		}}, nil
 
 	case protocol.ContentTypeToolCallInput:
 		toolCall, err := primitives.ParseContentDataToolCall(contentData.Data)
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("parse tool call input: %w", err)
 		}
 		// Produce an assistant message with tool calls.
 		return []*turnagent.Message{{
@@ -102,12 +107,12 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 				Arguments: toolCall.Input,
 			}},
 			CreatedAt: msg.CreatedAt,
-		}}
+		}}, nil
 
 	case protocol.ContentTypeToolCallOutput:
 		toolCall, err := primitives.ParseContentDataToolCall(contentData.Data)
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("parse tool call output: %w", err)
 		}
 		content := formatToolCallOutput(toolCall)
 		return []*turnagent.Message{{
@@ -116,10 +121,11 @@ func convertDBMessage(msg *model.Message) []*turnagent.Message {
 			ToolName:   toolCall.ToolName,
 			ToolCallID: toolCall.Id,
 			CreatedAt:  msg.CreatedAt,
-		}}
+		}}, nil
 
 	default:
-		return nil
+		// Unrecognized content type — silently skip (not a parse error).
+		return nil, nil
 	}
 }
 
@@ -133,25 +139,25 @@ func intDeref(p *int) int {
 
 // convertSummaryContent expands a summary content block into multiple messages.
 // Supports both old format ([]SummaryItem) and new format (SummaryContent{items, metadata}).
-func convertSummaryContent(data any, createdAt time.Time) []*turnagent.Message {
+func convertSummaryContent(data any, createdAt time.Time) ([]*turnagent.Message, error) {
 	dataBytes, err := primitives.ContentDataBytes(data)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("summary content data bytes: %w", err)
 	}
 
 	// Try new format first (SummaryContent with items and metadata)
 	var content primitives.SummaryContent
 	if err := json.Unmarshal(dataBytes, &content); err == nil && content.Items != nil {
-		return buildMessagesFromSummaryItems(content.Items, createdAt)
+		return buildMessagesFromSummaryItems(content.Items, createdAt), nil
 	}
 
 	// Fallback to old format ([]SummaryItem)
 	var items []primitives.SummaryItem
 	if err := json.Unmarshal(dataBytes, &items); err == nil {
-		return buildMessagesFromSummaryItems(items, createdAt)
+		return buildMessagesFromSummaryItems(items, createdAt), nil
 	}
 
-	return nil
+	return nil, fmt.Errorf("summary content: neither new nor old format parsed")
 }
 
 // buildMessagesFromSummaryItems converts SummaryItem slice to turnagent messages.

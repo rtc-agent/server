@@ -393,15 +393,6 @@ var staleTurnStatuses = []string{
 	string(model.TurnStatusInterrupted),
 }
 
-// resumeWorkPayload is the JSON carrier for resume work items published by
-// recoverStaleTurns. Uses struct + json.Marshal instead of fmt.Sprintf JSON
-// concatenation to avoid string escaping risks and ensure field type safety.
-type resumeWorkPayload struct {
-	Kind        string `json:"kind"`
-	SessionID   string `json:"session_id"`
-	InterruptID string `json:"interrupt_id"`
-}
-
 // basicAuth is an HTTP Basic Authentication middleware.
 // Used to protect internal admin endpoints such as /metrics.
 func basicAuth(next http.Handler, user, password string) http.Handler {
