@@ -1,6 +1,21 @@
+# golangci-lint configuration for centrifuge-plus
+# Version: 2.x format
+
+version: "2"
+
 run:
   timeout: 5m
-  modules-download-mode: readonly
+  go: "1.27"
+  tests: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+  settings:
+    gofmt:
+      simplify: true
 
 linters:
   enable:
@@ -9,23 +24,31 @@ linters:
     - staticcheck
     - ineffassign
     - unused
+    - gocyclo
     - misspell
     - revive
     - gosec
-    - gofmt
 
-linters-settings:
-  gocyclo:
-    min-complexity: 15
-  misspell:
-    locale: US
-  revive:
+  settings:
+    gocyclo:
+      min-complexity: 20
+
+    misspell:
+      locale: US
+
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+
+  exclusions:
     rules:
-      - name: exported
-        arguments:
-          - disableStutteringCheck
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - errcheck
 
 issues:
-  exclude-use-default: false
-  max-issues-per-linter: 0
-  max-same-issues: 0
+  max-issues-per-linter: 50
+  max-same-issues: 3

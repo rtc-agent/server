@@ -214,7 +214,7 @@ func provideCentrifugeNode() (*centrifuge.Node, error) {
 	})
 }
 
-// centrifugeLogHandler 将 Centrifuge 的日志转发到 zap logger
+// centrifugeLogHandler forwards Centrifuge logs to the zap logger.
 type centrifugeLogHandler struct{}
 
 func newCentrifugeLogHandler() centrifuge.LogHandler {
@@ -336,7 +336,7 @@ func provideAgent(
 	})
 }
 
-// convertModelPricing 将配置层的 ModelPricingConfig 转换为 agent 层的 ModelPricingConfig
+// convertModelPricing converts the config-layer ModelPricingConfig to the agent-layer ModelPricingConfig.
 func convertModelPricing(cfg *config.ModelPricingConfig) *agent.ModelPricingConfig {
 	if cfg == nil {
 		return nil
@@ -350,7 +350,7 @@ func convertModelPricing(cfg *config.ModelPricingConfig) *agent.ModelPricingConf
 	}
 }
 
-// provideMetrics 创建 Prometheus 指标收集器
+// provideMetrics creates a Prometheus metrics collector.
 func provideMetrics() *turnagent.PrometheusMetrics {
 	return turnagent.NewPrometheusMetrics()
 }
