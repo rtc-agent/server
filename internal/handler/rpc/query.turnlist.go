@@ -1,3 +1,4 @@
+//nolint:dupl // structurally similar to RtcList but operates on different entity/repo pair
 package rpchandler
 
 import (

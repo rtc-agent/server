@@ -21,6 +21,8 @@ import (
 
 // ServiceContext 服务上下文，用于依赖注入
 // 仅持有 repos 和基础设施（DB、Redis、Centrifuge），不包含业务逻辑
+//
+//nolint:dupl // struct fields mirror constructor params — unavoidable Go DI pattern
 type ServiceContext struct {
 	Config *config.Config
 	DB     *gorm.DB
@@ -99,6 +101,8 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 
 // NewServiceContextWithDeps 创建服务上下文（Wire 兼容版本）。
 // 所有依赖由调用方提供，便于 Wire 注入。
+//
+//nolint:dupl // constructor params mirror struct fields — unavoidable Go pattern
 func NewServiceContextWithDeps(
 	cfg *config.Config,
 	db *gorm.DB,

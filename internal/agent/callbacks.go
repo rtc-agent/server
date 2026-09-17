@@ -171,6 +171,39 @@ func (h *helpers) lookupTurn(ctx context.Context, sessionID string, workID strin
 // must always succeed; the publish is best-effort (frontend may miss the
 // event, but DB state remains correct).
 
+// publishLifecycleFallback handles the case where Turn lookup fails during a
+// lifecycle callback (beginTurn / failTurn). It extracts the sessionID from
+// context (set by agent_process.go via WithSessionID), updates the session
+// status, and publishes the lifecycle event so the frontend stays in sync.
+//
+// Returns nil — the caller treats this as "best-effort completed". The turn
+// status was already updated in the DB before this fallback runs.
+func (h *helpers) publishLifecycleFallback(
+	ctx context.Context,
+	tid uuid.UUID,
+	turnID string,
+	lookupErr error,
+	sessionStatus protocol.SessionStatus,
+	label string,
+) error {
+	sessionIDStr := turnagent.SessionIDFromContext(ctx)
+	if sid, parseErr := uuid.Parse(sessionIDStr); parseErr == nil {
+		if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, sessionStatus); err != nil {
+			h.logger.Warn(ctx, label+".update_session_status_failed_fallback", map[string]any{
+				"session_id": sid.String(),
+				"error":      err.Error(),
+			})
+		}
+		h.batchLifecyclePublish(ctx, tid, sid, label)
+	}
+	h.logger.Warn(ctx, label+".load_turn_failed", map[string]any{
+		"turn_id":  turnID,
+		"error":    lookupErr.Error(),
+		"fallback": sessionIDStr != "",
+	})
+	return nil
+}
+
 // beginTurn marks a freshly created turn as "running".
 //
 // Called exactly once per turn, after CreateTurn. The turnID is then passed
@@ -194,28 +227,11 @@ func (h *helpers) beginTurn(ctx context.Context, turnID string) error {
 	// when it reacts to the event), then publish both events together.
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		// Fallback: extract sessionID from context (set by agent_process.go
-		// via WithSessionID before calling BeginTurn). This ensures session
-		// activation and event publishing still work even when DB lookup fails.
-		// NOTE: beginTurn returns nil here — the turn status was already updated
-		// to "running" above. The caller sees success; only the session activation
-		// and event publishing use the fallback path.
-		sessionIDStr := turnagent.SessionIDFromContext(ctx)
-		if sid, parseErr := uuid.Parse(sessionIDStr); parseErr == nil {
-			if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusActive); err != nil {
-				h.logger.Warn(ctx, "beginTurn.update_session_status_failed_fallback", map[string]any{
-					"session_id": sid.String(),
-					"error":      err.Error(),
-				})
-			}
-			h.batchLifecyclePublish(ctx, tid, sid, "begin")
-		}
-		h.logger.Warn(ctx, "beginTurn.load_turn_failed", map[string]any{
-			"turn_id":  turnID,
-			"error":    lookupErr.Error(),
-			"fallback": sessionIDStr != "",
-		})
-		return nil
+		// Fallback: beginTurn returns nil here — the turn status was already
+		// updated to "running" above. The caller sees success; only the session
+		// activation and event publishing use the fallback path.
+		return h.publishLifecycleFallback(ctx, tid, turnID, lookupErr,
+			protocol.SessionStatusActive, "beginTurn")
 	}
 
 	// DB update session status before publishing events.
@@ -479,27 +495,10 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		// Fallback: extract sessionID from context (set by agent_process.go
-		// via WithSessionID). Ensures session status update and event
-		// publishing still work when DB lookup fails. Without this, the
-		// session stays stuck at "active" until the stale turn scanner
-		// runs (5-30 minutes).
-		sessionIDStr := turnagent.SessionIDFromContext(ctx)
-		if sid, parseErr := uuid.Parse(sessionIDStr); parseErr == nil {
-			if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusIdle); err != nil {
-				h.logger.Warn(ctx, "failTurn.update_session_status_failed_fallback", map[string]any{
-					"session_id": sid.String(),
-					"error":      err.Error(),
-				})
-			}
-			h.batchLifecyclePublish(ctx, tid, sid, "fail")
-		}
-		h.logger.Warn(ctx, "failTurn.load_turn_failed", map[string]any{
-			"turn_id":  turnID,
-			"error":    lookupErr.Error(),
-			"fallback": sessionIDStr != "",
-		})
-		return nil
+		// Fallback: extract sessionID from context. Without this, the session
+		// stays stuck at "active" until the stale turn scanner runs (5-30 min).
+		return h.publishLifecycleFallback(ctx, tid, turnID, lookupErr,
+			protocol.SessionStatusIdle, "failTurn")
 	}
 
 	// Set session status to "idle" — turn ended due to an error.
