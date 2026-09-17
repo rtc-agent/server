@@ -13,40 +13,45 @@ import (
 	"gorm.io/gorm"
 )
 
-// SessionRepo 会话仓储接口
+// SessionRepo provides session persistence operations.
 type SessionRepo interface {
-	// Create 创建新 Session 记录
+	// Create stores a new session record.
 	Create(ctx context.Context, session *model.Session) error
-	// GetByID 根据 ID 查询 Session
+	// GetByID looks up a session by ID.
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Session, error)
-	// FindByClientID 根据 clientID 查询 Session
+	// FindByClientID looks up a session by client-assigned ID.
 	FindByClientID(ctx context.Context, clientID string) (*model.Session, error)
-	// GetByUser 按用户分页查询 Session 列表
+	// GetByUser lists sessions for a user with cursor pagination.
 	GetByUser(ctx context.Context, userID uuid.UUID, cursor *string, limit int) ([]*model.Session, error)
-	// UpdateStatus 更新 Session 状态
+	// UpdateStatus updates the session status.
 	UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.SessionStatus) error
-	// Update 更新 Session 的指定字段
+	// Update modifies specific fields of a session.
 	Update(ctx context.Context, id uuid.UUID, fields map[string]any) error
-	// TouchActive 原子更新活跃会话的 updated_at；若会话不存在或已关闭返回错误。
-	// 用于在创建新 turn/message 时并发安全地"占位"，避免 TOCTOU 竞态。
+	// TouchActive atomically updates updated_at for an active session;
+	// returns an error if the session is missing or closed. Used to
+	// "claim" a session concurrently when creating a new turn/message,
+	// avoiding TOCTOU races.
 	TouchActive(ctx context.Context, id uuid.UUID) error
-	// UpdateFieldsActive 原子更新活跃会话的指定字段（自动带 updated_at）；
-	// 若会话不存在或已关闭返回错误。
+	// UpdateFieldsActive atomically updates the given fields (with automatic
+	// updated_at) for an active session; returns an error if the session
+	// is missing or closed.
 	UpdateFieldsActive(ctx context.Context, id uuid.UUID, fields map[string]any) error
-	// GetByIDs 批量查询会话，返回 map[id]*Session。未找到的 ID 不会出现在 map 中。
+	// GetByIDs batch-fetches sessions, returning map[id]*Session. Missing IDs are omitted.
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Session, error)
-	// ListByRoot 按 root_server_session_id 查询所有子孙会话，按指定 status 过滤，排除 root 自身。
+	// ListByRoot lists all descendant sessions by root_server_session_id,
+	// filtered by the given status, excluding the root itself.
 	ListByRoot(ctx context.Context, rootServerSessionID uuid.UUID, status string) ([]*model.Session, error)
-	// FindActiveByParent 根据 parent_server_session_id 查找活跃的子会话（status != closed）。
-	// 用于级联取消：父会话取消时需要取消所有活跃的子代理。
+	// FindActiveByParent finds active child sessions (status != closed) by
+	// parent_server_session_id. Used for cascade cancel: when a parent
+	// session is cancelled, all active sub-agents must be cancelled too.
 	FindActiveByParent(ctx context.Context, parentSessionID uuid.UUID) ([]*model.Session, error)
-	// AtomicAddTokenUsage 原子累加 Session 的 token 使用统计
+	// AtomicAddTokenUsage atomically increments the session's token usage counters.
 	AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UUID, delta TokenUsageDelta) error
-	// AtomicUpdateEWMA 原子更新 Session 的 token 预估 EWMA 值
+	// AtomicUpdateEWMA atomically updates the session's token estimate EWMA value.
 	AtomicUpdateEWMA(ctx context.Context, sessionID uuid.UUID, ewma float64) error
 }
 
-// TokenUsageDelta Token 使用增量
+// TokenUsageDelta represents incremental token usage changes.
 type TokenUsageDelta struct {
 	InputDelta       int64
 	OutputDelta      int64
@@ -56,13 +61,14 @@ type TokenUsageDelta struct {
 	ReasoningDelta   int64
 	CostMicrosDelta  int64
 
-	// SetEWMA 如果 > 0，原子设置 token_estimate_ewma 为该值。
-	// 用于 TokenEstimator 在每次 LLM 调用后更新持久化的 EWMA。
+	// SetEWMA, if > 0, atomically sets token_estimate_ewma to this value.
+	// Used by TokenEstimator to persist the EWMA after each LLM call.
 	SetEWMA float64
 
-	// SetCurrentContextTokens 如果 > 0，原子设置 current_context_tokens 为该值。
-	// 用于 token_callback 在每次 LLM 调用后更新当前上下文大小，
-	// 以及压缩后由 persistCompressedMessages / compact 写入准确的压缩后 token 数。
+	// SetCurrentContextTokens, if > 0, atomically sets current_context_tokens.
+	// Used by token_callback to update the current context size after each
+	// LLM call, and by persistCompressedMessages / compact to write the
+	// accurate post-compaction token count.
 	SetCurrentContextTokens int64
 }
 
@@ -70,7 +76,7 @@ type sessionRepo struct {
 	db *gorm.DB
 }
 
-// NewSessionRepo 创建 SessionRepo
+// NewSessionRepo creates a new SessionRepo.
 func NewSessionRepo(db *gorm.DB) SessionRepo {
 	return &sessionRepo{db: db}
 }
