@@ -88,10 +88,18 @@ func (w *Worker) setupCancelListener(
 				"session_id": claim.SessionID,
 				"message":    "work was cancelled between LoadWork and SubscribeCancel; Pub/Sub message was lost; triggering cancel now",
 			})
-			cancelCh <- CancelMessage{
+			// Non-blocking send: mirrors safety-net 1's pattern (lines 39-46)
+			// and the subscription handler (lines 70-73). cancelCh has buffer 1;
+			// the select/default guards against a theoretical race where safety-net 1
+			// or the subscription handler already filled the buffer between the
+			// adminCancelled guard check and this point.
+			select {
+			case cancelCh <- CancelMessage{
 				WorkID:    claim.WorkID,
 				Reason:    "cancelled_race_detected",
 				Timestamp: time.Now().Unix(),
+			}:
+			default:
 			}
 			adminCancelled.Store(true)
 			workCancel()

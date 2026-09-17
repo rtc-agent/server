@@ -249,5 +249,10 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 	}
 	h.notifyParentAfterSubAgentSession(ctx, session, nil, "failed", &errMsg)
 
+	// Cascade cancel: if this failed session has active child sessions (sub agents),
+	// cancel them as well. This prevents orphaned sub agents from continuing to run
+	// after the parent has failed. Mirrors the fallback path (L196) and cancelTurn.
+	h.cascadeCancelChildren(ctx, turnID, turn.SessionID)
+
 	return nil
 }

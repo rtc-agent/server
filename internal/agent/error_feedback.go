@@ -136,10 +136,12 @@ func (h *helpers) insertErrorMessage(
 // classifyError maps a Go error to an ErrorCategory and user-friendly text.
 // Detection priority:
 //  1. prompt-too-long → context (retryable)
+//     1b. stream-idle-timeout → stream (not retryable)
 //  2. anthropic.Error → by Type() (api/permission/context/timeout)
-//  3. net.OpError / url.Error → network
-//  4. context.DeadlineExceeded → timeout
-//  5. default → system
+//  3. net.OpError / url.Error → network (retryable)
+//  4. context.DeadlineExceeded → timeout (not retryable)
+//     4b. io.EOF / io.ErrUnexpectedEOF → network (retryable)
+//  5. default → system (not retryable)
 func classifyError(err error) (category protocol.ErrorCategory, title, message string, retryable bool) {
 	if err == nil {
 		return protocol.ErrorCategorySystem, "系统错误", "发生未知错误，请重试。", false
