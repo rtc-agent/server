@@ -185,8 +185,16 @@ func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turn
 	// Track whether the token target was already finalized by handleStreamChunk
 	// (via FinishReason). If so, tokens are already set and UpdateTokenUsage
 	// below can be skipped to avoid a redundant DB write.
+	//
+	// IMPORTANT: For the thinking-only case (no markdown exists), tokens are NOT
+	// written during finalization in handleStreamChunk because appendStreamChunk
+	// passes nil tokenUsage for the thinking path (to avoid double-counting with
+	// the markdown path). When no markdown exists, thinking is the token target
+	// and must receive tokens via UpdateTokenUsage below, even if already finalized.
+	// Only when markdown IS present does thinking finalization skip tokens safely,
+	// because markdown (the actual token target) carries them instead.
 	tokenTargetAlreadyFinalized := (tokenTargetKind == "markdown" && state.markdownFinalized) ||
-		(tokenTargetKind == "thinking" && state.thinkingFinalized)
+		(tokenTargetKind == "thinking" && state.thinkingFinalized && state.markdownMsgID != uuid.Nil)
 
 	// Finalize thinking if pending.
 	if state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
