@@ -106,7 +106,7 @@ func (r *SessionManagerRegistry) GetOrCreate(
 	cfg Config,
 	logFn func(ctx context.Context, level LogLevel, msg string, fields map[string]any),
 ) (*SessionTurnManager, bool, error) {
-	// 1. 快速路径：读锁检查现有 manager，避免阻塞其他 session 的读写
+	// 1. Fast path: read-lock check for existing manager, avoiding blocking other sessions' read/write.
 	r.mu.RLock()
 	existing := r.managers[sessionID]
 	r.mu.RUnlock()
@@ -114,7 +114,7 @@ func (r *SessionManagerRegistry) GetOrCreate(
 		return existing, false, nil
 	}
 
-	// 2. 无现有 manager：需要创建新的。先确定 credential。
+	// 2. No existing manager: need to create a new one. First determine the credential.
 	var credential string
 
 	if initialCredential != "" {
@@ -125,7 +125,7 @@ func (r *SessionManagerRegistry) GetOrCreate(
 	} else {
 		// No credential provided. This means we need to claim the lock ourselves.
 		// This path is used when GetOrCreate is called directly (not via Worker).
-		// Redis 操作在无锁状态下执行，避免阻塞其他 session
+		// Redis operations execute without holding the registry lock, avoiding blocking other sessions.
 		claim, err := queue.ClaimWithCredential(ctx, sessionID, workerID, "")
 		if err != nil {
 			return nil, false, fmt.Errorf("turnagent: claim: %w", err)
@@ -147,7 +147,7 @@ func (r *SessionManagerRegistry) GetOrCreate(
 		credential = claim.Credential
 	}
 
-	// 3. 写锁注册新 manager（double-check 防止并发创建）
+	// 3. Write-lock to register the new manager (double-check to prevent concurrent creation).
 	r.mu.Lock()
 	if existing := r.managers[sessionID]; existing != nil {
 		r.mu.Unlock()

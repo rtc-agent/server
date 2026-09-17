@@ -25,7 +25,7 @@ func extractTextFromContent(content protocol.ContentData) string {
 	}
 	dataBytes, err := json.Marshal(content.Data)
 	if err != nil {
-		// JSON 序列化失败时降级为 fmt.Sprintf，避免丢失调试信息
+		// Fall back to fmt.Sprintf on JSON serialization failure to avoid losing debug info.
 		return fmt.Sprintf("%v", content.Data)
 	}
 	return string(dataBytes)

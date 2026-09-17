@@ -12,7 +12,7 @@ import (
 
 // eventIdleWarningTimeout is the duration after which an idle warning is
 // logged if no events are received from the AsyncIterator. AsyncIterator
-// does not support Close()/Cancel(), so this is warning-only (方案 C).
+// does not support Close()/Cancel(), so this is warning-only (plan C).
 const eventIdleWarningTimeout = 10 * time.Minute
 
 // prepareAgent creates the eino Agent with tools for the current turn.

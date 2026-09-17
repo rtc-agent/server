@@ -25,7 +25,7 @@ import (
 )
 
 // =============================================================================
-// insertErrorMessage — 创建并推送一条错误类型消息
+// insertErrorMessage -- create and publish an error-type message
 // =============================================================================
 
 // insertErrorMessage creates and publishes an error-type message for the given
@@ -129,7 +129,7 @@ func (h *helpers) insertErrorMessage(
 }
 
 // =============================================================================
-// classifyError — 将 Go error 分类为用户友好的错误消息
+// classifyError -- classify Go errors into user-friendly error messages
 // =============================================================================
 
 // classifyError maps a Go error to an ErrorCategory and user-friendly text.
@@ -237,7 +237,7 @@ func classifyError(err error) (category protocol.ErrorCategory, title, message s
 }
 
 // =============================================================================
-// sanitizeRawError — 12 项正则净化规则 + 截断（共 13 步流水线）
+// sanitizeRawError -- 12 regex sanitization rules + truncation (13-step pipeline)
 // =============================================================================
 
 // sanitizationRule defines a single regex-based sanitization rule.
@@ -342,7 +342,7 @@ func sanitizeRawError(raw string) string {
 }
 
 // =============================================================================
-// 错误消息速率限制器
+// Error message rate limiter
 // =============================================================================
 
 const (

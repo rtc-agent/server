@@ -1,5 +1,5 @@
 // Package agent - session_title_summarizer.go
-// 会话标题摘要生成器
+// Session title summarizer.
 package agent
 
 import (
@@ -29,22 +29,22 @@ import (
 //go:embed prompts/session-title-summarize.md
 var sessionTitleSummarizePrompt string
 
-// maxConversationText 对话文本最大长度（字符数）
-// 参考 claude-code 实现，限制输入长度以控制 token 消耗
+// maxConversationText is the maximum conversation text length (in characters).
+// Following claude-code implementation, input length is limited to control token consumption.
 const maxConversationText = 1000
 
-// SessionTitleSummarizer 会话标题摘要生成器
+// SessionTitleSummarizer generates session title summaries.
 type SessionTitleSummarizer struct {
 	chatModel            einomodel.ToolCallingChatModel
 	sessionRepo          repo.SessionRepo
 	messageRepo          repo.MessageRepo
 	llmConfig            config.LLMConfig
-	maxMessages          int // 用于生成摘要的最大消息数
-	maxTitleLen          int // 标题最大长度（字符数）
+	maxMessages          int // maximum messages for summary generation
+	maxTitleLen          int // maximum title length (in characters)
 	tokenCallbackHandler callbacks.Handler
 }
 
-// NewSessionTitleSummarizer 创建 SessionTitleSummarizer
+// NewSessionTitleSummarizer creates a SessionTitleSummarizer.
 func NewSessionTitleSummarizer(
 	chatModel einomodel.ToolCallingChatModel,
 	sessionRepo repo.SessionRepo,
@@ -63,8 +63,8 @@ func NewSessionTitleSummarizer(
 	}
 }
 
-// noThinkingOptions 返回禁用 thinking/reasoning 的选项
-// 标题摘要不需要推理，禁用可节省 token
+// noThinkingOptions returns options that disable thinking/reasoning.
+// Title summaries don't need reasoning; disabling saves tokens.
 func (s *SessionTitleSummarizer) noThinkingOptions() []einomodel.Option {
 	var opts []einomodel.Option
 	switch s.llmConfig.Provider {
@@ -82,8 +82,8 @@ func (s *SessionTitleSummarizer) noThinkingOptions() []einomodel.Option {
 	return opts
 }
 
-// SummarizeIfNeeded 为指定会话生成并更新标题
-// 仅当会话标题仍以 "（" 开头（即初始截断标题）时才生成新标题
+// SummarizeIfNeeded generates and updates the title for the specified session.
+// Only generates a new title when the session title still starts with "(" (i.e., the initial truncated title).
 func (s *SessionTitleSummarizer) SummarizeIfNeeded(ctx context.Context, sessionID uuid.UUID) (string, error) {
 	if s.chatModel == nil {
 		return "", nil // LLM not configured, skip title generation
@@ -98,22 +98,22 @@ func (s *SessionTitleSummarizer) SummarizeIfNeeded(ctx context.Context, sessionI
 		ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{}, s.tokenCallbackHandler)
 	}
 
-	// 获取会话消息（最近的 N 条）
+	// Get session messages (most recent N).
 	modelMessages, err := s.messageRepo.ListRecentBySession(ctx, sessionID, s.maxMessages)
 	if err != nil {
 		return "", fmt.Errorf("list messages: %w", err)
 	}
 	if len(modelMessages) == 0 {
-		return "", nil // 没有消息，无需生成标题
+		return "", nil // no messages, no title needed
 	}
 
-	// 提取对话文本（参考 claude-code 实现）
+	// Extract conversation text (following claude-code implementation).
 	conversationText := extractConversationText(modelMessages, s.maxMessages)
 	if conversationText == "" {
 		return "", nil
 	}
 
-	// 生成标题
+	// Generate title.
 	title, err := s.generateTitle(ctx, conversationText)
 	if err != nil {
 		return title, fmt.Errorf("generate title: %w", err)
@@ -130,8 +130,8 @@ func (s *SessionTitleSummarizer) SummarizeIfNeeded(ctx context.Context, sessionI
 	return title, nil
 }
 
-// extractConversationText 从消息中提取对话文本
-// 只取 user 和 assistant 消息，限制总长度
+// extractConversationText extracts conversation text from messages.
+// Only takes user and assistant messages, with a total length limit.
 func extractConversationText(messages []*appmodel.Message, maxMessages int) string {
 	var parts []string
 	totalLen := 0
@@ -140,7 +140,7 @@ func extractConversationText(messages []*appmodel.Message, maxMessages int) stri
 		if i >= maxMessages {
 			break
 		}
-		// 只取用户和助手消息
+		// Only take user and assistant messages.
 		if msg.Role != "user" && msg.Role != "assistant" {
 			continue
 		}
@@ -150,14 +150,15 @@ func extractConversationText(messages []*appmodel.Message, maxMessages int) stri
 		}
 		parts = append(parts, content)
 		totalLen += len(content)
-		// 提前终止：已达上限
+		// Early termination: limit reached.
 		if totalLen >= maxConversationText {
 			break
 		}
 	}
 
 	text := strings.Join(parts, "\n")
-	// 尾部切片：保留最近的上下文。使用 rune 切片避免在多字节 UTF-8 字符中间截断。
+	// Tail slice: preserve the most recent context. Uses rune slicing to avoid
+	// truncating in the middle of multi-byte UTF-8 characters.
 	runes := []rune(text)
 	if len(runes) > maxConversationText {
 		text = string(runes[len(runes)-maxConversationText:])
@@ -165,13 +166,13 @@ func extractConversationText(messages []*appmodel.Message, maxMessages int) stri
 	return text
 }
 
-// generateTitle 调用 LLM 生成标题
+// generateTitle calls the LLM to generate a title.
 func (s *SessionTitleSummarizer) generateTitle(ctx context.Context, conversationText string) (string, error) {
-	// 构建 prompt
+	// Build prompt.
 	prompt := sessionTitleSummarizePrompt + "\n\n" + conversationText
 
-	// 使用 Stream 调用 LLM（长时间操作需要流式模式）
-	// 禁用 thinking 以节省 token
+	// Use Stream to call LLM (long operations require streaming mode).
+	// Thinking is disabled to save tokens.
 	stream, err := s.chatModel.Stream(ctx, []*schema.Message{
 		schema.UserMessage(prompt),
 	}, s.noThinkingOptions()...)
@@ -186,7 +187,7 @@ func (s *SessionTitleSummarizer) generateTitle(ctx context.Context, conversation
 	// operation and the caller already has a 30s overall context deadline.
 	const titleStreamIdleTimeout = 30 * time.Second
 
-	// 消费流以构建完整响应
+	// Consume stream to build complete response.
 	var contentBuilder strings.Builder
 	for {
 		res, timedOut := turnagent.RecvWithTimeout(ctx, stream.Recv, titleStreamIdleTimeout)
@@ -210,10 +211,10 @@ func (s *SessionTitleSummarizer) generateTitle(ctx context.Context, conversation
 		return "", fmt.Errorf("chat model returned empty response")
 	}
 
-	// 清理响应
+	// Clean the response.
 	title := cleanTitle(content)
 
-	// 截断过长的标题
+	// Truncate overly long titles.
 	if len([]rune(title)) > s.maxTitleLen {
 		title = string([]rune(title)[:s.maxTitleLen])
 	}
@@ -221,16 +222,16 @@ func (s *SessionTitleSummarizer) generateTitle(ctx context.Context, conversation
 	return title, nil
 }
 
-// cleanTitle 清理标题
+// cleanTitle cleans a title string.
 func cleanTitle(raw string) string {
-	// 移除可能的 markdown 格式和引号
+	// Remove possible markdown formatting and quotes.
 	title := strings.TrimSpace(raw)
 	title = strings.Trim(title, "`\"'*")
 	title = strings.TrimPrefix(title, "Title:")
 	title = strings.TrimPrefix(title, "标题:")
 	title = strings.TrimSpace(title)
 
-	// 取第一行
+	// Take the first line.
 	if idx := strings.Index(title, "\n"); idx != -1 {
 		title = title[:idx]
 	}

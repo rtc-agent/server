@@ -47,7 +47,7 @@ var promptTooLongPatterns = []string{
 	"maximum context length",  // OpenAI
 }
 
-// StreamIdleTimeoutError 表示流式读取超时（consumeStream 3分钟无数据）
+// StreamIdleTimeoutError indicates a stream read timeout (consumeStream 3 minutes without data).
 type StreamIdleTimeoutError struct {
 	SessionID string
 	TurnID    string
@@ -59,7 +59,7 @@ func (e *StreamIdleTimeoutError) Error() string {
 		e.Timeout, e.SessionID, e.TurnID)
 }
 
-// IsStreamIdleTimeout 判断是否为流空闲超时错误
+// IsStreamIdleTimeout checks whether the error is a stream idle timeout.
 func IsStreamIdleTimeout(err error) bool {
 	var target *StreamIdleTimeoutError
 	return errors.As(err, &target)

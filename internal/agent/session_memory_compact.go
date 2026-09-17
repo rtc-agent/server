@@ -7,8 +7,8 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 )
 
-// compressContextWithSessionMemory 尝试使用 session memory 进行压缩
-// 如果没有 session memory，返回 nil 让调用方回退到 LLM 生成摘要
+// compressContextWithSessionMemory attempts compression using session memories.
+// If there are no session memories, returns nil to let the caller fall back to LLM-generated summary.
 //
 // Strategy:
 //  1. Query session memories for the current session
@@ -50,17 +50,16 @@ func (h *helpers) compressContextWithSessionMemory(
 	return &summary
 }
 
-// buildSummaryFromMemories 将 session memories 构建为摘要文本
-//
-// 按分类分组，格式化为可读的 markdown 格式。模板定义在
+// buildSummaryFromMemories builds session memories into summary text.
+// Groups by category and formats as readable markdown. Template is defined in
 // prompts/attachments/session-memory-summary.md.tmpl。
 func buildSummaryFromMemories(memories []*model.SessionMemory) string {
 	return buildSummaryFromMemoriesTmpl(memories)
 }
 
-// formatSessionMemoriesForInjection 格式化 session memories 用于注入到消息中
-// 用于每轮对话前的注入（与压缩时的摘要不同）。模板定义在
-// prompts/attachments/session-memory-injection.md.tmpl。
+// formatSessionMemoriesForInjection formats session memories for injection into messages.
+// Used for pre-turn injection (different from compression summary). Template defined in
+// prompts/attachments/session-memory-injection.md.tmpl.
 func formatSessionMemoriesForInjection(memories []*model.SessionMemory) string {
 	return formatSessionMemoryInjection(memories)
 }

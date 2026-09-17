@@ -145,8 +145,8 @@ type Config struct {
 	// input costs by ~69% in those scenarios.
 	EnableStrategicCacheBreakpoints bool
 
-	// ModelPricing 模型定价配置（可选，用于成本计算）
-	// 未配置时使用默认价格（Claude 3.5 Sonnet）
+	// ModelPricing is the model pricing configuration (optional, used for cost calculation).
+	// Uses default pricing (Claude 3.5 Sonnet) when not configured.
 	ModelPricing *ModelPricingConfig
 
 	// ShowRawErrors controls whether RawError content is visible in error messages.
@@ -322,7 +322,7 @@ type helpers struct {
 	// Set by Config.EnableStrategicCacheBreakpoints (default: true).
 	enableStrategicCacheBreakpoints bool
 
-	// Token 预估相关
+	// Token estimation related.
 	tokenEstimator      *TokenEstimator
 	tokenUpdateThrottle *Throttle
 	modelPricing        ModelPricing

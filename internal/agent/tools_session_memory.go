@@ -11,7 +11,7 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 )
 
-// saveSessionMemoryTool 保存会话记忆
+// saveSessionMemoryTool saves a session memory.
 type saveSessionMemoryTool struct {
 	helpers *helpers
 }
@@ -105,7 +105,7 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 	return formatSessionMemorySaved(memory.ID.String(), args.Category, args.Title), nil
 }
 
-// listSessionMemoriesTool 列出会话记忆
+// listSessionMemoriesTool lists session memories.
 type listSessionMemoriesTool struct {
 	helpers *helpers
 }

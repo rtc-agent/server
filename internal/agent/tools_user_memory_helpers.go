@@ -7,8 +7,8 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 )
 
-// validateStructuredContent 验证 feedback/project 类型的内容结构
-// 必须包含 **Why:** 和 **How to apply:** 段落
+// validateStructuredContent validates the content structure for feedback/project types.
+// Must contain **Why:** and **How to apply:** sections.
 func validateStructuredContent(content string) error {
 	contentLower := strings.ToLower(content)
 	hasWhy := strings.Contains(contentLower, "**why:**") || strings.Contains(contentLower, "**why**")

@@ -208,8 +208,8 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 		"session_id": sessionID.String(),
 	})
 
-	// 压缩后回写 current_context_tokens：使用 compressed 消息的实际 token 数。
-	// 这会让前端进度条从累计的 TotalTokens 切换到真实的上下文大小。
+	// After compression, write back current_context_tokens: use the actual token count of the compressed messages.
+	// This switches the frontend progress bar from cumulative TotalTokens to the real context size.
 	if tokensAfter, err := cumulativeTokenCounter(ctx, compressed); err == nil && tokensAfter > 0 {
 		if err := h.deps.SessionRepo.Update(ctx, sessionID, map[string]any{
 			"current_context_tokens": tokensAfter,

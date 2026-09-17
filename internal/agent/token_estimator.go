@@ -8,44 +8,44 @@ import (
 	"github.com/rtc-agent/server/internal/repo"
 )
 
-// TokenEstimate Token 预估结果。
-// 表示一个 session 的当前 token 使用情况和对未来的预测。
+// TokenEstimate holds the token estimation result.
+// Represents a session's current token usage and prediction for the future.
 type TokenEstimate struct {
-	// CurrentTokens 当前上下文 token 数（= Session.TotalTokens，含所有类型）
+	// CurrentTokens is the current context token count (= Session.TotalTokens, all types).
 	CurrentTokens int64
 
-	// EstimatedNextRound 预估下一轮 token 数
+	// EstimatedNextRound is the estimated token count for the next round.
 	EstimatedNextRound int64
 
-	// CompressionThreshold 压缩阈值
+	// CompressionThreshold is the threshold at which compression is triggered.
 	CompressionThreshold int64
 
-	// CompressionProgress 压缩进度（0-100）
+	// CompressionProgress is the compression progress (0-100).
 	CompressionProgress float64
 
-	// RoundsUntilCompression 距离压缩的轮次
-	// 0 = 下一轮触发
-	// -1 = 已超过阈值
+	// RoundsUntilCompression is the estimated rounds until compression.
+	// 0 = triggered on next round
+	// -1 = already exceeded threshold
 	RoundsUntilCompression int
 
-	// NewEWMA 计算后的新 EWMA 值，调用方应通过 AtomicAddTokenUsage.SetEWMA 持久化。
+	// NewEWMA is the newly computed EWMA value. Caller should persist via AtomicAddTokenUsage.SetEWMA.
 	NewEWMA float64
 }
 
-// TokenEstimator Token 预估器。
-// 使用 EWMA（指数加权移动平均）增量预估下一轮 token 使用量。
-// EWMA 持久化在 Session.TokenEstimateEWMA 字段中。
+// TokenEstimator estimates token usage incrementally.
+// Uses EWMA (Exponentially Weighted Moving Average) to predict the next round's token usage.
+// EWMA is persisted in the Session.TokenEstimateEWMA field.
 type TokenEstimator struct {
 	sessionRepo      repo.SessionRepo
-	triggerThreshold int64   // 实际触发阈值（contextLimit - compactBuffer）
-	alpha            float64 // EWMA 衰减因子
-	defaultGrowth    float64 // 默认初始增长率
+	triggerThreshold int64   // actual trigger threshold (contextLimit - compactBuffer)
+	alpha            float64 // EWMA decay factor
+	defaultGrowth    float64 // default initial growth rate
 }
 
-// NewTokenEstimator 创建 Token 预估器。
-//   - contextLimit: 模型上下文窗口大小
-//   - compactBuffer: 压缩缓冲 token 数
-//   - sessionRepo: Session 仓库（用于读写 EWMA）
+// NewTokenEstimator creates a TokenEstimator.
+//   - contextLimit: model context window size
+//   - compactBuffer: compression buffer token count
+//   - sessionRepo: Session repository (for reading/writing EWMA)
 func NewTokenEstimator(contextLimit, compactBuffer int, sessionRepo repo.SessionRepo) *TokenEstimator {
 	threshold := int64(contextLimit - compactBuffer)
 	if threshold <= 0 {
@@ -68,16 +68,16 @@ func (e *TokenEstimator) TriggerThreshold() int64 {
 	return e.triggerThreshold
 }
 
-// Estimate 计算 Token 预估并返回新 EWMA（不持久化，调用方通过 AtomicAddTokenUsage.SetEWMA 持久化）。
+// Estimate computes the token estimate and returns the new EWMA (not persisted; caller persists via AtomicAddTokenUsage.SetEWMA).
 //
 // Parameters:
-//   - sessionID: 会话 ID
-//   - currentContextTokens: 当前上下文实际 token 数（含本轮 delta），用于进度和轮次计算
-//   - prevEWMA: 上一次的 EWMA（从 Session.TokenEstimateEWMA 读取）
-//   - roundDelta: 本轮的 token 增量（= usage.TotalTokens）
+//   - sessionID: session ID
+//   - currentContextTokens: current context token count (including this round's delta), used for progress and rounds calculation
+//   - prevEWMA: previous EWMA (read from Session.TokenEstimateEWMA)
+//   - roundDelta: this round's token increment (= usage.TotalTokens)
 //
 // Returns:
-//   - *TokenEstimate: 预估结果（含 NewEWMA 供调用方持久化）
+//   - *TokenEstimate: estimation result (includes NewEWMA for caller to persist)
 func (e *TokenEstimator) Estimate(
 	_ context.Context,
 	_ uuid.UUID,
@@ -85,7 +85,7 @@ func (e *TokenEstimator) Estimate(
 	prevEWMA float64,
 	roundDelta int64,
 ) *TokenEstimate {
-	// 1. 使用传入的 EWMA（来自 Session.TokenEstimateEWMA）
+	// 1. Use the provided EWMA (from Session.TokenEstimateEWMA).
 	// When prevEWMA <= 0 (first call or after reset), use defaultGrowth as a
 	// reasonable fallback. This is defensive programming, not a bug.
 	// prevEWMA itself is not modified; only the local lastEWMA gets the fallback.
@@ -94,17 +94,17 @@ func (e *TokenEstimator) Estimate(
 		lastEWMA = e.defaultGrowth
 	}
 
-	// 2. EWMA 增量更新：α * old_ewma + (1-α) * new_observation
+	// 2. EWMA incremental update: alpha * old_ewma + (1-alpha) * new_observation
 	newEWMA := e.alpha*lastEWMA + (1-e.alpha)*float64(roundDelta)
 
-	// 3. 预估下一轮（基于当前上下文大小 + 增量）
+	// 3. Estimate next round (based on current context size + increment).
 	estimatedNext := currentContextTokens + int64(newEWMA)
 
-	// 4. 计算压缩进度
+	// 4. Calculate compression progress.
 	progress := float64(currentContextTokens) / float64(e.triggerThreshold) * 100
 	progress = math.Min(progress, 100)
 
-	// 5. 计算距离压缩的轮次
+	// 5. Calculate rounds until compression.
 	roundsUntil := calcRounds(currentContextTokens, e.triggerThreshold, newEWMA)
 
 	return &TokenEstimate{
@@ -177,7 +177,7 @@ func (e *TokenEstimator) ReestimateAfterCompact(
 		}, nil
 	}
 
-	// 使用 tokensAfter（压缩后实际上下文大小）而非 session.TotalTokens（累计值）。
+	// Use tokensAfter (actual compressed context size) instead of session.TotalTokens (cumulative value).
 	currentTokens := int64(tokensAfter)
 	estimatedNext := currentTokens + int64(newEWMA)
 	progress := math.Min(float64(currentTokens)/float64(e.triggerThreshold)*100, 100)

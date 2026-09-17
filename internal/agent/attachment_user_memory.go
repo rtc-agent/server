@@ -44,10 +44,10 @@ func (a *UserMemoryAttachment) Name() string {
 // - Query fails
 //
 // The output is wrapped in <user_memory> tags and grouped by category:
-// - 关于用户 (user)
-// - 工作偏好与反馈 (feedback)
-// - 项目信息 (project)
-// - 参考资料 (reference)
+// - About the user (user)
+// - Work preferences and feedback (feedback)
+// - Project information (project)
+// - References (reference)
 func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, userID uuid.UUID) (string, error) {
 	if a.helpers.deps.UserMemoryRepo == nil {
 		return "", nil

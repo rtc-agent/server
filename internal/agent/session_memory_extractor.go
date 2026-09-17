@@ -22,32 +22,32 @@ import (
 //go:embed prompts/session-memory-extract.md
 var sessionMemoryExtractPrompt string
 
-// SessionMemoryExtractor 提取会话记忆
+// SessionMemoryExtractor extracts session memories.
 //
-// 触发条件（对齐需求文档 12-memory-system.md）：
-// - 初始化阈值：上下文 token 数 >= 10,000
-// - 更新阈值（满足其一）：
-//   - token 增长 >= 5,000 且 tool call 数量 >= 3
-//   - token 增长 >= 5,000 且 最后一轮 assistant 没有 tool call（自然对话断点）
+// Trigger conditions (aligned with requirements doc 12-memory-system.md):
+//   - Init threshold: context token count >= 10,000
+//   - Update threshold (any one of):
+//   - token growth >= 5,000 AND tool call count >= 3
+//   - token growth >= 5,000 AND last assistant turn has no tool calls (natural conversation breakpoint)
 type SessionMemoryExtractor struct {
 	chatModel    einomodel.ToolCallingChatModel
 	memoryRepo   repo.SessionMemoryRepo
 	tokenCounter turnagent.TokenCounterFunc
 	logger       turnagent.Logger
 
-	// 配置
-	InitThreshold   int // 初始化阈值，默认 10000
-	UpdateThreshold int // 更新阈值，默认 5000
-	MinToolCalls    int // 最小 tool call 数量，默认 3
+	// Configuration
+	InitThreshold   int // initialization threshold, default 10000
+	UpdateThreshold int // update threshold, default 5000
+	MinToolCalls    int // minimum tool call count, default 3
 
-	// noThinkingOptions 禁用 thinking 的选项（压缩任务不需要推理）
+	// noThinkingOptions disables thinking/reasoning (compression tasks don't need reasoning).
 	noThinkingOptions []einomodel.Option
 
-	// tokenCallbackHandler 用于追踪 LLM 调用的 token 消耗
+	// tokenCallbackHandler tracks token consumption for LLM calls.
 	tokenCallbackHandler callbacks.Handler
 }
 
-// NewSessionMemoryExtractor 创建 SessionMemoryExtractor
+// NewSessionMemoryExtractor creates a SessionMemoryExtractor.
 func NewSessionMemoryExtractor(
 	chatModel einomodel.ToolCallingChatModel,
 	memoryRepo repo.SessionMemoryRepo,
@@ -72,26 +72,26 @@ func NewSessionMemoryExtractor(
 	}
 }
 
-// ExtractionState 提取状态（用于跟踪上次提取的位置）
+// ExtractionState tracks extraction state (for tracking position since last extraction).
 type ExtractionState struct {
-	LastTokenCount   int    // 上次提取时的 token 数
-	LastMessageCount int    // 上次提取时的消息数
-	LastExtractedAt  string // 上次提取的时间（ISO 8601）
+	LastTokenCount   int    // token count at last extraction
+	LastMessageCount int    // message count at last extraction
+	LastExtractedAt  string // time of last extraction (ISO 8601)
 }
 
-// ExtractIfNeeded 检查是否需要提取，如果需要则执行提取
+// ExtractIfNeeded checks whether extraction is needed and performs it if so.
 //
-// 返回值：
-// - extracted: 是否执行了提取
-// - newState: 更新后的提取状态
-// - err: 错误信息
+// Returns:
+//   - extracted: whether extraction was performed
+//   - newState: updated extraction state
+//   - err: error information
 func (e *SessionMemoryExtractor) ExtractIfNeeded(
 	ctx context.Context,
 	sessionID uuid.UUID,
 	messages []*schema.Message,
 	state *ExtractionState,
 ) (extracted bool, newState *ExtractionState, err error) {
-	// 检查 chatModel 是否已配置
+	// Check if chatModel is configured.
 	if e.chatModel == nil {
 		e.log(ctx, "extractor.skip_chatmodel_nil", map[string]any{
 			"session_id": sessionID.String(),
@@ -99,13 +99,13 @@ func (e *SessionMemoryExtractor) ExtractIfNeeded(
 		return false, state, nil
 	}
 
-	// 计算当前 token 数
+	// Calculate current token count.
 	currentTokens, err := e.tokenCounter(ctx, messages)
 	if err != nil {
 		return false, state, fmt.Errorf("count tokens: %w", err)
 	}
 
-	// 检查初始化阈值
+	// Check initialization threshold.
 	if currentTokens < e.InitThreshold {
 		e.log(ctx, "extractor.skip_below_init_threshold", map[string]any{
 			"session_id":     sessionID.String(),
@@ -115,18 +115,18 @@ func (e *SessionMemoryExtractor) ExtractIfNeeded(
 		return false, state, nil
 	}
 
-	// 计算 token 增长
+	// Calculate token growth.
 	tokenGrowth := currentTokens
 	if state != nil && state.LastTokenCount > 0 {
 		tokenGrowth = currentTokens - state.LastTokenCount
 	}
 
-	// 计算 tool call 数量
+	// Calculate tool call count.
 	toolCallCount := countToolCalls(messages, state)
 
-	// 检查是否满足更新条件
-	// 条件 1: token 增长 >= 5000 且 tool call 数量 >= 3
-	// 条件 2: token 增长 >= 5000 且 最后一轮 assistant 没有 tool call（自然对话断点）
+	// Check if update conditions are met.
+	// Condition 1: token growth >= 5000 AND tool call count >= 3
+	// Condition 2: token growth >= 5000 AND last assistant turn has no tool calls (natural conversation breakpoint)
 	shouldExtract := (tokenGrowth >= e.UpdateThreshold && toolCallCount >= e.MinToolCalls) ||
 		(tokenGrowth >= e.UpdateThreshold && !hasToolCallInLastAssistant(messages))
 
@@ -141,7 +141,7 @@ func (e *SessionMemoryExtractor) ExtractIfNeeded(
 		return false, state, nil
 	}
 
-	// 执行提取
+	// Perform extraction.
 	e.log(ctx, "extractor.start", map[string]any{
 		"session_id":      sessionID.String(),
 		"current_tokens":  currentTokens,
@@ -149,19 +149,19 @@ func (e *SessionMemoryExtractor) ExtractIfNeeded(
 		"tool_call_count": toolCallCount,
 	})
 
-	// 查询现有的 session memories（用于避免重复提取）
+	// Query existing session memories (to avoid duplicate extraction).
 	existingMemories, err := e.memoryRepo.ListBySession(ctx, sessionID, 50)
 	if err != nil {
 		return false, state, fmt.Errorf("list existing memories: %w", err)
 	}
 
-	// 调用 LLM 提取记忆
+	// Call LLM to extract memories.
 	newMemories, err := e.extractMemories(ctx, sessionID, messages, existingMemories)
 	if err != nil {
 		return false, state, fmt.Errorf("extract memories: %w", err)
 	}
 
-	// 保存新记忆
+	// Save new memories.
 	if len(newMemories) > 0 {
 		for _, mem := range newMemories {
 			if err := e.memoryRepo.Create(ctx, mem); err != nil {
@@ -174,7 +174,7 @@ func (e *SessionMemoryExtractor) ExtractIfNeeded(
 		}
 	}
 
-	// 更新状态
+	// Update state.
 	newState = &ExtractionState{
 		LastTokenCount:   currentTokens,
 		LastMessageCount: len(messages),
@@ -189,11 +189,12 @@ func (e *SessionMemoryExtractor) ExtractIfNeeded(
 	return true, newState, nil
 }
 
-// extractMemories 调用 LLM 提取记忆
+// extractMemories calls the LLM to extract memories.
 //
-// 使用 tool calling 而非解析自由文本：LLM 必须调用 save_session_memories tool，
-// 参数由 JSON schema 约束，彻底避免了从 LLM 输出中解析 JSON 的可靠性问题。
-// 使用 Stream（而非 Generate）因为模型要求长时间操作必须流式。
+// Uses tool calling instead of parsing free text: the LLM must call the save_session_memories tool,
+// with parameters constrained by JSON schema, completely avoiding the reliability issues of parsing
+// JSON from LLM output.
+// Uses Stream (not Generate) because the model requires streaming for long operations.
 func (e *SessionMemoryExtractor) extractMemories(
 	ctx context.Context,
 	sessionID uuid.UUID,
@@ -210,45 +211,45 @@ func (e *SessionMemoryExtractor) extractMemories(
 		ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{}, e.tokenCallbackHandler)
 	}
 
-	// 构建 tool
+	// Build tool.
 	extractTool := &saveSessionMemoriesTool{sessionID: sessionID}
 	toolInfo, err := extractTool.Info(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("tool info: %w", err)
 	}
 
-	// 绑定 tool 到 chatModel
+	// Bind tool to chatModel.
 	boundModel, err := e.chatModel.WithTools([]*schema.ToolInfo{toolInfo})
 	if err != nil {
 		return nil, fmt.Errorf("bind tools: %w", err)
 	}
 
-	// 构建提示词
+	// Build prompt.
 	prompt := e.buildExtractPrompt(messages, existingMemories)
 	inputMessages := []*schema.Message{schema.UserMessage(prompt)}
 
-	// 调用 LLM（使用 Stream，禁用 thinking）
+	// Call LLM (using Stream, thinking disabled).
 	stream, err := boundModel.Stream(ctx, inputMessages, e.noThinkingOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("chat model stream: %w", err)
 	}
 
-	// 消费流，合并所有 chunk（包括增量分片的 tool calls）
-	// ConcatMessageStream 内部会关闭 stream，不需要 defer stream.Close()
+	// Consume stream, merging all chunks (including incrementally fragmented tool calls).
+	// ConcatMessageStream closes the stream internally, no need for defer stream.Close().
 	resp, err := schema.ConcatMessageStream(stream)
 	if err != nil {
 		return nil, fmt.Errorf("consume stream: %w", err)
 	}
 
-	// 检查 LLM 是否调用了 tool
+	// Check if LLM called the tool.
 	if len(resp.ToolCalls) == 0 {
 		e.log(ctx, "extractor.no_tool_call", map[string]any{
 			"session_id": sessionID.String(),
 		})
-		return nil, nil // 非致命：LLM 认为无需提取
+		return nil, nil // non-fatal: LLM determined no extraction needed
 	}
 
-	// 直接解析 tool call 参数（JSON schema 约束，100% 可靠）
+	// Parse tool call arguments directly (JSON schema constrained, 100% reliable).
 	tc := resp.ToolCalls[0]
 	if tc.Function.Name != "save_session_memories" {
 		return nil, fmt.Errorf("unexpected tool call: %s", tc.Function.Name)
@@ -265,7 +266,7 @@ func (e *SessionMemoryExtractor) extractMemories(
 		return nil, fmt.Errorf("unmarshal tool args: %w", err)
 	}
 
-	// 转换为 model.SessionMemory
+	// Convert to model.SessionMemory.
 	var memories []*model.SessionMemory
 	addMemories := func(category string, items []memoryItem) {
 		for _, item := range items {
@@ -290,8 +291,8 @@ func (e *SessionMemoryExtractor) extractMemories(
 	return memories, nil
 }
 
-// saveSessionMemoriesTool 是 memory extraction 专用的 tool。
-// LLM 通过调用此 tool 提交提取的记忆，参数由 JSON schema 约束。
+// saveSessionMemoriesTool is the tool for memory extraction.
+// The LLM submits extracted memories by calling this tool, with parameters constrained by JSON schema.
 type saveSessionMemoriesTool struct {
 	sessionID uuid.UUID
 }
@@ -352,25 +353,25 @@ func (t *saveSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 	return fmt.Sprintf("Successfully saved %d memories.", total), nil
 }
 
-// memoryItem 用于 tool 参数解析
+// memoryItem is used for tool argument parsing.
 type memoryItem struct {
 	Title    string           `json:"title"`
 	Content  string           `json:"content"`
 	Metadata model.JSONB[any] `json:"metadata"`
 }
 
-// buildExtractPrompt 构建提取提示词
+// buildExtractPrompt builds the extraction prompt.
 func (e *SessionMemoryExtractor) buildExtractPrompt(
 	messages []*schema.Message,
 	existingMemories []*model.SessionMemory,
 ) string {
 	var sb strings.Builder
 
-	// 写入提示词模板
+	// Write prompt template.
 	sb.WriteString(sessionMemoryExtractPrompt)
 	sb.WriteString("\n\n")
 
-	// 写入现有记忆（如果有）
+	// Write existing memories (if any).
 	if len(existingMemories) > 0 {
 		sb.WriteString("# Existing Session Memories\n\n")
 		sb.WriteString("The following memories have already been extracted. Do NOT duplicate them, only extract NEW information:\n\n")
@@ -380,14 +381,14 @@ func (e *SessionMemoryExtractor) buildExtractPrompt(
 		sb.WriteString("\n")
 	}
 
-	// 写入对话历史
+	// Write conversation history.
 	sb.WriteString("# Conversation History\n\n")
 	sb.WriteString(formatMessagesForMemoryExtract(messages))
 
 	return sb.String()
 }
 
-// countToolCalls 计算 tool call 数量（从上次提取之后）
+// countToolCalls counts tool calls (since the last extraction).
 func countToolCalls(messages []*schema.Message, state *ExtractionState) int {
 	startIdx := 0
 	if state != nil && state.LastMessageCount > 0 && state.LastMessageCount < len(messages) {
@@ -404,7 +405,7 @@ func countToolCalls(messages []*schema.Message, state *ExtractionState) int {
 	return count
 }
 
-// hasToolCallInLastAssistant 检查最后一条 assistant 消息是否有 tool call
+// hasToolCallInLastAssistant checks whether the last assistant message has tool calls.
 func hasToolCallInLastAssistant(messages []*schema.Message) bool {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == schema.Assistant {
@@ -414,7 +415,7 @@ func hasToolCallInLastAssistant(messages []*schema.Message) bool {
 	return false
 }
 
-// formatMessagesForMemoryExtract 格式化消息用于记忆提取
+// formatMessagesForMemoryExtract formats messages for memory extraction.
 func formatMessagesForMemoryExtract(messages []*schema.Message) string {
 	var sb strings.Builder
 
@@ -444,8 +445,8 @@ func formatMessagesForMemoryExtract(messages []*schema.Message) string {
 
 		case schema.Tool:
 			fmt.Fprintf(&sb, "## %s (result for %s)\n\n", role, msg.ToolName)
-			// 截断过长的工具结果。使用 UTF-8 安全的截断方法，
-			// 避免在多字节字符（如 CJK 字符）中间切断。
+			// Truncate overly long tool results. Uses UTF-8-safe truncation
+			// to avoid cutting in the middle of multi-byte characters (e.g. CJK).
 			if len(msg.Content) > 2000 {
 				fmt.Fprintf(&sb, "%s\n\n", stringutil.TruncateByByte(msg.Content, 2000))
 			} else {
@@ -471,7 +472,7 @@ func formatMessagesForMemoryExtract(messages []*schema.Message) string {
 	return sb.String()
 }
 
-// estimateMemoryTokens 估算 token 数（使用全局 TokenCounter）
+// estimateMemoryTokens estimates token count (using the global TokenCounter).
 func estimateMemoryTokens(s string) int {
 	return turnagent.CountStringTokens(s)
 }

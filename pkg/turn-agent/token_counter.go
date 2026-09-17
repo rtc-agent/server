@@ -50,22 +50,22 @@ func (h *HeuristicTokenCounter) CountMessageTokens(msg *schema.Message) int {
 
 	var charCount int
 
-	// 主内容
+	// Primary content (text + reasoning).
 	charCount += len(msg.Content)
 	charCount += len(msg.ReasoningContent)
 
-	// UserInputMultiContent（用户输入多模态内容）
+	// UserInputMultiContent (user-provided multimodal content).
 	for _, part := range msg.UserInputMultiContent {
 		if part.Type == schema.ChatMessagePartTypeText {
 			charCount += len(part.Text)
 		}
-		// 图片等多模态内容按固定 token 估算（约 250 tokens）
+		// Image and other multimodal content estimated at a fixed token count (~250 tokens).
 		if part.Type == schema.ChatMessagePartTypeImageURL {
 			charCount += estimatedImageChars
 		}
 	}
 
-	// AssistantGenMultiContent（模型输出多模态内容）
+	// AssistantGenMultiContent (model-generated multimodal content).
 	for _, part := range msg.AssistantGenMultiContent {
 		if part.Type == schema.ChatMessagePartTypeText {
 			charCount += len(part.Text)
@@ -74,14 +74,14 @@ func (h *HeuristicTokenCounter) CountMessageTokens(msg *schema.Message) int {
 		}
 	}
 
-	// ToolCalls（工具调用）
+	// ToolCalls (function name, arguments, and call ID).
 	for _, tc := range msg.ToolCalls {
 		charCount += len(tc.Function.Name)
 		charCount += len(tc.Function.Arguments)
 		charCount += len(tc.ID) // tool call ID
 	}
 
-	// Tool 结果消息
+	// Tool result message metadata.
 	if msg.Role == schema.Tool {
 		charCount += len(msg.ToolCallID)
 		charCount += len(msg.ToolName)
@@ -139,22 +139,22 @@ func (t *TiktokenTokenCounter) CountMessageTokens(msg *schema.Message) int {
 
 	var total int
 
-	// 主内容
+	// Primary content (text + reasoning).
 	total += t.CountTokens(msg.Content)
 	total += t.CountTokens(msg.ReasoningContent)
 
-	// UserInputMultiContent（用户输入多模态内容）
+	// UserInputMultiContent (user-provided multimodal content).
 	for _, part := range msg.UserInputMultiContent {
 		if part.Type == schema.ChatMessagePartTypeText {
 			total += t.CountTokens(part.Text)
 		}
-		// 图片等多模态内容按固定 token 估算（约 250 tokens）
+		// Image and other multimodal content estimated at a fixed token count (~250 tokens).
 		if part.Type == schema.ChatMessagePartTypeImageURL {
 			total += estimatedImageChars / 4
 		}
 	}
 
-	// AssistantGenMultiContent（模型输出多模态内容）
+	// AssistantGenMultiContent (model-generated multimodal content).
 	for _, part := range msg.AssistantGenMultiContent {
 		if part.Type == schema.ChatMessagePartTypeText {
 			total += t.CountTokens(part.Text)
@@ -163,14 +163,14 @@ func (t *TiktokenTokenCounter) CountMessageTokens(msg *schema.Message) int {
 		}
 	}
 
-	// ToolCalls（工具调用）
+	// ToolCalls (function name, arguments, and call ID).
 	for _, tc := range msg.ToolCalls {
 		total += t.CountTokens(tc.Function.Name)
 		total += t.CountTokens(tc.Function.Arguments)
 		total += t.CountTokens(tc.ID) // tool call ID
 	}
 
-	// Tool 结果消息
+	// Tool result message metadata.
 	if msg.Role == schema.Tool {
 		total += t.CountTokens(msg.ToolCallID)
 		total += t.CountTokens(msg.ToolName)
@@ -254,7 +254,7 @@ func CountStringTokens(text string) int {
 //   - If no messages have Usage data at all, fall back to estimating every
 //     message from content length.
 func CumulativeTokenCounter(_ context.Context, messages []*schema.Message) (int, error) {
-	// 1. 从后向前查找最后一条带 Usage 的消息作为基线（不限角色）。
+	// 1. Walk backwards to find the last message with Usage as the baseline (any role).
 	var baseTokens int
 	incrementStart := 0
 
@@ -262,7 +262,7 @@ func CumulativeTokenCounter(_ context.Context, messages []*schema.Message) (int,
 		msg := messages[i]
 		if msg.ResponseMeta != nil && msg.ResponseMeta.Usage != nil {
 			usage := msg.ResponseMeta.Usage
-			// TotalTokens 已经是准确值（包含 cache read + cache creation）
+			// TotalTokens is already an accurate value (includes cache read + cache creation).
 			if usage.TotalTokens > 0 {
 				baseTokens = usage.TotalTokens
 				incrementStart = i + 1
@@ -271,7 +271,7 @@ func CumulativeTokenCounter(_ context.Context, messages []*schema.Message) (int,
 		}
 	}
 
-	// 2. 累加基线之后新增消息的估算 token（使用精确估算）。
+	// 2. Accumulate estimated tokens for messages added after the baseline (using precise estimation).
 	var estimated int
 	for _, msg := range messages[incrementStart:] {
 		estimated += EstimateMessageTokensPrecise(msg)

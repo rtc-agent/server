@@ -12,8 +12,8 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 )
 
-// getUserIDFromContext 从上下文中获取用户 ID
-// 通过查找当前 session 的 owner 来获取
+// getUserIDFromContext gets the user ID from context.
+// Obtained by looking up the current session's owner.
 func (h *helpers) getUserIDFromContext(ctx context.Context) (uuid.UUID, error) {
 	sessionID := getSessionIDFromContext(ctx)
 	if sessionID == uuid.Nil {
@@ -25,7 +25,7 @@ func (h *helpers) getUserIDFromContext(ctx context.Context) (uuid.UUID, error) {
 		return uuid.Nil, fmt.Errorf("get session: %w", err)
 	}
 
-	// OwnerRefID 是用户 ID 的字符串表示
+	// OwnerRefID is the string representation of the user ID.
 	userID, err := uuid.Parse(session.OwnerRefID)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("parse owner_ref_id %q as UUID: %w", session.OwnerRefID, err)

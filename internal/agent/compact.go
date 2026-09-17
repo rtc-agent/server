@@ -89,7 +89,7 @@ func (h *helpers) processCompactWorker(ctx context.Context, sessionID string, cu
 	// 5. Count tokens after compression.
 	tokensAfter, _ := cumulativeTokenCounter(ctx, compressed)
 
-	// 5b. 压缩后回写 current_context_tokens，让前端进度条反映真实上下文大小。
+	// 5b. After compression, write back current_context_tokens so the frontend progress bar reflects the real context size.
 	if tokensAfter > 0 {
 		if err := h.deps.SessionRepo.Update(compactCtx, sid, map[string]any{
 			"current_context_tokens": tokensAfter,

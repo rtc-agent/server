@@ -168,7 +168,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 	// because this goroutine is outside any recover boundary.
 	if l.helpers.deps.TaskScheduler != nil {
 		logger.SafeGo("loopWorkflow.scheduleNext", func() {
-			// 使用带超时的 context 防止 asynq 调用挂起导致 goroutine 泄漏
+			// Use a context with timeout to prevent asynq calls from hanging and causing goroutine leaks.
 			schedCtx, schedCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer schedCancel()
 			l.scheduleNextLoop(schedCtx, loop)
@@ -184,8 +184,8 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 	return nil
 }
 
-// loopSchedulePayload 是 scheduleNextLoop 写入 TaskScheduler 的 JSON 载体。
-// 使用 struct 替代 map[string]any，避免运行时反射查找字段、获得类型安全。
+// loopSchedulePayload is the JSON payload that scheduleNextLoop writes to TaskScheduler.
+// Uses a struct instead of map[string]any to avoid runtime reflection for field lookup and gain type safety.
 type loopSchedulePayload struct {
 	LoopID    string `json:"loop_id"`
 	SessionID string `json:"session_id"`

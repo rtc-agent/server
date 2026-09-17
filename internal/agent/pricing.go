@@ -1,38 +1,38 @@
 package agent
 
-// ModelPricing 模型价格配置（USD per million tokens）。
-// 不同 token 类型价格不同，用于细粒度成本计算。
+// ModelPricing defines model pricing in USD per million tokens.
+// Different token types have different prices for fine-grained cost calculation.
 type ModelPricing struct {
-	// InputPerMillion 正常 input token 价格（USD）
+	// InputPerMillion is the price for normal input tokens (USD).
 	InputPerMillion float64
-	// OutputPerMillion output token 价格（USD）
+	// OutputPerMillion is the price for output tokens (USD).
 	OutputPerMillion float64
-	// CachedReadPerMillion cache read（cache hit）价格（USD），通常为 input 的 10%
+	// CachedReadPerMillion is the price for cache read (cache hit) tokens (USD), typically 10% of input.
 	CachedReadPerMillion float64
-	// CachedWritePerMillion cache write（cache creation）价格（USD），通常为 input 的 125%
+	// CachedWritePerMillion is the price for cache write (cache creation) tokens (USD), typically 125% of input.
 	CachedWritePerMillion float64
-	// ReasoningPerMillion reasoning（thinking）token 价格（USD）
+	// ReasoningPerMillion is the price for reasoning (thinking) tokens (USD).
 	ReasoningPerMillion float64
 }
 
-// FullTokenUsage 完整的 token 使用数据。
-// 覆盖所有 token 类型维度，用于成本计算和 Session 级累加。
+// FullTokenUsage represents complete token usage data.
+// Covers all token type dimensions for cost calculation and Session-level aggregation.
 type FullTokenUsage struct {
 	// InputTokens is the number of pure input tokens, EXCLUDING cached
 	// read/write tokens. Used for cost calculation where cached and uncached
 	// prices differ. CachedReadTokens and CachedWriteTokens are tracked
 	// separately for fine-grained billing.
 	// For total input tokens (including cache), see TokenUsage.InputTokens.
-	InputTokens       int64 // 纯 input（不含 cache read/write）
+	InputTokens       int64 // pure input (excludes cache read/write)
 	OutputTokens      int64
 	CachedReadTokens  int64 // cache hit
 	CachedWriteTokens int64 // cache creation
 	ReasoningTokens   int64 // thinking
-	TotalTokens       int64 // 包含所有类型（与 eino TotalTokens 对齐）
+	TotalTokens       int64 // all types (aligned with eino TotalTokens)
 }
 
-// NewModelPricing 从配置创建模型价格配置。
-// 如果配置为 nil，返回默认价格（Claude 3.5 Sonnet）。
+// NewModelPricing creates a ModelPricing from a configuration.
+// If cfg is nil, returns the default pricing (Claude 3.5 Sonnet).
 func NewModelPricing(cfg *ModelPricingConfig) ModelPricing {
 	if cfg == nil {
 		return DefaultModelPricing()
@@ -46,7 +46,7 @@ func NewModelPricing(cfg *ModelPricingConfig) ModelPricing {
 	}
 }
 
-// ModelPricingConfig 模型价格配置（与 config.ModelPricingConfig 对齐，避免循环依赖）
+// ModelPricingConfig is the pricing configuration (aligned with config.ModelPricingConfig to avoid circular imports).
 type ModelPricingConfig struct {
 	InputPerMillion       float64
 	OutputPerMillion      float64
@@ -55,7 +55,7 @@ type ModelPricingConfig struct {
 	ReasoningPerMillion   float64
 }
 
-// DefaultModelPricing 返回 Claude 3.5 Sonnet 的默认价格配置。
+// DefaultModelPricing returns the default pricing for Claude 3.5 Sonnet.
 func DefaultModelPricing() ModelPricing {
 	return ModelPricing{
 		InputPerMillion:       3.0,
@@ -66,9 +66,10 @@ func DefaultModelPricing() ModelPricing {
 	}
 }
 
-// calculateCostMicros 计算 token 使用成本，返回微美元（1 USD = 1,000,000 micros）。
-// 内部使用 float64 进行中间计算，最终结果转为 int64 微美元。
-// 对于当前的定价量级（每百万 token 几美元），float64 精度足以满足成本追踪需求。
+// calculateCostMicros calculates token usage cost in micro-USD (1 USD = 1,000,000 micros).
+// Uses float64 for intermediate calculations, converting to int64 micro-USD at the end.
+// For current pricing magnitudes (a few dollars per million tokens), float64 precision
+// is sufficient for cost tracking needs.
 func calculateCostMicros(u *FullTokenUsage, pricing ModelPricing) int64 {
 	inputCost := float64(u.InputTokens) / 1_000_000 * pricing.InputPerMillion
 	cachedReadCost := float64(u.CachedReadTokens) / 1_000_000 * pricing.CachedReadPerMillion
@@ -77,5 +78,5 @@ func calculateCostMicros(u *FullTokenUsage, pricing ModelPricing) int64 {
 	reasoningCost := float64(u.ReasoningTokens) / 1_000_000 * pricing.ReasoningPerMillion
 
 	totalCostUSD := inputCost + cachedReadCost + cachedWriteCost + outputCost + reasoningCost
-	return int64(totalCostUSD * 1_000_000) // 转换为微美元
+	return int64(totalCostUSD * 1_000_000) // convert to micro-USD
 }

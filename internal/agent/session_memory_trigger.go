@@ -51,8 +51,8 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 		h.deps.SessionMemoryRepo,
 		turnagent.CumulativeTokenCounter,
 		h.logger,
-		h.noThinkingOptions(),  // 禁用 thinking，节省 token
-		h.tokenCallbackHandler, // 追踪 token 消耗到 Session.TotalTokens
+		h.noThinkingOptions(),  // disable thinking to save tokens
+		h.tokenCallbackHandler, // track token consumption to Session.TotalTokens
 	)
 
 	// Load extraction state from session metadata.
@@ -76,7 +76,7 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 		}()
 
 		bgCtx := context.WithoutCancel(ctx)
-		// 添加超时防止提取操作挂起导致 goroutine 泄漏
+		// Add timeout to prevent extraction operations from hanging and causing goroutine leaks.
 		bgCtx, bgTimeoutCancel := context.WithTimeout(bgCtx, 60*time.Second)
 		defer bgTimeoutCancel()
 		extracted, newState, err := extractor.ExtractIfNeeded(bgCtx, sessionID, schemaMessages, state)

@@ -15,8 +15,8 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
-// searchMemoryTool 搜索记忆（同时搜索 Session Memory 和 User Memory）
-// 当前只实现 Session Memory 搜索，User Memory 在下一个 Phase 实现
+// searchMemoryTool searches memories (both Session Memory and User Memory).
+// Currently only Session Memory search is implemented; User Memory will be in the next phase.
 type searchMemoryTool struct {
 	helpers *helpers
 }
@@ -130,7 +130,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	return formatSearchResultsList(len(results), items), nil
 }
 
-// searchResult 统一的搜索结果格式
+// searchResult is the unified search result format.
 type searchResult struct {
 	MemoryType string // "session" or "user"
 	ID         string
@@ -140,7 +140,7 @@ type searchResult struct {
 	CreatedAt  time.Time
 }
 
-// searchSessionMemories 搜索 session memories（简单的关键词匹配）
+// searchSessionMemories searches session memories (simple keyword matching).
 func (t *searchMemoryTool) searchSessionMemories(
 	ctx context.Context,
 	query string,
@@ -191,8 +191,8 @@ func (t *searchMemoryTool) searchSessionMemories(
 	return results, nil
 }
 
-// searchUserMemories 搜索 user memories
-// 使用关键词搜索，通过重要性加权排序
+// searchUserMemories searches user memories.
+// Uses keyword search with importance-weighted ranking.
 func (t *searchMemoryTool) searchUserMemories(
 	ctx context.Context,
 	query string,
@@ -204,7 +204,7 @@ func (t *searchMemoryTool) searchUserMemories(
 		return nil, err
 	}
 
-	// 关键词搜索
+	// Keyword search.
 	keywordResults, err := t.helpers.deps.UserMemoryRepo.SearchByKeyword(ctx, userID, query, limit*2)
 	if err != nil {
 		t.helpers.logger.Warn(ctx, "search_memory.user_keyword_error", map[string]any{
@@ -213,7 +213,7 @@ func (t *searchMemoryTool) searchUserMemories(
 		return nil, nil
 	}
 
-	// 应用重要性权重并排序
+	// Apply importance weights and sort.
 	type scoredEntry struct {
 		memory *model.UserMemory
 		score  float64
@@ -232,14 +232,14 @@ func (t *searchMemoryTool) searchUserMemories(
 		return entries[i].score > entries[j].score
 	})
 
-	// 转换为统一结果
+	// Convert to unified results.
 	var results []searchResult
 	for i, entry := range entries {
 		if i >= limit {
 			break
 		}
 		mem := entry.memory
-		// 异步更新访问计数（不阻塞搜索）。
+		// Async update access count (non-blocking for search).
 		// Use logger.SafeGo to prevent a panic in the DB driver from
 		// crashing the entire server process.
 		logger.SafeGo("memory-access-count", func() {

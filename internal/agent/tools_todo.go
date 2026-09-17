@@ -12,8 +12,8 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 )
 
-// todoWriteTool 实现 Claude Code 风格的 TodoWrite 工具
-// 单工具 + 全量替换模式，更新后通过 publish update 通知前端
+// todoWriteTool implements a Claude Code-style TodoWrite tool.
+// Single tool + full replacement mode; publishes update events to notify the frontend after updates.
 type todoWriteTool struct {
 	helper  *helpers
 	session *model.Session
@@ -55,7 +55,7 @@ func (t *todoWriteTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	// 解析参数
+	// Parse arguments.
 	var args struct {
 		Todos []model.TodoItem `json:"todos,omitempty"`
 	}
@@ -67,7 +67,7 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		args.Todos = make([]model.TodoItem, 0)
 	}
 
-	// 验证 todos
+	// Validate todos.
 	for i, todo := range args.Todos {
 		if todo.Content == "" {
 			return "", fmt.Errorf("todo[%d].content is required but was empty. Ensure all required fields (content, status, active_form) are present with correct snake_case names", i)
@@ -80,7 +80,7 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		}
 	}
 
-	// 更新 session 的 todo_list
+	// Update session's todo_list.
 	todoList := model.JSONB[model.TodoItem](args.Todos)
 	err := t.helper.deps.SessionRepo.UpdateFieldsActive(ctx, t.session.ID, map[string]any{
 		"todo_list": todoList,
@@ -94,18 +94,18 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	// todo_list data and flash back to the old state.
 	t.session.TodoList = todoList
 
-	// 发布 update 事件通知前端
+	// Publish update event to notify the frontend.
 	_, err = t.helper.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		return primitives.BuildSessionUpdatedUpdates(t.session), nil
 	})
 	if err != nil {
-		// 日志记录但不返回错误（\t\o\d\o 已更新成功）
+		// Log but do not return error (todo was updated successfully).
 		t.helper.logger.Info(ctx, "todoWriteTool.publish_update", map[string]any{
 			"session_id": t.session.ID.String(),
 			"error":      err.Error(),
 		})
 	}
 
-	// 返回给 LLM 的结果（不包含在 transcript 中）
+	// Return result to LLM (not included in transcript).
 	return formatTodoNotification(), nil
 }

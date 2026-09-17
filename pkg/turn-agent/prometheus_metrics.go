@@ -7,8 +7,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// PrometheusMetrics 基于 Prometheus 的 Metrics 实现。
-// 所有计数器/直方图通过 promauto 自动注册到默认 registry。
+// PrometheusMetrics implements Metrics using Prometheus.
+// All counters and histograms are automatically registered to the default registry via promauto.
 type PrometheusMetrics struct {
 	turnDuration   *prometheus.HistogramVec
 	turnStatus     *prometheus.CounterVec
@@ -39,7 +39,7 @@ type PrometheusMetrics struct {
 	staleTurnsRecovered *prometheus.CounterVec // label: status (running/pending/interrupted)
 }
 
-// NewPrometheusMetrics 创建并注册所有 Prometheus 指标。
+// NewPrometheusMetrics creates and registers all Prometheus metrics.
 func NewPrometheusMetrics() *PrometheusMetrics {
 	return &PrometheusMetrics{
 		turnDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
