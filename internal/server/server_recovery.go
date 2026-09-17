@@ -37,122 +37,135 @@ func (s *Server) recoverStaleTurns(ctx context.Context) {
 	logger.Info(ctx, "[Server] recoverStaleTurns: found stale turns",
 		zap.Int("count", len(staleTurns)))
 
-	// Collect unique session IDs for ghost work cleanup
-	sessionIDs := make(map[string]bool)
-
 	// sessionStatusCache avoids repeated DB queries for sessions with multiple
 	// stale turns. Key: sessionID string, Value: session status string.
 	sessionStatusCache := make(map[string]string)
+	sessionIDs := make(map[string]bool)
 
 	for _, turn := range staleTurns {
 		sessionID := turn.SessionID.String()
 
-		// Check if the session is closed. Resume work items for closed sessions
-		// would be wasted — the worker would process them only to discover the
-		// session is closed. Skip early to save resources.
-		cachedStatus, cached := sessionStatusCache[sessionID]
-		if !cached {
-			session, sessErr := s.svcCtx.SessionRepo.GetByID(ctx, turn.SessionID)
-			if sessErr != nil {
-				logger.Warn(ctx, "[Server] recoverStaleTurns: load session failed",
-					zap.String("turn_id", turn.ID.String()),
-					zap.String("session_id", sessionID),
-					zap.Error(sessErr))
-			} else if session != nil {
-				cachedStatus = session.Status
-			}
-			sessionStatusCache[sessionID] = cachedStatus
-		}
-		if cachedStatus == string(model.SessionStatusClosed) {
-			logger.Info(ctx, "[Server] recoverStaleTurns: skip closed session",
-				zap.String("turn_id", turn.ID.String()),
-				zap.String("session_id", sessionID))
-			// Still mark the turn as failed/interrupted so it leaves the stale state.
-			if turn.Status != string(model.TurnStatusInterrupted) {
-				if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusFailed, "server restart recovery (session closed)"); err != nil {
-					logger.Error(ctx, "[Server] recoverStaleTurns: update stale turn failed (session closed)",
-						zap.String("turn_id", turn.ID.String()),
-						zap.String("session_id", sessionID),
-						zap.Error(err))
-				}
-			}
+		if s.handleClosedSessionTurn(ctx, turn, sessionID, sessionStatusCache) {
 			continue
 		}
 
 		sessionIDs[sessionID] = true
+		s.markAndPublishStaleTurn(ctx, turn, sessionID)
+	}
 
-		// Mark as interrupted (if not already)
-		if turn.Status != string(model.TurnStatusInterrupted) {
-			if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusInterrupted, "server restart recovery"); err != nil {
-				logger.Error(ctx, "[Server] recoverStaleTurns: update status",
-					zap.String("turn_id", turn.ID.String()),
-					zap.Error(err))
-				continue
-			}
+	s.cleanupGhostWorksAndLocks(ctx, sessionIDs)
+}
+
+// handleClosedSessionTurn checks if the session for a stale turn is closed.
+// If so, it marks non-interrupted turns as failed and returns true.
+// Returns false if the session is not closed (caller should continue processing).
+func (s *Server) handleClosedSessionTurn(ctx context.Context, turn *model.Turn, sessionID string, cache map[string]string) bool {
+	status, ok := cache[sessionID]
+	if !ok {
+		session, sessErr := s.svcCtx.SessionRepo.GetByID(ctx, turn.SessionID)
+		if sessErr != nil {
+			logger.Warn(ctx, "[Server] recoverStaleTurns: load session failed",
+				zap.String("turn_id", turn.ID.String()),
+				zap.String("session_id", sessionID),
+				zap.Error(sessErr))
+		} else if session != nil {
+			status = session.Status
 		}
+		cache[sessionID] = status
+	}
 
-		// Publish resume work item with InterruptID if available
-		if s.queue != nil {
-			// Build payload with InterruptID for proper ResumeParams construction
-			interruptID := turn.InterruptID
-			payloadBytes, err := json.Marshal(&resumeWorkPayload{
-				Kind:        "resume",
-				SessionID:   turn.SessionID.String(),
-				InterruptID: interruptID,
-			})
-			if err != nil {
-				logger.Error(ctx, "[Server] recoverStaleTurns: marshal resume payload",
-					zap.String("turn_id", turn.ID.String()),
-					zap.Error(err))
-				continue
-			}
-			payload := string(payloadBytes)
+	if status != string(model.SessionStatusClosed) {
+		return false
+	}
 
-			if _, err := s.queue.Publish(ctx, turn.SessionID.String(), payload, 100); err != nil {
-				logger.Error(ctx, "[Server] recoverStaleTurns: publish resume",
-					zap.String("turn_id", turn.ID.String()),
-					zap.Error(err))
-			} else {
-				logger.Info(ctx, "[Server] recoverStaleTurns: published resume",
-					zap.String("turn_id", turn.ID.String()),
-					zap.String("session_id", turn.SessionID.String()),
-					zap.String("interrupt_id", interruptID))
-			}
+	logger.Info(ctx, "[Server] recoverStaleTurns: skip closed session",
+		zap.String("turn_id", turn.ID.String()),
+		zap.String("session_id", sessionID))
+
+	// Mark the turn as failed if not already interrupted, so it leaves the stale state.
+	if turn.Status != string(model.TurnStatusInterrupted) {
+		if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusFailed, "server restart recovery (session closed)"); err != nil {
+			logger.Error(ctx, "[Server] recoverStaleTurns: update stale turn failed (session closed)",
+				zap.String("turn_id", turn.ID.String()),
+				zap.String("session_id", sessionID),
+				zap.Error(err))
+		}
+	}
+	return true
+}
+
+// markAndPublishStaleTurn marks a stale turn as interrupted and publishes a
+// resume work item so a Worker can pick it up after restart.
+func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, sessionID string) {
+	if turn.Status != string(model.TurnStatusInterrupted) {
+		if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusInterrupted, "server restart recovery"); err != nil {
+			logger.Error(ctx, "[Server] recoverStaleTurns: update status",
+				zap.String("turn_id", turn.ID.String()),
+				zap.Error(err))
+			return
 		}
 	}
 
-	// Clean up ghost work items and release stale session locks.
-	// Ghost work: work items left in "processing" state after worker crash.
-	// We detect them by checking if session:active pointer exists but lock expired.
-	if s.queue != nil {
-		sessionIDList := make([]string, 0, len(sessionIDs))
-		for sid := range sessionIDs {
-			sessionIDList = append(sessionIDList, sid)
-		}
+	if s.queue == nil {
+		return
+	}
 
-		// Batch requeue ghost works (single pipeline round-trip)
-		requeued, err := s.queue.RequeueGhostWorksBatch(ctx, sessionIDList)
-		if err != nil {
-			logger.Warn(ctx, "[Server] recoverStaleTurns: batch requeue ghost works",
+	payloadBytes, err := json.Marshal(&resumeWorkPayload{
+		Kind:        "resume",
+		SessionID:   turn.SessionID.String(),
+		InterruptID: turn.InterruptID,
+	})
+	if err != nil {
+		logger.Error(ctx, "[Server] recoverStaleTurns: marshal resume payload",
+			zap.String("turn_id", turn.ID.String()),
+			zap.Error(err))
+		return
+	}
+
+	if _, err := s.queue.Publish(ctx, sessionID, string(payloadBytes), 100); err != nil {
+		logger.Error(ctx, "[Server] recoverStaleTurns: publish resume",
+			zap.String("turn_id", turn.ID.String()),
+			zap.Error(err))
+	} else {
+		logger.Info(ctx, "[Server] recoverStaleTurns: published resume",
+			zap.String("turn_id", turn.ID.String()),
+			zap.String("session_id", sessionID),
+			zap.String("interrupt_id", turn.InterruptID))
+	}
+}
+
+// cleanupGhostWorksAndLocks requeues ghost work items and releases stale
+// session locks after startup recovery.
+func (s *Server) cleanupGhostWorksAndLocks(ctx context.Context, sessionIDs map[string]bool) {
+	if s.queue == nil {
+		return
+	}
+
+	sessionIDList := make([]string, 0, len(sessionIDs))
+	for sid := range sessionIDs {
+		sessionIDList = append(sessionIDList, sid)
+	}
+
+	requeued, err := s.queue.RequeueGhostWorksBatch(ctx, sessionIDList)
+	if err != nil {
+		logger.Warn(ctx, "[Server] recoverStaleTurns: batch requeue ghost works",
+			zap.Error(err))
+	} else {
+		for sid, workID := range requeued {
+			logger.Info(ctx, "[Server] recoverStaleTurns: requeued ghost work",
+				zap.String("session_id", sid),
+				zap.String("work_id", workID))
+		}
+	}
+
+	for _, sessionID := range sessionIDList {
+		if err := s.queue.ReleaseSession(ctx, sessionID); err != nil {
+			logger.Warn(ctx, "[Server] recoverStaleTurns: release session lock",
+				zap.String("session_id", sessionID),
 				zap.Error(err))
 		} else {
-			for sid, workID := range requeued {
-				logger.Info(ctx, "[Server] recoverStaleTurns: requeued ghost work",
-					zap.String("session_id", sid),
-					zap.String("work_id", workID))
-			}
-		}
-
-		// Release session locks (if still held)
-		for _, sessionID := range sessionIDList {
-			if err := s.queue.ReleaseSession(ctx, sessionID); err != nil {
-				logger.Warn(ctx, "[Server] recoverStaleTurns: release session lock",
-					zap.String("session_id", sessionID),
-					zap.Error(err))
-			} else {
-				logger.Info(ctx, "[Server] recoverStaleTurns: released session lock",
-					zap.String("session_id", sessionID))
-			}
+			logger.Info(ctx, "[Server] recoverStaleTurns: released session lock",
+				zap.String("session_id", sessionID))
 		}
 	}
 }
