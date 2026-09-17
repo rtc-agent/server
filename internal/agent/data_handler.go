@@ -84,6 +84,29 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 
 	// Finalize pending messages on phase transition or stream end.
 	if err := h.finalizePendingStreamMessages(ctx, sessionID, turnID, event, state); err != nil {
+		// Best-effort finalization: when finalizePendingStreamMessages fails
+		// partway through, one message type may be finalized while the other
+		// remains in "streaming" status. Finalize whichever is still pending
+		// so the user doesn't see a stuck loading spinner alongside the error.
+		// This mirrors the thinking-append failure pattern at lines 71-78.
+		if state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
+			if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil); finErr != nil {
+				h.logger.Warn(ctx, "handleStreamChunk.fallback_finalize_markdown_failed", map[string]any{
+					"session_id": sessionID.String(),
+					"turn_id":    turnID.String(),
+					"error":      finErr.Error(),
+				})
+			}
+		}
+		if state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
+			if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); finErr != nil {
+				h.logger.Warn(ctx, "handleStreamChunk.fallback_finalize_thinking_failed", map[string]any{
+					"session_id": sessionID.String(),
+					"turn_id":    turnID.String(),
+					"error":      finErr.Error(),
+				})
+			}
+		}
 		h.streamState.remove(turnID.String())
 		return err
 	}
