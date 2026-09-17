@@ -79,7 +79,7 @@ func (b *TopicBroker) BatchIncrby(ctx context.Context, reqs []ChannelIncrbyReque
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse offset for channel %s: %w", req.Channel, err)
 		}
-		// 检查 offset 是否超出 uint32 范围，与 IncrConversationOffset 保持一致
+		// Check if offset exceeds uint32 range, consistent with IncrConversationOffset.
 		if offset > math.MaxUint32 {
 			return nil, fmt.Errorf("offset overflow for channel %s: %d exceeds uint32 max", req.Channel, offset)
 		}
@@ -97,7 +97,7 @@ func (b *TopicBroker) PublishWithOffset(ctx context.Context, ch string, data []b
 	ctx, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.publish_with_offset",
 		trace.WithAttributes(
 			AttributeChannel.String(ch),
-			AttributeOffset.Int64(int64(sp.Offset)), //nolint:gosec // offset 不会超过 int64 范围
+			AttributeOffset.Int64(int64(sp.Offset)), //nolint:gosec // offset will not exceed int64 range
 			AttributeEpoch.String(sp.Epoch),
 		),
 	)
@@ -262,9 +262,9 @@ func (b *TopicBroker) PublishWithContext(ctx context.Context, ch string, data []
 	)
 	defer func() {
 		span.SetAttributes(
-			AttributeOffset.Int64(int64(result.Offset)), //nolint:gosec // offset 不会超过 int64 范围
+			AttributeOffset.Int64(int64(result.Offset)), //nolint:gosec // offset will not exceed int64 range
 			AttributeEpoch.String(result.Epoch),
-			AttributeFromCache.Bool(result.Suppressed), // 复用 Suppressed 字段表示 fromCache
+			AttributeFromCache.Bool(result.Suppressed), // reuse Suppressed field to indicate fromCache
 		)
 		recordError(span, err)
 		span.End()

@@ -91,7 +91,7 @@ func buildRepoResolver[T any, P any](
 	}
 }
 
-// NewUpdatePublisher 创建 UpdatePublisher
+// NewUpdatePublisher creates a new UpdatePublisher.
 func NewUpdatePublisher(
 	db *gorm.DB,
 	redis redis.UniversalClient,
@@ -106,7 +106,7 @@ func NewUpdatePublisher(
 		resolvers: make(map[string]EntityResolver),
 	}
 
-	// 注册实体解析器（registry 模式，批量查询）
+	// Register entity resolvers (registry pattern, batch query).
 	u.resolvers[string(protocol.EntitySession)] = func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
 		sessions, err := sessionRepo.GetByIDs(ctx, ids)
 		if err != nil {
@@ -115,7 +115,7 @@ func NewUpdatePublisher(
 		result := make(map[uuid.UUID]any, len(sessions))
 		for id, s := range sessions {
 			ps := toProtocolSession(s)
-			// 从 Session 持久化的 EWMA 计算 Token 预估字段
+			// Compute token estimate fields from the session's persisted EWMA.
 			enrichSessionWithTokenEstimate(&ps, s, u.compressionThreshold.Load())
 			result[id] = ps
 		}
@@ -127,8 +127,10 @@ func NewUpdatePublisher(
 			return nil, err
 		}
 
-		// 流式消息：从 Redis 读取 chunks 拼接到 content。
-		// 竞争条件：chunks 可能未完全写入，接受最终一致性（前端通过后续 update 获取最新内容）。
+		// Streaming messages: read chunks from Redis and append to content.
+		// Race condition: chunks may not be fully written yet; we accept
+		// eventual consistency (the frontend gets the latest content via
+		// a subsequent update).
 		u.mu.RLock()
 		ss := u.streamStore
 		u.mu.RUnlock()
@@ -138,7 +140,7 @@ func NewUpdatePublisher(
 			if ss != nil && protocol.MessageStreamingStatus(m.StreamingStatus) == protocol.MessageStreamingStreaming {
 				chunks, chunksErr := ss.GetAllChunks(m.ID.String())
 				if chunksErr != nil {
-					// 降级：返回 DB 原始数据，记录 warn 日志
+					// Fallback: return raw DB data and log a warning.
 					logger.Warn(ctx, "[UpdatePublisher] get chunks for streaming message failed, falling back to DB data",
 						zap.String("message_id", m.ID.String()),
 						zap.Error(chunksErr),

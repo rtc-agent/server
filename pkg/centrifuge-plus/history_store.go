@@ -10,8 +10,8 @@ import (
 // Implementations are provided by the integrator.
 type HistoryStore interface {
 	// Query retrieves publications from the given channel since the specified offset.
-	// latestOffset 是当前 stream 的最新 offset，用于 fillGapPublications 补齐尾部缺口，
-	// 保证恢复结果满足 centrifuge 的连续性检查（末条 pub.Offset == latestOffset）。
+	// latestOffset is the current stream's latest offset, used by fillGapPublications to fill the tail gap,
+	// ensuring the recovery result satisfies centrifuge's continuity check (last pub.Offset == latestOffset).
 	Query(ctx context.Context, channel string, sinceOffset uint32, latestOffset uint32) ([]*centrifuge.Publication, error)
 }
 
