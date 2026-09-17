@@ -12,16 +12,17 @@ import (
 	"gorm.io/gorm"
 )
 
-// MessageRepo 消息仓储接口
+// MessageRepo provides message persistence operations.
 type MessageRepo interface {
-	// Create 创建新消息记录
+	// Create stores a new message record.
 	Create(ctx context.Context, msg *model.Message) error
+	// BatchCreate stores multiple messages in a single INSERT.
 	BatchCreate(ctx context.Context, messages []*model.Message) error
-	// GetByID 根据 ID 查询消息
+	// GetByID looks up a message by ID.
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Message, error)
-	// FindByClientID 根据 clientID 查询消息
+	// FindByClientID looks up a message by client-assigned ID.
 	FindByClientID(ctx context.Context, clientID string) (*model.Message, error)
-	// ListBySession 按 session 分页查询消息列表
+	// ListBySession lists messages for a session with cursor pagination (ASC by global_offset).
 	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *uint32, limit int) ([]*model.Message, error)
 	// ListRecentBySession returns the most recent `limit` messages for a session,
 	// ordered by global_offset ASC (oldest first within the returned set).
@@ -31,13 +32,13 @@ type MessageRepo interface {
 	// ListBySessionBeforeOffset returns the most recent `limit` messages with global_offset <= maxOffset,
 	// ordered by global_offset ASC (oldest first).
 	ListBySessionBeforeOffset(ctx context.Context, sessionID uuid.UUID, maxOffset uint32, limit int) ([]*model.Message, error)
-	// GetNextGlobalOffset 获取 session 下一个全局偏移量
+	// GetNextGlobalOffset returns the next available global offset for a session.
 	GetNextGlobalOffset(ctx context.Context, sessionID uuid.UUID) (uint32, error)
-	// UpdateStreamingStatus 更新消息流式状态及内容
+	// UpdateStreamingStatus updates the streaming status and content of a message.
 	UpdateStreamingStatus(ctx context.Context, id uuid.UUID, status protocol.MessageStreamingStatus, content string) error
 	// DeleteByIDs hard-deletes messages by their IDs.
 	DeleteByIDs(ctx context.Context, ids []uuid.UUID) error
-	// GetByIDs 批量查询消息，返回 map[id]*Message。未找到的 ID 不会出现在 map 中。
+	// GetByIDs batch-fetches messages, returning map[id]*Message. Missing IDs are omitted.
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Message, error)
 	// UpdateTokenUsage updates the token usage fields for a message.
 	// Used to record LLM token usage on assistant messages after stream finalization.
@@ -48,7 +49,7 @@ type messageRepo struct {
 	db *gorm.DB
 }
 
-// NewMessageRepo 创建 MessageRepo
+// NewMessageRepo creates a new MessageRepo.
 func NewMessageRepo(db *gorm.DB) MessageRepo {
 	return &messageRepo{db: db}
 }
@@ -60,7 +61,7 @@ func (r *messageRepo) Create(ctx context.Context, msg *model.Message) error {
 	return nil
 }
 
-// BatchCreate 批量创建消息（一次 INSERT）。
+// BatchCreate stores multiple messages in a single INSERT.
 func (r *messageRepo) BatchCreate(ctx context.Context, messages []*model.Message) error {
 	if len(messages) == 0 {
 		return nil
@@ -158,7 +159,7 @@ func (r *messageRepo) ListRecentBySession(ctx context.Context, sessionID uuid.UU
 		Find(&messages).Error; err != nil {
 		return nil, fmt.Errorf("list recent messages by session %s: %w", sessionID, err)
 	}
-	// Reverse to chronological order (oldest first)
+	// Reverse to chronological order (oldest first).
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 		messages[i], messages[j] = messages[j], messages[i]
 	}
@@ -184,7 +185,7 @@ func (r *messageRepo) ListBySessionBeforeOffset(ctx context.Context, sessionID u
 	if limit <= 0 {
 		limit = 50
 	}
-	// 先 DESC 查询最新的 limit 条
+	// Query newest N rows in DESC order, then reverse to ASC.
 	var messages []*model.Message
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("session_id = ? AND global_offset <= ?", sessionID, maxOffset).
@@ -193,7 +194,7 @@ func (r *messageRepo) ListBySessionBeforeOffset(ctx context.Context, sessionID u
 		Find(&messages).Error; err != nil {
 		return nil, fmt.Errorf("list messages before offset %d for session %s: %w", maxOffset, sessionID, err)
 	}
-	// 反转为 ASC 顺序（旧的在前）
+	// Reverse to ASC order (oldest first).
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 		messages[i], messages[j] = messages[j], messages[i]
 	}

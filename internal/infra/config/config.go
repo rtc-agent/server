@@ -184,166 +184,167 @@ type CORSConfig struct {
 	AllowOrigins []string `mapstructure:"allow_origins"`
 }
 
-// WorkerConfig Worker 生命周期与 TurnLoop 配置
+// WorkerConfig holds Worker lifecycle and TurnLoop configuration.
 type WorkerConfig struct {
 	WorkerID              string        `mapstructure:"worker_id"`
 	Host                  string        `mapstructure:"host"`
 	Version               string        `mapstructure:"version"`
-	HeartbeatSec          int           `mapstructure:"heartbeat_sec"`          // 默认 10
-	TTLSec                int           `mapstructure:"ttl_sec"`                // 默认 60
-	IdleTimeout           time.Duration `mapstructure:"idle_timeout"`           // 默认 5m
-	StreamBlock           time.Duration `mapstructure:"stream_block"`           // 默认 500ms
-	MaxLenApprox          int64         `mapstructure:"max_len_approx"`         // 默认 10000
-	BackgroundConcurrency int           `mapstructure:"background_concurrency"` // 默认 5
-	SystemPrompt          string        `mapstructure:"system_prompt"`          // agent 系统提示词
+	HeartbeatSec          int           `mapstructure:"heartbeat_sec"`          // Default 10.
+	TTLSec                int           `mapstructure:"ttl_sec"`                // Default 60.
+	IdleTimeout           time.Duration `mapstructure:"idle_timeout"`           // Default 5m.
+	StreamBlock           time.Duration `mapstructure:"stream_block"`           // Default 500ms.
+	MaxLenApprox          int64         `mapstructure:"max_len_approx"`         // Default 10000.
+	BackgroundConcurrency int           `mapstructure:"background_concurrency"` // Default 5.
+	SystemPrompt          string        `mapstructure:"system_prompt"`          // Agent system prompt.
 
-	// ContextTokensLimit 触发上下文压缩的 token 阈值（可选）
-	// 默认 25000（约为模型上下文窗口的 20%）
+	// ContextTokensLimit is the token threshold for triggering context compression (optional).
+	// Default 25000 (approximately 20% of the model context window).
 	ContextTokensLimit int `mapstructure:"context_tokens_limit"`
 
-	// AutoCompactBufferTokens 自动压缩缓冲 token 数（可选）
-	// 用于计算实际触发阈值：ContextTokensLimit - AutoCompactBufferTokens
-	// 默认 13000
+	// AutoCompactBufferTokens is the auto-compact buffer token count (optional).
+	// Used to calculate the actual trigger threshold: ContextTokensLimit - AutoCompactBufferTokens.
+	// Default 13000.
 	AutoCompactBufferTokens int `mapstructure:"auto_compact_buffer_tokens"`
 
-	// MaxOutputTokensForSummary 压缩时最大输出 token 数（可选）
-	// 默认 20000
+	// MaxOutputTokensForSummary is the maximum output tokens for compression (optional).
+	// Default 20000.
 	MaxOutputTokensForSummary int `mapstructure:"max_output_tokens_for_summary"`
 
-	// CheckpointTTL eino checkpoint 在 Redis 中的存活时间
-	// 默认 24h。较长的 TTL 提高崩溃恢复窗口，但增加 Redis 内存压力
+	// CheckpointTTL is the eino checkpoint TTL in Redis.
+	// Default 24h. A longer TTL improves crash recovery window but increases Redis memory pressure.
 	CheckpointTTL time.Duration `mapstructure:"checkpoint_ttl"`
 
-	// StreamChunkTTL 流式消息 chunk 在 Redis 中的存活时间
-	// 默认 15m。chunks 是短生命周期数据，生成完成后即删除
-	// 注意：较长的 thinking/reasoning 流可能需要更长的 TTL，避免 chunk 丢失
+	// StreamChunkTTL is the streaming message chunk TTL in Redis.
+	// Default 15m. Chunks are short-lived data, deleted after generation completes.
+	// Note: longer thinking/reasoning streams may require a longer TTL to avoid chunk loss.
 	StreamChunkTTL time.Duration `mapstructure:"stream_chunk_ttl"`
 
-	// InterruptAnswerTTL interrupt 答案在 Redis 中的存活时间
-	// 默认 10m
+	// InterruptAnswerTTL is the interrupt answer TTL in Redis.
+	// Default 10m.
 	InterruptAnswerTTL time.Duration `mapstructure:"interrupt_answer_ttl"`
 
-	// OrphanTriggerTTL RTC orphan recovery 去重标记的存活时间
-	// 默认 24h
+	// OrphanTriggerTTL is the RTC orphan recovery dedup marker TTL.
+	// Default 24h.
 	OrphanTriggerTTL time.Duration `mapstructure:"orphan_trigger_ttl"`
 
-	// LockTTLSeconds rtc-queue session 锁的 TTL（秒）
-	// 默认 120
+	// LockTTLSeconds is the rtc-queue session lock TTL in seconds.
+	// Default 120.
 	LockTTLSeconds int `mapstructure:"lock_ttl_sec"`
 
-	// CacheHitRateWarnThreshold 缓存命中率告警阈值（可选）
-	// Session 累计缓存命中率 = TotalCachedReadTokens / (TotalCachedReadTokens + TotalInputTokens)
-	// 低于此阈值时输出 warn 日志。负数表示禁用告警。
-	// 默认 0.88（88%）
+	// CacheHitRateWarnThreshold is the cache hit rate alert threshold (optional).
+	// Session cumulative cache hit rate = TotalCachedReadTokens / (TotalCachedReadTokens + TotalInputTokens).
+	// A warning is logged when the rate falls below this threshold. Negative values disable the alert.
+	// Default 0.88 (88%).
 	CacheHitRateWarnThreshold float64 `mapstructure:"cache_hit_rate_warn_threshold"`
 
-	// TokenCounterMode 控制 token 计数策略（可选）
-	// 选项：
-	//   - "heuristic"（默认）：快速，约 4 字符/token，适合英文文本
-	//   - "tokenizer"：精确，使用 cl100k_base 编码（tiktoken-go），对中文精度提升 3-4 倍
-	// 注意：tokenizer 模式首次加载约 50-200ms，内存占用约 5MB
+	// TokenCounterMode controls the token counting strategy (optional).
+	// Options:
+	//   - "heuristic" (default): fast, ~4 chars/token, suitable for English text.
+	//   - "tokenizer": precise, uses cl100k_base encoding (tiktoken-go), 3-4x better accuracy for CJK.
+	// Note: tokenizer mode takes ~50-200ms to load initially, ~5MB memory.
 	TokenCounterMode string `mapstructure:"token_counter_mode"`
 
-	// EnableStrategicCacheBreakpoints 启用战略性缓存断点（可选）
-	// 通过在关键位置设置缓存断点，保护稳定内容免受 microcompact 或工具结果预算修改导致的缓存失效
-	// 启用后，microcompact 后的缓存命中率从 0% 提升至 75%，输入成本降低约 69%
-	// 默认 true
+	// EnableStrategicCacheBreakpoints enables strategic cache breakpoints (optional).
+	// By setting cache breakpoints at key positions, protects stable content from cache invalidation
+	// caused by microcompact or tool result budget modifications.
+	// When enabled, cache hit rate after microcompact improves from 0% to 75%, input cost reduced by ~69%.
+	// Default true.
 	EnableStrategicCacheBreakpoints bool `mapstructure:"enable_strategic_cache_breakpoints"`
 }
 
-// LLMConfig LLM 模型配置（支持 Claude 和 OpenAI 协议）
+// LLMConfig holds LLM model configuration (supports Claude and OpenAI protocols).
 type LLMConfig struct {
-	// Provider 模型提供商: "claude" 或 "openai"
+	// Provider is the model provider: "claude" or "openai".
 	Provider string `mapstructure:"provider"`
 
-	// APIKey API 密钥
+	// APIKey is the API key.
 	APIKey string `mapstructure:"api_key"`
 
-	// BaseURL 自定义 API 端点（可选，用于代理或企业部署）
+	// BaseURL is a custom API endpoint (optional, for proxies or enterprise deployments).
 	BaseURL string `mapstructure:"base_url"`
 
-	// Model 模型名称（如 "claude-3-5-sonnet-20241022", "gpt-4o"）
+	// Model is the model name (e.g., "claude-3-5-sonnet-20241022", "gpt-4o").
 	Model string `mapstructure:"model"`
 
-	// MaxTokens 最大输出 token 数（Claude 必填，OpenAI 可选）
+	// MaxTokens is the maximum output tokens (required for Claude, optional for OpenAI).
 	MaxTokens int `mapstructure:"max_tokens"`
 
-	// Temperature 采样温度（OpenAI 可选，0.0-2.0）
+	// Temperature is the sampling temperature (optional for OpenAI, 0.0-2.0).
 	Temperature *float32 `mapstructure:"temperature"`
 
-	// Timeout API 请求超时时间（可选）
+	// Timeout is the API request timeout (optional).
 	Timeout time.Duration `mapstructure:"timeout"`
 
-	// ThinkingBudgetTokens Claude thinking 模式的 token 预算（可选）
-	// 仅对支持 thinking 的 Claude 模型生效，默认 50000
+	// ThinkingBudgetTokens is the Claude thinking mode token budget (optional).
+	// Only effective for Claude models that support thinking. Default 50000.
 	ThinkingBudgetTokens int64 `mapstructure:"thinking_budget_tokens"`
 
-	// ReasoningEffort OpenAI reasoning 模型的推理力度（可选）
-	// 可选值: "low", "medium", "high"，默认 "medium"
+	// ReasoningEffort is the OpenAI reasoning model effort level (optional).
+	// Options: "low", "medium", "high". Default "medium".
 	ReasoningEffort string `mapstructure:"reasoning_effort"`
 
-	// RetryMaxAttempts 模型调用失败时的最大重试次数（可选）
-	// 默认 0（不重试）。建议生产环境设置为 3
+	// RetryMaxAttempts is the maximum retry count on model call failure (optional).
+	// Default 0 (no retry). Recommended to set to 3 in production.
 	RetryMaxAttempts int `mapstructure:"retry_max_attempts"`
 
-	// RetryBaseDelay 重试的基础退避时间（可选）
-	// 默认 1s。实际退避时间 = RetryBaseDelay * 2^(attempt-1)，即指数退避
+	// RetryBaseDelay is the base backoff duration for retries (optional).
+	// Default 1s. Actual backoff = RetryBaseDelay * 2^(attempt-1), i.e., exponential backoff.
 	RetryBaseDelay time.Duration `mapstructure:"retry_base_delay"`
 
-	// Pricing 模型定价配置（可选，用于成本计算）
-	// 未配置时使用默认价格（Claude 3.5 Sonnet）
+	// Pricing is the model pricing configuration (optional, for cost calculation).
+	// Uses default pricing (Claude 3.5 Sonnet) when not configured.
 	Pricing *ModelPricingConfig `mapstructure:"pricing"`
 }
 
-// ModelPricingConfig 模型价格配置（USD per million tokens）
+// ModelPricingConfig holds model pricing configuration (USD per million tokens).
 type ModelPricingConfig struct {
-	// InputPerMillion 正常 input token 价格（USD）
+	// InputPerMillion is the normal input token price (USD).
 	InputPerMillion float64 `mapstructure:"input_per_million"`
 
-	// OutputPerMillion output token 价格（USD）
+	// OutputPerMillion is the output token price (USD).
 	OutputPerMillion float64 `mapstructure:"output_per_million"`
 
-	// CachedReadPerMillion cache read（cache hit）价格（USD）
-	// 通常为 input 的 10%
+	// CachedReadPerMillion is the cache read (cache hit) price (USD).
+	// Typically 10% of input price.
 	CachedReadPerMillion float64 `mapstructure:"cached_read_per_million"`
 
-	// CachedWritePerMillion cache write（cache creation）价格（USD）
-	// 通常为 input 的 125%
+	// CachedWritePerMillion is the cache write (cache creation) price (USD).
+	// Typically 125% of input price.
 	CachedWritePerMillion float64 `mapstructure:"cached_write_per_million"`
 
-	// ReasoningPerMillion reasoning（thinking）token 价格（USD）
+	// ReasoningPerMillion is the reasoning (thinking) token price (USD).
 	ReasoningPerMillion float64 `mapstructure:"reasoning_per_million"`
 }
 
-// APIConfig API 层配置（分页、限流等）
+// APIConfig holds API-layer configuration (pagination, rate limiting, etc.).
 type APIConfig struct {
-	// QueryDefaultLimit 分页查询默认每页条数，默认 50
+	// QueryDefaultLimit is the default page size for paginated queries. Default 50.
 	QueryDefaultLimit int `mapstructure:"query_default_limit"`
 
-	// QueryMaxLimit 分页查询最大每页条数，默认 100
+	// QueryMaxLimit is the maximum page size for paginated queries. Default 100.
 	QueryMaxLimit int `mapstructure:"query_max_limit"`
 }
 
-// TracingConfig OpenTelemetry 分布式追踪配置
+// TracingConfig holds OpenTelemetry distributed tracing configuration.
 type TracingConfig struct {
-	// Enabled 是否启用 tracing
+	// Enabled controls whether tracing is active.
 	Enabled bool `mapstructure:"enabled"`
 
-	// Endpoint OTLP endpoint (例如: "localhost:4317")
+	// Endpoint is the OTLP endpoint (e.g., "localhost:4317").
 	Endpoint string `mapstructure:"endpoint"`
 
-	// SampleRate 采样率 (0.0 - 1.0)，默认 1.0（全量采样）
+	// SampleRate is the sampling rate (0.0 - 1.0). Default 1.0 (full sampling).
 	SampleRate float64 `mapstructure:"sample_rate"`
 }
 
-// Load 加载配置。使用局部 viper 实例，不污染全局状态，可安全并行测试。
+// Load loads configuration. Uses a local viper instance to avoid polluting global state; safe for parallel tests.
 //
-// 配置合并策略（无 --config 时）：
-//  1. 加载 etc/config.yaml 作为基线
-//  2. 若 etc/config.local.yaml 存在，合并覆盖基线（仅写差异项）
-//  3. config.local.yaml 应加入 .gitignore，用于本地个人配置
+// Config merge strategy (when --config is not specified):
+//  1. Load etc/config.yaml as baseline
+//  2. If etc/config.local.yaml exists, merge and override baseline (only write differences)
+//  3. config.local.yaml should be in .gitignore, used for local personal configuration
 //
-// 使用 --config 时，仅加载指定文件，不做合并。
+// When --config is specified, only loads the specified file without merging.
 func Load(cfgFile string) (*Config, error) {
 	v := viper.New()
 
