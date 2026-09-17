@@ -57,21 +57,24 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		}
 	}
 
-	// 3. Dedup: check if a compact task for this session is already in the queue.
-	if h.deps.Queue != nil {
-		hasPending, checkErr := h.deps.Queue.HasPendingWorkByKind(ctx, session.ID.String(), string(turnagent.WorkKindCompact))
-		if checkErr != nil {
-			return nil, h.internalError(ctx, "compact.dedup_error", "internal error", checkErr)
-		}
-		if hasPending {
-			return nil, &APIError{
-				Code:    "compact.already_pending",
-				Message: "a compact task is already pending or processing for this session",
-			}
+	// 3. Verify queue availability.
+	if h.deps.Queue == nil {
+		return nil, h.internalError(ctx, "compact.queue_unavailable", "compact service unavailable", nil)
+	}
+
+	// 4. Dedup: check if a compact task for this session is already in the queue.
+	hasPending, checkErr := h.deps.Queue.HasPendingWorkByKind(ctx, session.ID.String(), string(turnagent.WorkKindCompact))
+	if checkErr != nil {
+		return nil, h.internalError(ctx, "compact.dedup_error", "internal error", checkErr)
+	}
+	if hasPending {
+		return nil, &APIError{
+			Code:    "compact.already_pending",
+			Message: "a compact task is already pending or processing for this session",
 		}
 	}
 
-	// 4. Build payload and enqueue.
+	// 5. Build payload and enqueue.
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:              turnagent.WorkKindCompact,
 		SessionID:         session.ID.String(),
@@ -81,10 +84,8 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		return nil, h.internalError(ctx, "compact.marshal_error", "internal error", marshalErr)
 	}
 
-	if h.deps.Queue != nil {
-		if _, err := h.deps.Queue.Publish(ctx, session.ID.String(), string(payload), 0); err != nil {
-			return nil, h.internalError(ctx, "compact.queue_error", "failed to enqueue compact task", err)
-		}
+	if _, err := h.deps.Queue.Publish(ctx, session.ID.String(), string(payload), 0); err != nil {
+		return nil, h.internalError(ctx, "compact.queue_error", "failed to enqueue compact task", err)
 	}
 
 	logger.Info(ctx, "[CompactSession] enqueued",

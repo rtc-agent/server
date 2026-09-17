@@ -110,14 +110,25 @@ func (s *Server) handleClosedSessionTurn(ctx context.Context, turn *model.Turn, 
 // "running" or "pending" when the server crashed). Submit creates a fresh
 // turn, avoiding checkpoint lookup failures. This matches the runtime scanner
 // (periodicRecoverStaleTurns) which also uses submit.
+//
+// Turns already in "interrupted" state are NOT auto-resumed — they are waiting
+// for external input (e.g., SubmitRtcResult) and should remain interrupted
+// until the application explicitly resumes them.
 func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, sessionID string) {
-	if turn.Status != string(model.TurnStatusInterrupted) {
-		if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusInterrupted, "server restart recovery"); err != nil {
-			logger.Error(ctx, "[Server] recoverStaleTurns: update status",
-				zap.String("turn_id", turn.ID.String()),
-				zap.Error(err))
-			return
-		}
+	// If the turn is already interrupted, it's waiting for external input.
+	// Do NOT publish a submit — the application will resume it explicitly.
+	if turn.Status == string(model.TurnStatusInterrupted) {
+		logger.Info(ctx, "[Server] recoverStaleTurns: skip already-interrupted turn",
+			zap.String("turn_id", turn.ID.String()),
+			zap.String("session_id", sessionID))
+		return
+	}
+
+	if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, model.TurnStatusInterrupted, "server restart recovery"); err != nil {
+		logger.Error(ctx, "[Server] recoverStaleTurns: update status",
+			zap.String("turn_id", turn.ID.String()),
+			zap.Error(err))
+		return
 	}
 
 	if s.queue == nil {
