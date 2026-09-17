@@ -17,7 +17,7 @@ import (
 // from invalidation caused by microcompact or tool result budget modifications.
 //
 // Architecture:
-//   - turnagent.Message.CacheBreakpoint is set by setCacheBreakpoints() in data_context.go
+//   - turnagent.Message.CacheBreakpoint is set by setCacheBreakpoints() in data_cache_breakpoints.go
 //   - toEinoMessage() converts it to Extra[ExtraKeyCacheBreakpoint]
 //   - applyClaudeCacheBreakpoints() recognizes the Extra key and calls
 //     claude.SetMessageCacheControl() to set the actual breakpoint
