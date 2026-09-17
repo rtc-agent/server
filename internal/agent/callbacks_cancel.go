@@ -21,9 +21,19 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 		return fmt.Errorf("cancelTurn: invalid turn ID %q: %w", turnID, err)
 	}
 
-	if err := h.deps.TurnRepo.UpdateStatus(ctx, tid, protocol.TurnStatusCancelled, reason); err != nil {
+	// Use context.WithoutCancel + timeout for the critical status update.
+	// The caller's ctx may already be cancelled (e.g., during worker shutdown).
+	// Without isolation, the turn would be left in "running" state permanently,
+	// requiring the stale turn scanner (5-30 minutes) to recover it.
+	statusCtx, statusCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer statusCancel()
+
+	if err := h.deps.TurnRepo.UpdateStatus(statusCtx, tid, protocol.TurnStatusCancelled, reason); err != nil {
 		return fmt.Errorf("cancelTurn: update status: %w", err)
 	}
+
+	// Use the isolated context for subsequent critical operations.
+	ctx = statusCtx
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
@@ -56,6 +66,13 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 		h.logger.Warn(ctx, "cancelTurn.load_session_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      sessErr.Error(),
+		})
+	}
+	if session == nil && sessErr == nil {
+		h.logger.Warn(ctx, "cancelTurn.session_nil", map[string]any{
+			"session_id": turn.SessionID.String(),
+			"turn_id":    turnID,
+			"message":    "session not found; parent notification skipped",
 		})
 	}
 	h.notifyParentAfterSubAgentSession(ctx, session, nil, "cancelled", &reason)
@@ -105,8 +122,11 @@ func (h *helpers) cascadeCancelChildren(callerCtx context.Context, turnID string
 		"child_count": len(activeChildren),
 	})
 	// Cancel children in parallel so a slow CancelSession call does not
-	// block the remaining children. The 30s context timeout (above)
-	// still bounds the total time.
+	// block the remaining children. Each child gets its own 30s timeout
+	// (detached from the caller's context via WithoutCancel) so that a slow
+	// cancel of one child does not cause the remaining children to hit the
+	// shared deadline. Without per-child timeouts, 10 slow children could
+	// exhaust the parent timeout before the later goroutines even start.
 	var wg sync.WaitGroup
 	for _, child := range activeChildren {
 		wg.Add(1)
@@ -121,7 +141,10 @@ func (h *helpers) cascadeCancelChildren(callerCtx context.Context, turnID string
 					})
 				}
 			}()
-			if err := h.queue.CancelSession(ctx, childID.String(), "parent session cancelled"); err != nil {
+			// Per-child timeout: each child gets up to 30s independently.
+			childCtx, childCancel := context.WithTimeout(context.WithoutCancel(callerCtx), 30*time.Second)
+			defer childCancel()
+			if err := h.queue.CancelSession(childCtx, childID.String(), "parent session cancelled"); err != nil {
 				h.logger.Warn(ctx, "cascadeCancelChildren.cancel_failed", map[string]any{
 					"parent_session_id": parentSessionID.String(),
 					"child_session_id":  childID.String(),

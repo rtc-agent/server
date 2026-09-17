@@ -169,9 +169,19 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 		errMsg = turnErr.Error()
 	}
 
-	if err := h.deps.TurnRepo.UpdateStatus(ctx, tid, protocol.TurnStatusFailed, errMsg); err != nil {
+	// Use context.WithoutCancel + timeout for the critical status update.
+	// The caller's ctx may already be cancelled (e.g., during worker shutdown).
+	// Without isolation, the turn would be left in "running" state permanently,
+	// requiring the stale turn scanner (5-30 minutes) to recover it.
+	statusCtx, statusCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer statusCancel()
+
+	if err := h.deps.TurnRepo.UpdateStatus(statusCtx, tid, protocol.TurnStatusFailed, errMsg); err != nil {
 		return fmt.Errorf("failTurn: update status: %w", err)
 	}
+
+	// Use the isolated context for subsequent critical operations.
+	ctx = statusCtx
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
@@ -224,6 +234,13 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 		h.logger.Warn(ctx, "failTurn.load_session_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      sessErr.Error(),
+		})
+	}
+	if session == nil && sessErr == nil {
+		h.logger.Warn(ctx, "failTurn.session_nil", map[string]any{
+			"session_id": turn.SessionID.String(),
+			"turn_id":    turnID,
+			"message":    "session not found; parent notification skipped",
 		})
 	}
 	h.notifyParentAfterSubAgentSession(ctx, session, nil, "failed", &errMsg)
