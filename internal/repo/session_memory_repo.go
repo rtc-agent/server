@@ -10,39 +10,41 @@ import (
 	"gorm.io/gorm"
 )
 
-// SessionMemoryRepo 会话记忆仓储接口
+// SessionMemoryRepo provides session memory persistence operations.
 type SessionMemoryRepo interface {
-	// Create 创建一条会话记忆
+	// Create stores a new session memory record.
 	Create(ctx context.Context, memory *model.SessionMemory) error
 
-	// BatchCreate 批量创建会话记忆
+	// BatchCreate stores multiple session memories in a single INSERT.
 	BatchCreate(ctx context.Context, memories []*model.SessionMemory) error
 
-	// GetByID 根据 ID 获取记忆
+	// GetByID looks up a session memory by ID.
 	GetByID(ctx context.Context, id uuid.UUID) (*model.SessionMemory, error)
 
-	// ListBySession 列出会话的所有记忆
-	// 按 created_at DESC 排序
+	// ListBySession lists all memories for a session,
+	// ordered by created_at DESC.
 	ListBySession(ctx context.Context, sessionID uuid.UUID, limit int) ([]*model.SessionMemory, error)
 
-	// ListByCategory 列出会话的指定分类记忆
-	// 按 created_at DESC 排序
+	// ListByCategory lists memories for a session filtered by category,
+	// ordered by created_at DESC.
 	ListByCategory(ctx context.Context, sessionID uuid.UUID, category string, limit int) ([]*model.SessionMemory, error)
 
-	// ListRecentForInjection 列出用于注入的最新记忆
-	// 按 created_at DESC 排序，累计 token_count 直到达到 maxTokens 或 maxCount
+	// ListRecentForInjection lists the most recent memories for injection.
+	// Ordered by created_at DESC; cumulative token_count is tracked until
+	// maxTokens or maxCount is reached.
 	ListRecentForInjection(ctx context.Context, sessionID uuid.UUID, maxCount int, maxTokens int) ([]*model.SessionMemory, error)
 
-	// Update 更新记忆
+	// Update modifies specific fields of a session memory.
 	Update(ctx context.Context, id uuid.UUID, fields map[string]any) error
 
-	// Delete 删除记忆（物理删除，SessionMemory 使用 *time.Time 而非 gorm.DeletedAt）
+	// Delete removes a session memory (hard delete — SessionMemory uses
+	// *time.Time instead of gorm.DeletedAt).
 	Delete(ctx context.Context, id uuid.UUID) error
 
-	// DeleteBySession 删除会话的所有记忆（软删除，设置 deleted_at）
+	// DeleteBySession deletes all memories for a session (soft delete via deleted_at).
 	DeleteBySession(ctx context.Context, sessionID uuid.UUID) error
 
-	// CountTokensBySession 统计会话的总 token 数
+	// CountTokensBySession returns the total token count for a session's memories.
 	CountTokensBySession(ctx context.Context, sessionID uuid.UUID) (int, error)
 }
 
@@ -50,7 +52,7 @@ type sessionMemoryRepo struct {
 	db *gorm.DB
 }
 
-// NewSessionMemoryRepo 创建 SessionMemoryRepo
+// NewSessionMemoryRepo creates a new SessionMemoryRepo.
 func NewSessionMemoryRepo(db *gorm.DB) SessionMemoryRepo {
 	return &sessionMemoryRepo{db: db}
 }
@@ -103,8 +105,9 @@ func (r *sessionMemoryRepo) ListByCategory(ctx context.Context, sessionID uuid.U
 	return listByCategory[model.SessionMemory](ctx, r.db, "session_id", sessionID, category, limit, "created_at DESC", "", "session memories")
 }
 
-// ListRecentForInjection 列出用于注入的最新记忆
-// 策略：查询最新的记忆，累计 token_count 直到达到 maxTokens 或 maxCount
+// ListRecentForInjection lists the most recent memories for injection.
+// Strategy: fetch the newest memories (over-fetching), then accumulate
+// token_count until maxTokens or maxCount is reached.
 func (r *sessionMemoryRepo) ListRecentForInjection(ctx context.Context, sessionID uuid.UUID, maxCount int, maxTokens int) ([]*model.SessionMemory, error) {
 	if maxCount <= 0 {
 		maxCount = 20
@@ -113,9 +116,9 @@ func (r *sessionMemoryRepo) ListRecentForInjection(ctx context.Context, sessionI
 		maxTokens = 12000
 	}
 
-	// 先查询最新的记忆（多查一些，后续过滤）
+	// Fetch more memories than needed to allow for filtering.
 	var allMemories []*model.SessionMemory
-	queryLimit := maxCount * 2 // 多查一些，确保有足够的记忆
+	queryLimit := maxCount * 2 // over-fetch to ensure enough candidates
 	if queryLimit > 100 {
 		queryLimit = 100
 	}
@@ -128,23 +131,24 @@ func (r *sessionMemoryRepo) ListRecentForInjection(ctx context.Context, sessionI
 		return nil, fmt.Errorf("list recent session memories for injection: %w", err)
 	}
 
-	// 累计 token_count，过滤出符合限制的记忆
+	// Accumulate token_count, selecting memories within budget.
 	var result []*model.SessionMemory
 	totalTokens := 0
 
 	for _, mem := range allMemories {
-		// 检查数量限制
+		// Check count limit.
 		if len(result) >= maxCount {
 			break
 		}
 
-		// 获取 token_count（如果为 nil，估算为 0）
+		// Get token_count (default to 0 if nil).
 		tokenCount := 0
 		if mem.TokenCount != nil {
 			tokenCount = *mem.TokenCount
 		}
 
-		// 检查 token 限制（如果单条记忆就超过限制，也加入，避免返回空）
+		// Check token budget (if a single memory exceeds the limit, still
+		// include it to avoid returning empty results).
 		if totalTokens+tokenCount > maxTokens && len(result) > 0 {
 			break
 		}

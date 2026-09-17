@@ -16,23 +16,23 @@ import (
 
 var log = zap.NewNop()
 
-// debugMode 表示是否开启了 DEBUG 日志（通过环境变量 DEBUG=true 启用）。
-// 开启后会额外输出到文件 logs/debug.log，使用人类可读的 console 编码。
-// 使用 atomic.Bool 保证并发安全。
+// debugMode indicates whether DEBUG logging is enabled (via DEBUG=true environment variable).
+// When enabled, additional output is written to logs/debug.log using human-readable console encoding.
+// Uses atomic.Bool for concurrency safety.
 var debugMode atomic.Bool
 
-// IsDebugMode 返回当前是否处于 DEBUG 模式。
-// 替代直接读取 logger.DebugMode 变量，保证并发安全。
+// IsDebugMode returns whether the logger is currently in DEBUG mode.
+// Replaces direct access to the logger.DebugMode variable for concurrency safety.
 func IsDebugMode() bool {
 	return debugMode.Load()
 }
 
-// Init 初始化日志。
-// 除 cfg.Level 外，还会检查环境变量 DEBUG：
-//   - DEBUG=true / DEBUG=1 → 启用 debug 模式，额外输出到 logs/debug.log（console 编码）
-//   - 其他值 → 仅使用 cfg.Level 配置
+// Init initializes logging.
+// In addition to cfg.Level, it also checks the DEBUG environment variable:
+//   - DEBUG=true / DEBUG=1 -> enable debug mode, additional output to logs/debug.log (console encoding)
+//   - other values -> only use cfg.Level configuration
 //
-// serverLogFile 如果非空，会额外输出 JSON 格式日志到该文件（用于 promtail 采集）。
+// If serverLogFile is non-empty, additional JSON-format logs are written to that file (for promtail collection).
 func Init(level string, serverLogFile ...string) {
 	var zapLevel zapcore.Level
 	switch level {
@@ -75,21 +75,21 @@ func Init(level string, serverLogFile ...string) {
 		panic(err)
 	}
 
-	// 检查 DEBUG 环境变量，启用额外的文件日志（人类可读格式）
+	// Check DEBUG environment variable, enable extra file logging (human-readable format).
 	debugEnv := strings.ToLower(os.Getenv("DEBUG"))
 	if debugEnv == "true" || debugEnv == "1" || debugEnv == "yes" {
 		debugMode.Store(true)
 
-		// 创建 logs 目录（忽略错误——目录已存在也无妨）
+		// Create logs directory (ignore error -- directory may already exist).
 		_ = os.MkdirAll("logs", 0o755)
 
-		// 人类可读的 console 编码器
+		// Human-readable console encoder.
 		consoleEncoderConfig := encoderConfig
 		consoleEncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 		consoleEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 		consoleEncoder := zapcore.NewConsoleEncoder(consoleEncoderConfig)
 
-		// lumberjack 轮转 writer：100MB/文件，保留 3 个旧文件，最多 7 天，gzip 压缩
+		// Lumberjack rotating writer: 100MB/file, keep 3 old files, max 7 days, gzip compression.
 		debugLJ := &lumberjack.Logger{
 			Filename:   "logs/debug.log",
 			MaxSize:    100, // MB
@@ -98,27 +98,27 @@ func Init(level string, serverLogFile ...string) {
 			Compress:   true,
 		}
 
-		// 文件 core：Debug 级别，输出到 logs/debug.log
+		// File core: Debug level, output to logs/debug.log.
 		fileCore := zapcore.NewCore(
 			consoleEncoder,
 			zapcore.AddSync(debugLJ),
 			zapcore.DebugLevel,
 		)
 
-		// 将 stdout (JSON) 和 file (console) 合并为 Tee
+		// Merge stdout (JSON) and file (console) into a Tee.
 		l = zap.New(zapcore.NewTee(l.Core(), fileCore))
 	}
 
-	// 服务器日志文件（JSON 格式，用于 promtail 采集）
+	// Server log file (JSON format, for promtail collection).
 	if len(serverLogFile) > 0 && serverLogFile[0] != "" {
 		logPath := serverLogFile[0]
-		// 确保目录存在（LastIndex 返回 -1 时说明路径无分隔符，跳过 MkdirAll）
+		// Ensure directory exists (LastIndex returns -1 when path has no separator, skip MkdirAll).
 		if idx := strings.LastIndex(logPath, "/"); idx > 0 {
 			if dir := logPath[:idx]; dir != "" {
 				_ = os.MkdirAll(dir, 0o755)
 			}
 		}
-		// lumberjack 轮转 writer：100MB/文件，保留 3 个旧文件，最多 7 天，gzip 压缩
+		// Lumberjack rotating writer: 100MB/file, keep 3 old files, max 7 days, gzip compression.
 		serverLJ := &lumberjack.Logger{
 			Filename:   logPath,
 			MaxSize:    100, // MB
@@ -126,7 +126,7 @@ func Init(level string, serverLogFile ...string) {
 			MaxAge:     7, // days
 			Compress:   true,
 		}
-		// JSON 编码器（与 stdout 相同）
+		// JSON encoder (same as stdout).
 		jsonEncoder := zapcore.NewJSONEncoder(encoderConfig)
 		fileCore := zapcore.NewCore(
 			jsonEncoder,
@@ -143,15 +143,15 @@ func Init(level string, serverLogFile ...string) {
 	zap.ReplaceGlobals(l)
 }
 
-// Sync 刷新日志缓冲
+// Sync flushes the log buffer.
 func Sync() {
 	if log != nil {
 		_ = log.Sync()
 	}
 }
 
-// extractTraceFields 从 context 中提取 OpenTelemetry trace 信息。
-// 返回的字段包含 trace_id 和 span_id（如果存在有效的 span）。
+// extractTraceFields extracts OpenTelemetry trace information from the context.
+// Returns fields containing trace_id and span_id (if a valid span exists).
 func extractTraceFields(ctx context.Context) []zap.Field {
 	if ctx == nil {
 		return nil
@@ -167,34 +167,34 @@ func extractTraceFields(ctx context.Context) []zap.Field {
 	}
 }
 
-// Debug 打印调试日志
+// Debug logs a debug-level message.
 func Debug(ctx context.Context, msg string, fields ...zap.Field) {
 	log.Debug(msg, append(extractTraceFields(ctx), fields...)...)
 }
 
-// Info 打印信息日志
+// Info logs an info-level message.
 func Info(ctx context.Context, msg string, fields ...zap.Field) {
 	log.Info(msg, append(extractTraceFields(ctx), fields...)...)
 }
 
-// Warn 打印警告日志
+// Warn logs a warning-level message.
 func Warn(ctx context.Context, msg string, fields ...zap.Field) {
 	log.Warn(msg, append(extractTraceFields(ctx), fields...)...)
 }
 
-// Error 打印错误日志
+// Error logs an error-level message.
 func Error(ctx context.Context, msg string, fields ...zap.Field) {
 	log.Error(msg, append(extractTraceFields(ctx), fields...)...)
 }
 
-// Fatal 打印致命错误日志并退出
+// Fatal logs a fatal-level message and exits.
 func Fatal(ctx context.Context, msg string, fields ...zap.Field) {
 	log.Fatal(msg, append(extractTraceFields(ctx), fields...)...)
 }
 
-// CaptureStack 捕获当前调用栈，返回人类可读的字符串。
-// skip 表示跳过的栈帧数（0 = CaptureStack 自身的调用者）。
-// 用于在关键入口点记录 "谁调用了这里"。
+// CaptureStack captures the current call stack, returning a human-readable string.
+// skip indicates the number of stack frames to skip (0 = caller of CaptureStack).
+// Used at key entry points to record "who called here".
 func CaptureStack(skip int) string {
 	var pcs [32]uintptr
 	n := runtime.Callers(skip+2, pcs[:]) // +2: skip Callers + CaptureStack
@@ -205,7 +205,7 @@ func CaptureStack(skip int) string {
 	var sb strings.Builder
 	for {
 		frame, more := frames.Next()
-		// 跳过 runtime 内部帧
+		// Skip internal runtime frames.
 		if strings.HasPrefix(frame.Function, "runtime.") {
 			if !more {
 				break

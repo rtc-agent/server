@@ -7,12 +7,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// SafeGo 启动一个 goroutine，捕获 panic 并记录日志。
-// 防止单个 goroutine 的 panic 导致整个进程崩溃。
+// SafeGo starts a goroutine, catching panics and logging them.
+// Prevents a single goroutine's panic from crashing the entire process.
 //
-// name 用于标识 goroutine 身份（出现在日志中），便于定位问题。
+// name identifies the goroutine (appears in logs) for easier troubleshooting.
 //
-// 用法：
+// Usage:
 //
 //	logger.SafeGo("queue-worker", func() {
 //	    w.processSession(ctx, sessionID)

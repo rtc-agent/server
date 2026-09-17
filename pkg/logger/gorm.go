@@ -11,16 +11,16 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
-// GormLogger 将 GORM 的日志转发到 zap logger
+// GormLogger forwards GORM logs to the zap logger.
 type GormLogger struct {
 	ctx                  context.Context
 	ignoreRecordNotFound bool
 	slowThreshold        time.Duration
 }
 
-// NewGormLogger 创建 GORM logger 适配器
-// ignoreRecordNotFound: 是否忽略 ErrRecordNotFound 错误（不输出日志）
-// slowThreshold: 慢查询阈值，超过此时间的查询会被记录为 Warn
+// NewGormLogger creates a GORM logger adapter.
+// ignoreRecordNotFound: whether to ignore ErrRecordNotFound errors (suppress log output).
+// slowThreshold: slow query threshold; queries exceeding this duration are logged as warnings.
 func NewGormLogger(ignoreRecordNotFound bool, slowThreshold time.Duration) *GormLogger {
 	return &GormLogger{
 		ctx:                  context.Background(),
@@ -29,9 +29,9 @@ func NewGormLogger(ignoreRecordNotFound bool, slowThreshold time.Duration) *Gorm
 	}
 }
 
-// LogMode 实现 gormlogger.Interface
+// LogMode implements gormlogger.Interface.
 func (l *GormLogger) LogMode(level gormlogger.LogLevel) gormlogger.Interface {
-	// 返回新的 logger 实例（GORM 要求不可变）
+	// Return a new logger instance (GORM requires immutability).
 	return &GormLogger{
 		ctx:                  l.ctx,
 		ignoreRecordNotFound: l.ignoreRecordNotFound,
@@ -39,24 +39,24 @@ func (l *GormLogger) LogMode(level gormlogger.LogLevel) gormlogger.Interface {
 	}
 }
 
-// Info 实现 gormlogger.Interface
+// Info implements gormlogger.Interface.
 func (l *GormLogger) Info(ctx context.Context, msg string, data ...interface{}) {
 	formatted := fmt.Sprintf(msg, data...)
 	Info(ctx, "[gorm] info", zap.String("detail", formatted))
 }
 
-// Warn 实现 gormlogger.Interface
+// Warn implements gormlogger.Interface.
 func (l *GormLogger) Warn(ctx context.Context, msg string, data ...interface{}) {
 	formatted := fmt.Sprintf(msg, data...)
 	Warn(ctx, "[gorm] warn", zap.String("detail", formatted))
 }
 
-// Error 实现 gormlogger.Interface
+// Error implements gormlogger.Interface.
 func (l *GormLogger) Error(ctx context.Context, msg string, data ...interface{}) {
-	// 检查是否是 ErrRecordNotFound 且需要忽略
+	// Check if this is ErrRecordNotFound and should be ignored.
 	if l.ignoreRecordNotFound && len(data) > 0 {
 		if err, ok := data[0].(error); ok && errors.Is(err, gorm.ErrRecordNotFound) {
-			// 忽略 ErrRecordNotFound，不输出日志
+			// Ignore ErrRecordNotFound, suppress log output.
 			return
 		}
 	}
@@ -71,13 +71,13 @@ func (l *GormLogger) Error(ctx context.Context, msg string, data ...interface{})
 	Error(ctx, "[gorm] error", fields...)
 }
 
-// Trace 实现 gormlogger.Interface
-// 用于记录 SQL 执行信息
+// Trace implements gormlogger.Interface.
+// Used to record SQL execution information.
 func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
 	elapsed := time.Since(begin)
 	sql, rows := fc()
 
-	// 构建日志字段
+	// Build log fields.
 	fields := []zap.Field{
 		zap.Duration("elapsed", elapsed),
 		zap.String("sql", sql),

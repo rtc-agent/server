@@ -11,33 +11,33 @@ import (
 	"gorm.io/gorm"
 )
 
-// UserMemoryRepo 用户记忆仓储接口
+// UserMemoryRepo provides user memory persistence operations.
 type UserMemoryRepo interface {
-	// Create 创建一条用户记忆
+	// Create stores a new user memory record.
 	Create(ctx context.Context, memory *model.UserMemory) error
 
-	// GetByID 根据 ID 获取记忆
+	// GetByID looks up a user memory by ID.
 	GetByID(ctx context.Context, id uuid.UUID) (*model.UserMemory, error)
 
-	// ListByUser 列出用户的所有记忆
+	// ListByUser lists all memories for a user.
 	ListByUser(ctx context.Context, userID uuid.UUID, limit int) ([]*model.UserMemory, error)
 
-	// ListByCategory 列出用户的指定分类记忆
+	// ListByCategory lists memories for a user filtered by category.
 	ListByCategory(ctx context.Context, userID uuid.UUID, category string, limit int) ([]*model.UserMemory, error)
 
-	// Update 更新记忆
+	// Update modifies specific fields of a user memory.
 	Update(ctx context.Context, id uuid.UUID, fields map[string]any) error
 
-	// Delete 软删除记忆
+	// Delete performs a soft delete on a user memory.
 	Delete(ctx context.Context, id uuid.UUID) error
 
-	// IncrementAccessCount 增加访问次数并更新最后访问时间
+	// IncrementAccessCount increments the access count and updates last_accessed_at.
 	IncrementAccessCount(ctx context.Context, id uuid.UUID) error
 
-	// SearchByKeyword 关键词搜索（tags + title + content）
+	// SearchByKeyword performs a keyword search across tags, title, and content.
 	SearchByKeyword(ctx context.Context, userID uuid.UUID, query string, limit int) ([]*model.UserMemory, error)
 
-	// CountByUser 统计用户的记忆数量
+	// CountByUser returns the total memory count for a user.
 	CountByUser(ctx context.Context, userID uuid.UUID) (int, error)
 }
 
@@ -45,7 +45,7 @@ type userMemoryRepo struct {
 	db *gorm.DB
 }
 
-// NewUserMemoryRepo 创建 UserMemoryRepo
+// NewUserMemoryRepo creates a new UserMemoryRepo.
 func NewUserMemoryRepo(db *gorm.DB) UserMemoryRepo {
 	return &userMemoryRepo{db: db}
 }
@@ -122,8 +122,8 @@ func (r *userMemoryRepo) IncrementAccessCount(ctx context.Context, id uuid.UUID)
 	return nil
 }
 
-// SearchByKeyword 关键词搜索（tags + title + content）
-// 使用 PostgreSQL 的 ILIKE 进行模糊匹配
+// SearchByKeyword performs a keyword search across tags, title, and content
+// using PostgreSQL ILIKE for case-insensitive matching.
 func (r *userMemoryRepo) SearchByKeyword(ctx context.Context, userID uuid.UUID, query string, limit int) ([]*model.UserMemory, error) {
 	if limit <= 0 {
 		limit = 20
