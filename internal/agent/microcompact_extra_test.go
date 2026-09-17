@@ -29,7 +29,7 @@ func TestMicrocompactMessages_NonCompactableMixedWithCompactable(t *testing.T) {
 	result := microcompactMessages(msgs, cfg)
 
 	// tc1 (read) should be cleared — compactable but not the most recent compactable.
-	if result[1].Content != TimeBasedMCClearedMessage {
+	if result[1].Content != MCClearedMessage {
 		t.Errorf("tc1 (read) should be cleared, got %q", result[1].Content)
 	}
 	// tc2 (grep) should be kept — most recent compactable tool.

@@ -79,10 +79,10 @@ func TestAggressiveMicrocompact_KeepRecent(t *testing.T) {
 	}
 
 	// First two tool results (index 2, 4) should be cleared
-	if result[2].Content != TimeBasedMCClearedMessage {
+	if result[2].Content != MCClearedMessage {
 		t.Errorf("expected first tool result cleared, got %q", result[2].Content)
 	}
-	if result[4].Content != TimeBasedMCClearedMessage {
+	if result[4].Content != MCClearedMessage {
 		t.Errorf("expected second tool result cleared, got %q", result[4].Content)
 	}
 	// Last tool result (index 6) should be preserved
@@ -103,10 +103,10 @@ func TestAggressiveMicrocompact_KeepZero(t *testing.T) {
 		t.Fatalf("expected 4 messages, got %d", len(result))
 	}
 	// Tool results at index 1 and 3 should be cleared
-	if result[1].Content != TimeBasedMCClearedMessage {
+	if result[1].Content != MCClearedMessage {
 		t.Errorf("message[1] should be cleared, got %q", result[1].Content)
 	}
-	if result[3].Content != TimeBasedMCClearedMessage {
+	if result[3].Content != MCClearedMessage {
 		t.Errorf("message[3] should be cleared, got %q", result[3].Content)
 	}
 	// Assistant messages (with tool calls) should not be modified
@@ -149,7 +149,7 @@ func TestAggressiveMicrocompact_PreservesMetadata(t *testing.T) {
 	if result[1].ToolCallID != "call_abc" {
 		t.Errorf("ToolCallID should be preserved, got %q", result[1].ToolCallID)
 	}
-	if result[1].Content != TimeBasedMCClearedMessage {
+	if result[1].Content != MCClearedMessage {
 		t.Errorf("Content should be cleared message, got %q", result[1].Content)
 	}
 }
@@ -170,16 +170,16 @@ func TestAggressiveMicrocompact_MixedCompactableAndNonCompactable(t *testing.T) 
 	result := aggressiveMicrocompact(messages, 0)
 
 	// read (c1), write (c3), script (c4) should be cleared; ask_user (c2) preserved
-	if result[1].Content != TimeBasedMCClearedMessage {
+	if result[1].Content != MCClearedMessage {
 		t.Errorf("read result should be cleared, got %q", result[1].Content)
 	}
 	if result[3].Content != "ask result" {
 		t.Errorf("ask_user result should be preserved, got %q", result[3].Content)
 	}
-	if result[5].Content != TimeBasedMCClearedMessage {
+	if result[5].Content != MCClearedMessage {
 		t.Errorf("write result should be cleared, got %q", result[5].Content)
 	}
-	if result[7].Content != TimeBasedMCClearedMessage {
+	if result[7].Content != MCClearedMessage {
 		t.Errorf("script result should be cleared, got %q", result[7].Content)
 	}
 }
@@ -200,7 +200,7 @@ func TestAggressiveMicrocompact_SingleCompactablePair(t *testing.T) {
 		t.Error("assistant tool call should be preserved")
 	}
 	// The tool result should be cleared
-	if result[1].Content != TimeBasedMCClearedMessage {
+	if result[1].Content != MCClearedMessage {
 		t.Errorf("expected cleared message, got %q", result[1].Content)
 	}
 	// ToolName and ToolCallID should be preserved for API pairing

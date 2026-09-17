@@ -85,6 +85,12 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	// The markdownMsgID != uuid.Nil guard handles the edge case where only reasoning
 	// content was streamed (no markdown). In that case, handleStreamEnd finalizes
 	// the thinking message and routes token usage to it instead.
+	//
+	// NOTE: When event.Content != "" AND FinishReason is set, appendStreamChunk
+	// (called above) already finalized and set state.markdownFinalized=true.
+	// The assignment below is therefore redundant in that path but provides
+	// defense-in-depth for the Content=="" path where finalizeStreamMessage
+	// handles the finalization.
 	if event.FinishReason != "" && state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
 		if event.Content == "" {
 			// No content in this chunk, but we need to finalize the stream

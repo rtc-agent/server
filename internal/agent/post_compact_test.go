@@ -97,7 +97,7 @@ func TestPostCompact_DedupByPath(t *testing.T) {
 func TestPostCompact_SkipsClearedContent(t *testing.T) {
 	discarded := []*schema.Message{
 		newReadCall("tc1", "/workspace/foo.go"),
-		newToolResult("tc1", TimeBasedMCClearedMessage),
+		newToolResult("tc1", MCClearedMessage),
 		newReadCall("tc2", "/workspace/bar.go"),
 		newToolResult("tc2", "bar content"),
 	}

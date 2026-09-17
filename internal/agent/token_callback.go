@@ -24,6 +24,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
@@ -352,7 +353,7 @@ func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.Strea
 	var maxUsage model.TokenUsage
 	var modelName string
 	var lastMessage *schema.Message
-	var thinkingContent string
+	var thinkingBuilder strings.Builder
 	var cachedWriteTokens int
 
 	for {
@@ -367,7 +368,7 @@ func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.Strea
 		if chunk.Message != nil {
 			lastMessage = chunk.Message
 			if thinking, ok := einoclaude.GetThinking(chunk.Message); ok && thinking != "" {
-				thinkingContent += thinking
+				thinkingBuilder.WriteString(thinking)
 			}
 			if v, ok := einoclaude.GetCacheCreationInputTokens(chunk.Message); ok && v > cachedWriteTokens {
 				cachedWriteTokens = v
@@ -375,6 +376,7 @@ func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.Strea
 		}
 	}
 
+	thinkingContent := thinkingBuilder.String()
 	fullOutput := h.buildDrainedOutput(thinkingContent, lastMessage, modelName, &maxUsage)
 	fullUsage := h.extractFullUsage(fullOutput)
 	if fullUsage != nil {

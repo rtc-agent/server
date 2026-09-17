@@ -61,10 +61,10 @@ func TestMicrocompactMessages_IdleUser_ClearsOld(t *testing.T) {
 	got := microcompactMessages(msgs, cfg)
 
 	// tc1 and tc2 should be cleared, tc3 kept
-	if got[1].Content != TimeBasedMCClearedMessage {
+	if got[1].Content != MCClearedMessage {
 		t.Errorf("tc1 should be cleared, got %q", got[1].Content)
 	}
-	if got[3].Content != TimeBasedMCClearedMessage {
+	if got[3].Content != MCClearedMessage {
 		t.Errorf("tc2 should be cleared, got %q", got[3].Content)
 	}
 	if got[5].Content != "recent result" {

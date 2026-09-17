@@ -23,9 +23,11 @@ var CompactableTools = map[string]bool{
 	"script": true,
 }
 
-// TimeBasedMCClearedMessage is the placeholder text that replaces the
-// content of a cleared tool result.
-const TimeBasedMCClearedMessage = "[Old tool result content cleared]"
+// MCClearedMessage is the placeholder text that replaces the content of a
+// cleared tool result after microcompact (time-based or aggressive) or
+// reactive compact. It signals to the LLM that the tool output was cleared
+// to save context space, while preserving the tool call/result pairing.
+const MCClearedMessage = "[Old tool result content cleared]"
 
 // MicrocompactConfig controls the behavior of time-based Microcompact.
 type MicrocompactConfig struct {
@@ -58,7 +60,7 @@ func DefaultMicrocompactConfig() MicrocompactConfig {
 //     messages' ToolCalls).
 //  3. Keep the most recent KeepRecent IDs; mark the rest for clearing.
 //  4. Replace the Content of tool messages whose ToolCallID is marked with
-//     TimeBasedMCClearedMessage.
+//     MCClearedMessage.
 //
 // This function operates in-memory only; it does NOT persist changes to the DB.
 // The original messages slice is NOT modified — a new slice is returned.
@@ -130,7 +132,7 @@ func clearCompactableToolResults(
 				if _, kept := keepSet[msg.ToolCallID]; !kept {
 					result[i] = &turnagent.Message{
 						Role:       msg.Role,
-						Content:    TimeBasedMCClearedMessage,
+						Content:    MCClearedMessage,
 						ToolName:   msg.ToolName,
 						ToolCallID: msg.ToolCallID,
 						CreatedAt:  msg.CreatedAt,
