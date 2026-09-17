@@ -138,15 +138,31 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 
 	rootClientSessionID, rootServerSessionID := t.resolveRootSession()
 
-	parentMessageID, subSessionMsgID, err := t.createSubSessionAndMessages(ctx, subSessionID, subSessionClientID, rootClientSessionID, rootServerSessionID, turnUUID, callID, mode, args)
+	parentMessageID, subSessionMsgID, err := t.createSubSessionAndMessages(ctx, subSessionID, subSessionClientID, rootClientSessionID, rootServerSessionID, turnUUID, callID, mode, args, argumentsInJSON)
 	if err != nil {
 		return "", err
 	}
 
 	t.logSubAgentCreated(ctx, subSessionID, parentMessageID, subSessionMsgID, turnUUID, args.Instruction)
 
+	// Publish work item to start sub-agent processing. If this fails after
+	// the sub-session was created, we have an orphaned sub-session in the DB.
+	// Implement saga pattern: clean up by closing the sub-session.
 	if err := t.publishSubAgentWork(ctx, subSessionID); err != nil {
-		return "", err
+		t.helpers.logger.Error(ctx, "subAgent.publish_work_failed_closing_orphan", map[string]any{
+			"sub_session_id": subSessionID.String(),
+			"error":          err.Error(),
+		})
+		// Best-effort cleanup: close the orphaned sub-session to prevent
+		// it from appearing as active. The sub-session will remain in DB
+		// but with closed status, making it clear it failed to start.
+		if closeErr := t.helpers.deps.SessionRepo.UpdateStatus(ctx, subSessionID, protocol.SessionStatusClosed); closeErr != nil {
+			t.helpers.logger.Warn(ctx, "subAgent.cleanup_close_failed", map[string]any{
+				"sub_session_id": subSessionID.String(),
+				"error":          closeErr.Error(),
+			})
+		}
+		return "", fmt.Errorf("sub_agent: failed to start sub-agent (cleaned up orphan session): %w", err)
 	}
 
 	if mode == "async" {
@@ -295,11 +311,12 @@ func (t *subAgentTool) createSubSessionAndMessages(
 	callID string,
 	mode string,
 	args subAgentArgs,
+	argumentsInJSON string,
 ) (parentMessageID uuid.UUID, subSessionMsgID uuid.UUID, err error) {
 	toolCallData := protocol.ToolCall{
 		Id:       callID,
 		ToolName: "sub_agent",
-		Input:    "",
+		Input:    argumentsInJSON,
 	}
 	parentContent := protocol.ContentData{
 		Type: protocol.ContentTypeToolCallInput,
