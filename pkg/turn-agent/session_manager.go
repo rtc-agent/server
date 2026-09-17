@@ -226,7 +226,8 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 			}
 		}()
 		mgr.Wait()
-		// 使用带超时的 context 防止 Redis 挂起导致 goroutine 永不退出
+		// Use a timeout context to prevent the goroutine from hanging
+		// indefinitely if Redis is unresponsive.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 		mgr.Cleanup(cleanupCtx)
@@ -320,7 +321,8 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 			"message":    "lock was lost to another worker, skipping ReleaseSession to avoid deleting their lock",
 		})
 	} else {
-		// 使用带超时的 context 防止 Redis 挂起导致 cleanup 阻塞
+		// Use a timeout context to prevent cleanup from blocking
+		// indefinitely if Redis is unresponsive.
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer releaseCancel()
 		if err := mgr.queue.ReleaseSession(releaseCtx, mgr.sessionID); err != nil {
@@ -395,8 +397,9 @@ func (mgr *SessionTurnManager) runLockRenewal(ctx context.Context) {
 		case <-ticker.C:
 			ok, err := mgr.queue.RenewLockWithCredential(ctx, mgr.sessionID, mgr.workerID, mgr.getCredential())
 			if err != nil {
-				// 瞬态 Redis 错误：仅递增失败计数，不立即标记 lockLost。
-				// 连续 N 次失败才认为锁真正丢失（防止网络抖动导致 session 误判）。
+				// Transient Redis error: increment the failure counter but do not
+				// immediately mark lockLost. Only N consecutive failures indicate
+				// a genuine lock loss (guards against network jitter false positives).
 				mgr.consecutiveRenewFailures.Add(1)
 				failures := mgr.consecutiveRenewFailures.Load()
 				mgr.log(ctx, LogLevelWarn, "session_manager.renewal_redis_error_transient", map[string]any{
@@ -413,12 +416,12 @@ func (mgr *SessionTurnManager) runLockRenewal(ctx context.Context) {
 					mgr.loop.Stop(adk.WithSkipCheckpoint())
 					return
 				}
-				continue // 继续下次 renewal 尝试
+				continue // Continue to the next renewal attempt
 			}
-			// Redis 成功响应，重置失败计数
+			// Redis responded successfully — reset the failure counter.
 			mgr.consecutiveRenewFailures.Store(0)
 			if !ok {
-				// 明确的锁丢失（被其他 worker 抢占或 TTL 过期）
+				// Definite lock loss (preempted by another worker or TTL expired).
 				mgr.log(ctx, LogLevelWarn, "session_manager.lock_lost", map[string]any{
 					"session_id": mgr.sessionID,
 				})
