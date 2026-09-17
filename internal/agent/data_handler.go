@@ -63,6 +63,20 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	// Handle reasoning/thinking content.
 	if event.ReasoningContent != "" {
 		if err := h.appendStreamChunk(ctx, sessionID, turnID, event.ReasoningContent, event.FinishReason, &state.thinkingMsgID, &state.thinkingFinalized, primitives.ThinkingContentData, "thinking", nil); err != nil {
+			// If the markdown appendStreamChunk succeeded above but the thinking one
+			// failed, the markdown message is left in "streaming" status permanently.
+			// Best-effort finalization: close the markdown message so the user doesn't
+			// see a stuck loading spinner alongside the error message from FailTurn.
+			if state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
+				if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil); finErr != nil {
+					h.logger.Warn(ctx, "handleStreamChunk.fallback_finalize_markdown_failed", map[string]any{
+						"session_id": sessionID.String(),
+						"turn_id":    turnID.String(),
+						"error":      finErr.Error(),
+					})
+				}
+			}
+			h.streamState.remove(turnID.String())
 			return err
 		}
 	}
@@ -128,6 +142,10 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 //     its token fields from the aggregated data (max of all chunks at EOF).
 func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turnID uuid.UUID, event *turnagent.Event) error {
 	state := h.streamState.getOrCreate(turnID.String())
+	// Ensure per-turn stream state is always cleaned up, even if finalization
+	// fails partway through (lines 170, 178). Without this defer, early returns
+	// on finalizeStreamMessage errors would leak the entry in the sync.Map.
+	defer h.streamState.remove(turnID.String())
 
 	h.logger.Info(ctx, "handleStreamEnd.start", map[string]any{
 		"session_id":         sessionID.String(),
@@ -218,8 +236,7 @@ func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turn
 		}
 	}
 
-	// Clean up per-turn state.
-	h.streamState.remove(turnID.String())
+	// Per-turn state cleanup is handled by the deferred remove call above.
 
 	return nil
 }

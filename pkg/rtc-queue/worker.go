@@ -230,7 +230,10 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 	// with empty credentials, each creating a lock with different credentials,
 	// leading to lock-loss detection and unexpected turn cancellation.
 	w.sessionClaims.Lock()
-	if _, active := w.sessions[sessionID]; active {
+	w.mu.Lock()
+	_, active := w.sessions[sessionID]
+	w.mu.Unlock()
+	if active {
 		w.sessionClaims.Unlock()
 		w.log("worker.session_already_active", map[string]any{
 			"session_id": sessionID,
@@ -238,8 +241,13 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 		})
 		return
 	}
-	// Mark session as active (will be cleared in the deferred cleanup)
+	// Mark session as active (will be cleared in the deferred cleanup).
+	// Hold w.mu to prevent a data race with Stop(), which iterates
+	// w.sessions under w.mu. Without this, concurrent map write (here)
+	// and map read (Stop) would panic at runtime.
+	w.mu.Lock()
 	w.sessions[sessionID] = nil
+	w.mu.Unlock()
 	w.sessionClaims.Unlock()
 
 	// create a session-scoped context so we can cancel this session

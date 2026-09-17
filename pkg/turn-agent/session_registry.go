@@ -62,10 +62,10 @@ func (r *SessionManagerRegistry) Remove(sessionID string) {
 		// the manager has fully stopped, preventing memory leaks.
 		go func() {
 			defer func() {
-				if r := recover(); r != nil {
+				if rv := recover(); rv != nil {
 					mgr.log(context.Background(), LogLevelError, "session_registry.cleanup_panic", map[string]any{
 						"session_id": mgr.sessionID,
-						"panic":      fmt.Sprintf("%v", r),
+						"panic":      fmt.Sprintf("%v", rv),
 					})
 				}
 			}()
@@ -83,11 +83,9 @@ func (r *SessionManagerRegistry) Remove(sessionID string) {
 
 // GetOrCreate returns the existing manager for the session, or creates a new one.
 //
-// If a manager exists and its loop is still running (Push succeeds), it returns
-// the existing manager with isNew=false.
-//
-// If a manager exists but its loop has stopped (Push fails), it removes the old
-// manager and creates a new one.
+// If a manager exists (regardless of whether its loop is still running), it is
+// returned with isNew=false. The caller must check health externally (e.g., via
+// Push) and use Replace when the loop has stopped.
 //
 // If no manager exists, it creates a new one. The behavior depends on whether
 // a credential was provided:
@@ -98,6 +96,9 @@ func (r *SessionManagerRegistry) Remove(sessionID string) {
 //     wait for the old manager's done channel (up to claimRetryTimeout) and retry.
 //
 // The returned boolean is true when a new manager was created.
+//
+// For the stale-loop replacement path (Push fails on existing manager), use
+// Replace instead.
 func (r *SessionManagerRegistry) GetOrCreate(
 	ctx context.Context,
 	queue *rtcqueue.Queue,
@@ -168,10 +169,10 @@ func (r *SessionManagerRegistry) GetOrCreate(
 	// Start the manager's loop and lock renewal.
 	go func() {
 		defer func() {
-			if r := recover(); r != nil {
+			if rv := recover(); rv != nil {
 				mgr.log(ctx, LogLevelError, "session-registry-run-panic", map[string]any{
 					"session_id": mgr.sessionID,
-					"panic":      fmt.Sprintf("%v", r),
+					"panic":      fmt.Sprintf("%v", rv),
 				})
 			}
 		}()
@@ -249,10 +250,10 @@ func (r *SessionManagerRegistry) Replace(
 	if oldMgrTracked {
 		go func() {
 			defer func() {
-				if r := recover(); r != nil {
+				if rv := recover(); rv != nil {
 					oldMgr.log(context.Background(), LogLevelError, "session_registry.replace_cleanup_panic", map[string]any{
 						"session_id": oldMgr.sessionID,
-						"panic":      fmt.Sprintf("%v", r),
+						"panic":      fmt.Sprintf("%v", rv),
 					})
 				}
 			}()
@@ -359,10 +360,10 @@ func (r *SessionManagerRegistry) Replace(
 	// Start the manager's loop and lock renewal.
 	go func() {
 		defer func() {
-			if r := recover(); r != nil {
+			if rv := recover(); rv != nil {
 				mgr.log(ctx, LogLevelError, "session-registry-run-panic", map[string]any{
 					"session_id": mgr.sessionID,
-					"panic":      fmt.Sprintf("%v", r),
+					"panic":      fmt.Sprintf("%v", rv),
 					"source":     "Replace",
 				})
 			}

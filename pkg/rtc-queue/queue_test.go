@@ -383,3 +383,87 @@ func awaitSubscriberCount(t *testing.T, mr *miniredis.Miniredis, channel string,
 	counts := mr.PubSubNumSub(channel)
 	t.Fatalf("timed out waiting for %d subscriber(s) on %q (last count: %d)", want, channel, counts[channel])
 }
+
+func TestHasPendingWorkByKind_PendingWork(t *testing.T) {
+	q, _ := newTestQueue(t)
+	ctx := context.Background()
+
+	// Publish a work item with kind="compact" in the JSON data.
+	payload := `{"kind":"compact","session_id":"s1"}`
+	q.Publish(ctx, "s1", payload, 0)
+
+	// Should find the pending compact work.
+	found, err := q.HasPendingWorkByKind(ctx, "s1", "compact")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected to find pending compact work, got false")
+	}
+
+	// Should NOT find a different kind.
+	found, err = q.HasPendingWorkByKind(ctx, "s1", "submit")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Fatal("expected no pending submit work, got true")
+	}
+}
+
+func TestHasPendingWorkByKind_ActiveWork(t *testing.T) {
+	q, _ := newTestQueue(t)
+	ctx := context.Background()
+
+	// Publish and claim (moves to active/processing).
+	payload := `{"kind":"resume","session_id":"s1"}`
+	q.Publish(ctx, "s1", payload, 0)
+	res, err := q.Claim(ctx, "s1", "w1")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected claim to succeed")
+	}
+
+	// Should find the active resume work.
+	found, err := q.HasPendingWorkByKind(ctx, "s1", "resume")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found {
+		t.Fatal("expected to find active resume work, got false")
+	}
+}
+
+func TestHasPendingWorkByKind_EmptyQueue(t *testing.T) {
+	q, _ := newTestQueue(t)
+	ctx := context.Background()
+
+	// No work published — should return false.
+	found, err := q.HasPendingWorkByKind(ctx, "s1", "compact")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Fatal("expected no pending work in empty queue, got true")
+	}
+}
+
+func TestHasPendingWorkByKind_DifferentSession(t *testing.T) {
+	q, _ := newTestQueue(t)
+	ctx := context.Background()
+
+	// Publish compact for session s1.
+	payload := `{"kind":"compact","session_id":"s1"}`
+	q.Publish(ctx, "s1", payload, 0)
+
+	// Should NOT find it when querying session s2.
+	found, err := q.HasPendingWorkByKind(ctx, "s2", "compact")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Fatal("expected no pending work for different session, got true")
+	}
+}

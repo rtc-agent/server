@@ -62,6 +62,8 @@ func (a *Agent) beginTurn(ctx context.Context, span trace.Span, sessionID, turnI
 			})
 			return fmt.Errorf("turnagent: ResumeTurn: %w", err)
 		}
+	default:
+		return fmt.Errorf("turnagent: beginTurn: unknown work kind: %q", kind)
 	}
 	return nil
 }

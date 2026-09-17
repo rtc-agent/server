@@ -445,7 +445,7 @@ local kind = ARGV[1]
 -- Check pending items in the sorted set
 local work_ids = redis.call("ZRANGE", queue_key, 0, -1)
 for _, wid in ipairs(work_ids) do
-    local data = redis.call("HGET", "rtc:work:" .. wid, "data")
+    local data = redis.call("HGET", "work:" .. wid, "data")
     if data then
         -- Simple JSON substring match: look for "kind":"<value>" pattern
         -- This avoids a full JSON parser in Lua while being safe for our
@@ -460,7 +460,7 @@ end
 -- Check the active (processing) work item
 local active_id = redis.call("GET", active_key)
 if active_id and active_id ~= "" then
-    local data = redis.call("HGET", "rtc:work:" .. active_id, "data")
+    local data = redis.call("HGET", "work:" .. active_id, "data")
     if data then
         local pattern = '"kind":"' .. kind .. '"'
         if string.find(data, pattern, 1, true) then

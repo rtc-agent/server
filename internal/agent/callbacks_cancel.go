@@ -96,7 +96,15 @@ func (h *helpers) cascadeCancelChildren(ctx context.Context, turnID string, pare
 		return
 	}
 	activeChildren, findErr := h.deps.SessionRepo.FindActiveByParent(ctx, parentSessionID)
-	if findErr != nil || len(activeChildren) == 0 {
+	if findErr != nil {
+		h.logger.Warn(ctx, "cascadeCancelChildren.find_active_by_parent_failed", map[string]any{
+			"turn_id":           turnID,
+			"parent_session_id": parentSessionID.String(),
+			"error":             findErr.Error(),
+		})
+		return
+	}
+	if len(activeChildren) == 0 {
 		return
 	}
 	h.logger.Info(ctx, "cascadeCancelChildren.start", map[string]any{
