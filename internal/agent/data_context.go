@@ -141,7 +141,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// repair tool call/result pairing, merge consecutive same-role messages,
 	// and validate structural compliance with the Anthropic Messages API.
 	// This is the final defensive pass before messages reach the LLM.
-	messages, err = h.normalizeMessagesForLLM(ctx, messages)
+	messages, err = h.normalizeMessagesForLLM(ctx, sid, messages)
 	if err != nil {
 		return nil, fmt.Errorf("loadMessages: normalize: %w", err)
 	}

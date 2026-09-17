@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -43,6 +44,7 @@ import (
 // Returns an error only for unrecoverable structural issues.
 func (h *helpers) normalizeMessagesForLLM(
 	ctx context.Context,
+	sessionID uuid.UUID,
 	messages []*turnagent.Message,
 ) ([]*turnagent.Message, error) {
 	if len(messages) == 0 {
@@ -74,8 +76,9 @@ func (h *helpers) normalizeMessagesForLLM(
 	// If repair+merge succeeded, validation should pass. Errors here indicate
 	// a structural issue that repair could not fix — a bug worth investigating.
 	if err := validateMessageSequence(messages); err != nil {
-		h.logger.Info(ctx, "normalizeMessagesForLLM.sequence_invalid", map[string]any{
-			"error": err.Error(),
+		h.logger.Warn(ctx, "normalizeMessagesForLLM.sequence_invalid", map[string]any{
+			"session_id": sessionID.String(),
+			"error":      err.Error(),
 		})
 		return nil, fmt.Errorf("normalizeMessagesForLLM: %w", err)
 	}
@@ -84,8 +87,9 @@ func (h *helpers) normalizeMessagesForLLM(
 	// were actually made to avoid noise in the common (no-op) case.
 	if len(messages) != originalLen {
 		h.logger.Info(ctx, "normalizeMessagesForLLM.applied", map[string]any{
-			"before": originalLen,
-			"after":  len(messages),
+			"session_id": sessionID.String(),
+			"before":     originalLen,
+			"after":      len(messages),
 		})
 	}
 

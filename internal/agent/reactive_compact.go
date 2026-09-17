@@ -45,54 +45,44 @@ func (h *helpers) recoverFromPromptTooLong(ctx context.Context, sessionID string
 	}
 }
 
-// reactiveCompactLevel1: Clear old tool results aggressively, then force
-// summarize the remaining messages. This reuses the existing compression
-// pipeline (summarizeMessages → logSummarizeTokenUsage → persistCompressedMessages).
-func (h *helpers) reactiveCompactLevel1(ctx context.Context, sessionID uuid.UUID) error {
+// reactiveCompactWithConfig is the shared implementation for L1 and L2
+// reactive compression. Both levels follow the same 5-step pipeline
+// (load, microcompact, convert, compress, persist) but differ in the
+// keepRecent parameter and retention config.
+func (h *helpers) reactiveCompactWithConfig(ctx context.Context, sessionID uuid.UUID, keepRecent int, config RetentionConfig, label string) error {
 	// 1. Load messages from DB (applies normal budget + microcompact).
 	messages, err := h.loadMessages(ctx, sessionID.String())
 	if err != nil {
-		return fmt.Errorf("reactive compact L1: load messages: %w", err)
+		return fmt.Errorf("reactive compact %s: load messages: %w", label, err)
 	}
 
-	// 2. Apply aggressive microcompact: keep only 1 tool result.
-	messages = aggressiveMicrocompact(messages, 1)
+	// 2. Apply aggressive microcompact with the given keepRecent parameter.
+	messages = aggressiveMicrocompact(messages, keepRecent)
 
 	// 3. Convert to schema.Message for compression.
 	schemaMsgs := turnagent.MessagesToEino(messages)
 
 	// 4. Force compress (bypasses token threshold check).
-	compressed, err := h.forceCompressContext(ctx, schemaMsgs, aggressiveRetentionConfig())
+	compressed, err := h.forceCompressContext(ctx, schemaMsgs, config)
 	if err != nil {
-		return fmt.Errorf("reactive compact L1: compress: %w", err)
+		return fmt.Errorf("reactive compact %s: compress: %w", label, err)
 	}
 
 	// 5. Persist the summary.
 	return h.persistCompressedMessages(ctx, compressed)
 }
 
-// reactiveCompactLevel2: Even more aggressive compression — minimal retention.
+// reactiveCompactLevel1: Clear old tool results aggressively (keep 1), then force
+// summarize the remaining messages. This reuses the existing compression
+// pipeline (summarizeMessages → logSummarizeTokenUsage → persistCompressedMessages).
+func (h *helpers) reactiveCompactLevel1(ctx context.Context, sessionID uuid.UUID) error {
+	return h.reactiveCompactWithConfig(ctx, sessionID, 1, aggressiveRetentionConfig(), "L1")
+}
+
+// reactiveCompactLevel2: Even more aggressive compression — clear ALL tool results
+// (keep 0) with minimal retention config.
 func (h *helpers) reactiveCompactLevel2(ctx context.Context, sessionID uuid.UUID) error {
-	// 1. Load messages from DB.
-	messages, err := h.loadMessages(ctx, sessionID.String())
-	if err != nil {
-		return fmt.Errorf("reactive compact L2: load messages: %w", err)
-	}
-
-	// 2. Aggressive microcompact: keep 0 tool results (clear all).
-	messages = aggressiveMicrocompact(messages, 0)
-
-	// 3. Convert to schema.Message.
-	schemaMsgs := turnagent.MessagesToEino(messages)
-
-	// 4. Force compress with minimal retention.
-	compressed, err := h.forceCompressContext(ctx, schemaMsgs, minimalRetentionConfig())
-	if err != nil {
-		return fmt.Errorf("reactive compact L2: compress: %w", err)
-	}
-
-	// 5. Persist the summary.
-	return h.persistCompressedMessages(ctx, compressed)
+	return h.reactiveCompactWithConfig(ctx, sessionID, 0, minimalRetentionConfig(), "L2")
 }
 
 // Soft-delete oldest half of live messages (L3 strategy).
@@ -152,7 +142,9 @@ func (h *helpers) reactiveCompactLevel3(ctx context.Context, sessionID uuid.UUID
 		return fmt.Errorf("reactive compact L3: soft-delete messages: %w", err)
 	}
 
-	h.logger.Info(ctx, "reactive_compact.L3.deleted", map[string]any{
+	// Log at Warn level: soft-delete is a destructive, irreversible operation.
+	// Operators should be able to monitor when data loss occurs.
+	h.logger.Warn(ctx, "reactive_compact.L3.deleted", map[string]any{
 		"session_id": sessionID.String(),
 		"deleted":    len(idsToDelete),
 		"remaining":  len(liveMsgs) - len(idsToDelete),

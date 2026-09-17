@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -103,15 +104,33 @@ func (h *helpers) cascadeCancelChildren(callerCtx context.Context, turnID string
 		"session_id":  parentSessionID.String(),
 		"child_count": len(activeChildren),
 	})
+	// Cancel children in parallel so a slow CancelSession call does not
+	// block the remaining children. The 30s context timeout (above)
+	// still bounds the total time.
+	var wg sync.WaitGroup
 	for _, child := range activeChildren {
-		if err := h.queue.CancelSession(ctx, child.ID.String(), "parent session cancelled"); err != nil {
-			h.logger.Warn(ctx, "cascadeCancelChildren.cancel_failed", map[string]any{
-				"parent_session_id": parentSessionID.String(),
-				"child_session_id":  child.ID.String(),
-				"error":             err.Error(),
-			})
-		}
+		wg.Add(1)
+		go func(childID uuid.UUID) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					h.logger.Warn(ctx, "cascadeCancelChildren.panic", map[string]any{
+						"parent_session_id": parentSessionID.String(),
+						"child_session_id":  childID.String(),
+						"panic":             fmt.Sprintf("%v", r),
+					})
+				}
+			}()
+			if err := h.queue.CancelSession(ctx, childID.String(), "parent session cancelled"); err != nil {
+				h.logger.Warn(ctx, "cascadeCancelChildren.cancel_failed", map[string]any{
+					"parent_session_id": parentSessionID.String(),
+					"child_session_id":  childID.String(),
+					"error":             err.Error(),
+				})
+			}
+		}(child.ID)
 	}
+	wg.Wait()
 	h.logger.Info(ctx, "cascadeCancelChildren.done", map[string]any{
 		"turn_id":     turnID,
 		"session_id":  parentSessionID.String(),

@@ -309,11 +309,11 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 	}
 
 	// Load session to check Sub Agent hierarchy and publish events.
-	session, sessionErr := h.deps.SessionRepo.GetByID(ctx, sid)
-	if sessionErr != nil {
+	session, sessErr := h.deps.SessionRepo.GetByID(ctx, sid)
+	if sessErr != nil {
 		h.logger.Warn(ctx, "completeTurn.load_session_failed", map[string]any{
 			"session_id": sessionID,
-			"error":      sessionErr.Error(),
+			"error":      sessErr.Error(),
 		})
 		// Continue even if session load fails — turn status is already updated.
 	}

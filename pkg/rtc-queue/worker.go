@@ -412,7 +412,12 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 		"hold_lock":  holdLock,
 	})
 
-	work, err := w.q.LoadWork(ctx, claim.WorkID)
+	// Use a timeout for the Redis call to prevent blocking indefinitely
+	// if Redis is unresponsive. Consistent with other Redis calls in this
+	// file (e.g., lock release at lines 363, 374).
+	loadCtx, loadCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer loadCancel()
+	work, err := w.q.LoadWork(loadCtx, claim.WorkID)
 	if err != nil {
 		w.cfg.OnError(fmt.Errorf("load work %s: %w", claim.WorkID, err))
 		return
