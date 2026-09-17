@@ -98,6 +98,7 @@ const (
 	// Full channel: session:cancel:{sessionID}
 	// Value: "stop"
 	// Use case: cross-node session stop for all turns (shared by StopTurn/CloseSession).
+	// NOTE: Must stay in sync with rtc-queue/types.go ChannelSessionCancelPrefix.
 	PrefixSessionCancel = "session:cancel:"
 
 	// ========== Checkpoint and Interrupt prefixes ==========

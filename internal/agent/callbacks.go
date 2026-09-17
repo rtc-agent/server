@@ -94,6 +94,13 @@ func (h *helpers) createTurn(ctx context.Context, sessionID string, workID strin
 				})
 				return existing.ID.String(), nil
 			}
+			// Anomalous: unique constraint fired but re-lookup found nothing.
+			// Log this TOCTOU edge case so operators can detect DB inconsistency.
+			h.logger.Warn(ctx, "createTurn.duplicate_key_relookup_nil", map[string]any{
+				"session_id": sessionID,
+				"work_id":    workID,
+				"message":    "unique constraint violation but re-lookup returned nil; returning original error",
+			})
 		}
 		return "", fmt.Errorf("createTurn: create turn: %w", err)
 	}

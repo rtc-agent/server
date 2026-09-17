@@ -49,6 +49,7 @@ type CancelMessage struct {
 const (
 	ChannelSessionNew = "session:new"
 	// ChannelSessionCancel formats to "session:cancel:%s" with the session id.
+	// NOTE: Must stay in sync with cache/keys.go PrefixSessionCancel.
 	ChannelSessionCancelPrefix = "session:cancel:"
 )
 

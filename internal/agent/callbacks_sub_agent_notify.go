@@ -29,6 +29,12 @@ import (
 //
 // The function detaches from the caller's context for fire-and-forget operation.
 func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subSession *model.Session, lastMessage *turnagent.Message, status string, errorMessage *string) {
+	// Defensive nil check: caller (notifyParentAfterSubAgentSession) guards
+	// against nil, but protect against future call sites.
+	if subSession == nil {
+		return
+	}
+
 	// Detach from the callback's context — fire-and-forget.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(callerCtx), 30*time.Second)
 	defer cancel()

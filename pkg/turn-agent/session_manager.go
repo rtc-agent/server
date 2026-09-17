@@ -344,7 +344,12 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 	// pending) → claim again → ... because ReleaseSession was called AFTER the
 	// claim loop, so the lock was never released.
 	if !mgr.lockLost.Load() {
-		mgr.notifyPendingWork(ctx)
+		// Use a detached context for notification: the caller's ctx may be
+		// cancelled (which is what triggered cleanup). Redis operations need
+		// a live context to succeed. Mirrors the ReleaseSession pattern above.
+		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		mgr.notifyPendingWork(notifyCtx)
+		notifyCancel()
 	}
 
 	// Step 5: Remove from registry.

@@ -305,13 +305,13 @@ func (a *Agent) handleOwnerLifecycleEnd(
 		// Use WithTimeout to prevent indefinite blocking if Redis is unresponsive
 		// during cleanup. The caller's ctx may already be cancelled.
 		requeueCtx, requeueCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer requeueCancel()
 		if reErr := a.queue.RequeueWork(requeueCtx, workID); reErr != nil {
 			a.log(ctx, LogLevelWarn, "turn.requeue_owner_failed", map[string]any{
 				"work_id": workID,
 				"error":   reErr.Error(),
 			})
 		}
-		requeueCancel()
 	}
 
 	a.log(ctx, LogLevelInfo, "turn.loop_exited", map[string]any{
