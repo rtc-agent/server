@@ -150,9 +150,10 @@ func (h *helpers) cascadeCancelChildren(callerCtx context.Context, turnID string
 				}
 			}()
 			// Per-child timeout: each child gets up to 30s independently.
-			// callerCtx is already detached via WithoutCancel at the top of this
-			// method, so no need for a second WithoutCancel here.
-			childCtx, childCancel := context.WithTimeout(callerCtx, 30*time.Second)
+			// ctx is already detached from the caller's context via WithoutCancel
+			// at the top of this method, so child cancel operations are protected
+			// from the caller's cancellation.
+			childCtx, childCancel := context.WithTimeout(ctx, 30*time.Second)
 			defer childCancel()
 			if err := h.queue.CancelSession(childCtx, childID.String(), "parent session cancelled"); err != nil {
 				h.logger.Warn(ctx, "cascadeCancelChildren.cancel_failed", map[string]any{
