@@ -73,7 +73,11 @@ func (a *Agent) handleNonOwnerCompletion(
 			"work_id":    workID,
 			"message":    "manager shut down before work was processed, requeuing",
 		})
-		if reErr := a.queue.RequeueWork(context.Background(), workID); reErr != nil {
+		// Use WithTimeout to prevent indefinite blocking if Redis is unresponsive
+		// during cleanup. The caller's ctx may already be cancelled.
+		requeueCtx, requeueCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer requeueCancel()
+		if reErr := a.queue.RequeueWork(requeueCtx, workID); reErr != nil {
 			a.log(ctx, LogLevelWarn, "turn.requeue_abandoned_failed", map[string]any{
 				"work_id": workID,
 				"error":   reErr.Error(),
@@ -298,12 +302,16 @@ func (a *Agent) handleOwnerLifecycleEnd(
 			"work_id":    workID,
 			"message":    "owner's work was not processed before loop exited, requeuing",
 		})
-		if reErr := a.queue.RequeueWork(context.Background(), workID); reErr != nil {
+		// Use WithTimeout to prevent indefinite blocking if Redis is unresponsive
+		// during cleanup. The caller's ctx may already be cancelled.
+		requeueCtx, requeueCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if reErr := a.queue.RequeueWork(requeueCtx, workID); reErr != nil {
 			a.log(ctx, LogLevelWarn, "turn.requeue_owner_failed", map[string]any{
 				"work_id": workID,
 				"error":   reErr.Error(),
 			})
 		}
+		requeueCancel()
 	}
 
 	a.log(ctx, LogLevelInfo, "turn.loop_exited", map[string]any{
@@ -449,9 +457,12 @@ func (a *Agent) tryReactiveCompactRecovery(
 	}
 
 	// Step 4: publish submit work item to trigger a new Process lifecycle.
-	// Use context.Background() because ctx may be cancelled.
+	// Use context.Background() (with timeout) because ctx may be cancelled.
+	// The 10s timeout prevents indefinite blocking if Redis is unresponsive.
 	payload := string(MarshalSubmitPayload(p.SessionID, attempt))
-	if _, err := a.queue.Publish(context.Background(), p.SessionID, payload, rtcqueue.ResumeWorkPriority); err != nil {
+	publishCtx, publishCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer publishCancel()
+	if _, err := a.queue.Publish(publishCtx, p.SessionID, payload, rtcqueue.ResumeWorkPriority); err != nil {
 		a.log(ctx, LogLevelError, "turn.submit_publish_failed", map[string]any{
 			"error":   err.Error(),
 			"attempt": attempt,

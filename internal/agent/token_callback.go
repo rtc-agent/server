@@ -79,8 +79,18 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 				bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 				go func() {
 					defer cancel()
-					// No outer recover needed: drainStreamAndReport handles its
-					// own panic recovery internally (see its defer/recover block).
+					// Defensive recover: drainStreamAndReport has its own recover
+					// internally, but adding one here protects against future refactors
+					// that remove the inner recover. A panic in a goroutine crashes the
+					// entire process, so defense-in-depth is warranted.
+					defer func() {
+						if r := recover(); r != nil {
+							logger.Error(bgCtx, "token_callback.goroutine_panic",
+								zap.Any("recover", r),
+								zap.String("stack", string(debug.Stack())),
+							)
+						}
+					}()
 					h.drainStreamAndReport(bgCtx, output)
 				}()
 				return ctx

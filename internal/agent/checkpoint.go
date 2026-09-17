@@ -45,13 +45,16 @@ func newRedisCheckpointStore(rdb redis.UniversalClient, ttl time.Duration) *redi
 
 // Set persists checkpoint data to Redis with the configured TTL.
 //
-// Uses context.Background() for Redis operations to ensure checkpoint
-// persistence is not affected by session or request context cancellation.
+// Uses context.Background() (with a timeout) for Redis operations to ensure
+// checkpoint persistence is not affected by session or request context cancellation.
 // A checkpoint save must survive even if the parent context is cancelled —
 // otherwise the turn's state is lost and cannot be resumed.
+// The 10s timeout prevents indefinite blocking if Redis is unresponsive.
 func (s *redisCheckpointStore) Set(ctx context.Context, id string, data []byte) error {
 	key := cache.Checkpoint(id)
-	if err := s.redis.Set(context.Background(), key, data, s.ttl).Err(); err != nil {
+	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.redis.Set(bgCtx, key, data, s.ttl).Err(); err != nil {
 		return fmt.Errorf("checkpoint set: id=%s key=%s: %w", id, key, err)
 	}
 	return nil
@@ -63,11 +66,14 @@ func (s *redisCheckpointStore) Set(ctx context.Context, id string, data []byte) 
 // This is the expected behavior when no checkpoint exists (e.g., on the
 // first turn of a session).
 //
-// Uses context.Background() for the same reason as Set: checkpoint reads
-// must not be affected by context cancellation.
+// Uses context.Background() (with a timeout) for the same reason as Set:
+// checkpoint reads must not be affected by context cancellation.
+// The 10s timeout prevents indefinite blocking if Redis is unresponsive.
 func (s *redisCheckpointStore) Get(ctx context.Context, id string) ([]byte, bool, error) {
 	key := cache.Checkpoint(id)
-	data, err := s.redis.Get(context.Background(), key).Result()
+	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	data, err := s.redis.Get(bgCtx, key).Result()
 	if errors.Is(err, redis.Nil) {
 		// Key does not exist — return (nil, false, nil) per convention.
 		return nil, false, nil
@@ -84,11 +90,14 @@ func (s *redisCheckpointStore) Get(ctx context.Context, id string) ([]byte, bool
 // stale resumption. Without this method, old checkpoints persist and cause
 // subsequent turns to incorrectly take the GenResume path instead of GenInput.
 //
-// Uses context.Background() for consistency with Set/Get — checkpoint deletion
-// must not be affected by context cancellation.
+// Uses context.Background() (with a timeout) for consistency with Set/Get —
+// checkpoint deletion must not be affected by context cancellation.
+// The 10s timeout prevents indefinite blocking if Redis is unresponsive.
 func (s *redisCheckpointStore) Delete(ctx context.Context, id string) error {
 	key := cache.Checkpoint(id)
-	if err := s.redis.Del(context.Background(), key).Err(); err != nil {
+	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.redis.Del(bgCtx, key).Err(); err != nil {
 		return fmt.Errorf("checkpoint delete: id=%s key=%s: %w", id, key, err)
 	}
 	return nil

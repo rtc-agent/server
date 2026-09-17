@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/rtc-agent/server/pkg/protocol"
-	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/google/uuid"
 )
@@ -27,43 +26,10 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {
-		// Fallback: extract sessionID from context (set by agent_process.go
-		// via WithSessionID). Ensures session status update, event publishing,
-		// and cascade cancel still work when DB lookup fails. Without this,
-		// the session stays stuck at "active" until the stale turn scanner
-		// runs (5-30 minutes).
-		sessionIDStr := turnagent.SessionIDFromContext(ctx)
-		if sid, parseErr := uuid.Parse(sessionIDStr); parseErr == nil {
-			if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusIdle); err != nil {
-				h.logger.Warn(ctx, "cancelTurn.update_session_status_failed_fallback", map[string]any{
-					"session_id": sid.String(),
-					"error":      err.Error(),
-				})
-			}
-			h.batchLifecyclePublish(ctx, tid, sid, "cancel")
-			// Sub Agent support: query session by sessionID (not turnID) to
-			// check if this is a sub-session and notify the parent. Even though
-			// Turn lookup failed, Session lookup may succeed (different table).
-			// Without this, a sub-agent cancellation with a Turn DB lookup error
-			// leaves the parent session stuck at "active" until the stale turn
-			// scanner runs (5-30 minutes).
-			session, sessErr := h.deps.SessionRepo.GetByID(ctx, sid)
-			if sessErr != nil {
-				h.logger.Warn(ctx, "cancelTurn.load_session_fallback_failed", map[string]any{
-					"session_id": sid.String(),
-					"error":      sessErr.Error(),
-				})
-			}
-			h.notifyParentAfterSubAgentSession(ctx, session, nil, "cancelled", &reason)
-			// Cascade cancel: propagate to active child sessions even when
-			// GetByID failed. This prevents orphaned sub agents.
-			h.cascadeCancelChildren(ctx, turnID, sid)
-		}
-		h.logger.Warn(ctx, "cancelTurn.load_turn_failed", map[string]any{
-			"turn_id":  turnID,
-			"error":    lookupErr.Error(),
-			"fallback": sessionIDStr != "",
-		})
+		// Fallback: extract sessionID from context and perform cleanup.
+		// Delegates to shared helper (also used by failTurn) to eliminate
+		// the 35-line duplicate that previously lived here.
+		h.fallbackTurnLookupCleanup(ctx, turnID, tid, "cancel", "cancelled", &reason, "cancelTurn")
 		return nil
 	}
 

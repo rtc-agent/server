@@ -367,3 +367,62 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 
 	return nil
 }
+
+// =============================================================================
+// Shared fallback helpers
+// =============================================================================
+
+// fallbackTurnLookupCleanup handles the common cleanup when TurnRepo.GetByID
+// fails in cancelTurn/failTurn. It extracts the sessionID from context (set by
+// agent_process.go via WithSessionID) and performs session status update,
+// lifecycle event publishing, parent notification, and cascade cancel.
+//
+// Parameters:
+//   - ctx: callback context
+//   - turnID: original turn ID string
+//   - tid: parsed turn UUID
+//   - action: lifecycle publish action ("cancel" or "fail")
+//   - subAgentStatus: sub-agent status string ("cancelled" or "failed")
+//   - errorMsg: pointer to error/reason message for parent notification
+//   - logPrefix: caller name for log events ("cancelTurn" or "failTurn")
+func (h *helpers) fallbackTurnLookupCleanup(ctx context.Context, turnID string, tid uuid.UUID, action string, subAgentStatus string, errorMsg *string, logPrefix string) {
+	sessionIDStr := turnagent.SessionIDFromContext(ctx)
+	sid, parseErr := uuid.Parse(sessionIDStr)
+	if parseErr != nil {
+		h.logger.Warn(ctx, logPrefix+".load_turn_failed", map[string]any{
+			"turn_id":  turnID,
+			"fallback": false,
+		})
+		return
+	}
+
+	if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusIdle); err != nil {
+		h.logger.Warn(ctx, logPrefix+".update_session_status_failed_fallback", map[string]any{
+			"session_id": sid.String(),
+			"error":      err.Error(),
+		})
+	}
+	h.batchLifecyclePublish(ctx, tid, sid, action)
+
+	// Sub Agent support: query session by sessionID (not turnID) to check if
+	// this is a sub-session and notify the parent. Even though Turn lookup
+	// failed, Session lookup may succeed (different table). Without this, a
+	// sub-agent failure/cancellation with a Turn DB lookup error leaves the
+	// parent session stuck at "active" until the stale turn scanner runs.
+	session, sessErr := h.deps.SessionRepo.GetByID(ctx, sid)
+	if sessErr != nil {
+		h.logger.Warn(ctx, logPrefix+".load_session_fallback_failed", map[string]any{
+			"session_id": sid.String(),
+			"error":      sessErr.Error(),
+		})
+	}
+	h.notifyParentAfterSubAgentSession(ctx, session, nil, subAgentStatus, errorMsg)
+	// Cascade cancel: propagate to active child sessions even when GetByID
+	// failed. This prevents orphaned sub agents.
+	h.cascadeCancelChildren(ctx, turnID, sid)
+
+	h.logger.Warn(ctx, logPrefix+".load_turn_failed", map[string]any{
+		"turn_id":  turnID,
+		"fallback": true,
+	})
+}

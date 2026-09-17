@@ -212,7 +212,10 @@ func (b *TopicBroker) RemoveHistory(ch string) error {
 		b.channelEpochKey(ch),
 	}
 
-	if err := b.redisClient.Do(context.Background(), b.redisClient.B().Del().Key(keysToDelete...).Build()).Error(); err != nil {
+	// Use WithTimeout to prevent indefinite blocking if Redis is unresponsive.
+	delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer delCancel()
+	if err := b.redisClient.Do(delCtx, b.redisClient.B().Del().Key(keysToDelete...).Build()).Error(); err != nil {
 		errs = append(errs, fmt.Errorf("redis DEL: %w", err))
 	}
 

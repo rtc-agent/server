@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/centrifugal/centrifuge"
 	"go.opentelemetry.io/otel/trace"
@@ -148,8 +149,12 @@ func (d *DualBroker) Unsubscribe(channels ...string) error {
 }
 
 // Publish publishes data to channel.
+// Uses WithTimeout to prevent indefinite blocking if Redis is unresponsive.
+// The 5s timeout matches PublishJoin/PublishLeave in topic_broker.go.
 func (d *DualBroker) Publish(ch string, data []byte, opts centrifuge.PublishOptions) (centrifuge.PublishResult, error) {
-	return d.PublishWithContext(context.Background(), ch, data, opts)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return d.PublishWithContext(ctx, ch, data, opts)
 }
 
 // PublishWithContext is like Publish but accepts a context for distributed tracing.
