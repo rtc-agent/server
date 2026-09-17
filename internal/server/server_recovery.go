@@ -20,7 +20,9 @@ import (
 // Startup recovery differs from the periodic runtime scanner (staleTurnScanner):
 //   - No time thresholds — recovers ALL stale turns immediately.
 //   - No Worker liveness or checkpoint checks (no Workers connected at startup).
-//   - Publishes kind="resume" (preserving InterruptID) instead of kind="submit".
+//   - Publishes kind="submit" via MarshalSubmitPayload (not "resume") because stale turns
+//     may lack valid checkpoints or InterruptIDs. Creates a fresh turn to avoid checkpoint
+//     lookup failures. This matches the runtime scanner's recovery approach.
 //   - Performs ghost-work cleanup and session-lock release (runtime scanner does not).
 func (s *Server) recoverStaleTurns(ctx context.Context) {
 	staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurns(ctx, staleTurnStatuses)

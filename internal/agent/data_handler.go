@@ -56,6 +56,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	// the markdown message is the primary assistant response.
 	if event.Content != "" {
 		if err := h.appendStreamChunk(ctx, sessionID, turnID, event.Content, event.FinishReason, &state.markdownMsgID, &state.markdownFinalized, primitives.MarkdownContentData, "markdown", event.TokenUsage); err != nil {
+			h.streamState.remove(turnID.String())
 			return err
 		}
 	}
