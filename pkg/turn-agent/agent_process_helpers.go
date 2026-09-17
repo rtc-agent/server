@@ -67,6 +67,18 @@ func (a *Agent) handleNonOwnerCompletion(
 	// shutdown). When abandoned, the work is still in "processing" status
 	// in Redis — requeue it so another worker can pick it up.
 	if mgr.Tracker().IsAbandoned(workID) {
+		// Re-check cancellation inside the abandonment block: the manager may
+		// have been cancelled between the initial check (line 25) and this point.
+		// Requeuing cancelled work causes it to be re-executed on another worker.
+		if mgr.IsCancelledByQueue() {
+			a.log(ctx, LogLevelInfo, "turn.work_abandoned_cancelled", map[string]any{
+				"session_id": sessionID,
+				"turn_id":    turnID,
+				"work_id":    workID,
+				"message":    "work abandoned but session cancelled; skipping requeue",
+			})
+			return nil
+		}
 		a.log(ctx, LogLevelWarn, "turn.work_abandoned", map[string]any{
 			"session_id": sessionID,
 			"turn_id":    turnID,
@@ -296,21 +308,33 @@ func (a *Agent) handleOwnerLifecycleEnd(
 	// The work is still in "processing" state in Redis — requeue it so another
 	// worker can pick it up.
 	if mgr.Tracker().IsAbandoned(workID) {
-		a.log(ctx, LogLevelWarn, "turn.owner_work_abandoned", map[string]any{
-			"session_id": p.SessionID,
-			"turn_id":    turnID,
-			"work_id":    workID,
-			"message":    "owner's work was not processed before loop exited, requeuing",
-		})
-		// Use WithTimeout to prevent indefinite blocking if Redis is unresponsive
-		// during cleanup. The caller's ctx may already be cancelled.
-		requeueCtx, requeueCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer requeueCancel()
-		if reErr := a.queue.RequeueWork(requeueCtx, workID); reErr != nil {
-			a.log(ctx, LogLevelWarn, "turn.requeue_owner_failed", map[string]any{
-				"work_id": workID,
-				"error":   reErr.Error(),
+		// Before requeuing, check if the session was cancelled. If so, the
+		// cancel script handles cleanup and requeuing would just cause the
+		// work to be re-executed on another worker unnecessarily.
+		if mgr.IsCancelledByQueue() {
+			a.log(ctx, LogLevelInfo, "turn.owner_work_abandoned_cancelled", map[string]any{
+				"session_id": p.SessionID,
+				"turn_id":    turnID,
+				"work_id":    workID,
+				"message":    "owner's work abandoned but session cancelled; skipping requeue",
 			})
+		} else {
+			a.log(ctx, LogLevelWarn, "turn.owner_work_abandoned", map[string]any{
+				"session_id": p.SessionID,
+				"turn_id":    turnID,
+				"work_id":    workID,
+				"message":    "owner's work was not processed before loop exited, requeuing",
+			})
+			// Use WithTimeout to prevent indefinite blocking if Redis is unresponsive
+			// during cleanup. The caller's ctx may already be cancelled.
+			requeueCtx, requeueCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer requeueCancel()
+			if reErr := a.queue.RequeueWork(requeueCtx, workID); reErr != nil {
+				a.log(ctx, LogLevelWarn, "turn.requeue_owner_failed", map[string]any{
+					"work_id": workID,
+					"error":   reErr.Error(),
+				})
+			}
 		}
 	}
 
