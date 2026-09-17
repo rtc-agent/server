@@ -144,7 +144,7 @@ func TestClassifyError_AnthropicAPIError(t *testing.T) {
 		{"permission", "permission_error", protocol.ErrorCategoryPermission, false},
 		{"invalid_request", "invalid_request_error", protocol.ErrorCategoryContext, false},
 		{"timeout", "timeout_error", protocol.ErrorCategoryTimeout, true},
-		{"unknown_type", "some_new_error_type", protocol.ErrorCategoryAPI, true},
+		{"unknown_type", "some_new_error_type", protocol.ErrorCategoryAPI, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

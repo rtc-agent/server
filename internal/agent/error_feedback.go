@@ -201,10 +201,15 @@ func classifyError(err error) (category protocol.ErrorCategory, title, message s
 				"AI 服务响应超时，系统正在自动重试。",
 				true
 		default:
+			// Unknown Anthropic API error. Default to non-retryable to fail-safe
+			// against new permanent error types (e.g., model deprecation, invalid
+			// organization) that would otherwise retry indefinitely. Known transient
+			// errors (overloaded, rate_limit, timeout) are handled explicitly above
+			// with retryable=true.
 			return protocol.ErrorCategoryAPI,
 				"API 错误",
-				"AI 服务返回错误，系统正在自动重试。",
-				true
+				"AI 服务返回错误，请重试。如果问题持续，请联系支持。",
+				false
 		}
 	}
 

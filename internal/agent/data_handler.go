@@ -393,6 +393,10 @@ func (h *helpers) handleMessage(ctx context.Context, sessionID uuid.UUID, turnID
 //
 // Note: stream state is cleaned up here to prevent leaks in the sync.Map
 // when a stream error occurs between handleStreamChunk and handleStreamEnd.
+// Additionally, any pending streaming messages (e.g., from a partial stream
+// that failed before the FinishReason chunk) are best-effort finalized so
+// they are not left in "streaming" status permanently. Without this, the user
+// sees a stuck loading spinner alongside the error message from FailTurn.
 func (h *helpers) handleEventError(ctx context.Context, sessionID uuid.UUID, turnID uuid.UUID, event *turnagent.Event) error {
 	errMsg := ""
 	if event.Err != nil {
@@ -403,6 +407,31 @@ func (h *helpers) handleEventError(ctx context.Context, sessionID uuid.UUID, tur
 		"turn_id":    turnID.String(),
 		"error":      errMsg,
 	})
+
+	// Best-effort finalize any pending streaming messages before removing state.
+	// When the stream fails before the FinishReason chunk arrives (e.g., network
+	// error, idle timeout, PublishEvent failure), handleStreamEnd is never called.
+	// Without finalization, messages remain in "streaming" status in the DB,
+	// causing the frontend to show a stuck loading spinner.
+	state := h.streamState.getOrCreate(turnID.String())
+	if state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
+		if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil); finErr != nil {
+			h.logger.Warn(ctx, "handleEventError.fallback_finalize_markdown_failed", map[string]any{
+				"session_id": sessionID.String(),
+				"turn_id":    turnID.String(),
+				"error":      finErr.Error(),
+			})
+		}
+	}
+	if state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
+		if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); finErr != nil {
+			h.logger.Warn(ctx, "handleEventError.fallback_finalize_thinking_failed", map[string]any{
+				"session_id": sessionID.String(),
+				"turn_id":    turnID.String(),
+				"error":      finErr.Error(),
+			})
+		}
+	}
 
 	// Clean up per-turn stream state to prevent sync.Map leaks.
 	// On the normal path, handleStreamEnd performs this cleanup.

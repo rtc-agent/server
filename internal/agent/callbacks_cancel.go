@@ -32,8 +32,12 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 		return fmt.Errorf("cancelTurn: update status: %w", err)
 	}
 
-	// Use the isolated context for subsequent critical operations.
-	ctx = statusCtx
+	// IMPORTANT: do NOT reassign ctx = statusCtx here. The isolated context has
+	// a 10s deadline shared with the critical UpdateStatus above. Subsequent
+	// operations (GetByID, session UpdateStatus, Publish, notifyParent,
+	// cascadeCancel) would share that shrinking budget. If UpdateStatus took 8s,
+	// only 2s would remain for all remaining work.
+	// Using the original ctx gives each operation its own full deadline.
 
 	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
 	if lookupErr != nil {

@@ -50,9 +50,10 @@ type SessionTurnManager struct {
 	// logFn is an optional closure for structured logging.
 	logFn func(ctx context.Context, level LogLevel, msg string, fields map[string]any)
 
-	renewCancel context.CancelFunc
-	done        chan struct{} // closed when cleanup completes
-	cleanupOnce sync.Once     // ensures cleanup runs exactly once
+	renewCancelMu sync.Mutex         // protects renewCancel from concurrent access
+	renewCancel   context.CancelFunc // set by Run, called by doCleanup
+	done          chan struct{}      // closed when cleanup completes
+	cleanupOnce   sync.Once          // ensures cleanup runs exactly once
 
 	// loopExitState is set after Wait() returns.
 	// waitOnce ensures loop.Wait() is called exactly once, even when both
@@ -195,7 +196,9 @@ func (mgr *SessionTurnManager) LastMessage() *Message {
 // This is non-blocking; the loop runs in a goroutine managed by eino.
 func (mgr *SessionTurnManager) Run(ctx context.Context) {
 	renewCtx, cancel := context.WithCancel(ctx)
+	mgr.renewCancelMu.Lock()
 	mgr.renewCancel = cancel
+	mgr.renewCancelMu.Unlock()
 
 	// Configure auto-exit: when the loop has been continuously idle for 100ms
 	// (no items in buffer, blocking between turns), it exits automatically.
@@ -315,9 +318,11 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 	mgr.tracker.CompleteAll()
 
 	// Step 2: Stop lock renewal.
+	mgr.renewCancelMu.Lock()
 	if mgr.renewCancel != nil {
 		mgr.renewCancel()
 	}
+	mgr.renewCancelMu.Unlock()
 
 	// Step 2b: Cancel any pending resume context timer to prevent goroutine leak.
 	mgr.resumeCancelMu.Lock()
