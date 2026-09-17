@@ -33,125 +33,125 @@ type MetricsConfig struct {
 	Password string `mapstructure:"password"`
 }
 
-// DebugConfig /debug/pprof 与 /debug/goroutines 端点配置。
-// 这些端点暴露进程内部状态，生产环境必须配置认证。
+// DebugConfig holds /debug/pprof and /debug/goroutines endpoint configuration.
+// These endpoints expose internal process state; authentication must be configured in production.
 type DebugConfig struct {
-	// Enabled 是否启用 debug 端点，默认 true。
-	// 设为 false 可完全关闭 /debug/* 路由。
+	// Enabled controls whether debug endpoints are active. Defaults to true.
+	// Set to false to completely disable /debug/* routes.
 	Enabled bool `mapstructure:"enabled"`
-	// User 基本认证用户名。为空时不启用认证（仅开发环境安全）
+	// User is the basic auth username. Empty disables authentication (development only).
 	User string `mapstructure:"user"`
-	// Password 基本认证密码
+	// Password is the basic auth password.
 	Password string `mapstructure:"password"`
-	// GoroutineLeakThreshold goroutine 数量超过此阈值时记录告警日志。
-	// 默认 1000。设为 0 禁用告警。
+	// GoroutineLeakThreshold logs a warning when goroutine count exceeds this value.
+	// Default 1000. Set to 0 to disable the alert.
 	GoroutineLeakThreshold int `mapstructure:"goroutine_leak_threshold"`
-	// ShowRawErrors 是否在错误消息中展示 RawError 原始错误内容。
-	// 独立于 Enabled，默认 false。即使 debug 端点启用（用于 pprof 调试），
-	// RawError 也不会自动暴露给终端用户，必须显式开启。
-	// 生产部署必须保持 false 或显式设为 false。
+	// ShowRawErrors controls whether RawError content is shown in error messages.
+	// Independent of Enabled; defaults to false. Even when debug endpoints are active (for pprof debugging),
+	// RawError is not automatically exposed to end users — must be explicitly enabled.
+	// Production deployments must keep this false or explicitly set it to false.
 	ShowRawErrors bool `mapstructure:"show_raw_errors"`
 }
 
-// AsynqConfig asynq 任务调度配置
+// AsynqConfig holds asynq task scheduling configuration.
 type AsynqConfig struct {
-	// RedisAddr Redis 地址，默认使用主 Redis
+	// RedisAddr is the Redis address. Defaults to the main Redis.
 	RedisAddr string `mapstructure:"redis_addr"`
-	// RedisPassword Redis 密码
+	// RedisPassword is the Redis password.
 	RedisPassword string `mapstructure:"redis_password"`
-	// RedisDB Redis DB 编号
+	// RedisDB is the Redis DB number.
 	RedisDB int `mapstructure:"redis_db"`
-	// Concurrency asynq worker 并发数
+	// Concurrency is the asynq worker concurrency.
 	Concurrency int `mapstructure:"concurrency"`
-	// Queue 队列名
+	// Queue is the queue name.
 	Queue string `mapstructure:"queue"`
-	// RecoveryInterval recovery 扫描间隔
+	// RecoveryInterval is the recovery scan interval.
 	RecoveryInterval time.Duration `mapstructure:"recovery_interval"`
 
-	// StaleThreshold 判定 loop 为 stale 的时间阈值。
-	// 活跃 loop 若在此时间内未产生 asynq task，则视为 stale 并重新入队。
-	// 默认 5 分钟。
+	// StaleThreshold is the time threshold for determining a loop is stale.
+	// An active loop that has not produced an asynq task within this period is considered stale and re-enqueued.
+	// Default 5 minutes.
 	StaleThreshold time.Duration `mapstructure:"stale_threshold"`
 
-	// RetryMax 任务失败时的最大重试次数。
-	// 默认 3。
+	// RetryMax is the maximum number of retries on task failure.
+	// Default 3.
 	RetryMax int `mapstructure:"retry_max"`
 
-	// RetryTimeout 任务执行超时时间。
-	// 默认 30 秒。
+	// RetryTimeout is the task execution timeout.
+	// Default 30 seconds.
 	RetryTimeout time.Duration `mapstructure:"retry_timeout"`
 
-	// HealthCheckInterval 健康检查间隔。
-	// 默认 30 秒。
+	// HealthCheckInterval is the health check interval.
+	// Default 30 seconds.
 	HealthCheckInterval time.Duration `mapstructure:"health_check_interval"`
 }
 
-// ServerConfig HTTP/WebSocket 服务器监听地址配置。
+// ServerConfig holds HTTP/WebSocket server listen address configuration.
 type ServerConfig struct {
 	Host string `mapstructure:"host"`
 	Port int    `mapstructure:"port"`
 
-	// Env 运行环境：development / production
-	// 默认 production；development 允许部分宽松回退（如 WebSocket 允许任意 Origin）
+	// Env is the runtime environment: development / production.
+	// Defaults to production; development allows relaxed fallbacks (e.g., WebSocket accepts any Origin).
 	Env string `mapstructure:"env"`
 
-	// ShutdownTimeout 优雅停机超时时间（等待 in-flight 请求完成）
-	// 默认 10s
+	// ShutdownTimeout is the graceful shutdown timeout (waiting for in-flight requests to complete).
+	// Default 10s.
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
 
-	// RPCTimeout RPC 处理器上下文超时时间
-	// 默认 10s
+	// RPCTimeout is the RPC handler context timeout.
+	// Default 10s.
 	RPCTimeout time.Duration `mapstructure:"rpc_timeout"`
 }
 
-// DatabaseConfig 数据库连接与迁移配置。
+// DatabaseConfig holds database connection and migration configuration.
 type DatabaseConfig struct {
 	DSN         string `mapstructure:"dsn"`
 	AutoMigrate bool   `mapstructure:"auto_migrate"`
 }
 
-// LogConfig 日志级别配置。
+// LogConfig holds log level configuration.
 type LogConfig struct {
 	Level string `mapstructure:"level"`
 
-	// LLMPayload 启用后，将每次 LLM API 调用的完整请求/响应
-	// 以 JSON Lines 格式写入 logs/llm-payload.log。
-	// 仅用于开发/调试环境，生产环境请勿开启。
+	// LLMPayload enables writing the full LLM API request/response as JSON Lines
+	// to logs/llm-payload.log.
+	// Only for development/debugging; do not enable in production.
 	LLMPayload bool `mapstructure:"llm_payload"`
 
-	// ServerLogFile 服务器日志文件路径（JSON 格式）。
-	// 设置后，所有日志会同时输出到 stdout 和该文件。
-	// 用于开发环境 promtail 采集宿主机日志。留空则不写文件。
+	// ServerLogFile is the server log file path (JSON format).
+	// When set, all logs are written to both stdout and this file.
+	// Used for promtail host log collection in development. Leave empty to skip file output.
 	ServerLogFile string `mapstructure:"server_log_file"`
 }
 
-// RedisConfig Redis 连接配置
+// RedisConfig holds Redis connection configuration.
 type RedisConfig struct {
 	Addr     string `mapstructure:"addr"`
 	Password string `mapstructure:"password"`
 	DB       int    `mapstructure:"db"`
 }
 
-// AuthConfig JWT / 令牌相关配置
+// AuthConfig holds JWT / token configuration.
 type AuthConfig struct {
 	JWTSecret             string        `mapstructure:"jwt_secret"`
 	AccessTokenTTLSeconds int           `mapstructure:"access_token_ttl_seconds"`
-	RefreshTokenTTL       time.Duration `mapstructure:"refresh_token_ttl"` // 默认 30 天
-	OAuth2StateTTL        time.Duration `mapstructure:"oauth2_state_ttl"`  // 默认 10 分钟
-	// AllowedRedirectURIs OAuth2 redirect_uri 白名单。
-	// 为空时不限制（仅用于开发环境），生产环境必须显式配置。
+	RefreshTokenTTL       time.Duration `mapstructure:"refresh_token_ttl"` // Default 30 days.
+	OAuth2StateTTL        time.Duration `mapstructure:"oauth2_state_ttl"`  // Default 10 minutes.
+	// AllowedRedirectURIs is the OAuth2 redirect_uri whitelist.
+	// Empty means no restriction (development only); production must configure explicitly.
 	AllowedRedirectURIs []string `mapstructure:"allowed_redirect_uris"`
 }
 
-// ProvidersConfig OAuth2 Provider 配置集合
+// ProvidersConfig holds the OAuth2 provider configuration set.
 type ProvidersConfig struct {
 	Mock        MockProviderConfig   `mapstructure:"mock"`
 	GitHub      GitHubProviderConfig `mapstructure:"github"`
 	Google      GoogleProviderConfig `mapstructure:"google"`
-	HTTPTimeout time.Duration        `mapstructure:"http_timeout"` // OAuth2 HTTP 客户端超时，默认 10s
+	HTTPTimeout time.Duration        `mapstructure:"http_timeout"` // OAuth2 HTTP client timeout, default 10s.
 }
 
-// MockProviderConfig Mock OAuth2 Provider 配置
+// MockProviderConfig holds Mock OAuth2 provider configuration.
 type MockProviderConfig struct {
 	Enabled      bool   `mapstructure:"enabled"`
 	URL          string `mapstructure:"url"`
@@ -159,28 +159,28 @@ type MockProviderConfig struct {
 	ClientSecret string `mapstructure:"client_secret"`
 }
 
-// GitHubProviderConfig GitHub OAuth2 Provider 配置
+// GitHubProviderConfig holds GitHub OAuth2 provider configuration.
 type GitHubProviderConfig struct {
 	Enabled      bool   `mapstructure:"enabled"`
 	ClientID     string `mapstructure:"client_id"`
 	ClientSecret string `mapstructure:"client_secret"`
-	// Scope 请求的权限范围，默认 "read:user user:email"
+	// Scope is the requested permission scope. Default "read:user user:email".
 	Scope string `mapstructure:"scope"`
 }
 
-// GoogleProviderConfig Google OAuth2 Provider 配置
+// GoogleProviderConfig holds Google OAuth2 provider configuration.
 type GoogleProviderConfig struct {
 	Enabled      bool   `mapstructure:"enabled"`
 	ClientID     string `mapstructure:"client_id"`
 	ClientSecret string `mapstructure:"client_secret"`
-	// Scope 请求的权限范围，默认 "openid email profile"
+	// Scope is the requested permission scope. Default "openid email profile".
 	Scope string `mapstructure:"scope"`
 }
 
-// CORSConfig 跨域配置
+// CORSConfig holds cross-origin resource sharing configuration.
 type CORSConfig struct {
-	// AllowOrigins 允许的 origin 列表，如 ["https://app.example.com"]
-	// 为空时回退到 "*"（仅限开发环境，生产环境必须显式配置）
+	// AllowOrigins is the list of allowed origins, e.g., ["https://app.example.com"].
+	// Empty falls back to "*" (development only; production must configure explicitly).
 	AllowOrigins []string `mapstructure:"allow_origins"`
 }
 

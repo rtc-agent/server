@@ -12,27 +12,27 @@ import (
 	"gorm.io/gorm"
 )
 
-// RtcRepo RTC 仓储接口
+// RtcRepo provides RTC record persistence operations.
 type RtcRepo interface {
-	// Create 创建新 RTC 记录
+	// Create stores a new RTC record.
 	Create(ctx context.Context, rtc *model.Rtc) error
-	// GetByID 根据 ID 查询 RTC
+	// GetByID looks up an RTC by ID.
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Rtc, error)
-	// FindByClientID 根据 clientID 查询 RTC
+	// FindByClientID looks up an RTC by client-assigned ID.
 	FindByClientID(ctx context.Context, clientID string) (*model.Rtc, error)
-	// ListBySession 按 session 分页查询 RTC 列表
+	// ListBySession lists RTCs for a session with cursor pagination.
 	ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Rtc, error)
-	// ListByTurn 按 turn 查询 RTC 列表
+	// ListByTurn lists RTCs for a turn.
 	ListByTurn(ctx context.Context, turnID uuid.UUID) ([]*model.Rtc, error)
-	// ListByMessageIDs 按消息 ID 批量查询 RTC 列表
+	// ListByMessageIDs lists RTCs matching the given message IDs.
 	ListByMessageIDs(ctx context.Context, messageIDs []uuid.UUID) ([]*model.Rtc, error)
-	// UpdateStatus 更新 RTC 状态
+	// UpdateStatus updates the RTC status.
 	UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.RtcStatus) error
-	// UpdateResult 更新 RTC 结果及状态
+	// UpdateResult updates the RTC result and status.
 	UpdateResult(ctx context.Context, id uuid.UUID, status protocol.RtcStatus, result *string, errMsg string) error
-	// UpdateOutputMessageID 更新 RTC 输出消息 ID
+	// UpdateOutputMessageID updates the output message ID for an RTC.
 	UpdateOutputMessageID(ctx context.Context, id uuid.UUID, outputMessageID uuid.UUID) error
-	// GetByIDs 批量查询 RTC，返回 map[id]*Rtc。未找到的 ID 不会出现在 map 中。
+	// GetByIDs batch-fetches RTCs, returning map[id]*Rtc. Missing IDs are omitted.
 	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]*model.Rtc, error)
 }
 
@@ -40,7 +40,7 @@ type rtcRepo struct {
 	db *gorm.DB
 }
 
-// NewRtcRepo 创建 RtcRepo
+// NewRtcRepo creates a new RtcRepo.
 func NewRtcRepo(db *gorm.DB) RtcRepo {
 	return &rtcRepo{db: db}
 }
