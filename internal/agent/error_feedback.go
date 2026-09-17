@@ -237,7 +237,7 @@ func classifyError(err error) (category protocol.ErrorCategory, title, message s
 }
 
 // =============================================================================
-// sanitizeRawError — 13 项正则净化规则 + 截断（共 13 步流水线）
+// sanitizeRawError — 12 项正则净化规则 + 截断（共 13 步流水线）
 // =============================================================================
 
 // sanitizationRule defines a single regex-based sanitization rule.
