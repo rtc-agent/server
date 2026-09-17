@@ -35,7 +35,7 @@ type Work struct {
 type ClaimResult struct {
 	SessionID  string
 	WorkID     string
-	Credential string // 锁的密码，首次 Claim 时生成，后续 Claim 需要带上
+	Credential string // Lock credential, generated on first Claim; required for subsequent Claims.
 }
 
 // CancelMessage is the payload published on the per-session cancel channel.
