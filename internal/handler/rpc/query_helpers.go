@@ -15,6 +15,7 @@ import (
 //
 // Parameters:
 //   - ctx: request context
+//   - h: the RPC handler (for auth and session checks)
 //   - idStr: the string representation of the entity UUID
 //   - idField: the JSON field name for error messages (e.g., "message_id")
 //   - errorCode: the error code for API errors (e.g., "message.not_found")
@@ -23,8 +24,9 @@ import (
 //   - getSessionID: function to extract the session ID from the entity
 //
 // Returns the entity, the authenticated user ID, or an APIError.
-func (h *Handler) getOwnedByID[T any](
+func getOwnedByID[T any](
 	ctx context.Context,
+	h *Handler,
 	idStr string,
 	idField string,
 	errorCode string,

@@ -10,8 +10,9 @@ import (
 
 // RtcGet 获取当前用户会话中的单个 RTC。
 func (h *Handler) RtcGet(ctx context.Context, req *protocol.RtcGetRequest) (*protocol.RtcGetResponse, error) {
-	rtc, _, err := h.getOwnedByID(
+	rtc, _, err := getOwnedByID(
 		ctx,
+		h,
 		req.RtcId,
 		"rtc_id",
 		"rtc.not_found",

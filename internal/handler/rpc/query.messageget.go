@@ -10,8 +10,9 @@ import (
 
 // MessageGet 获取当前用户会话中的单个消息。
 func (h *Handler) MessageGet(ctx context.Context, req *protocol.MessageGetRequest) (*protocol.MessageGetResponse, error) {
-	msg, _, err := h.getOwnedByID(
+	msg, _, err := getOwnedByID(
 		ctx,
+		h,
 		req.MessageId,
 		"message_id",
 		"message.not_found",

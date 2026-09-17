@@ -10,8 +10,9 @@ import (
 
 // TurnGet 获取当前用户会话中的单个 Turn。
 func (h *Handler) TurnGet(ctx context.Context, req *protocol.TurnGetRequest) (*protocol.TurnGetResponse, error) {
-	turn, _, err := h.getOwnedByID(
+	turn, _, err := getOwnedByID(
 		ctx,
+		h,
 		req.TurnId,
 		"turn_id",
 		"turn.not_found",
