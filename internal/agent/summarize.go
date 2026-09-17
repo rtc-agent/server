@@ -272,6 +272,9 @@ func (h *helpers) finalizeSummaryStreamWithMetadata(
 // It is called when the trigger condition is met (e.g., token count exceeds
 // the threshold).
 //
+// If force is true, compression is performed regardless of token thresholds.
+// This is used for manual /compact commands where the user explicitly requests compression.
+//
 // Strategy:
 //  1. Calculate the retention index using token-based retention config.
 //  2. If retention index == 0 → compress all messages (full compact).
@@ -281,20 +284,6 @@ func (h *helpers) finalizeSummaryStreamWithMetadata(
 //
 // Session Memory Integration:
 //   - Before calling LLM to generate summary, try to use existing session memories.
-//   - If session memories exist, use them as the summary (zero API cost).
-//   - Otherwise, fall back to LLM summarization.
-//
-// Streaming flow:
-//  1. Create pending summary message (published to topic channel)
-//  2. During LLM streaming, publish chunks to live channel in real-time
-//  3. On completion, finalize message with metadata and publish to topic channel
-//
-// compressContext compresses the conversation context by summarizing older messages.
-//
-// If force is true, compression is performed regardless of token thresholds.
-// This is used for manual /compact commands where the user explicitly requests compression.
-//
-// Compression strategy:
 //   - If session memories exist, use them as the summary (zero API cost).
 //   - Otherwise, fall back to LLM summarization.
 //

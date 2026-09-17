@@ -102,9 +102,6 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	messages = h.injectCommandPrompts(ctx, sid, messages)
 
 	// Inject scenario prompts from the last user message's scenarios field.
-	// Scenarios are injected as a system message after command prompts but
-	// before attachments are prepended, so the final order is:
-	// [system] Attachments → [system] Scenarios → [system] Command prompts → [conversation]
 	// Pass the already-loaded dbMsgs to avoid a redundant DB query.
 	messages = h.injectScenarioPrompts(messages, dbMsgs)
 

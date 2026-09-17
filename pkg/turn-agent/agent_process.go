@@ -135,6 +135,9 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		})
 		if turnID != "" {
 			func() {
+				// Nested recover: FailTurn may panic (e.g., DB unreachable).
+				// Swallow the panic to prevent it from crashing the process
+				// during an already-in-flight panic recovery.
 				defer func() { _ = recover() }()
 				_ = a.cfg.FailTurn(turnCtx, turnID, pErr)
 			}()

@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -83,6 +84,10 @@ func (s *SessionTitleSummarizer) noThinkingOptions() []einomodel.Option {
 // SummarizeIfNeeded 为指定会话生成并更新标题
 // 仅当会话标题仍以 "（" 开头（即初始截断标题）时才生成新标题
 func (s *SessionTitleSummarizer) SummarizeIfNeeded(ctx context.Context, sessionID uuid.UUID) (string, error) {
+	if s.chatModel == nil {
+		return "", nil // LLM not configured, skip title generation
+	}
+
 	// Set sessionID in context so the token callback handler can find it.
 	ctx = turnagent.WithSessionID(ctx, sessionID.String())
 
@@ -151,9 +156,10 @@ func extractConversationText(messages []*appmodel.Message, maxMessages int) stri
 	}
 
 	text := strings.Join(parts, "\n")
-	// 尾部切片：保留最近的上下文
-	if len(text) > maxConversationText {
-		text = text[len(text)-maxConversationText:]
+	// 尾部切片：保留最近的上下文。使用 rune 切片避免在多字节 UTF-8 字符中间截断。
+	runes := []rune(text)
+	if len(runes) > maxConversationText {
+		text = string(runes[len(runes)-maxConversationText:])
 	}
 	return text
 }
@@ -178,7 +184,7 @@ func (s *SessionTitleSummarizer) generateTitle(ctx context.Context, conversation
 	for {
 		msg, recvErr := stream.Recv()
 		if recvErr != nil {
-			if recvErr == io.EOF {
+			if errors.Is(recvErr, io.EOF) {
 				break
 			}
 			return "", fmt.Errorf("stream recv: %w", recvErr)

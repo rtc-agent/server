@@ -333,6 +333,11 @@ func (t *saveSessionMemoriesTool) Info(ctx context.Context) (*schema.ToolInfo, e
 	}, nil
 }
 
+// InvokableRun satisfies the tool.InvokableTool interface but does not persist
+// memories. The actual save happens in extractMemories: the tool's Info() provides
+// the JSON schema that constrains the LLM's tool_call output, and extractMemories
+// parses the arguments directly from the stream response. InvokableRun is only
+// present to satisfy the interface; it validates JSON format and returns a count.
 func (t *saveSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args struct {
 		Decision  []memoryItem `json:"decision"`
