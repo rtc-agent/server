@@ -197,6 +197,16 @@ func (h *helpers) prependAttachments(ctx context.Context, sid uuid.UUID, message
 		if parsedID, parseErr := uuid.Parse(session.OwnerRefID); parseErr == nil {
 			userID = parsedID
 		}
+	} else if sessionErr != nil {
+		// Log at Warn level so operators can detect session lookup failures
+		// that silently cause attachments to be skipped. Without attachments,
+		// the LLM operates without persistent context (TodoList, SessionMemory,
+		// UserMemory), degrading response quality.
+		h.logger.Warn(ctx, "prependAttachments.load_session_failed", map[string]any{
+			"session_id": sid.String(),
+			"error":      sessionErr.Error(),
+			"message":    "session lookup failed; attachments will be skipped",
+		})
 	}
 
 	attachmentMsgs, err := h.attachmentManager.BuildAttachments(ctx, sid, userID)
