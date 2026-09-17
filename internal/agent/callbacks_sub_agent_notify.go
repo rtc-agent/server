@@ -12,6 +12,7 @@ import (
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/google/uuid"
@@ -139,7 +140,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 		return
 	}
 
-	if _, err := h.queue.Publish(ctx, parentSessionID.String(), string(payload), 0); err != nil {
+	if _, err := h.queue.Publish(ctx, parentSessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 		h.logger.Warn(ctx, "notifyParentAfterAsyncSubAgent.submit_failed", map[string]any{
 			"parent_session_id": parentSessionID.String(),
 			"error":             err.Error(),

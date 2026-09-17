@@ -82,6 +82,11 @@ const DefaultMaxConsecutiveRenewFailures = 3
 // checkpoint is still intact when the worker picks it up.
 const ResumeWorkPriority int64 = 100
 
+// SubmitWorkPriority is the default priority for submit work items (new turns
+// and async sub-agent notifications). Lower than ResumeWorkPriority so that
+// checkpoint resumes are always processed before fresh submissions.
+const SubmitWorkPriority int64 = 0
+
 // Redis key prefixes.
 const (
 	keyPrefixQueue  = "queue:session:"
