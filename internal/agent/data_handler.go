@@ -56,6 +56,19 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	// the markdown message is the primary assistant response.
 	if event.Content != "" {
 		if err := h.appendStreamChunk(ctx, sessionID, turnID, event.Content, event.FinishReason, &state.markdownMsgID, &state.markdownFinalized, primitives.MarkdownContentData, "markdown", event.TokenUsage); err != nil {
+			// If the markdown message record was already created (first chunk succeeded
+			// in creating it but a subsequent operation failed), best-effort finalize
+			// it so it is not left in "streaming" status permanently. Without this,
+			// the user sees a stuck loading spinner alongside the error message.
+			if state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
+				if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil); finErr != nil {
+					h.logger.Warn(ctx, "handleStreamChunk.fallback_finalize_markdown_failed", map[string]any{
+						"session_id": sessionID.String(),
+						"turn_id":    turnID.String(),
+						"error":      finErr.Error(),
+					})
+				}
+			}
 			h.streamState.remove(turnID.String())
 			return err
 		}
