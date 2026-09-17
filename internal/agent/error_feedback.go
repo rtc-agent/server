@@ -291,12 +291,16 @@ var (
 	// 6. PEM private key blocks
 	rePEMKey = regexp.MustCompile(`-----BEGIN[A-Z ]+PRIVATE KEY-----[\s\S]*?-----END[A-Z ]+PRIVATE KEY-----`)
 	// 7. Generic password/secret parameters (case-insensitive)
-	rePassword = regexp.MustCompile(`(?i)(password|passwd|secret|api[_-]?key|token)\s*[=:]\s*\S+`)
+	// "token" is excluded to avoid false-positives in LLM contexts where
+	// error messages may contain non-credential tokens like token=count or
+	// token=usage. Actual auth tokens are covered by reBearerToken and reAPIKey.
+	rePassword = regexp.MustCompile(`(?i)(password|passwd|secret|api[_-]?key)\s*[=:]\s*\S+`)
 	// 8. Internal IPs and hostnames
 	// Includes RFC1918 private ranges, loopback (127.x.x.x, localhost),
 	// link-local (169.254.x.x — AWS IMDS at 169.254.169.254 is a common
-	// SSRF target), IPv6 loopback (::1), and .internal hostnames.
-	reInternalAddr = regexp.MustCompile(`\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3}|localhost|::1|[a-z0-9-]+\.internal)\b`)
+	// SSRF target), IPv6 loopback (::1), IPv6 unique-local (fc00::/7),
+	// IPv6 link-local (fe80::/10), and .internal hostnames.
+	reInternalAddr = regexp.MustCompile(`\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3}|localhost|::1|(fc|fd|fe8)[0-9a-fA-F]:[a-fA-F0-9:]+|[a-z0-9-]+\.internal)\b`)
 	// 9. Go stack trace pattern
 	reGoStackTrace = regexp.MustCompile(`goroutine \d+ \[[^\]]+\]:\n\s+[\w/.]+\.go:\d+`)
 	// 10. Email addresses
