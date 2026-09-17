@@ -59,6 +59,12 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 				&streamedContent, &streamedReasoningContent)
 		}
 
+		// Defensive: skip nil messages (should not happen in normal operation,
+		// but guards against stream reader bugs). Matches summarize.go's nil check.
+		if res.Msg == nil {
+			continue
+		}
+
 		var finishReason string
 		var tokenUsage *TokenUsage
 		if res.Msg.ResponseMeta != nil {
