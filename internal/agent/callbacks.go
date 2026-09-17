@@ -320,13 +320,13 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 
 	// DB update session status before publishing events.
 	// Skip the update if session is already idle (avoid redundant DB write).
-	if session != nil && session.Status == string(protocol.SessionStatusIdle) {
-		// Already idle — nothing to update.
-	} else if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusIdle); err != nil {
-		h.logger.Warn(ctx, "completeTurn.update_session_status_failed", map[string]any{
-			"session_id": sessionID,
-			"error":      err.Error(),
-		})
+	if session != nil && session.Status != string(protocol.SessionStatusIdle) {
+		if err := h.deps.SessionRepo.UpdateStatus(ctx, sid, protocol.SessionStatusIdle); err != nil {
+			h.logger.Warn(ctx, "completeTurn.update_session_status_failed", map[string]any{
+				"session_id": sessionID,
+				"error":      err.Error(),
+			})
+		}
 	}
 
 	// Batch publish: turn.updated + session.updated in one centrifuge call.

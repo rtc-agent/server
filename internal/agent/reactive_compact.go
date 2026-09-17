@@ -186,22 +186,28 @@ func aggressiveMicrocompact(messages []*turnagent.Message, keepRecent int) []*tu
 
 // aggressiveRetentionConfig returns a retention config that keeps fewer messages
 // than the default, suitable for reactive compact Level 1.
+// Package-level var avoids per-call allocation.
+var aggressiveRetention = RetentionConfig{
+	MinTokens:            2000,
+	MinTextBlockMessages: 2,
+	MaxTokens:            10000,
+}
+
 func aggressiveRetentionConfig() RetentionConfig {
-	return RetentionConfig{
-		MinTokens:            2000,
-		MinTextBlockMessages: 2,
-		MaxTokens:            10000,
-	}
+	return aggressiveRetention
 }
 
 // minimalRetentionConfig returns the most aggressive retention config —
 // keep as few messages as possible. Suitable for reactive compact Level 2.
+// Package-level var avoids per-call allocation.
+var minimalRetention = RetentionConfig{
+	MinTokens:            500,
+	MinTextBlockMessages: 1,
+	MaxTokens:            5000,
+}
+
 func minimalRetentionConfig() RetentionConfig {
-	return RetentionConfig{
-		MinTokens:            500,
-		MinTextBlockMessages: 1,
-		MaxTokens:            5000,
-	}
+	return minimalRetention
 }
 
 // forceCompressContext forces compression of messages using the given retention

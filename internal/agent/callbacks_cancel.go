@@ -64,29 +64,33 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 		"reason":  reason,
 	})
 
-	// Sub Agent support: if this is a sub session, notify the parent.
-	session, sessErr := h.deps.SessionRepo.GetByID(ctx, turn.SessionID)
+	// Sub Agent support + cascade cancel: shared helper (also used by failTurn)
+	// eliminates duplication.
+	h.notifyParentAndCascadeCancel(ctx, turnID, turn.SessionID, "cancelled", &reason, "cancelTurn")
+
+	return nil
+}
+
+// notifyParentAndCascadeCancel loads the session, notifies the parent (if this
+// is a sub session), and cascade-cancels active child sessions. Shared by
+// cancelTurn and failTurn to eliminate the duplicated 15-line block.
+func (h *helpers) notifyParentAndCascadeCancel(ctx context.Context, turnID string, sessionID uuid.UUID, subAgentStatus string, errorMsg *string, logPrefix string) {
+	session, sessErr := h.deps.SessionRepo.GetByID(ctx, sessionID)
 	if sessErr != nil {
-		h.logger.Warn(ctx, "cancelTurn.load_session_failed", map[string]any{
-			"session_id": turn.SessionID.String(),
+		h.logger.Warn(ctx, logPrefix+".load_session_failed", map[string]any{
+			"session_id": sessionID.String(),
 			"error":      sessErr.Error(),
 		})
 	}
 	if session == nil && sessErr == nil {
-		h.logger.Warn(ctx, "cancelTurn.session_nil", map[string]any{
-			"session_id": turn.SessionID.String(),
+		h.logger.Warn(ctx, logPrefix+".session_nil", map[string]any{
+			"session_id": sessionID.String(),
 			"turn_id":    turnID,
 			"message":    "session not found; parent notification skipped",
 		})
 	}
-	h.notifyParentAfterSubAgentSession(ctx, session, nil, "cancelled", &reason)
-
-	// Cascade cancel: if this session has active child sessions (sub agents),
-	// cancel them as well. This prevents orphaned sub agents from continuing
-	// to run after the parent has been cancelled.
-	h.cascadeCancelChildren(ctx, turnID, turn.SessionID)
-
-	return nil
+	h.notifyParentAfterSubAgentSession(ctx, session, nil, subAgentStatus, errorMsg)
+	h.cascadeCancelChildren(ctx, turnID, sessionID)
 }
 
 // cascadeCancelChildren propagates cancellation to all active child sessions

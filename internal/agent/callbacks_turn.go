@@ -233,27 +233,9 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 		}
 	}
 
-	// Sub Agent support: if this is a sub session, notify the parent.
-	session, sessErr := h.deps.SessionRepo.GetByID(ctx, turn.SessionID)
-	if sessErr != nil {
-		h.logger.Warn(ctx, "failTurn.load_session_failed", map[string]any{
-			"session_id": turn.SessionID.String(),
-			"error":      sessErr.Error(),
-		})
-	}
-	if session == nil && sessErr == nil {
-		h.logger.Warn(ctx, "failTurn.session_nil", map[string]any{
-			"session_id": turn.SessionID.String(),
-			"turn_id":    turnID,
-			"message":    "session not found; parent notification skipped",
-		})
-	}
-	h.notifyParentAfterSubAgentSession(ctx, session, nil, "failed", &errMsg)
-
-	// Cascade cancel: if this failed session has active child sessions (sub agents),
-	// cancel them as well. This prevents orphaned sub agents from continuing to run
-	// after the parent has failed. Mirrors the fallback path (L196) and cancelTurn.
-	h.cascadeCancelChildren(ctx, turnID, turn.SessionID)
+	// Sub Agent support + cascade cancel: shared helper (also used by cancelTurn)
+	// eliminates duplication.
+	h.notifyParentAndCascadeCancel(ctx, turnID, turn.SessionID, "failed", &errMsg, "failTurn")
 
 	return nil
 }
