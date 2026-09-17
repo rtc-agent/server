@@ -288,10 +288,10 @@ func (b *TopicBroker) IncrConversationOffset(ctx context.Context, conversationID
 	if result > int64(math.MaxUint32) {
 		return 0, fmt.Errorf("conversation offset overflow: %d", result)
 	}
-	return uint32(result), nil //nolint:gosec // 已检查范围
+	return uint32(result), nil //nolint:gosec // range already checked
 }
 
-// SetConversationOffset 设置指定会话的 offset 值（Redis SET），用于 fork 等场景初始化计数器
+// SetConversationOffset sets the offset value for a given session (Redis SET), used to initialize the counter in fork scenarios.
 func (b *TopicBroker) SetConversationOffset(ctx context.Context, conversationID string, value uint32) error {
 	key := b.prefix + ":conv:offset:" + conversationID
 	cmd := b.redisClient.B().Set().Key(key).Value(strconv.FormatUint(uint64(value), 10)).Build()

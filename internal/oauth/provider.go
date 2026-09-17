@@ -69,7 +69,7 @@ func (p *Provider) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// serveAuthorizePage 显示 HTML 授权页面
+// serveAuthorizePage displays the HTML authorization page.
 func (p *Provider) serveAuthorizePage(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	redirectURI := r.URL.Query().Get("redirect_uri")
@@ -87,7 +87,7 @@ func (p *Provider) serveAuthorizePage(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
 <head>
-  <title>Mock OAuth2 授权</title>
+  <title>Mock OAuth2 Authorization</title>
   <style>
     body { font-family: sans-serif; max-width: 400px; margin: 50px auto; padding: 20px; }
     input, button { display: block; width: 100%%; margin: 10px 0; padding: 10px; box-sizing: border-box; }
@@ -97,23 +97,23 @@ func (p *Provider) serveAuthorizePage(w http.ResponseWriter, r *http.Request) {
   </style>
 </head>
 <body>
-  <h1>Mock OAuth2 授权</h1>
+  <h1>Mock OAuth2 Authorization</h1>
   <form method="POST" action="/oauth2/authorize">
     <input type="hidden" name="state" value="%s">
     <input type="hidden" name="redirect_uri" value="%s">
     <label for="user_id">User ID:</label>
-    <input type="text" id="user_id" name="user_id" placeholder="输入用户 ID" required>
-    <label for="username">Username (可选):</label>
-    <input type="text" id="username" name="username" placeholder="用户名">
-    <label for="email">Email (可选):</label>
+    <input type="text" id="user_id" name="user_id" placeholder="Enter user ID" required>
+    <label for="username">Username (optional):</label>
+    <input type="text" id="username" name="username" placeholder="Username">
+    <label for="email">Email (optional):</label>
     <input type="text" id="email" name="email" placeholder="email@example.com">
-    <button type="submit">授权</button>
+    <button type="submit">Authorize</button>
   </form>
 </body>
 </html>`, html.EscapeString(state), html.EscapeString(redirectURI))
 }
 
-// handleAuthorizeConfirm 处理授权确认
+// handleAuthorizeConfirm handles authorization confirmation.
 func (p *Provider) handleAuthorizeConfirm(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
