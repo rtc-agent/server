@@ -33,6 +33,7 @@ type Manager struct {
 	shutdownCh   chan struct{}
 	wg           sync.WaitGroup
 	started      bool
+	stopped      bool            // set by Stop; prevents Start from running concurrently with shutdown
 	ctx          context.Context // lifecycle context, cancelled on Stop
 	cancel       context.CancelFunc
 	shutdownOnce sync.Once // ensures Stop's destructive actions run exactly once
@@ -59,8 +60,8 @@ func (m *Manager) Register(name string, c Component) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.started {
-		panic("lifecycle.Manager: cannot register after Start")
+	if m.started || m.stopped {
+		panic("lifecycle.Manager: cannot register after Start or Stop")
 	}
 
 	m.components = append(m.components, namedComponent{name: name, c: c})
@@ -74,6 +75,9 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	if m.started {
 		return fmt.Errorf("lifecycle.Manager: already started")
+	}
+	if m.stopped {
+		return fmt.Errorf("lifecycle.Manager: cannot start after stop")
 	}
 
 	for i, nc := range m.components {
@@ -114,6 +118,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 	// Mark as stopped immediately so concurrent callers skip the shutdown sequence.
 	m.started = false
+	m.stopped = true // prevent Start from running concurrently with shutdown
 	m.mu.Unlock()
 
 	// Use sync.Once to ensure destructive actions (channel close, context cancel,
