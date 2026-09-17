@@ -351,18 +351,17 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 			// may be cancelled (worker shutdown), which would prevent the lock
 			// from being released and leave the session locked until TTL expires.
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer releaseCancel()
 			if err := w.q.ReleaseSession(releaseCtx, sessionID); err != nil {
 				w.logError("worker.release_session_failed",
 					"session", sessionID, "error", err.Error())
 			}
+			releaseCancel()
 			return
 		}
 		if nextClaim == nil {
 			// Queue is empty, release lock.
 			// Use Background() with timeout for the same reason as above.
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer releaseCancel()
 			w.log("worker.queue_empty_releasing_lock", map[string]any{
 				"session_id": sessionID,
 			})
@@ -370,6 +369,7 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 				w.logError("worker.release_session_failed",
 					"session", sessionID, "error", err.Error())
 			}
+			releaseCancel()
 			return
 		}
 

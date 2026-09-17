@@ -71,53 +71,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 	// Build the notification text wrapped in <system-reminder> tags.
 	// This is a convention aligned with CCHH: user-role message with XML tags
 	// telling the LLM "this is system-level context, not user input".
-	var notificationText string
-	switch status {
-	case "completed":
-		result := "(no output)"
-		if lastMessage != nil {
-			result = lastMessage.Content
-		}
-		content := fmt.Sprintf(
-			"The async sub agent task has completed.\n- Session ID: %s\n- Title: %s\n- Status: completed\n\nResult:\n%s",
-			subSession.ID.String(),
-			subSession.Title,
-			result,
-		)
-		notificationText = turnagent.FormatSystemReminder(content)
-	case "failed":
-		errMsg := "(unknown error)"
-		if errorMessage != nil {
-			errMsg = *errorMessage
-		}
-		content := fmt.Sprintf(
-			"The async sub agent task has failed.\n- Session ID: %s\n- Title: %s\n- Status: failed\n\nError:\n%s",
-			subSession.ID.String(),
-			subSession.Title,
-			errMsg,
-		)
-		notificationText = turnagent.FormatSystemReminder(content)
-	case "cancelled":
-		reason := "(no reason given)"
-		if errorMessage != nil {
-			reason = *errorMessage
-		}
-		content := fmt.Sprintf(
-			"The async sub agent task has been cancelled.\n- Session ID: %s\n- Title: %s\n- Status: cancelled\n\nReason:\n%s",
-			subSession.ID.String(),
-			subSession.Title,
-			reason,
-		)
-		notificationText = turnagent.FormatSystemReminder(content)
-	default:
-		content := fmt.Sprintf(
-			"The async sub agent task has ended with status: %s.\n- Session ID: %s\n- Title: %s",
-			status,
-			subSession.ID.String(),
-			subSession.Title,
-		)
-		notificationText = turnagent.FormatSystemReminder(content)
-	}
+	notificationText := buildAsyncSubAgentNotificationText(subSession, lastMessage, status, errorMessage)
 
 	// Create the notification message in the parent session.
 	// Role is user (not system) because system-reminder is a convention:
@@ -192,6 +146,52 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 		"parent_session_id": parentSessionID.String(),
 		"status":            status,
 	})
+}
+
+// buildAsyncSubAgentNotificationText constructs the notification text for an
+// async sub-agent completion, wrapped in <system-reminder> XML tags.
+// The text format varies by status: completed/failed/cancelled each produce
+// a different template. Unknown statuses produce a generic notification.
+func buildAsyncSubAgentNotificationText(subSession *model.Session, lastMessage *turnagent.Message, status string, errorMessage *string) string {
+	sessionID := subSession.ID.String()
+	title := subSession.Title
+
+	var content string
+	switch status {
+	case "completed":
+		result := "(no output)"
+		if lastMessage != nil {
+			result = lastMessage.Content
+		}
+		content = fmt.Sprintf(
+			"The async sub agent task has completed.\n- Session ID: %s\n- Title: %s\n- Status: completed\n\nResult:\n%s",
+			sessionID, title, result,
+		)
+	case "failed":
+		errMsg := "(unknown error)"
+		if errorMessage != nil {
+			errMsg = *errorMessage
+		}
+		content = fmt.Sprintf(
+			"The async sub agent task has failed.\n- Session ID: %s\n- Title: %s\n- Status: failed\n\nError:\n%s",
+			sessionID, title, errMsg,
+		)
+	case "cancelled":
+		reason := "(no reason given)"
+		if errorMessage != nil {
+			reason = *errorMessage
+		}
+		content = fmt.Sprintf(
+			"The async sub agent task has been cancelled.\n- Session ID: %s\n- Title: %s\n- Status: cancelled\n\nReason:\n%s",
+			sessionID, title, reason,
+		)
+	default:
+		content = fmt.Sprintf(
+			"The async sub agent task has ended with status: %s.\n- Session ID: %s\n- Title: %s",
+			status, sessionID, title,
+		)
+	}
+	return turnagent.FormatSystemReminder(content)
 }
 
 // notifyParentAfterSubAgentSession dispatches the parent notification based on
