@@ -456,4 +456,3 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	// Handle completion (extracted for complexity).
 	w.handleWorkCompletion(claim, err, holdLock, lockLost.lost, &adminCancelled)
 }
-
