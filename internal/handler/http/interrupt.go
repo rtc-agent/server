@@ -126,8 +126,8 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 			zap.Int("answer_len", len(req.Answer)))
 	}
 
-	// 原子执行 SET + PUBLISH（Lua 脚本保证一致性）：
-	// 1. SET answer with TTL（catches early arrivals before subscriber is ready）
+	// Atomically SET + PUBLISH (Lua script ensures consistency):
+	// 1. SET answer with TTL (catches early arrivals before subscriber is ready)
 	// 2. PUBLISH to notify the waiting subscriber
 	answerKey := cache.InterruptAnswer(sessionID.String(), interruptID)
 	channel := cache.InterruptChannel(sessionID.String(), interruptID)

@@ -27,26 +27,26 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
-// TokenSigner JWT 签名接口
+// TokenSigner is the JWT signing interface.
 type TokenSigner interface {
 	SignAccessToken(userID uuid.UUID, deviceID string) (token string, expiresAt time.Time, err error)
 	AccessTTL() time.Duration
 }
 
-// StateStore OAuth2 state 存储接口（CSRF 防护）
+// StateStore is the OAuth2 state storage interface (CSRF protection).
 type StateStore interface {
 	Set(ctx context.Context, state string, value string, ttl time.Duration) error
 	GetDel(ctx context.Context, state string) (string, error)
 }
 
-// ProviderClient OAuth2 Provider 客户端接口
+// ProviderClient is the OAuth2 provider client interface.
 type ProviderClient interface {
 	GetAuthorizationURL(provider string, state string, redirectURI string) (string, error)
 	ExchangeCode(ctx context.Context, provider string, code string, redirectURI string) (*oauth.ProviderUserInfo, error)
 	GetProviders() []string
 }
 
-// OAuth2Handler OAuth2 端点处理器
+// OAuth2Handler handles OAuth2 endpoints.
 type OAuth2Handler struct {
 	svcCtx         *svc.ServiceContext
 	signer         TokenSigner
@@ -55,7 +55,7 @@ type OAuth2Handler struct {
 	authConfig     config.AuthConfig
 }
 
-// NewOAuth2Handler 创建 OAuth2 端点处理器
+// NewOAuth2Handler creates a new OAuth2 endpoint handler.
 func NewOAuth2Handler(svcCtx *svc.ServiceContext, signer TokenSigner, stateStore StateStore, providerClient ProviderClient, authCfg config.AuthConfig) *OAuth2Handler {
 	return &OAuth2Handler{
 		svcCtx:         svcCtx,
@@ -66,7 +66,7 @@ func NewOAuth2Handler(svcCtx *svc.ServiceContext, signer TokenSigner, stateStore
 	}
 }
 
-// RegisterRoutes 注册 OAuth2 路由到 HTTP ServeMux
+// RegisterRoutes registers OAuth2 routes to the HTTP ServeMux.
 func (h *OAuth2Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /oauth2/authorize", h.handleAuthorize)
 	mux.HandleFunc("POST /oauth2/token", h.handleToken)
@@ -88,8 +88,8 @@ func (h *OAuth2Handler) isAllowedRedirectURI(uri string) bool {
 	return false
 }
 
-// handleProviders 处理 GET /oauth2/providers
-// 返回当前已启用的 provider 列表
+// handleProviders handles GET /oauth2/providers.
+// Returns the list of currently enabled providers.
 func (h *OAuth2Handler) handleProviders(w http.ResponseWriter, r *http.Request) {
 	providers := h.providerClient.GetProviders()
 	httputil.WriteJSON(w, http.StatusOK, map[string][]string{
@@ -97,12 +97,12 @@ func (h *OAuth2Handler) handleProviders(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleAuthorize 处理 GET /oauth2/authorize
-// 生成 state，返回 Provider 授权页面重定向 URL
+// handleAuthorize handles GET /oauth2/authorize.
+// Generates state and returns the provider authorization page redirect URL.
 func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	provider := r.URL.Query().Get("provider")
 	if provider == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "provider 参数不能为空")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "provider parameter is required")
 		return
 	}
 	redirectURI := r.URL.Query().Get("redirect_uri")
@@ -120,26 +120,26 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// 生成随机 state
+	// Generate random state.
 	state, err := generateState()
 	if err != nil {
-		logger.Error(r.Context(), "生成 state 失败", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "生成 state 失败")
+		logger.Error(r.Context(), "failed to generate state", zap.Error(err))
+		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to generate state")
 		return
 	}
 
-	// 拼接 Provider 授权 URL（同时验证 provider 是否存在）
+	// Build provider authorization URL (also validates provider existence).
 	redirectURL, err := h.providerClient.GetAuthorizationURL(provider, state, redirectURI)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("不支持的 provider: %s", provider))
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("unsupported provider: %s", provider))
 		return
 	}
 
-	// 存入 StateStore（key=state, value=provider, TTL=10min）
+	// Store in StateStore (key=state, value=provider, TTL=10min).
 	ctx := r.Context()
 	if err := h.stateStore.Set(ctx, state, provider, h.authConfig.OAuth2StateTTL); err != nil {
-		logger.Error(ctx, "存储 state 失败", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "存储 state 失败")
+		logger.Error(ctx, "failed to store state", zap.Error(err))
+		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to store state")
 		return
 	}
 
@@ -149,127 +149,128 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleToken 处理 POST /oauth2/token
-// 支持 JSON 和 application/x-www-form-urlencoded 两种 Content-Type
+// handleToken handles POST /oauth2/token.
+// Supports both JSON and application/x-www-form-urlencoded Content-Types.
 func (h *OAuth2Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 	req, err := parseTokenExchangeRequest(w, r)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "请求解析失败")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "failed to parse request")
 		return
 	}
 
 	if req.Code == "" || req.State == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "code 和 state 不能为空")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "code and state are required")
 		return
 	}
 
 	h.handleAuthorizationCodeGrant(w, r, req)
 }
 
-// handleAuthorizationCodeGrant 处理 authorization_code 换取 token
+// handleAuthorizationCodeGrant handles the authorization_code grant flow.
 func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Request, req *protocol.OAuth2TokenExchangeRequest) {
 	ctx := r.Context()
 
-	// 1. 从 StateStore 验证 state（获取关联的 provider），验证后删除
+	// 1. Validate state from StateStore (retrieve associated provider), then delete.
 	provider, err := h.stateStore.GetDel(ctx, req.State)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "state 无效或已过期")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "state is invalid or expired")
 		return
 	}
 
-	// 2. 用授权码换取用户信息
+	// 2. Exchange authorization code for user info.
 	userInfo, err := h.providerClient.ExchangeCode(ctx, provider, req.Code, req.RedirectUri)
 	if err != nil {
-		logger.Error(ctx, "ExchangeCode 失败", zap.String("provider", provider), zap.Error(err))
-		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "授权码交换失败")
+		logger.Error(ctx, "ExchangeCode failed", zap.String("provider", provider), zap.Error(err))
+		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "authorization code exchange failed")
 		return
 	}
 
-	// 3. 查找或创建 OAuth2User
+	// 3. Find or create OAuth2User.
 	user, err := h.findOrCreateUser(ctx, provider, userInfo)
 	if err != nil {
-		logger.Error(ctx, "查找或创建用户失败", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "认证失败")
+		logger.Error(ctx, "failed to find or create user", zap.Error(err))
+		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "authentication failed")
 		return
 	}
 
-	// 4. 查找或更新 Device
+	// 4. Find or update Device.
 	if req.DeviceId != "" {
 		if err := h.upsertDevice(ctx, user.ID, req); err != nil {
-			logger.Warn(ctx, "更新设备信息失败", zap.Error(err))
+			logger.Warn(ctx, "failed to update device info", zap.Error(err))
 		}
 	}
 
-	// 5. 签发 token pair
+	// 5. Issue token pair.
 	resp, err := h.issueTokenPair(ctx, user.ID, req.DeviceId)
 	if err != nil {
-		logger.Error(ctx, "签发 token 失败", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "签发 token 失败")
+		logger.Error(ctx, "failed to issue token", zap.Error(err))
+		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to issue token")
 		return
 	}
 
-	logger.Info(ctx, "authorization_code 认证成功", zap.String("provider", provider), zap.String("user_id", user.ID.String()))
+	logger.Info(ctx, "authorization_code authentication succeeded", zap.String("provider", provider), zap.String("user_id", user.ID.String()))
 	httputil.WriteJSON(w, http.StatusOK, *resp)
 }
 
-// handleRefresh 处理 POST /oauth2/refresh
+// handleRefresh handles POST /oauth2/refresh.
 func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	req, err := parseRefreshRequest(w, r)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "请求体解析失败")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "failed to parse request body")
 		return
 	}
 
 	if req.RefreshToken == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "refresh_token 不能为空")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "refresh_token is required")
 		return
 	}
 
 	ctx := r.Context()
 
-	// 1. hash 后查找
+	// 1. Look up by hashed token.
 	rtHash := hashRefreshToken(req.RefreshToken)
 	rt, err := h.svcCtx.RefreshTokenRepo.FindByHash(ctx, rtHash)
 	if err != nil {
 		if repo.IsNotFound(err) {
-			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token 无效")
+			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token is invalid")
 		} else {
-			logger.Error(ctx, "查找 refresh_token 失败", zap.Error(err))
-			httputil.WriteError(w, http.StatusInternalServerError, "server_error", "内部错误")
+			logger.Error(ctx, "failed to find refresh_token", zap.Error(err))
+			httputil.WriteError(w, http.StatusInternalServerError, "server_error", "internal error")
 		}
 		return
 	}
 
-	// 2. 检查未过期、未撤销
+	// 2. Check not expired and not revoked.
 	if rt.Revoked {
-		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token 已撤销")
+		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has been revoked")
 		return
 	}
 	if time.Now().After(rt.ExpiresAt) {
-		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token 已过期")
+		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has expired")
 		return
 	}
 
-	// 3. 签发新 access_token
+	// 3. Issue new access_token.
 	accessToken, expiresAt, err := h.signer.SignAccessToken(rt.UserID, rt.DeviceID)
 	if err != nil {
-		logger.Error(ctx, "签发 access_token 失败", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "签发 token 失败")
+		logger.Error(ctx, "failed to sign access_token", zap.Error(err))
+		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to issue token")
 		return
 	}
 
-	logger.Info(ctx, "refresh_token 刷新成功", zap.String("user_id", rt.UserID.String()))
+	logger.Info(ctx, "refresh_token refresh succeeded", zap.String("user_id", rt.UserID.String()))
 	httputil.WriteJSON(w, http.StatusOK, protocol.OAuth2TokenRefreshResponse{
 		AccessToken: accessToken,
 		ExpiresIn:   int64(time.Until(expiresAt).Seconds()),
 	})
 }
 
-// ---------- 内部辅助方法 ----------
+// ---------- Internal helper methods ----------
 
-// parseRequestBody 解析请求体，支持 application/json 和 form-urlencoded。
-// JSON 直接解码到 target；form 先 ParseForm 再调用 formFiller 填充 target。
-// 对请求体添加 1MB 大小限制，防止恶意客户端消耗过多内存。
+// parseRequestBody parses the request body, supporting application/json and
+// form-urlencoded. JSON is decoded directly into target; form calls ParseForm
+// then uses formFiller to populate target. A 1MB size limit is applied to
+// prevent malicious clients from consuming excessive memory.
 func parseRequestBody(w http.ResponseWriter, r *http.Request, target any, formFiller func(r *http.Request)) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit for all content types
 	contentType := r.Header.Get("Content-Type")
@@ -283,7 +284,7 @@ func parseRequestBody(w http.ResponseWriter, r *http.Request, target any, formFi
 	return nil
 }
 
-// parseTokenExchangeRequest 解析 token 交换请求（支持 JSON 和 form）
+// parseTokenExchangeRequest parses a token exchange request (supports JSON and form).
 func parseTokenExchangeRequest(w http.ResponseWriter, r *http.Request) (*protocol.OAuth2TokenExchangeRequest, error) {
 	var req protocol.OAuth2TokenExchangeRequest
 	if err := parseRequestBody(w, r, &req, func(r *http.Request) {
@@ -299,7 +300,7 @@ func parseTokenExchangeRequest(w http.ResponseWriter, r *http.Request) (*protoco
 	return &req, nil
 }
 
-// parseRefreshRequest 解析 refresh_token 请求（支持 JSON 和 form）
+// parseRefreshRequest parses a refresh_token request (supports JSON and form).
 func parseRefreshRequest(w http.ResponseWriter, r *http.Request) (*protocol.OAuth2TokenRefreshRequest, error) {
 	var req protocol.OAuth2TokenRefreshRequest
 	if err := parseRequestBody(w, r, &req, func(r *http.Request) {
@@ -310,17 +311,19 @@ func parseRefreshRequest(w http.ResponseWriter, r *http.Request) (*protocol.OAut
 	return &req, nil
 }
 
-// findOrCreateUser 查找或创建 OAuth2 用户（「先查后建 + 唯一约束回退」模式）。
+// findOrCreateUser finds or creates an OAuth2 user using a "lookup + unique
+// constraint fallback" pattern.
 //
-// 并发安全：两个相同 provider+sub 的请求同时到达时，一个 Create 成功，
-// 另一个触发唯一约束冲突（23505），回退到重新查找。
+// Concurrency safe: when two requests with the same provider+sub arrive
+// simultaneously, one Create succeeds and the other triggers a unique
+// constraint violation (23505), falling back to re-lookup.
 func (h *OAuth2Handler) findOrCreateUser(ctx context.Context, provider string, userInfo *oauth.ProviderUserInfo) (*model.OAuth2User, error) {
 	user, err := h.svcCtx.OAuth2UserRepo.FindByProvider(ctx, provider, userInfo.ProviderUserID)
 	if err != nil {
 		if !repo.IsNotFound(err) {
 			return nil, fmt.Errorf("find user by provider: %w", err)
 		}
-		// 记录不存在，创建
+		// Record does not exist, create it.
 		user = &model.OAuth2User{
 			Provider:  provider,
 			Sub:       userInfo.ProviderUserID,
@@ -329,7 +332,7 @@ func (h *OAuth2Handler) findOrCreateUser(ctx context.Context, provider string, u
 			AvatarURL: userInfo.AvatarURL,
 		}
 		if err := h.svcCtx.OAuth2UserRepo.Create(ctx, user); err != nil {
-			// 唯一约束冲突 → 并发创建 → 重新查找
+			// Unique constraint violation → concurrent creation → re-lookup.
 			if isDuplicateKeyError(err) {
 				logger.Info(ctx, "findOrCreateUser: concurrent create detected, re-fetching",
 					zap.String("provider", provider))
@@ -339,17 +342,18 @@ func (h *OAuth2Handler) findOrCreateUser(ctx context.Context, provider string, u
 		}
 		return user, nil
 	}
-	// 已存在，更新用户信息
+	// Already exists, update user info.
 	user.Name = userInfo.Username
 	user.Email = userInfo.Email
 	user.AvatarURL = userInfo.AvatarURL
 	if err := h.svcCtx.OAuth2UserRepo.Update(ctx, user); err != nil {
-		logger.Warn(ctx, "更新用户信息失败", zap.Error(err))
+		logger.Warn(ctx, "failed to update user info", zap.Error(err))
 	}
 	return user, nil
 }
 
-// isDuplicateKeyError 判断是否为 PostgreSQL 唯一约束冲突错误（code 23505）。
+// isDuplicateKeyError checks whether the error is a PostgreSQL unique
+// constraint violation (code 23505).
 func isDuplicateKeyError(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -358,7 +362,7 @@ func isDuplicateKeyError(err error) bool {
 	return false
 }
 
-// upsertDevice 查找或更新设备信息
+// upsertDevice finds or updates device information.
 func (h *OAuth2Handler) upsertDevice(ctx context.Context, userID uuid.UUID, req *protocol.OAuth2TokenExchangeRequest) error {
 	device := &model.Device{
 		UserID:       userID,
@@ -370,7 +374,7 @@ func (h *OAuth2Handler) upsertDevice(ctx context.Context, userID uuid.UUID, req 
 	return h.svcCtx.DeviceRepo.Upsert(ctx, device)
 }
 
-// issueTokenPair 签发 access_token + refresh_token
+// issueTokenPair issues an access_token + refresh_token pair.
 func (h *OAuth2Handler) issueTokenPair(ctx context.Context, userID uuid.UUID, deviceID string) (*protocol.OAuth2TokenExchangeResponse, error) {
 	accessToken, expiresAt, err := h.signer.SignAccessToken(userID, deviceID)
 	if err != nil {
@@ -402,7 +406,7 @@ func (h *OAuth2Handler) issueTokenPair(ctx context.Context, userID uuid.UUID, de
 	}, nil
 }
 
-// generateState 生成随机 state
+// generateState generates a random state string.
 func generateState() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -411,7 +415,7 @@ func generateState() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// generateRefreshToken 生成不透明的 refresh_token
+// generateRefreshToken generates an opaque refresh_token.
 func generateRefreshToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -420,7 +424,7 @@ func generateRefreshToken() (string, error) {
 	return "rt_" + hex.EncodeToString(b), nil
 }
 
-// hashRefreshToken 计算 refresh_token 的 SHA-256 哈希
+// hashRefreshToken computes the SHA-256 hash of a refresh_token.
 func hashRefreshToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])

@@ -1,7 +1,8 @@
-// Package httphandler 提供 HTTP API 的协议适配层。
+// Package httphandler provides the protocol adaptation layer for HTTP APIs.
 //
-// 包含健康检查（healthz/readyz）、OAuth2 端点、Interrupt 提交等 HTTP 路由。
-// 所有 HTTP 响应通过 httputil 包统一格式化。
+// It includes health check (healthz/readyz), OAuth2 endpoints, Interrupt
+// submission, and other HTTP routes. All HTTP responses are formatted
+// uniformly via the httputil package.
 package httphandler
 
 import (
@@ -17,29 +18,31 @@ import (
 	"go.uber.org/zap"
 )
 
-// readyzLimiter 限制 /readyz 端点请求频率，防止 DoS 攻击。
-// 每秒 10 个请求，桶大小 10（允许短暂突发）。
+// readyzLimiter rate-limits the /readyz endpoint to prevent DoS attacks.
+// 10 requests per second with a burst of 10.
 var readyzLimiter = rate.NewLimiter(rate.Every(time.Second/10), 10)
 
-// Handler HTTP 处理器
+// Handler is the HTTP request handler.
 type Handler struct {
 	svcCtx *svc.ServiceContext
 }
 
-// NewHandler 创建 HTTP 处理器
+// NewHandler creates a new HTTP handler.
 func NewHandler(svcCtx *svc.ServiceContext) *Handler {
 	return &Handler{svcCtx: svcCtx}
 }
 
-// Healthz 健康检查端点（存活探针）
-// 仅返回服务是否运行，不检查依赖。用于 K8s livenessProbe。
+// Healthz is the liveness probe endpoint.
+// It returns whether the service is running without checking dependencies.
+// Used for K8s livenessProbe.
 func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// Readyz 就绪检查端点（就绪探针）
-// 检查 DB、Redis、Centrifuge 等依赖是否可用。用于 K8s readinessProbe。
-// 包含限流保护，防止频繁检查导致下游依赖过载。
+// Readyz is the readiness probe endpoint.
+// It checks whether dependencies (DB, Redis, Centrifuge) are available.
+// Used for K8s readinessProbe. Includes rate limiting to prevent
+// overloading downstream dependencies with frequent checks.
 func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 	// Rate limiting: reject excessive requests to prevent DoS
 	if !readyzLimiter.Allow() {
@@ -53,7 +56,7 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 	checks := make(map[string]string)
 	allReady := true
 
-	// 检查数据库连通性
+	// Check database connectivity.
 	if err := h.svcCtx.DB.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
 		checks["db"] = "error"
 		allReady = false
@@ -62,7 +65,7 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 		checks["db"] = "ok"
 	}
 
-	// 检查 Redis 连通性
+	// Check Redis connectivity.
 	if err := h.svcCtx.Redis.Ping(ctx).Err(); err != nil {
 		checks["redis"] = "error"
 		allReady = false
@@ -71,13 +74,13 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 		checks["redis"] = "ok"
 	}
 
-	// 检查 Centrifuge 节点状态
+	// Check Centrifuge node status.
 	if h.svcCtx.CentrifugeNode == nil {
 		checks["centrifuge"] = "not configured"
 		allReady = false
 	} else {
-		// Centrifuge node 没有直接的 Ping 方法，通过检查 node 是否 running 来判断
-		// 如果 node 已经 shutdown，NodeInfo() 会返回错误
+		// Centrifuge node has no direct Ping method; check if the node is
+		// running via Info(). If the node has shut down, Info() returns an error.
 		if _, err := h.svcCtx.CentrifugeNode.Info(); err != nil {
 			checks["centrifuge"] = "error"
 			allReady = false
