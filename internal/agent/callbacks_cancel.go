@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -104,11 +105,21 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 // (sub agents) of the given parent session. This prevents orphaned sub agents
 // from continuing to run after the parent has been cancelled.
 //
+// The method detaches from the caller's context (which may already be cancelled
+// when called from cancelTurn/failTurn) using context.WithoutCancel with a 30s
+// timeout, ensuring child sessions are always cancelled even if the parent's
+// context is done. Mirrors notifyParentAfterAsyncSubAgent's fire-and-forget pattern.
+//
 // The method is safe to call even when h.queue is nil or no children exist.
-func (h *helpers) cascadeCancelChildren(ctx context.Context, turnID string, parentSessionID uuid.UUID) {
+func (h *helpers) cascadeCancelChildren(callerCtx context.Context, turnID string, parentSessionID uuid.UUID) {
 	if h.queue == nil {
 		return
 	}
+	// Detach from the caller's context — it may already be cancelled (e.g., when
+	// called from cancelTurn after the turn context was cancelled). Without this,
+	// CancelSession calls would fail silently, leaving orphaned child sessions.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(callerCtx), 30*time.Second)
+	defer cancel()
 	activeChildren, findErr := h.deps.SessionRepo.FindActiveByParent(ctx, parentSessionID)
 	if findErr != nil {
 		h.logger.Warn(ctx, "cascadeCancelChildren.find_active_by_parent_failed", map[string]any{

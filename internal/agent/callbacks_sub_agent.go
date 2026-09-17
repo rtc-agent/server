@@ -35,7 +35,14 @@ import (
 //   - status: "completed" or "failed"
 //   - errorMessage: error message if status is "failed"
 //   - result: the sub agent's result if status is "completed"
-func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(ctx context.Context, messageID uuid.UUID, status string, errorMessage *string, result *string) {
+func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(callerCtx context.Context, messageID uuid.UUID, status string, errorMessage *string, result *string) {
+	// Detach from the caller's context — fire-and-forget.
+	// The callback's context may be cancelled when the callback returns,
+	// but the toolcall_output creation must complete independently.
+	// Mirrors resumeParentAfterSubAgent's fire-and-forget pattern.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(callerCtx), 30*time.Second)
+	defer cancel()
+
 	// Load the toolcall_input message.
 	inputMsg, err := h.deps.MessageRepo.GetByID(ctx, messageID)
 	if err != nil {
