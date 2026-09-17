@@ -360,15 +360,12 @@ func repairToolPairing(messages []*turnagent.Message) []*turnagent.Message {
 	// tool call IDs. Only tool calls from KEPT assistant messages (with
 	// calls intact) are considered valid.
 	validCallIDs := make(map[string]bool)
-	type keptMsg struct {
-		msg *turnagent.Message
-	}
-	var kept []keptMsg
+	var kept []*turnagent.Message
 
 	for _, msg := range messages {
 		if msg.Role != turnagent.RoleAssistant || len(msg.ToolCalls) == 0 {
 			// Non-assistant or assistant without calls: keep unconditionally.
-			kept = append(kept, keptMsg{msg})
+			kept = append(kept, msg)
 			continue
 		}
 
@@ -383,7 +380,7 @@ func repairToolPairing(messages []*turnagent.Message) []*turnagent.Message {
 
 		if allMatched {
 			// All calls matched: keep the message, register call IDs as valid.
-			kept = append(kept, keptMsg{msg})
+			kept = append(kept, msg)
 			for _, tc := range msg.ToolCalls {
 				validCallIDs[tc.ID] = true
 			}
@@ -392,7 +389,7 @@ func repairToolPairing(messages []*turnagent.Message) []*turnagent.Message {
 			// The text is valuable; the calls are broken. No valid IDs registered.
 			cleaned := *msg
 			cleaned.ToolCalls = nil
-			kept = append(kept, keptMsg{&cleaned})
+			kept = append(kept, &cleaned)
 		}
 		// else: pure tool-call message with unmatched calls, drop entirely.
 	}
@@ -402,8 +399,7 @@ func repairToolPairing(messages []*turnagent.Message) []*turnagent.Message {
 	// Track used IDs to handle (unlikely) duplicate results.
 	usedToolIDs := make(map[string]bool)
 	result := make([]*turnagent.Message, 0, len(kept))
-	for _, km := range kept {
-		msg := km.msg
+	for _, msg := range kept {
 		if msg.Role == turnagent.RoleTool {
 			if msg.ToolCallID != "" && validCallIDs[msg.ToolCallID] && !usedToolIDs[msg.ToolCallID] {
 				usedToolIDs[msg.ToolCallID] = true
