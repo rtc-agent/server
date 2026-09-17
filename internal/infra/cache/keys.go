@@ -1,314 +1,314 @@
-// Package cache 统一管理所有 Redis key 的前缀与构造函数。
+// Package cache manages all Redis key prefixes and constructor functions centrally.
 //
-// 规范：
-//   - 所有 key 前缀常量集中在此文件定义，禁止在业务代码中硬编码 key 字符串。
-//   - 每个前缀提供对应的构造函数（如 OAuth2State），返回完整的 key 字符串。
-//   - 新增 key 类型时必须在此处注册，便于全局检索与冲突检测。
+// Conventions:
+//   - All key prefix constants are defined in this file. Business code must not hardcode key strings.
+//   - Each prefix has a corresponding constructor function (e.g., OAuth2State) that returns the full key string.
+//   - New key types must be registered here for global searchability and conflict detection.
 package cache
 
 import "fmt"
 
-// ========== 前缀常量 ==========
+// ========== Prefix constants ==========
 
 const (
-	// PrefixOAuth2State OAuth2 CSRF state 前缀
-	// 完整 key: oauth2:state:{state}
-	// value: provider 名称；TTL: 10 分钟
+	// PrefixOAuth2State is the OAuth2 CSRF state prefix.
+	// Full key: oauth2:state:{state}
+	// Value: provider name; TTL: 10 minutes.
 	PrefixOAuth2State = "oauth2:state:"
 
-	// PrefixSession 用户会话前缀（预留）
-	// 完整 key: session:{session_id}
+	// PrefixSession is the user session prefix (reserved).
+	// Full key: session:{session_id}
 	PrefixSession = "session:"
 
-	// PrefixIDEMarker 幂等标记前缀（预留）
-	// 完整 key: idempotent:{domain}:{idempotency_key}
+	// PrefixIDEMarker is the idempotent marker prefix (reserved).
+	// Full key: idempotent:{domain}:{idempotency_key}
 	PrefixIDEMarker = "idempotent:"
 
-	// PrefixChannelOffset 频道 offset 计数器前缀
-	// 完整 key: channel:offset:{channel}
-	// value: 当前最大 offset（uint64）；无 TTL（持久化）
+	// PrefixChannelOffset is the channel offset counter prefix.
+	// Full key: channel:offset:{channel}
+	// Value: current max offset (uint64); no TTL (persistent).
 	PrefixChannelOffset = "channel:offset:"
 
-	// PrefixChannelEpoch 频道 epoch 前缀（首次写入后不变）
-	// 完整 key: channel:epoch:{channel}
-	// value: UUID v7 epoch 字符串；无 TTL（持久化）
+	// PrefixChannelEpoch is the channel epoch prefix (immutable after first write).
+	// Full key: channel:epoch:{channel}
+	// Value: UUID v7 epoch string; no TTL (persistent).
 	PrefixChannelEpoch = "channel:epoch:"
 
-	// PrefixSessionMsgOffset session 内消息全局 offset 计数器前缀
-	// 完整 key: session:msg_offset:{sessionID}
-	// value: 当前最大 global_offset（uint64）；无 TTL（持久化）
+	// PrefixSessionMsgOffset is the per-session message global offset counter prefix.
+	// Full key: session:msg_offset:{sessionID}
+	// Value: current max global_offset (uint64); no TTL (persistent).
 	PrefixSessionMsgOffset = "session:msg_offset:"
 
-	// PrefixTurnMsgOffset turn 内消息 offset 计数器前缀
-	// 完整 key: session:turn_offset:{turnID}
-	// value: 当前最大 turn_offset（uint64）；无 TTL（持久化）
+	// PrefixTurnMsgOffset is the per-turn message offset counter prefix.
+	// Full key: session:turn_offset:{turnID}
+	// Value: current max turn_offset (uint64); no TTL (persistent).
 	PrefixTurnMsgOffset = "session:turn_offset:"
 
-	// PrefixSessionRtcOffset session 内 RTC 记录 offset 计数器前缀
-	// 完整 key: session:rtc_offset:{sessionID}
-	// value: 当前最大 rtc_offset（uint64）；无 TTL（持久化）
-	// 与消息 global_offset 计数器分离，避免 RTC 创建时消耗消息 offset 导致跳空
+	// PrefixSessionRtcOffset is the per-session RTC record offset counter prefix.
+	// Full key: session:rtc_offset:{sessionID}
+	// Value: current max rtc_offset (uint64); no TTL (persistent).
+	// Separated from the message global_offset counter to avoid RTC creation consuming message offsets and causing gaps.
 	PrefixSessionRtcOffset = "session:rtc_offset:"
 
-	// ========== Worker 管理相关前缀 ==========
+	// ========== Worker management prefixes ==========
 	//
-	// 注意：以下 5 个 Worker 前缀常量的值均为 "worker:"，它们共享同一根前缀。
-	// 区分不同数据类型（info / sessions / queue / background / bg_last_id）
-	// 依赖于构造函数中拼接的后缀（如 ":sessions"、":queue" 等）。
-	// 这些常量作为公共根前缀存在，主要用于文档化和全局检索。
+	// Note: the following 5 Worker prefix constants all have the value "worker:", sharing the same root prefix.
+	// Distinguishing different data types (info / sessions / queue / background / bg_last_id)
+	// relies on suffixes appended in constructor functions (e.g., ":sessions", ":queue").
+	// These constants exist as common root prefixes, primarily for documentation and global search.
 
-	// PrefixWorkerInfo Worker 信息 Hash 前缀
-	// 完整 key: worker:{workerID}
+	// PrefixWorkerInfo is the Worker info Hash prefix.
+	// Full key: worker:{workerID}
 	PrefixWorkerInfo = "worker:"
 
-	// PrefixWorkerSessions Worker 负责的 Session Hash 前缀
-	// 完整 key: worker:{workerID}:sessions
+	// PrefixWorkerSessions is the Worker's Session Hash prefix.
+	// Full key: worker:{workerID}:sessions
 	PrefixWorkerSessions = "worker:"
 
-	// PrefixWorkerQueue Worker 的 Turn 队列 Stream 前缀
-	// 完整 key: worker:{workerID}:queue
+	// PrefixWorkerQueue is the Worker's Turn queue Stream prefix.
+	// Full key: worker:{workerID}:queue
 	PrefixWorkerQueue = "worker:"
 
-	// PrefixWorkerBackground Worker 的 Background 任务 Stream 前缀
-	// 完整 key: worker:{workerID}:background
-	// 与 turn stream 分离：background 任务可并发、无顺序要求，不需要 session 亲和。
-	// Worker 注销时不删除（新 worker 启动后从持久化的 lastID 继续，幂等检查保证不重复执行）。
+	// PrefixWorkerBackground is the Worker's Background task Stream prefix.
+	// Full key: worker:{workerID}:background
+	// Separated from the turn stream: background tasks can run concurrently, have no ordering requirements, and do not need session affinity.
+	// Not deleted on Worker deregistration (new worker resumes from persisted lastID; idempotent checks prevent duplicate execution).
 	PrefixWorkerBackground = "worker:"
 
-	// PrefixWorkerBackgroundLastID Worker 的 Background Stream 消费位置前缀
-	// 完整 key: worker:{workerID}:bg_last_id
-	// value: 最后消费的 Stream ID（格式 "timestamp-sequence"）；无 TTL（持久化）
-	// 用于重启后从上次位置继续消费，避免重读历史任务。
+	// PrefixWorkerBackgroundLastID is the Worker's Background Stream consumption position prefix.
+	// Full key: worker:{workerID}:bg_last_id
+	// Value: last consumed Stream ID (format "timestamp-sequence"); no TTL (persistent).
+	// Used to resume consumption from the last position after restart, avoiding re-reading historical tasks.
 	PrefixWorkerBackgroundLastID = "worker:"
 
-	// SessionAffinityKey Session -> Worker 映射 Hash
-	// 完整 key: session:affinity
+	// SessionAffinityKey is the Session -> Worker mapping Hash.
+	// Full key: session:affinity
 	SessionAffinityKey = "session:affinity"
 
-	// WorkersActiveKey 所有活跃 Worker Set
-	// 完整 key: workers:active
+	// WorkersActiveKey is the set of all active Workers.
+	// Full key: workers:active
 	WorkersActiveKey = "workers:active"
 
-	// PrefixTurnCancel Turn 取消信号 Pub/Sub channel 前缀
-	// 完整 channel: turn:cancel:{turnID}
-	// value: "cancel"
+	// PrefixTurnCancel is the Turn cancel signal Pub/Sub channel prefix.
+	// Full channel: turn:cancel:{turnID}
+	// Value: "cancel"
 	PrefixTurnCancel = "turn:cancel:"
 
-	// PrefixSessionCancel Session 级停止信号 Pub/Sub channel 前缀
-	// 完整 channel: session:cancel:{sessionID}
-	// value: "stop"
-	// 用途：跨节点停止 session 的所有 turn（StopTurn/CloseSession 复用）
+	// PrefixSessionCancel is the Session-level stop signal Pub/Sub channel prefix.
+	// Full channel: session:cancel:{sessionID}
+	// Value: "stop"
+	// Use case: cross-node session stop for all turns (shared by StopTurn/CloseSession).
 	PrefixSessionCancel = "session:cancel:"
 
-	// ========== Checkpoint 与 Interrupt 相关前缀 ==========
+	// ========== Checkpoint and Interrupt prefixes ==========
 
-	// PrefixCheckpoint Agent checkpoint 数据前缀
-	// 完整 key: checkpoint:{id}
-	// value: checkpoint data (binary); TTL: 可配置（推荐 24 小时）
+	// PrefixCheckpoint is the agent checkpoint data prefix.
+	// Full key: checkpoint:{id}
+	// Value: checkpoint data (binary); TTL: configurable (recommended 24 hours).
 	PrefixCheckpoint = "checkpoint:"
 
-	// PrefixInterruptAnswer Interrupt 答案存储前缀
-	// 完整 key: interrupt:answer:{sessionID}:{interruptID}
-	// value: answer string; TTL: 10 分钟
+	// PrefixInterruptAnswer is the interrupt answer storage prefix.
+	// Full key: interrupt:answer:{sessionID}:{interruptID}
+	// Value: answer string; TTL: 10 minutes.
 	PrefixInterruptAnswer = "interrupt:answer:"
 
-	// PrefixInterruptChannel Interrupt 答案 Pub/Sub channel 前缀
-	// 完整 channel: interrupt:channel:{sessionID}:{interruptID}
-	// value: answer string
+	// PrefixInterruptChannel is the interrupt answer Pub/Sub channel prefix.
+	// Full channel: interrupt:channel:{sessionID}:{interruptID}
+	// Value: answer string.
 	PrefixInterruptChannel = "interrupt:channel:"
 
-	// PrefixMessageStream 流式消息 chunks List 前缀
-	// 完整 key: message:stream:{messageID}
-	// value: Redis List，每个元素是一个 chunk 文本片段；TTL: 5 分钟
-	// 用途：流式生成期间临时存储增量 chunks，最后一个 chunk 到达后拼接写入 DB 并删除
+	// PrefixMessageStream is the streaming message chunks List prefix.
+	// Full key: message:stream:{messageID}
+	// Value: Redis List, each element is a chunk text fragment; TTL: 5 minutes.
+	// Use case: temporarily stores incremental chunks during streaming generation; after the last chunk arrives, all chunks are concatenated, written to DB, then the key is deleted.
 	PrefixMessageStream = "message:stream:"
 
-	// PrefixRtcResultChannel RTC 结果通知 Pub/Sub channel 前缀
-	// 完整 channel: rtc:result:{rtcID}
-	// value: serialized result string
-	// 用途：RTC 执行完成后，通过 PUBLISH 通知等待中的 handleInterrupt goroutine
+	// PrefixRtcResultChannel is the RTC result notification Pub/Sub channel prefix.
+	// Full channel: rtc:result:{rtcID}
+	// Value: serialized result string.
+	// Use case: after RTC completion, notifies the waiting handleInterrupt goroutine via PUBLISH.
 	PrefixRtcResultChannel = "rtc:result:"
 
-	// PrefixRtcResultKey RTC 结果存储前缀（SET+PUBLISH 模式）
-	// 完整 key: rtc:result:answer:{rtcID}
-	// value: serialized result string; TTL: 10 分钟
-	// 用途：与 PUB/SUB 配合，防止订阅前已有结果到达（先 SET 再 PUBLISH，订阅者先 SUBSCRIBE 再 GET 兜底）
+	// PrefixRtcResultKey is the RTC result storage prefix (SET+PUBLISH pattern).
+	// Full key: rtc:result:answer:{rtcID}
+	// Value: serialized result string; TTL: 10 minutes.
+	// Use case: paired with PUB/SUB to prevent results arriving before subscription (SET then PUBLISH; subscriber does SUBSCRIBE then GET as fallback).
 	PrefixRtcResultKey = "rtc:result:answer:"
 
-	// PrefixRtcOrphanTriggered 孤儿 turn 触发去重前缀（SETNX 模式）
-	// 完整 key: rtc:orphan:triggered:{rtcID}
-	// value: "1"; TTL: 24 小时
-	// 用途：确保同一 RTC 只触发一次孤儿 turn（crash 恢复后客户端上报时去重）
+	// PrefixRtcOrphanTriggered is the orphan turn trigger deduplication prefix (SETNX pattern).
+	// Full key: rtc:orphan:triggered:{rtcID}
+	// Value: "1"; TTL: 24 hours.
+	// Use case: ensures the same RTC only triggers one orphan turn (deduplication when client reports after crash recovery).
 	PrefixRtcOrphanTriggered = "rtc:orphan:triggered:"
 
-	// ========== 批量恢复（Batch Resume）相关前缀 ==========
+	// ========== Batch Resume prefixes ==========
 
-	// PrefixRtcBatchPending 批量恢复待完成 RTC 集合前缀（Redis Set）
-	// 完整 key: rtc:batch:pending:{turnID}
-	// members: RTC ID 列表；TTL: 10 分钟
-	// 用途：跟踪同一 turn 中所有需要中断的 RTC，当集合为空时触发批量恢复
+	// PrefixRtcBatchPending is the batch resume pending RTC set prefix (Redis Set).
+	// Full key: rtc:batch:pending:{turnID}
+	// Members: RTC ID list; TTL: 10 minutes.
+	// Use case: tracks all RTCs that need interruption in the same turn; triggers batch resume when the set becomes empty.
 	PrefixRtcBatchPending = "rtc:batch:pending:"
 
-	// PrefixRtcBatchResults 批量恢复结果存储前缀（Redis Hash）
-	// 完整 key: rtc:batch:results:{turnID}
-	// field: RTC ID, value: JSON 编码的结果；TTL: 10 分钟
-	// 用途：存储每个 RTC 的完成结果，供 GenResume 构建多目标 ResumeParams
+	// PrefixRtcBatchResults is the batch resume result storage prefix (Redis Hash).
+	// Full key: rtc:batch:results:{turnID}
+	// Field: RTC ID, value: JSON-encoded result; TTL: 10 minutes.
+	// Use case: stores each RTC's completion result for GenResume to build multi-target ResumeParams.
 	PrefixRtcBatchResults = "rtc:batch:results:"
 
-	// PrefixRtcBatchInterruptMap 批量恢复 InterruptID 映射前缀（Redis Hash）
-	// 完整 key: rtc:batch:interrupt_map:{turnID}
-	// field: RTC ID, value: InterruptID (tool_call_id)；TTL: 10 分钟
-	// 用途：存储 RTC ID 到 eino InterruptID 的映射，供 GenResume 构建 Targets
+	// PrefixRtcBatchInterruptMap is the batch resume InterruptID mapping prefix (Redis Hash).
+	// Full key: rtc:batch:interrupt_map:{turnID}
+	// Field: RTC ID, value: InterruptID (tool_call_id); TTL: 10 minutes.
+	// Use case: stores RTC ID to eino InterruptID mapping for GenResume to build Targets.
 	PrefixRtcBatchInterruptMap = "rtc:batch:interrupt_map:"
 
-	// ========== Token 预估相关前缀 ==========
-	// 注：Token 预估数据已迁移至 Session 表持久化，不再使用 Redis 缓存。
+	// ========== Token estimation prefixes ==========
+	// Note: Token estimation data has been migrated to the Session table for persistence; Redis cache is no longer used.
 
-	// ========== 错误消息速率限制前缀 ==========
+	// ========== Error message rate limiting prefixes ==========
 
-	// PrefixErrorMessageRateLimit 错误消息速率限制计数器前缀
-	// 完整 key: error_msg_rate:{sessionID}:{hour}
-	// value: 当前小时内的错误消息计数（uint64）；TTL: 1 小时
-	// 用途：防止 Worker 故障导致的错误消息风暴（每 Session 每小时最多 20 条）
+	// PrefixErrorMessageRateLimit is the error message rate limiting counter prefix.
+	// Full key: error_msg_rate:{sessionID}:{hour}
+	// Value: error message count within the current hour (uint64); TTL: 1 hour.
+	// Use case: prevents error message storms caused by Worker failures (max 20 messages per Session per hour).
 	PrefixErrorMessageRateLimit = "error_msg_rate:"
 )
 
-// ========== 构造函数 ==========
+// ========== Constructor functions ==========
 
-// OAuth2State 返回 OAuth2 state 的 Redis key
+// OAuth2State returns the Redis key for an OAuth2 state.
 func OAuth2State(state string) string {
 	return PrefixOAuth2State + state
 }
 
-// Session 返回会话的 Redis key
+// Session returns the Redis key for a session.
 func Session(sessionID string) string {
 	return PrefixSession + sessionID
 }
 
-// IDEMarker 返回幂等标记的 Redis key
+// IDEMarker returns the Redis key for an idempotent marker.
 func IDEMarker(domain, idempotencyKey string) string {
 	return fmt.Sprintf("%s%s:%s", PrefixIDEMarker, domain, idempotencyKey)
 }
 
-// ChannelOffset 返回频道 offset 计数器的 Redis key
+// ChannelOffset returns the Redis key for a channel offset counter.
 func ChannelOffset(channel string) string {
 	return PrefixChannelOffset + channel
 }
 
-// ChannelEpoch 返回频道 epoch 的 Redis key
+// ChannelEpoch returns the Redis key for a channel epoch.
 func ChannelEpoch(channel string) string {
 	return PrefixChannelEpoch + channel
 }
 
-// SessionMsgOffset 返回 session 内消息全局 offset 计数器的 Redis key
+// SessionMsgOffset returns the Redis key for the per-session message global offset counter.
 func SessionMsgOffset(sessionID string) string {
 	return PrefixSessionMsgOffset + sessionID
 }
 
-// TurnMsgOffset 返回 turn 内消息 offset 计数器的 Redis key
+// TurnMsgOffset returns the Redis key for the per-turn message offset counter.
 func TurnMsgOffset(turnID string) string {
 	return PrefixTurnMsgOffset + turnID
 }
 
-// SessionRtcOffset 返回 session 内 RTC 记录 offset 计数器的 Redis key
+// SessionRtcOffset returns the Redis key for the per-session RTC record offset counter.
 func SessionRtcOffset(sessionID string) string {
 	return PrefixSessionRtcOffset + sessionID
 }
 
-// ========== Worker 管理构造函数 ==========
+// ========== Worker management constructors ==========
 
-// WorkerInfo 返回 Worker 信息 Hash 的 Redis key
+// WorkerInfo returns the Redis key for the Worker info Hash.
 func WorkerInfo(workerID string) string { return PrefixWorkerInfo + workerID }
 
-// WorkerSessions 返回 Worker 负责的 Session Hash 的 Redis key
+// WorkerSessions returns the Redis key for the Worker's Session Hash.
 func WorkerSessions(workerID string) string { return PrefixWorkerSessions + workerID + ":sessions" }
 
-// WorkerQueue 返回 Worker 的 Turn 队列 Stream 的 Redis key
+// WorkerQueue returns the Redis key for the Worker's Turn queue Stream.
 func WorkerQueue(workerID string) string { return PrefixWorkerQueue + workerID + ":queue" }
 
-// WorkerBackground 返回 Worker 的 Background 任务 Stream 的 Redis key
+// WorkerBackground returns the Redis key for the Worker's Background task Stream.
 func WorkerBackground(workerID string) string {
 	return PrefixWorkerBackground + workerID + ":background"
 }
 
-// WorkerBackgroundLastID 返回 Worker 的 Background Stream 消费位置的 Redis key
+// WorkerBackgroundLastID returns the Redis key for the Worker's Background Stream consumption position.
 func WorkerBackgroundLastID(workerID string) string {
 	return PrefixWorkerBackgroundLastID + workerID + ":bg_last_id"
 }
 
-// SessionAffinity 返回 Session -> Worker 映射 Hash 的 Redis key
+// SessionAffinity returns the Redis key for the Session -> Worker mapping Hash.
 func SessionAffinity() string { return SessionAffinityKey }
 
-// WorkersActive 返回所有活跃 Worker Set 的 Redis key
+// WorkersActive returns the Redis key for the set of all active Workers.
 func WorkersActive() string { return WorkersActiveKey }
 
-// TurnCancel 返回 Turn 取消信号的 Pub/Sub channel name
+// TurnCancel returns the Pub/Sub channel name for a Turn cancel signal.
 func TurnCancel(turnID string) string { return PrefixTurnCancel + turnID }
 
-// SessionCancel 返回 Session 级停止信号的 Pub/Sub channel name
+// SessionCancel returns the Pub/Sub channel name for a Session-level stop signal.
 func SessionCancel(sessionID string) string { return PrefixSessionCancel + sessionID }
 
-// ========== Checkpoint 与 Interrupt 构造函数 ==========
+// ========== Checkpoint and Interrupt constructors ==========
 
-// Checkpoint 返回 agent checkpoint 数据的 Redis key
+// Checkpoint returns the Redis key for agent checkpoint data.
 func Checkpoint(id string) string {
 	return PrefixCheckpoint + id
 }
 
-// InterruptAnswer 返回 interrupt 答案存储的 Redis key
+// InterruptAnswer returns the Redis key for interrupt answer storage.
 func InterruptAnswer(sessionID, interruptID string) string {
 	return PrefixInterruptAnswer + sessionID + ":" + interruptID
 }
 
-// InterruptChannel 返回 interrupt 答案 Pub/Sub channel name
+// InterruptChannel returns the Pub/Sub channel name for interrupt answers.
 func InterruptChannel(sessionID, interruptID string) string {
 	return PrefixInterruptChannel + sessionID + ":" + interruptID
 }
 
-// MessageStream 返回流式消息 chunks List 的 Redis key
+// MessageStream returns the Redis key for the streaming message chunks List.
 func MessageStream(messageID string) string {
 	return PrefixMessageStream + messageID
 }
 
-// RtcResultChannel 返回 RTC 结果通知 Pub/Sub channel name
+// RtcResultChannel returns the Pub/Sub channel name for RTC result notifications.
 func RtcResultChannel(rtcID string) string {
 	return PrefixRtcResultChannel + rtcID
 }
 
-// RtcResultKey 返回 RTC 结果存储的 Redis key
+// RtcResultKey returns the Redis key for RTC result storage.
 func RtcResultKey(rtcID string) string {
 	return PrefixRtcResultKey + rtcID
 }
 
-// RtcOrphanTriggered 返回孤儿 turn 触发去重的 Redis key
+// RtcOrphanTriggered returns the Redis key for orphan turn trigger deduplication.
 func RtcOrphanTriggered(rtcID string) string {
 	return PrefixRtcOrphanTriggered + rtcID
 }
 
-// ========== 批量恢复（Batch Resume）构造函数 ==========
+// ========== Batch Resume constructors ==========
 
-// RtcBatchPending 返回批量恢复待完成 RTC 集合的 Redis key
+// RtcBatchPending returns the Redis key for the batch resume pending RTC set.
 func RtcBatchPending(turnID string) string {
 	return PrefixRtcBatchPending + turnID
 }
 
-// RtcBatchResults 返回批量恢复结果存储的 Redis key
+// RtcBatchResults returns the Redis key for batch resume result storage.
 func RtcBatchResults(turnID string) string {
 	return PrefixRtcBatchResults + turnID
 }
 
-// RtcBatchInterruptMap 返回批量恢复 InterruptID 映射的 Redis key
+// RtcBatchInterruptMap returns the Redis key for the batch resume InterruptID mapping.
 func RtcBatchInterruptMap(turnID string) string {
 	return PrefixRtcBatchInterruptMap + turnID
 }
 
-// ========== Token 预估 ==========
-// 注：Token 预估数据已迁移至 Session 表持久化，不再使用 Redis 缓存。
-// 原 TokenEstimate() 函数已删除。
+// ========== Token estimation ==========
+// Note: Token estimation data has been migrated to the Session table for persistence; Redis cache is no longer used.
+// The original TokenEstimate() function has been deleted.
 
-// ========== 错误消息速率限制 ==========
+// ========== Error message rate limiting ==========
 
-// ErrorMessageRateLimit 返回错误消息速率限制计数器的 Redis key
+// ErrorMessageRateLimit returns the Redis key for the error message rate limiting counter.
 func ErrorMessageRateLimit(sessionID, hour string) string {
 	return PrefixErrorMessageRateLimit + sessionID + ":" + hour
 }
