@@ -79,10 +79,11 @@ func cancelLoopAsynqTask(
 		return
 	}
 	if cancelErr := deps.TaskScheduler.Cancel(ctx, loop.AsynqTaskID); cancelErr != nil {
-		logger.Info(ctx, "cancelLoopAsynqTask.failed", map[string]any{
+		logger.Warn(ctx, "cancelLoopAsynqTask.failed", map[string]any{
 			"loop_id": loop.ID.String(),
 			"task_id": loop.AsynqTaskID,
 			"error":   cancelErr.Error(),
+			"message": "asynq task cancel failed; task may still execute even though loop is cancelled",
 		})
 		// Continue — status update proceeds even if task cancellation fails.
 	}

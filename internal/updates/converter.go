@@ -5,14 +5,15 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
-// ========== dbmodel → protocol 转换 ==========
+// ========== DB model → protocol conversion ==========
 //
-// 供 UpdatePublisher 内部使用：将 repo 返回的 dbmodel 实体转换为 protocol DTO，
-// 用于组装推送到 Centrifuge 的富内容 Update。
+// Used internally by UpdatePublisher: converts repo-returned dbmodel entities
+// to protocol DTOs for assembling rich-content Updates pushed to Centrifuge.
 //
-// Session 转换已迁移到 model.ToProtocolSession，供多处复用。
+// Session conversion has been migrated to model.ToProtocolSession for reuse across packages.
 
-// toProtocolSession 调用 model.ToProtocolSession，保留本包内的短名称便于内部使用。
+// toProtocolSession calls model.ToProtocolSession, keeping the short name
+// for internal convenience.
 func toProtocolSession(m *model.Session) protocol.Session {
 	return model.ToProtocolSession(m)
 }
@@ -29,10 +30,10 @@ func toProtocolRtc(m *model.Rtc) protocol.Rtc {
 	return model.ToProtocolRtc(m)
 }
 
-// ========== 通用辅助 ==========
+// ========== Common helpers ==========
 
-// DerefUpdates 将 []*protocol.Update 转为 *[]protocol.Update。
-// handler 层用于组装 RPC 响应的 Updates 字段。
+// DerefUpdates converts []*protocol.Update to *[]protocol.Update.
+// Used by the handler layer to assemble the Updates field in RPC responses.
 func DerefUpdates(src []*protocol.Update) *[]protocol.Update {
 	if src == nil {
 		return nil
@@ -44,9 +45,10 @@ func DerefUpdates(src []*protocol.Update) *[]protocol.Update {
 	return &out
 }
 
-// enrichSessionWithTokenEstimate 从 Session 模型的持久化 EWMA 计算预估字段，
-// 填充 protocol.Session 的预估字段。
-// threshold 为压缩触发阈值（contextTokensLimit - autoCompactBufferTokens）。
+// enrichSessionWithTokenEstimate computes token estimate fields from the
+// Session model's persisted EWMA and populates the protocol.Session's
+// estimate fields.
+// threshold is the compression trigger threshold (contextTokensLimit - autoCompactBufferTokens).
 func enrichSessionWithTokenEstimate(ps *protocol.Session, session *model.Session, threshold int64) {
 	if session == nil || threshold <= 0 {
 		return

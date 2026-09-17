@@ -437,6 +437,15 @@ return 1
 //
 // This replaces the N+1 Redis round-trip pattern (ZRange + per-item HGet)
 // with a single atomic call.
+//
+// NOTE: Uses JSON substring matching ("kind":"<value>") which relies on Go's
+// json.Marshal producing consistent output (no extra spaces, deterministic field
+// order for struct types). This is safe for our controlled payload format where
+// WorkPayload is a struct with fixed field ordering. If the serialization format
+// ever changes (e.g., switching to map types or json.MarshalIndent), this script
+// would need to be updated. An alternative would be storing kind as a separate
+// Redis hash field, but that requires parsing JSON in Go before publish and adds
+// complexity for a theoretical risk.
 var hasPendingWorkByKindScript = redis.NewScript(`
 local queue_key = KEYS[1]
 local active_key = KEYS[2]
