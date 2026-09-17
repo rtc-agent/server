@@ -21,27 +21,27 @@ import (
 	"github.com/rtc-agent/server/internal/infra/httputil"
 )
 
-// Config Mock OAuth2 配置
+// Config holds Mock OAuth2 configuration.
 type Config struct {
 	ClientID     string
 	ClientSecret string
 }
 
-// Provider Mock OAuth2 提供者
+// Provider is the Mock OAuth2 provider.
 type Provider struct {
 	config Config
 	mu     sync.RWMutex
-	codes  map[string]*authCodeData // 授权码 → 数据
+	codes  map[string]*authCodeData // authorization code -> data
 }
 
-// authCodeData 授权码数据
+// authCodeData holds authorization code data.
 type authCodeData struct {
 	UserID    string
 	ExpiresAt time.Time
 	Used      bool
 }
 
-// NewProvider 创建 Mock OAuth2 Provider
+// NewProvider creates a new Mock OAuth2 Provider.
 func NewProvider(cfg Config) *Provider {
 	return &Provider{
 		config: cfg,
@@ -49,15 +49,15 @@ func NewProvider(cfg Config) *Provider {
 	}
 }
 
-// RegisterRoutes 注册路由到 http.ServeMux
+// RegisterRoutes registers routes to the http.ServeMux.
 func (p *Provider) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/oauth2/authorize", p.handleAuthorize)
 	mux.HandleFunc("/oauth2/token/exchange", p.handleTokenExchange)
 }
 
-// handleAuthorize 处理授权请求
-// GET: 显示 HTML 授权页面（输入 User ID，点击授权）
-// POST: 生成授权码并重定向
+// handleAuthorize handles authorization requests.
+// GET: displays the HTML authorization page (enter User ID, click authorize)
+// POST: generates an authorization code and redirects
 func (p *Provider) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

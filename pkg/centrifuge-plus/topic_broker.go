@@ -116,8 +116,8 @@ func (b *TopicBroker) RegisterBrokerEventHandler(handler centrifuge.BrokerEventH
 // History returns publications for channel from HistoryStore.
 // StreamPosition is read from Redis meta key.
 func (b *TopicBroker) History(ch string, opts centrifuge.HistoryOptions) (pubs []*centrifuge.Publication, sp centrifuge.StreamPosition, err error) {
-	// 接口方法无法接受 context，内部使用带超时的 context 防止 Redis/DB 查询无限阻塞
-	// Recovery 可能涉及大量 DB 查询，给予充足的超时时间
+	// Interface methods cannot accept context; use an internal context with timeout to prevent Redis/DB queries from blocking indefinitely.
+	// Recovery may involve many DB queries, so allow generous timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -127,7 +127,7 @@ func (b *TopicBroker) History(ch string, opts centrifuge.HistoryOptions) (pubs [
 	defer func() {
 		if sp.Offset > 0 {
 			span.SetAttributes(
-				AttributeOffset.Int64(int64(sp.Offset)), //nolint:gosec // offset 不会超过 int64 范围
+				AttributeOffset.Int64(int64(sp.Offset)), //nolint:gosec // offset will not exceed int64 range
 				AttributeEpoch.String(sp.Epoch),
 			)
 		}
@@ -153,7 +153,7 @@ func (b *TopicBroker) History(ch string, opts centrifuge.HistoryOptions) (pubs [
 		return nil, sp, nil
 	}
 
-	pubs, err = b.historyStore.Query(ctx, ch, sinceOffset, uint32(sp.Offset)) //nolint:gosec // offset 不会超过 uint32 范围
+	pubs, err = b.historyStore.Query(ctx, ch, sinceOffset, uint32(sp.Offset)) //nolint:gosec // range already checked
 	if err != nil {
 		b.logger.Warn("HistoryStore.Query failed for channel %s: %v", ch, err)
 		return nil, sp, err
@@ -231,8 +231,8 @@ func (b *TopicBroker) Close(_ context.Context) error {
 	if b.pubSubCancel != nil {
 		b.pubSubCancel()
 	}
-	b.pubSubClient = nil                      // 置空防止并发复用
-	b.subscribedChans = make(map[string]bool) // 清空订阅状态，确保下次 Subscribe 重新发送 SUBSCRIBE
+	b.pubSubClient = nil                      // Set to nil to prevent concurrent reuse.
+	b.subscribedChans = make(map[string]bool) // Clear subscription state to ensure next Subscribe re-sends SUBSCRIBE.
 	b.pubSubMu.Unlock()
 
 	if b.redisClient != nil {
@@ -245,15 +245,15 @@ func (b *TopicBroker) metaKey(ch string) string {
 	return b.prefix + ":meta:" + ch
 }
 
-// channelOffsetKey 返回频道 offset 计数器的 Redis key。
-// 与 cache.ChannelOffset(ch) 保持一致（"channel:offset:" + ch）。
-// 注：centrifuge-plus 是独立模块，无法导入 internal/infra/cache，因此硬编码 key 格式。
+// channelOffsetKey returns the Redis key for the channel offset counter.
+// Consistent with cache.ChannelOffset(ch) ("channel:offset:" + ch).
+// Note: centrifuge-plus is an independent module and cannot import internal/infra/cache, so the key format is hardcoded.
 func (b *TopicBroker) channelOffsetKey(ch string) string {
 	return "channel:offset:" + ch
 }
 
-// channelEpochKey 返回频道 epoch 的 Redis key。
-// 与 cache.ChannelEpoch(ch) 保持一致（"channel:epoch:" + ch）。
+// channelEpochKey returns the Redis key for the channel epoch.
+// Consistent with cache.ChannelEpoch(ch) ("channel:epoch:" + ch).
 func (b *TopicBroker) channelEpochKey(ch string) string {
 	return "channel:epoch:" + ch
 }
@@ -276,7 +276,7 @@ func (b *TopicBroker) mustMarshal(v any) []byte {
 	return data
 }
 
-// IncrConversationOffset 为指定会话分配下一个 offset（Redis INCR）
+// IncrConversationOffset allocates the next offset for a given session (Redis INCR).
 // key: {prefix}:conv:offset:{conversationID}
 func (b *TopicBroker) IncrConversationOffset(ctx context.Context, conversationID string) (uint32, error) {
 	key := b.prefix + ":conv:offset:" + conversationID
