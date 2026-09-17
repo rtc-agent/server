@@ -167,21 +167,21 @@ func (p *Provider) handleAuthorizeConfirm(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// handleTokenExchange 处理授权码换取用户信息
+// handleTokenExchange handles authorization code exchange for user info.
 // POST /oauth2/token/exchange
-// 参数: client_id, client_secret, code, redirect_uri
-// 返回: 用户信息 JSON
+// Params: client_id, client_secret, code, redirect_uri
+// Returns: user info JSON
 func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 限制请求体大小，防止恶意大 payload 耗尽内存
+	// Limit request body size to prevent malicious payloads from exhausting memory.
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
 
 	if err := r.ParseForm(); err != nil {
-		// 尝试 JSON 解析
+		// Try JSON parsing.
 		var body struct {
 			ClientID     string `json:"client_id"`
 			ClientSecret string `json:"client_secret"`
@@ -191,7 +191,7 @@ func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 			Email        string `json:"email"`
 		}
 		if jsonErr := json.NewDecoder(r.Body).Decode(&body); jsonErr != nil {
-			httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "无法解析请求参数")
+			httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "cannot parse request parameters")
 			return
 		}
 		p.processExchange(w, body.ClientID, body.ClientSecret, body.Code, body.Username, body.Email)
@@ -207,39 +207,39 @@ func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	p.processExchange(w, clientID, clientSecret, code, username, email)
 }
 
-// processExchange 处理授权码交换
+// processExchange handles authorization code exchange.
 func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret, code, username, email string) {
-	// 验证 client 凭据
+	// Validate client credentials.
 	if clientID != p.config.ClientID || clientSecret != p.config.ClientSecret {
-		httputil.WriteError(w, http.StatusUnauthorized, "invalid_client", "无效的客户端凭据")
+		httputil.WriteError(w, http.StatusUnauthorized, "invalid_client", "invalid client credentials")
 		return
 	}
 
 	if code == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "code 不能为空")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "code is required")
 		return
 	}
 
-	// 查找授权码
+	// Look up authorization code.
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	codeData, ok := p.codes[code]
 	if !ok {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "授权码无效")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "authorization code is invalid")
 		return
 	}
 	if codeData.Used {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "授权码已使用")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "authorization code has been used")
 		return
 	}
 	if time.Now().After(codeData.ExpiresAt) {
 		delete(p.codes, code)
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "授权码已过期")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "authorization code has expired")
 		return
 	}
 	codeData.Used = true
 
-	// 构造用户信息
+	// Build user info.
 	userID := codeData.UserID
 	if username == "" {
 		username = "user_" + userID
@@ -248,7 +248,7 @@ func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret
 		email = userID + "@example.com"
 	}
 
-	// 直接返回用户信息
+	// Return user info directly.
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{
 		"provider_user_id": userID,
 		"username":         username,
@@ -257,32 +257,33 @@ func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret
 	})
 }
 
-// generateCode 生成随机授权码
+// generateCode generates a random authorization code.
 func generateCode() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// rand.Read 失败意味着系统熵源耗尽，无法生成安全随机数
+		// rand.Read failure means the system entropy source is exhausted;
+		// secure random numbers cannot be generated.
 		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
 	}
 	return hex.EncodeToString(b)
 }
 
-// isValidRedirectURI 验证 redirect_uri 格式，防止开放重定向攻击。
-// 仅允许 http/https 协议的绝对 URL。
+// isValidRedirectURI validates redirect_uri format to prevent open redirect
+// attacks. Only absolute URLs with http/https schemes are allowed.
 func isValidRedirectURI(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return false
 	}
-	// 必须是绝对 URL 且协议为 http 或 https
+	// Must be an absolute URL with http or https scheme.
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return false
 	}
-	// 必须有 host
+	// Must have a host.
 	if u.Host == "" {
 		return false
 	}
-	// 禁止 javascript: 等危险协议（已通过 scheme 检查排除）
-	// 禁止 fragment 中的重定向（防止 location.hash 操纵）
+	// Dangerous schemes like javascript: are excluded by the scheme check above.
+	// Fragment-based redirects (via location.hash) are also prevented.
 	return true
 }

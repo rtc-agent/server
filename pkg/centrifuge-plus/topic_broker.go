@@ -141,7 +141,7 @@ func (b *TopicBroker) History(ch string, opts centrifuge.HistoryOptions) (pubs [
 			b.logger.Warn("History sinceOffset %d exceeds uint32 range, clamping to MaxUint32", opts.Filter.Since.Offset)
 			sinceOffset = math.MaxUint32
 		} else {
-			sinceOffset = uint32(opts.Filter.Since.Offset) //nolint:gosec // 已检查范围
+			sinceOffset = uint32(opts.Filter.Since.Offset) //nolint:gosec // range already checked
 		}
 	}
 
