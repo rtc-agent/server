@@ -208,7 +208,7 @@ func (c *Client) fetchUserInfo(ctx context.Context, userInfoURL string, accessTo
 		}
 	}
 
-	// 优先级：username > login > name
+	// Priority: username > login > name
 	username := result.Username
 	if username == "" {
 		username = result.Login
@@ -217,7 +217,7 @@ func (c *Client) fetchUserInfo(ctx context.Context, userInfoURL string, accessTo
 		username = result.Name
 	}
 
-	// 优先级：avatar_url > picture
+	// Priority: avatar_url > picture
 	avatarURL := result.AvatarURL
 	if avatarURL == "" {
 		avatarURL = result.Picture
@@ -235,7 +235,9 @@ func (c *Client) fetchUserInfo(ctx context.Context, userInfoURL string, accessTo
 	}, nil
 }
 
-// parseUserInfoFromTokenResponse 向后兼容：TokenURL 直接返回用户信息
+// parseUserInfoFromTokenResponse provides backward compatibility for providers
+// whose TokenURL endpoint returns user info directly (instead of requiring a
+// separate UserInfo call).
 func (c *Client) parseUserInfoFromTokenResponse(ctx context.Context, cfg *ProviderConfig, code string, redirectURI string) (*ProviderUserInfo, error) {
 	form := url.Values{
 		"client_id":     {cfg.ClientID},

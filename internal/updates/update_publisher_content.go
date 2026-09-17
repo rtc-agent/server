@@ -15,9 +15,10 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
-// ResolveMessageContent 返回消息的完整内容（JSON 字符串）。
-// 如果消息是 streaming 状态，从 StreamStore 聚合 chunks 并替换 ContentData.Data。
-// 返回值为 ContentData JSON 字符串，调用方可直接 Unmarshal 为 protocol.ContentData。
+// ResolveMessageContent returns the full content of a message as a JSON string.
+// If the message is still streaming, chunks are aggregated from the StreamStore
+// and used to replace ContentData.Data. The return value is a ContentData JSON
+// string that callers can directly unmarshal into protocol.ContentData.
 func (u *UpdatePublisher) ResolveMessageContent(msg *model.Message) string {
 	u.mu.RLock()
 	ss := u.streamStore
@@ -42,8 +43,9 @@ func (u *UpdatePublisher) ResolveMessageContent(msg *model.Message) string {
 	return msg.Content
 }
 
-// publishLive 将更新推送到 Live 频道（不持久化 offset，仅实时推送）。
-// Live 频道用于实时展示，断线后客户端通过 Topic 频道恢复状态。
+// publishLive pushes updates to the Live channel (no offset persistence,
+// real-time only). Live channels provide real-time display; after reconnect,
+// clients recover state via Topic channels.
 func (u *UpdatePublisher) publishLive(ctx context.Context, items []UpdatePublishItem) ([]*protocol.Update, error) {
 	u.mu.RLock()
 	broker := u.broker
@@ -54,7 +56,7 @@ func (u *UpdatePublisher) publishLive(ctx context.Context, items []UpdatePublish
 	for _, item := range items {
 		tempUpdate := &model.UserUpdate{
 			Items:  model.UpdateItemArray(item.Items),
-			Offset: 0, // Live 频道不使用 offset
+			Offset: 0, // Live channels do not use offset
 		}
 
 		pushUpdates, err := u.convertUpdates(ctx, []*model.UserUpdate{tempUpdate})
@@ -79,7 +81,8 @@ func (u *UpdatePublisher) publishLive(ctx context.Context, items []UpdatePublish
 	return allUpdates, nil
 }
 
-// publishTopic 将更新保存到 Topic 频道（持久化 offset + DB）并推送到 Centrifuge。
+// publishTopic saves updates to the Topic channel (persistent offset + DB) and
+// pushes them to Centrifuge.
 func (u *UpdatePublisher) publishTopic(ctx context.Context, items []UpdatePublishItem) ([]*protocol.Update, error) {
 	userUpdates, err := u.Save(ctx, items...)
 	if err != nil {
@@ -88,15 +91,17 @@ func (u *UpdatePublisher) publishTopic(ctx context.Context, items []UpdatePublis
 	return u.Push(ctx, items, userUpdates)
 }
 
-// entityRef 记录一个实体引用的元数据，用于 Phase 3 按原始顺序回填。
+// entityRef records metadata for an entity reference, used in Phase 3 to
+// backfill results in their original order.
 type entityRef struct {
 	entityType string
 	entityID   protocol.UUID
 	uuid       uuid.UUID
 }
 
-// collectEntityRefs 遍历所有 UserUpdate，按实体类型收集需要查询的 UUID（去重）。
-// 返回保持原始顺序的 allRefs 和按类型分组的 groupedIDs。
+// collectEntityRefs iterates all UserUpdates and collects UUIDs to query,
+// grouped by entity type (deduplicated). Returns allRefs preserving the
+// original order and groupedIDs grouped by type.
 func collectEntityRefs(uus []*model.UserUpdate, resolvers map[string]EntityResolver) ([]entityRef, map[string][]uuid.UUID, error) {
 	var allRefs []entityRef
 	groupedIDs := make(map[string][]uuid.UUID)
@@ -125,7 +130,8 @@ func collectEntityRefs(uus []*model.UserUpdate, resolvers map[string]EntityResol
 	return allRefs, groupedIDs, nil
 }
 
-// buildUpdates 按原始顺序将查询结果回填到 protocol.Update 的 DataList。
+// buildUpdates backfills query results into protocol.Update DataList in the
+// original order.
 func buildUpdates(uus []*model.UserUpdate, allRefs []entityRef, resolved map[string]map[uuid.UUID]any) []*protocol.Update {
 	refIdx := 0
 	result := make([]*protocol.Update, 0, len(uus))
@@ -199,7 +205,7 @@ func resolveWithNilPlaceholder(
 	return result, nil
 }
 
-// uniqueUUIDs 对 UUID 切片去重，保持首次出现的顺序。
+// uniqueUUIDs deduplicates a UUID slice, preserving first-occurrence order.
 func uniqueUUIDs(ids []uuid.UUID) []uuid.UUID {
 	seen := make(map[uuid.UUID]struct{}, len(ids))
 	result := make([]uuid.UUID, 0, len(ids))
@@ -212,8 +218,9 @@ func uniqueUUIDs(ids []uuid.UUID) []uuid.UUID {
 	return result
 }
 
-// channelRouter 按频道类型（Topic / Live）分类 UpdatePublishItem。
-// 提取为公共函数避免在 Publish 方法中重复分类逻辑。
+// routePublishItems classifies UpdatePublishItems by channel type (Topic / Live).
+// Extracted as a shared function to avoid duplicating the classification logic
+// in the Publish method.
 func routePublishItems(items []UpdatePublishItem) (topic, live []UpdatePublishItem) {
 	for _, item := range items {
 		if channel.IsTopic(item.Channel) {

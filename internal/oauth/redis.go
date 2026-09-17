@@ -1,4 +1,4 @@
-// Package oauth 提供 OAuth2 state（CSRF 防护）存储实现。
+// Package oauth provides OAuth2 state (CSRF protection) storage implementation.
 package oauth
 
 import (
@@ -12,23 +12,24 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ErrStateNotFound state 不存在或已过期
+// ErrStateNotFound indicates the state does not exist or has expired.
 var ErrStateNotFound = errors.New("state not found")
 
-// RedisStore 基于 Redis 的 StateStore 实现（生产 / 分布式环境使用）。
+// RedisStore is a Redis-backed StateStore implementation for production and
+// distributed environments.
 //
-// 存储结构：
+// Storage layout:
 //
-//	key   = oauth2:state:{state}   （由 cache.OAuth2State 构造）
-//	value = provider 名称
-//	TTL   = 由调用方指定（通常 10 分钟）
+//	key   = oauth2:state:{state}   (constructed via cache.OAuth2State)
+//	value = provider name
+//	TTL   = caller-specified (typically 10 minutes)
 //
-// GetDel 通过 Lua 脚本原子地读取并删除，防止重放攻击。
+// GetDel uses a Lua script for atomic read-and-delete to prevent replay attacks.
 type RedisStore struct {
 	client redis.UniversalClient
 }
 
-// NewRedisStore 创建 Redis state 存储
+// NewRedisStore creates a new Redis-backed state store.
 func NewRedisStore(client redis.UniversalClient) *RedisStore {
 	if client == nil {
 		panic("statestore: redis client is nil")
@@ -36,7 +37,7 @@ func NewRedisStore(client redis.UniversalClient) *RedisStore {
 	return &RedisStore{client: client}
 }
 
-// Set 存储 state（带 TTL）
+// Set stores a state value with the given TTL.
 func (s *RedisStore) Set(ctx context.Context, state string, value string, ttl time.Duration) error {
 	if state == "" {
 		return errors.New("state key is empty")
@@ -45,7 +46,8 @@ func (s *RedisStore) Set(ctx context.Context, state string, value string, ttl ti
 	return s.client.Set(ctx, key, value, ttl).Err()
 }
 
-// GetDel 原子地获取并删除 state；不存在或已过期时返回 ErrStateNotFound
+// GetDel atomically retrieves and deletes a state value.
+// Returns ErrStateNotFound if the state does not exist or has expired.
 func (s *RedisStore) GetDel(ctx context.Context, state string) (string, error) {
 	if state == "" {
 		return "", ErrStateNotFound

@@ -1,6 +1,7 @@
 // Package taskscheduler provides the asynq-based implementation of TaskScheduler.
 //
-// 包名使用 taskscheduler 而非 asynq，避免与导入的 github.com/hibiken/asynq 冲突。
+// The package is named taskscheduler (not asynq) to avoid collision with the
+// imported github.com/hibiken/asynq module.
 package taskscheduler
 
 import (
