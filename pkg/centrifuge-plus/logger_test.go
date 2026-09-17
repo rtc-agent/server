@@ -6,7 +6,7 @@ import (
 
 func TestDefaultLogger_Info(_ *testing.T) {
 	l := defaultLogger{}
-	// 不应 panic
+	// Should not panic.
 	l.Info("test info: %s", "arg1")
 }
 

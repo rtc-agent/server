@@ -44,7 +44,7 @@ func TestValidateCreateMessageRequest_OK(t *testing.T) {
 }
 
 func TestCheckSessionOwnership_SystemAlwaysPass(t *testing.T) {
-	// System Creator 永远放行；deps 传 nil 也不该报错
+	// System creator always passes; deps may be nil and it must still not error.
 	err := primitives.CheckSessionOwnership(context.Background(), nil, uuid.New(), usecase.SystemCreator{})
 	if err != nil {
 		t.Fatalf("system creator should always pass, got %v", err)
@@ -69,11 +69,12 @@ func TestBuildSendMessageUpdates_UserSessionProducesPush(t *testing.T) {
 	}
 }
 
-// repo 交互的单测建议用 in-memory fake 实现 repo.SessionRepo / TurnRepo / MessageRepo
-// 此处省略完整 fake，实现时按 repo 接口定义写一个。
+// Repository-interaction unit tests should use an in-memory fake implementing
+// repo.SessionRepo / TurnRepo / MessageRepo. The full fake is elided here;
+// implement it according to the repo interfaces when needed.
 func TestCreateSession_PersistsSession(t *testing.T) {
-	t.Skip("实现时补 fake repo 单测")
+	t.Skip("implement fake repo test when ready")
 }
 
-// 占位：确保 protocol 常量可访问
+// Placeholder: ensure protocol constants are importable.
 var _ = protocol.MessageRoleUser

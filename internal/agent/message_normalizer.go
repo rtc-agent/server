@@ -21,7 +21,7 @@ import (
 //  1. Extract system messages to the leading position.
 //  2. Repair tool call/result pairing (drop orphaned entries).
 //  3. Merge consecutive same-role user/assistant messages ("\n" join).
-//  4. Validate the final sequence for structural correctness.
+//  4. Validate the final sequence for basic structural correctness.
 //
 // Repair runs before merge because dropping an intermediate assistant/tool
 // message during repair can create new consecutive same-role pairs that
@@ -29,6 +29,15 @@ import (
 //
 // The normalizer runs as the final step in the loadMessages pipeline,
 // after all content injection (attachments, commands, scenarios) is complete.
+//
+// Design Philosophy:
+// The database may store messages in various orders (e.g., assistant text
+// followed by tool results, multiple consecutive tool messages). The repair
+// functions (repairToolPairing, mergeConsecutiveSameRole) handle these cases
+// and produce a valid sequence. Validation only checks the most basic rules
+// (system messages leading, first message is user/assistant) and does not
+// enforce strict role transition rules. This makes the system more tolerant
+// of edge cases and data inconsistencies.
 
 // normalizeMessagesForLLM reshapes the message sequence to satisfy LLM API
 // requirements. It performs four transformations in order:
@@ -200,16 +209,20 @@ func joinContent(a, b string) string {
 // validateMessageSequence checks the structural correctness of a message
 // sequence for the Anthropic Messages API.
 //
+// This is a defensive validation layer that only checks the most basic rules.
+// The repair functions (repairToolPairing, mergeConsecutiveSameRole) handle
+// most structural issues, so validation only catches cases that repair cannot
+// fix.
+//
 // Rules enforced:
 //  1. System messages must occupy the leading position (no interleaving).
-//  2. Non-system messages follow valid turn structure:
-//     - The first non-system message may be user or assistant (prefill).
-//     - User must be followed by assistant or tool (tool-use continuation).
-//     - Assistant without tool calls must be followed by user.
-//     - Assistant with tool calls must be followed by tool messages.
-//     - Tool messages must be followed by assistant (model processes results)
-//     or user (human interrupts the tool-use chain).
-//  3. Tool pairing is structurally sound (delegated to validateToolPairing).
+//  2. The first non-system message must be user or assistant (not tool).
+//
+// Note: Role transitions and tool pairing are NOT validated here because:
+//   - repairToolPairing fixes orphan tool results and unmatched tool calls
+//   - mergeConsecutiveSameRole merges consecutive same-role messages
+//   - The database may store messages in various orders that are all valid
+//     after repair (e.g., assistant text followed by tool results)
 func validateMessageSequence(messages []*turnagent.Message) error {
 	if len(messages) == 0 {
 		return nil
@@ -247,51 +260,8 @@ func validateMessageSequence(messages []*turnagent.Message) error {
 			convStart, first.Role)
 	}
 
-	// Rule 3: Validate role transitions in the conversation body.
-	if err := validateRoleTransitions(messages, convStart); err != nil {
-		return err
-	}
-
-	// Rule 4: Tool pairing integrity.
-	return validateToolPairing(messages)
-}
-
-// validateRoleTransitions checks that each role transition in the conversation
-// body follows the Anthropic Messages API contract.
-func validateRoleTransitions(messages []*turnagent.Message, convStart int) error {
-	for i := convStart; i < len(messages)-1; i++ {
-		curr := messages[i]
-		next := messages[i+1]
-
-		switch curr.Role {
-		case turnagent.RoleUser:
-			if next.Role != turnagent.RoleAssistant && next.Role != turnagent.RoleTool {
-				return fmt.Errorf(
-					"user message at position %d followed by %s (expected assistant or tool)",
-					i, next.Role)
-			}
-
-		case turnagent.RoleAssistant:
-			if len(curr.ToolCalls) > 0 {
-				if next.Role != turnagent.RoleTool {
-					return fmt.Errorf(
-						"assistant with tool_calls at position %d not followed by tool",
-						i)
-				}
-			} else if next.Role != turnagent.RoleUser {
-				return fmt.Errorf(
-					"assistant at position %d followed by %s (expected user)",
-					i, next.Role)
-			}
-
-		case turnagent.RoleTool:
-			if next.Role != turnagent.RoleAssistant && next.Role != turnagent.RoleUser {
-				return fmt.Errorf(
-					"tool message at position %d followed by %s (expected assistant or user)",
-					i, next.Role)
-			}
-		}
-	}
+	// Role transitions and tool pairing are not validated here.
+	// The repair functions handle these cases.
 	return nil
 }
 

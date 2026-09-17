@@ -9,7 +9,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-// ========== encodeTraceParent 测试 ==========
+// ========== encodeTraceParent tests ==========
 
 func TestEncodeTraceParent_ValidSpanContext(t *testing.T) {
 	traceID := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
@@ -37,20 +37,20 @@ func TestEncodeTraceParent_InvalidSpanContext(t *testing.T) {
 }
 
 func TestEncodeTraceParent_NoopSpanContext(t *testing.T) {
-	// noop TracerProvider 的 span context 通常是 invalid
+	// A noop TracerProvider's span context is typically invalid.
 	tp := noop.NewTracerProvider()
 	tracer := tp.Tracer("test")
 	_, span := tracer.Start(context.Background(), "test-op")
 	defer span.End()
 
 	result := encodeTraceParent(span.SpanContext())
-	// noop span context 通常是 invalid，应返回空
+	// A noop span context is usually invalid; expect empty.
 	if result != "" {
 		t.Logf("noop span context produced: %s", result)
 	}
 }
 
-// ========== decodeTraceParent 测试 ==========
+// ========== decodeTraceParent tests ==========
 
 func TestDecodeTraceParent_Valid(t *testing.T) {
 	tp := "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01"
@@ -108,7 +108,7 @@ func TestDecodeTraceParent_InvalidFormat(t *testing.T) {
 	}
 }
 
-// ========== encode/decode 往返测试 ==========
+// ========== encode/decode round-trip tests ==========
 
 func TestEncodeDecodeRoundTrip(t *testing.T) {
 	traceID := [16]byte{0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c}
@@ -137,7 +137,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	}
 }
 
-// ========== extractTraceParentFromPayload 测试 ==========
+// ========== extractTraceParentFromPayload tests ==========
 
 func TestExtractTraceParentFromPayload_WithTraceParent(t *testing.T) {
 	payload := `{"msg":"hello"}__tp:00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01`
@@ -174,7 +174,7 @@ func TestExtractTraceParentFromPayload_EmptyPayload(t *testing.T) {
 }
 
 func TestExtractTraceParentFromPayload_MultipleTraceParents(t *testing.T) {
-	// 只提取最后一个有效的 __tp:（符合W3C traceparent格式）
+	// Only the last valid __tp: (matching W3C traceparent format) is extracted.
 	tp1 := "00-0102030405060708090a0b0c0d0e0f10-0102030405060708-01"
 	tp2 := "00-aabbccddeeff00112233445566778899-abcdef0123456789-02"
 	payload := `data__tp:` + tp1 + `__tp:` + tp2
@@ -188,7 +188,7 @@ func TestExtractTraceParentFromPayload_MultipleTraceParents(t *testing.T) {
 	}
 }
 
-// ========== TracingConfig 测试 ==========
+// ========== TracingConfig tests ==========
 
 func TestTracingConfig_DisabledReturnsNoop(t *testing.T) {
 	cfg := TracingConfig{Enabled: false}
@@ -196,7 +196,7 @@ func TestTracingConfig_DisabledReturnsNoop(t *testing.T) {
 	if tracer == nil {
 		t.Fatal("expected non-nil tracer")
 	}
-	// 应该可以安全使用
+	// Should be safe to use.
 	_, span := tracer.Start(context.Background(), "test")
 	span.End()
 }
@@ -211,15 +211,15 @@ func TestTracingConfig_NilProviderReturnsNoop(t *testing.T) {
 	span.End()
 }
 
-// ========== recordError 测试 ==========
+// ========== recordError tests ==========
 
 func TestRecordError_WithError(_ *testing.T) {
-	// 使用 noop tracer，确保不 panic
+	// Use a noop tracer; must not panic.
 	tp := noop.NewTracerProvider()
 	tracer := tp.Tracer("test")
 	_, span := tracer.Start(context.Background(), "test-op")
 
-	// 不应 panic
+	// Should not panic.
 	recordError(span, nil)
 	recordError(span, fmt.Errorf("test error"))
 	span.End()
@@ -230,12 +230,12 @@ func TestRecordError_NilError(_ *testing.T) {
 	tracer := tp.Tracer("test")
 	_, span := tracer.Start(context.Background(), "test-op")
 
-	// nil error 不应 panic
+	// A nil error must not panic.
 	recordError(span, nil)
 	span.End()
 }
 
-// ========== isTraceParentCandidate 测试 ==========
+// ========== isTraceParentCandidate tests ==========
 
 func TestIsTraceParentCandidate_Valid(t *testing.T) {
 	tests := []struct {

@@ -11,7 +11,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// isSystemSession 判断 session 是否属于系统。系统 session 不推送 update。
+// isSystemSession reports whether the session belongs to the system.
+// Updates are not published for system sessions.
 //
 // nil session is treated as non-system. Callers should check for nil session
 // separately and skip publishing if the routing metadata is unavailable.
@@ -22,7 +23,7 @@ func isSystemSession(session *model.Session) bool {
 	return session.OwnerKind == string(usecase.CreatorKindSystem)
 }
 
-// BuildSendMessageUpdates 构造 SendMessage 的 UpdatePublishItem 列表。
+// BuildSendMessageUpdates builds the UpdatePublishItem list for SendMessage.
 //
 // turnID is optional: when non-nil, a "turn created" update is emitted; when
 // nil, only the session and message updates are produced. The turn may not
@@ -67,7 +68,8 @@ func BuildSendMessageUpdates(
 	}}
 }
 
-// BuildMessageUpdate 构造"仅 message 创建"的 UpdatePublishItem（worker 使用）。
+// BuildMessageUpdate builds an UpdatePublishItem for "message created" only
+// (used by the worker).
 // nil session returns nil (cannot route).
 func BuildMessageUpdate(session *model.Session, messageID uuid.UUID) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
@@ -81,7 +83,8 @@ func BuildMessageUpdate(session *model.Session, messageID uuid.UUID) []updates.U
 	}}
 }
 
-// BuildSessionUpdateUpdates 构造"仅 session 属性更新"的 UpdatePublishItem。
+// BuildSessionUpdateUpdates builds an UpdatePublishItem for "session attributes
+// updated" only.
 // nil session returns nil (cannot route).
 func BuildSessionUpdateUpdates(session *model.Session) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
@@ -95,12 +98,12 @@ func BuildSessionUpdateUpdates(session *model.Session) []updates.UpdatePublishIt
 	}}
 }
 
-// BuildSessionCloseUpdates 构造"session 关闭"的 UpdatePublishItem。
+// BuildSessionCloseUpdates builds an UpdatePublishItem for "session closed".
 func BuildSessionCloseUpdates(session *model.Session) []updates.UpdatePublishItem {
 	return BuildSessionUpdateUpdates(session)
 }
 
-// BuildTurnStopUpdates 构造"turn 停止"的 UpdatePublishItem。
+// BuildTurnStopUpdates builds an UpdatePublishItem for "turn stopped".
 // nil session returns nil (cannot route).
 func BuildTurnStopUpdates(session *model.Session, turnID uuid.UUID) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
@@ -114,7 +117,7 @@ func BuildTurnStopUpdates(session *model.Session, turnID uuid.UUID) []updates.Up
 	}}
 }
 
-// BuildRtcStatusUpdates 构造"RTC 状态更新"的 UpdatePublishItem。
+// BuildRtcStatusUpdates builds an UpdatePublishItem for "RTC status updated".
 // nil session returns nil (cannot route).
 func BuildRtcStatusUpdates(session *model.Session, rtcID uuid.UUID) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
@@ -128,13 +131,14 @@ func BuildRtcStatusUpdates(session *model.Session, rtcID uuid.UUID) []updates.Up
 	}}
 }
 
-// BuildRtcResultUpdates 构造"RTC 结果提交"的 UpdatePublishItem。
+// BuildRtcResultUpdates builds an UpdatePublishItem for "RTC result submitted".
 func BuildRtcResultUpdates(session *model.Session, rtcID uuid.UUID) []updates.UpdatePublishItem {
 	return BuildRtcStatusUpdates(session, rtcID)
 }
 
-// BuildOrphanTurnUpdates 构造"孤儿 RTC 触发新 turn"的 UpdatePublishItem。
-// 新 Turn + 触发消息的创建通知。
+// BuildOrphanTurnUpdates builds an UpdatePublishItem for "orphan RTC triggers
+// a new turn". Emits both a new turn and the triggering message's creation
+// notifications.
 // nil session returns nil (cannot route).
 func BuildOrphanTurnUpdates(session *model.Session, turnID, messageID uuid.UUID) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
@@ -149,9 +153,10 @@ func BuildOrphanTurnUpdates(session *model.Session, turnID, messageID uuid.UUID)
 	}}
 }
 
-// BuildTurnCreatedUpdates 构造"turn 创建"的 UpdatePublishItem。
-// 当 createTurn 回调创建新 turn 时发布，通知前端有新的 turn 开始处理。
-// 这是唯一发布 turn.created 的位置 —— 其他 turn 生命周期转换都发布 turn.updated。
+// BuildTurnCreatedUpdates builds an UpdatePublishItem for "turn created".
+// Emitted when the createTurn callback creates a new turn, notifying the
+// frontend that processing has begun. This is the only site that publishes
+// turn.created — every other turn lifecycle transition publishes turn.updated.
 // nil session returns nil (cannot route).
 func BuildTurnCreatedUpdates(session *model.Session, turnID uuid.UUID) []updates.UpdatePublishItem {
 	if session == nil || isSystemSession(session) {
@@ -165,22 +170,23 @@ func BuildTurnCreatedUpdates(session *model.Session, turnID uuid.UUID) []updates
 	}}
 }
 
-// BuildSessionUpdatedUpdates 构造"session 属性更新"的 UpdatePublishItem。
-// 当 session 状态变化时发布（如 beginTurn → active, completeTurn → idle）。
+// BuildSessionUpdatedUpdates builds an UpdatePublishItem for "session
+// attributes updated". Emitted when session state changes (e.g. beginTurn
+// transitions to active, completeTurn transitions to idle).
 // nil session returns nil (cannot route).
 func BuildSessionUpdatedUpdates(session *model.Session) []updates.UpdatePublishItem {
 	return BuildSessionUpdateUpdates(session)
 }
 
-// BuildTurnUpdatedUpdates 构造"turn 更新"的 UpdatePublishItem。
-// 当 turn 状态变化时发布（如 begin → running, cancel → cancelled）。
+// BuildTurnUpdatedUpdates builds an UpdatePublishItem for "turn updated".
+// Emitted when turn state changes (e.g. begin to running, cancel to cancelled).
 // nil session returns nil (cannot route).
 func BuildTurnUpdatedUpdates(session *model.Session, turnID uuid.UUID) []updates.UpdatePublishItem {
 	return BuildTurnStopUpdates(session, turnID)
 }
 
-// BuildForkSessionUpdates 构造 ForkSession 的 UpdatePublishItem 列表。
-// 新 session 创建 + 批量消息创建。
+// BuildForkSessionUpdates builds the UpdatePublishItem list for ForkSession.
+// Emits a session creation plus a batch of message creation updates.
 // nil newSession returns nil (cannot route).
 func BuildForkSessionUpdates(
 	newSession *model.Session,
@@ -192,7 +198,7 @@ func BuildForkSessionUpdates(
 	items := []protocol.UpdateItem{
 		{Entity: protocol.EntitySession, Action: protocol.ActionCreated, EntityId: newSession.ID.String()},
 	}
-	// 添加所有消息的 created update
+	// Append a created update for every message.
 	for _, msg := range messages {
 		items = append(items, protocol.UpdateItem{
 			Entity:   protocol.EntityMessage,

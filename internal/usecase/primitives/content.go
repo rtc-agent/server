@@ -7,7 +7,7 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
-// TextContentData 创建纯文本类型的 ContentData
+// TextContentData builds a ContentData of plain-text type.
 func TextContentData(text string) (protocol.ContentData, error) {
 	return protocol.ContentData{
 		Type: protocol.ContentTypeText,
@@ -15,7 +15,7 @@ func TextContentData(text string) (protocol.ContentData, error) {
 	}, nil
 }
 
-// MarkdownContentData 创建 Markdown 类型的 ContentData
+// MarkdownContentData builds a ContentData of Markdown type.
 func MarkdownContentData(markdown string) (protocol.ContentData, error) {
 	return protocol.ContentData{
 		Type: protocol.ContentTypeMarkdown,
@@ -23,7 +23,7 @@ func MarkdownContentData(markdown string) (protocol.ContentData, error) {
 	}, nil
 }
 
-// ThinkingContentData 创建 LLM 推理过程类型的 ContentData
+// ThinkingContentData builds a ContentData carrying the LLM's reasoning trace.
 func ThinkingContentData(thinking string) (protocol.ContentData, error) {
 	return protocol.ContentData{
 		Type: protocol.ContentTypeThinking,
@@ -37,28 +37,29 @@ type SummaryItem struct {
 	Content string
 }
 
-// SummaryMetadata 压缩操作的元数据
+// SummaryMetadata captures metadata about a compression operation.
 type SummaryMetadata struct {
-	// TokensBefore 压缩前的上下文 token 数
+	// TokensBefore is the context token count before compression.
 	TokensBefore int `json:"tokens_before"`
-	// TokensAfter 压缩后的上下文 token 数（估算）
+	// TokensAfter is the estimated context token count after compression.
 	TokensAfter int `json:"tokens_after"`
-	// DurationMs 压缩耗时（毫秒）
+	// DurationMs is the wall-clock cost of the compression in milliseconds.
 	DurationMs int64 `json:"duration_ms"`
-	// Mode 压缩模式: "full" 或 "partial"
+	// Mode is the compression mode: "full" or "partial".
 	Mode string `json:"mode"`
-	// SessionMemoryUsed 是否使用了 session memory（零成本压缩）
+	// SessionMemoryUsed indicates whether session memory was used (zero-cost compression).
 	SessionMemoryUsed bool `json:"session_memory_used,omitempty"`
 }
 
-// SummaryContent 完整的 summary content 结构（包含 items 和 metadata）
-// 向后兼容：旧数据 Data 为 []SummaryItem（JSON 数组），新数据为 SummaryContent（JSON 对象）
+// SummaryContent is the full summary content structure (items + metadata).
+// Backward compatibility: legacy rows store Data as []SummaryItem (JSON array);
+// new rows store SummaryContent (JSON object).
 type SummaryContent struct {
 	Items    []SummaryItem    `json:"items"`
 	Metadata *SummaryMetadata `json:"metadata,omitempty"`
 }
 
-// SummaryContentData 创建 上下文摘要 类型的 ContentData
+// SummaryContentData builds a ContentData of context-summary type.
 func SummaryContentData(summaryList []SummaryItem) (protocol.ContentData, error) {
 	return protocol.ContentData{
 		Type: protocol.ContentTypeSummary,
@@ -66,7 +67,7 @@ func SummaryContentData(summaryList []SummaryItem) (protocol.ContentData, error)
 	}, nil
 }
 
-// SummaryContentDataWithMetadata 创建带元数据的 summary ContentData
+// SummaryContentDataWithMetadata builds a summary ContentData carrying metadata.
 func SummaryContentDataWithMetadata(
 	items []SummaryItem,
 	metadata *SummaryMetadata,
@@ -80,7 +81,8 @@ func SummaryContentDataWithMetadata(
 	}, nil
 }
 
-// SerializeContentData 将 ContentData 序列化为 JSON 字符串（用于存储到数据库 Content 字段）
+// SerializeContentData serializes a ContentData to a JSON string
+// (for persistence in the database Content column).
 func SerializeContentData(cd protocol.ContentData) (string, error) {
 	jsonBytes, err := json.Marshal(cd)
 	if err != nil {
@@ -89,7 +91,7 @@ func SerializeContentData(cd protocol.ContentData) (string, error) {
 	return string(jsonBytes), nil
 }
 
-// ParseContentData 从 JSON 字符串解析 ContentData
+// ParseContentData parses a ContentData from a JSON string.
 func ParseContentData(content string) (protocol.ContentData, error) {
 	if content == "" {
 		return protocol.ContentData{}, nil
@@ -113,13 +115,14 @@ func ParseContentDataToolCall(data any) (protocol.ToolCall, error) {
 	return *v, e
 }
 
-// ContentDataBytes 将 ContentData.Data（any）重新序列化为 JSON 字节。
+// ContentDataBytes re-serializes ContentData.Data (any) to JSON bytes.
 func ContentDataBytes(data any) ([]byte, error) {
 	return json.Marshal(data)
 }
 
-// ParseUserMessageContent 解析 UserMessageContent
-// data 参数经过 JSON 反序列化后是 map[string]interface{}，需要二次转换
+// ParseUserMessageContent parses a UserMessageContent from an arbitrary value.
+// The input arrives as map[string]interface{} after JSON deserialization and
+// requires a second conversion pass through JSON round-tripping.
 func ParseUserMessageContent(data any) (protocol.UserMessageContent, error) {
 	bytes, err := json.Marshal(data)
 	if err != nil {
@@ -132,7 +135,7 @@ func ParseUserMessageContent(data any) (protocol.UserMessageContent, error) {
 	return umc, nil
 }
 
-// UserMessageContentData 创建用户消息类型的 ContentData
+// UserMessageContentData builds a ContentData of user-message type.
 func UserMessageContentData(text string, scenarios []protocol.ScenarioRef) (protocol.ContentData, error) {
 	content := protocol.UserMessageContent{
 		Text: text,
@@ -146,8 +149,9 @@ func UserMessageContentData(text string, scenarios []protocol.ScenarioRef) (prot
 	}, nil
 }
 
-// ContentDataString 将 ContentData.Data（any）提取为字符串。
-// JSON 字符串 → 直接返回；其他类型 → 序列化为 JSON 字符串。
+// ContentDataString extracts ContentData.Data (any) as a string.
+// JSON strings are returned as-is (after unquoting); other types are
+// serialized to a JSON string.
 func ContentDataString(data any) (string, error) {
 	if s, ok := data.(string); ok {
 		return s, nil
@@ -156,7 +160,8 @@ func ContentDataString(data any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// 如果序列化结果是 JSON 字符串（带引号），反序列化得到原始字符串
+	// If the serialization produced a JSON string (quoted), unmarshal
+	// to recover the original unquoted value.
 	var s string
 	if err := json.Unmarshal(b, &s); err == nil {
 		return s, nil

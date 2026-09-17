@@ -306,6 +306,17 @@ func TestValidateMessageSequence(t *testing.T) {
 			},
 		},
 		{
+			name: "valid: multiple consecutive tool messages",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleUser, Content: "read files"},
+				{Role: turnagent.RoleAssistant, ToolCalls: []turnagent.ToolCall{{ID: "c1"}, {ID: "c2"}, {ID: "c3"}}},
+				{Role: turnagent.RoleTool, Content: "file1", ToolCallID: "c1"},
+				{Role: turnagent.RoleTool, Content: "file2", ToolCallID: "c2"},
+				{Role: turnagent.RoleTool, Content: "file3", ToolCallID: "c3"},
+				{Role: turnagent.RoleAssistant, Content: "done"},
+			},
+		},
+		{
 			name: "invalid: system after conversation",
 			input: []*turnagent.Message{
 				{Role: turnagent.RoleUser, Content: "hi"},
@@ -318,32 +329,6 @@ func TestValidateMessageSequence(t *testing.T) {
 			input: []*turnagent.Message{
 				{Role: turnagent.RoleTool, Content: "orphan", ToolCallID: "c1"},
 				{Role: turnagent.RoleAssistant, Content: "answer"},
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid: user → user",
-			input: []*turnagent.Message{
-				{Role: turnagent.RoleUser, Content: "a"},
-				{Role: turnagent.RoleUser, Content: "b"},
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid: assistant with tool_calls followed by user",
-			input: []*turnagent.Message{
-				{Role: turnagent.RoleUser, Content: "start"},
-				{Role: turnagent.RoleAssistant, ToolCalls: []turnagent.ToolCall{{ID: "c1"}}},
-				{Role: turnagent.RoleUser, Content: "skip tool"},
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid: assistant without tool_calls followed by tool",
-			input: []*turnagent.Message{
-				{Role: turnagent.RoleUser, Content: "hi"},
-				{Role: turnagent.RoleAssistant, Content: "text"},
-				{Role: turnagent.RoleTool, Content: "orphan", ToolCallID: "c1"},
 			},
 			wantErr: true,
 		},

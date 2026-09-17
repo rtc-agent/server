@@ -10,8 +10,8 @@ import (
 	"github.com/redis/rueidis"
 )
 
-// ========== RegisterBrokerEventHandler 并发安全测试 ==========
-// 使用 -race flag 运行时验证无 data race
+// ========== RegisterBrokerEventHandler concurrency-safety tests ==========
+// Run with -race flag to verify there is no data race.
 
 func TestTopicBroker_RegisterBrokerEventHandler_ConcurrentRead(t *testing.T) {
 	if testing.Short() {
@@ -24,7 +24,7 @@ func TestTopicBroker_RegisterBrokerEventHandler_ConcurrentRead(t *testing.T) {
 	broker, _, cleanup := setupTestBroker(t, prefix)
 	defer cleanup()
 
-	// 并发注册和读取 eventHandler，验证无 data race
+	// Concurrently register and read the eventHandler; verify no data race.
 	var wg sync.WaitGroup
 	numGoroutines := 50
 
@@ -37,12 +37,12 @@ func TestTopicBroker_RegisterBrokerEventHandler_ConcurrentRead(t *testing.T) {
 		}(i)
 	}
 
-	// 同时并发读取 eventHandler（通过 handlePubSubMessage 间接读取）
+	// Concurrently read the eventHandler (indirectly via handlePubSubMessage).
 	for range numGoroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// 直接读取 eventHandler 指针，模拟 handlePubSubMessage 的行为
+			// Read the eventHandler pointer directly, simulating handlePubSubMessage.
 			h := broker.eventHandler.Load()
 			_ = h
 		}()
@@ -65,7 +65,7 @@ func TestTopicBroker_RegisterBrokerEventHandler_ConcurrentRegisterAndPubSub(t *t
 	var wg sync.WaitGroup
 	numGoroutines := 30
 
-	// 并发注册 handler
+	// Concurrently register handlers.
 	for i := range numGoroutines {
 		wg.Add(1)
 		go func(_ int) {
@@ -75,15 +75,15 @@ func TestTopicBroker_RegisterBrokerEventHandler_ConcurrentRegisterAndPubSub(t *t
 		}(i)
 	}
 
-	// 并发模拟 handlePubSubMessage 的 eventHandler.Load() 操作
+	// Concurrently simulate the eventHandler.Load() call of handlePubSubMessage.
 	for range numGoroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// 模拟 handlePubSubMessage 中 eventHandler.Load() 的调用
+			// Simulate the eventHandler.Load() call inside handlePubSubMessage.
 			h := broker.eventHandler.Load()
 			if h != nil {
-				// 安全地解引用
+				// Safe dereference.
 				_ = *h
 			}
 		}()
@@ -92,10 +92,10 @@ func TestTopicBroker_RegisterBrokerEventHandler_ConcurrentRegisterAndPubSub(t *t
 	wg.Wait()
 }
 
-// ========== handlePubSubMessage 未注册 eventHandler 时不 panic ==========
+// ========== handlePubSubMessage does not panic when eventHandler is unregistered ==========
 
 func TestTopicBroker_HandlePubSubMessage_NoEventHandler(t *testing.T) {
-	// 不注册 eventHandler，直接调用 handlePubSubMessage 验证不 panic
+	// Do not register an eventHandler; call handlePubSubMessage directly and verify no panic.
 	config := TopicBrokerConfig{
 		Prefix:    "test-no-handler",
 		RedisAddr: "localhost:6379",
@@ -108,14 +108,14 @@ func TestTopicBroker_HandlePubSubMessage_NoEventHandler(t *testing.T) {
 	}
 	defer func() { _ = broker.Close(context.TODO()) }()
 
-	// eventHandler 未注册（nil），handlePubSubMessage 应该安全返回
-	// 构造一个模拟的 PUB/SUB 消息
+	// eventHandler is unregistered (nil); handlePubSubMessage should return safely.
+	// Construct a synthetic PUB/SUB message.
 	msg := rueidis.PubSubMessage{
 		Channel: "test-no-handler:pubsub:test-channel",
 		Message: "__p1:1:test-epoch:11__hello data",
 	}
 
-	// 应该不 panic
+	// Should not panic.
 	defer func() {
 		if r := recover(); r != nil {
 			t.Errorf("handlePubSubMessage panicked with nil eventHandler: %v", r)
@@ -180,7 +180,7 @@ func TestTopicBroker_HandlePubSubMessage_NoEventHandler_LeaveMessage(t *testing.
 }
 
 func TestTopicBroker_HandlePubSubMessage_UnknownPrefix(t *testing.T) {
-	// 测试 channel 前缀不匹配时安全返回
+	// Verify safe return when the channel prefix does not match.
 	config := TopicBrokerConfig{
 		Prefix:    "test-unknown-prefix",
 		RedisAddr: "localhost:6379",
@@ -193,11 +193,11 @@ func TestTopicBroker_HandlePubSubMessage_UnknownPrefix(t *testing.T) {
 	}
 	defer func() { _ = broker.Close(context.TODO()) }()
 
-	// 注册一个 handler
+	// Register a handler.
 	eh := &testEventHandler{}
 	_ = broker.RegisterBrokerEventHandler(eh)
 
-	// channel 前缀不匹配（非 pubsub: 前缀）
+	// Channel prefix does not match (not the pubsub: prefix).
 	msg := rueidis.PubSubMessage{
 		Channel: "wrong-prefix:test-channel",
 		Message: "__p1:1:epoch:5__hello",
@@ -213,7 +213,7 @@ func TestTopicBroker_HandlePubSubMessage_UnknownPrefix(t *testing.T) {
 }
 
 func TestTopicBroker_HandlePubSubMessage_InvalidPayload(t *testing.T) {
-	// 测试无效 payload 时安全返回（不 panic）
+	// Verify safe return (no panic) on invalid payloads.
 	config := TopicBrokerConfig{
 		Prefix:    "test-invalid-payload",
 		RedisAddr: "localhost:6379",
@@ -261,9 +261,10 @@ func TestTopicBroker_HandlePubSubMessage_InvalidPayload(t *testing.T) {
 	}
 }
 
-// ========== handlePubSubMessage 成功路径测试 ==========
+// ========== handlePubSubMessage success-path tests ==========
 
-// recordingEventHandler 记录调用，用于验证 handlePubSubMessage 正确转发消息
+// recordingEventHandler records calls so we can verify handlePubSubMessage
+// forwards messages correctly.
 type recordingEventHandler struct {
 	mu           sync.Mutex
 	publications []*centrifuge.Publication
@@ -293,7 +294,7 @@ func (r *recordingEventHandler) HandleLeave(_ string, info *centrifuge.ClientInf
 }
 
 func TestTopicBroker_HandlePubSubMessage_SuccessfulPublication(t *testing.T) {
-	// 验证成功的 publication 消息被正确转发到 eventHandler
+	// Verify a successful publication message is forwarded to the eventHandler.
 	config := TopicBrokerConfig{
 		Prefix:    "test-success-pub",
 		RedisAddr: "localhost:6379",
@@ -309,7 +310,7 @@ func TestTopicBroker_HandlePubSubMessage_SuccessfulPublication(t *testing.T) {
 	recorder := &recordingEventHandler{}
 	_ = broker.RegisterBrokerEventHandler(recorder)
 
-	// 构造合法的 publication 消息：__p1:{offset}:{epoch}:{data_len}__{data}
+	// Construct a well-formed publication message: __p1:{offset}:{epoch}:{data_len}__{data}
 	data := `{"text":"hello"}`
 	payload := fmt.Sprintf("__p1:42:test-epoch:%d__%s", len(data), data)
 
@@ -334,7 +335,7 @@ func TestTopicBroker_HandlePubSubMessage_SuccessfulPublication(t *testing.T) {
 }
 
 func TestTopicBroker_HandlePubSubMessage_SuccessfulJoin(t *testing.T) {
-	// 验证 join 消息被正确解析并转发
+	// Verify the join message is parsed and forwarded correctly.
 	config := TopicBrokerConfig{
 		Prefix:    "test-success-join",
 		RedisAddr: "localhost:6379",
@@ -367,7 +368,7 @@ func TestTopicBroker_HandlePubSubMessage_SuccessfulJoin(t *testing.T) {
 }
 
 func TestTopicBroker_HandlePubSubMessage_SuccessfulLeave(t *testing.T) {
-	// 验证 leave 消息被正确解析并转发
+	// Verify the leave message is parsed and forwarded correctly.
 	config := TopicBrokerConfig{
 		Prefix:    "test-success-leave",
 		RedisAddr: "localhost:6379",
@@ -400,7 +401,7 @@ func TestTopicBroker_HandlePubSubMessage_SuccessfulLeave(t *testing.T) {
 }
 
 func TestTopicBroker_HandlePubSubMessage_MissingSeparator(t *testing.T) {
-	// 测试 __p1: 格式中缺少 __ 分隔符的场景
+	// Test the scenario where the __p1: format is missing the __ separator.
 	config := TopicBrokerConfig{
 		Prefix:    "test-missing-sep",
 		RedisAddr: "localhost:6379",
@@ -416,7 +417,7 @@ func TestTopicBroker_HandlePubSubMessage_MissingSeparator(t *testing.T) {
 	recorder := &recordingEventHandler{}
 	_ = broker.RegisterBrokerEventHandler(recorder)
 
-	// __p1: 后有 meta 但没有 __ 分隔符
+	// After __p1: there is meta but no __ separator.
 	msg := rueidis.PubSubMessage{
 		Channel: "test-missing-sep:pubsub:ch",
 		Message: "__p1:1:epoch:5data_without_separator",
@@ -424,14 +425,14 @@ func TestTopicBroker_HandlePubSubMessage_MissingSeparator(t *testing.T) {
 
 	broker.handlePubSubMessage(msg)
 
-	// 应该安全返回，不调用 handler
+	// Should return safely without invoking the handler.
 	if len(recorder.publications) != 0 {
 		t.Errorf("expected 0 publications when separator missing, got %d", len(recorder.publications))
 	}
 }
 
 func TestTopicBroker_HandlePubSubMessage_DataLenZero(t *testing.T) {
-	// 测试 dataLen=0 的边界情况（空数据但合法）
+	// Test the dataLen=0 edge case (empty but valid data).
 	config := TopicBrokerConfig{
 		Prefix:    "test-datalen-zero",
 		RedisAddr: "localhost:6379",
@@ -447,7 +448,7 @@ func TestTopicBroker_HandlePubSubMessage_DataLenZero(t *testing.T) {
 	recorder := &recordingEventHandler{}
 	_ = broker.RegisterBrokerEventHandler(recorder)
 
-	// dataLen=0，encodedData 为空字符串
+	// dataLen=0; encodedData is the empty string.
 	payload := "__p1:1:epoch:0__"
 	msg := rueidis.PubSubMessage{
 		Channel: "test-datalen-zero:pubsub:ch",
@@ -465,7 +466,7 @@ func TestTopicBroker_HandlePubSubMessage_DataLenZero(t *testing.T) {
 }
 
 func TestTopicBroker_HandlePubSubMessage_ChannelPrefixStripping(t *testing.T) {
-	// 验证 channel 前缀被正确剥离后传给 handler
+	// Verify the channel prefix is stripped before being passed to the handler.
 	config := TopicBrokerConfig{
 		Prefix:    "test-prefix-strip",
 		RedisAddr: "localhost:6379",
@@ -478,7 +479,7 @@ func TestTopicBroker_HandlePubSubMessage_ChannelPrefixStripping(t *testing.T) {
 	}
 	defer func() { _ = broker.Close(context.TODO()) }()
 
-	// 使用 channelCapturingHandler 验证 channel 参数
+	// Use channelCapturingHandler to verify the channel argument.
 	handler := &channelCapturingHandler{}
 	_ = broker.RegisterBrokerEventHandler(handler)
 
@@ -496,7 +497,7 @@ func TestTopicBroker_HandlePubSubMessage_ChannelPrefixStripping(t *testing.T) {
 	}
 }
 
-// channelCapturingHandler 捕获传递给 handler 的 channel 名称
+// channelCapturingHandler captures the channel name passed to the handler.
 type channelCapturingHandler struct {
 	capturedChannel string
 }
@@ -516,8 +517,8 @@ func (h *channelCapturingHandler) HandleLeave(ch string, _ *centrifuge.ClientInf
 	return nil
 }
 
-// ========== TopicBroker.Close 清理测试 ==========
-// 注：TestTopicBroker_Close_Idempotent 已在 broker_test.go 中覆盖
+// ========== TopicBroker.Close cleanup tests ==========
+// Note: TestTopicBroker_Close_Idempotent is covered in broker_test.go.
 
 func TestTopicBroker_Close_ClearsSubscribedChans(t *testing.T) {
 	if testing.Short() {
@@ -530,7 +531,7 @@ func TestTopicBroker_Close_ClearsSubscribedChans(t *testing.T) {
 	broker, _, cleanup := setupTestBroker(t, prefix)
 	defer cleanup()
 
-	// 手动订阅一些频道
+	// Manually subscribe to a few channels.
 	if err := broker.Subscribe("ch-1"); err != nil {
 		t.Fatalf("Subscribe ch-1: %v", err)
 	}
@@ -538,7 +539,7 @@ func TestTopicBroker_Close_ClearsSubscribedChans(t *testing.T) {
 		t.Fatalf("Subscribe ch-2: %v", err)
 	}
 
-	// 验证 subscribedChans 非空
+	// Verify subscribedChans is non-empty.
 	broker.pubSubMu.Lock()
 	countBefore := len(broker.subscribedChans)
 	broker.pubSubMu.Unlock()
@@ -547,13 +548,13 @@ func TestTopicBroker_Close_ClearsSubscribedChans(t *testing.T) {
 		t.Fatalf("expected 2 subscribed chans before Close, got %d", countBefore)
 	}
 
-	// 调用 Close
+	// Call Close.
 	ctx := context.Background()
 	if err := broker.Close(ctx); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// 验证 subscribedChans 已被清空
+	// Verify subscribedChans has been cleared.
 	broker.pubSubMu.Lock()
 	countAfter := len(broker.subscribedChans)
 	pubSubClient := broker.pubSubClient
@@ -567,7 +568,8 @@ func TestTopicBroker_Close_ClearsSubscribedChans(t *testing.T) {
 	}
 }
 
-// Close 后 redisClient 已关闭，Subscribe 应返回错误（不会 panic）
+// After Close the redisClient is shut down, so Subscribe must return an
+// error (and must not panic).
 func TestTopicBroker_Close_SubscribeAfterClose(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode")
@@ -579,17 +581,17 @@ func TestTopicBroker_Close_SubscribeAfterClose(t *testing.T) {
 	broker, _, cleanup := setupTestBroker(t, prefix)
 	defer cleanup()
 
-	// 先订阅再关闭
+	// Subscribe first, then close.
 	_ = broker.Subscribe("ch-before-close")
 	_ = broker.Close(context.Background())
 
-	// Close 后 Subscribe 应返回错误（redisClient 已关闭），不应 panic
+	// After Close, Subscribe must return an error (redisClient is closed) and must not panic.
 	err := broker.Subscribe("ch-after-close")
 	if err == nil {
 		t.Fatal("expected error when subscribing after Close, got nil")
 	}
 
-	// subscribedChans 应保持为空
+	// subscribedChans must remain empty.
 	broker.pubSubMu.Lock()
 	count := len(broker.subscribedChans)
 	broker.pubSubMu.Unlock()

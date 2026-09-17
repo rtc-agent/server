@@ -1,4 +1,4 @@
-// Package centrifugeplus 提供 centrifuge-plus 的单元测试。
+// Package centrifugeplus provides unit tests for centrifuge-plus.
 package centrifugeplus
 
 import (
@@ -933,7 +933,7 @@ func TestDualBroker_UnregisterChannelType(t *testing.T) {
 		HistoryTTL:  time.Hour,
 	}
 
-	// 未注册的 channel 应该返回错误
+	// An unregistered channel must return an error.
 	result, err := broker.Publish("unregistered-channel", data, opts)
 	sp := result.StreamPosition
 	if err == nil {
@@ -944,7 +944,7 @@ func TestDualBroker_UnregisterChannelType(t *testing.T) {
 	}
 }
 
-// TestDualBroker_UnregisteredChannel_AllMethods 验证所有方法对未注册频道都返回错误
+// TestDualBroker_UnregisteredChannel_AllMethods verifies that all methods return an error for unregistered channels.
 func TestDualBroker_UnregisteredChannel_AllMethods(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode")
@@ -989,47 +989,47 @@ func TestDualBroker_UnregisteredChannel_AllMethods(t *testing.T) {
 
 	ch := "never-registered-channel"
 
-	// Subscribe 应该返回错误
+	// Subscribe must return an error.
 	if err := broker.Subscribe(ch); err == nil {
 		t.Error("Subscribe: expected error for unregistered channel")
 	} else if !strings.Contains(err.Error(), "not registered") {
 		t.Errorf("Subscribe: expected 'not registered' error, got: %v", err)
 	}
 
-	// Unsubscribe 应该返回错误
+	// Unsubscribe must return an error.
 	if err := broker.Unsubscribe(ch); err == nil {
 		t.Error("Unsubscribe: expected error for unregistered channel")
 	}
 
-	// PublishWithContext 应该返回错误
+	// PublishWithContext must return an error.
 	_, err = broker.PublishWithContext(context.Background(), ch, []byte("{}"), centrifuge.PublishOptions{})
 	if err == nil {
 		t.Error("PublishWithContext: expected error for unregistered channel")
 	}
 
-	// PublishJoin 应该返回错误
+	// PublishJoin must return an error.
 	if err := broker.PublishJoin(ch, &centrifuge.ClientInfo{}); err == nil {
 		t.Error("PublishJoin: expected error for unregistered channel")
 	}
 
-	// PublishLeave 应该返回错误
+	// PublishLeave must return an error.
 	if err := broker.PublishLeave(ch, &centrifuge.ClientInfo{}); err == nil {
 		t.Error("PublishLeave: expected error for unregistered channel")
 	}
 
-	// History 应该返回错误
+	// History must return an error.
 	_, _, err = broker.History(ch, centrifuge.HistoryOptions{})
 	if err == nil {
 		t.Error("History: expected error for unregistered channel")
 	}
 
-	// RemoveHistory 应该返回错误
+	// RemoveHistory must return an error.
 	if err := broker.RemoveHistory(ch); err == nil {
 		t.Error("RemoveHistory: expected error for unregistered channel")
 	}
 }
 
-// TestDualBroker_GetChannelType 验证 getChannelType 方法的行为
+// TestDualBroker_GetChannelType verifies the behavior of getChannelType.
 func TestDualBroker_GetChannelType(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode")
@@ -1068,7 +1068,7 @@ func TestDualBroker_GetChannelType(t *testing.T) {
 	}
 	defer func() { _ = broker.Close(context.Background()) }()
 
-	// 未注册频道应该返回错误
+	// An unregistered channel must return an error.
 	_, err = broker.getChannelType("unknown-channel")
 	if err == nil {
 		t.Error("expected error for unregistered channel")
@@ -1077,7 +1077,7 @@ func TestDualBroker_GetChannelType(t *testing.T) {
 		t.Errorf("expected 'not registered' error, got: %v", err)
 	}
 
-	// 注册 Live 频道后应该返回 Live
+	// After registering a Live channel, the type should be Live.
 	broker.RegisterChannelType("my-live", Live)
 	ct, err := broker.getChannelType("my-live")
 	if err != nil {
@@ -1087,7 +1087,7 @@ func TestDualBroker_GetChannelType(t *testing.T) {
 		t.Errorf("expected Live, got %v", ct)
 	}
 
-	// 注册 Topic 频道后应该返回 Topic
+	// After registering a Topic channel, the type should be Topic.
 	broker.RegisterChannelType("my-topic", Topic)
 	ct, err = broker.getChannelType("my-topic")
 	if err != nil {
@@ -1097,36 +1097,36 @@ func TestDualBroker_GetChannelType(t *testing.T) {
 		t.Errorf("expected Topic, got %v", ct)
 	}
 
-	// 测试 channelTypes 清理行为
-	// 新行为：只有 Unsubscribe 成功后才清理 channelTypes
-	// 由于单元测试没有实际的 Redis 连接，Subscribe/Unsubscribe 可能会失败
-	// 所以我们直接验证：如果 Unsubscribe 返回 nil（成功），channel type 应该被清理
-	// 如果 Unsubscribe 返回 error（失败），channel type 应该保留
+	// Test the channelTypes cleanup behavior.
+	// New behavior: channelTypes is only cleaned up on a successful Unsubscribe.
+	// Unit tests lack a real Redis connection, so Subscribe/Unsubscribe may fail.
+	// So we verify directly: if Unsubscribe returns nil (success), the channel type should be cleaned up;
+	// if Unsubscribe returns an error (failure), the channel type should be preserved.
 
-	// 场景1：对于 Live 类型，底层 liveBroker.Unsubscribe 即使没有先 Subscribe 也可能成功（取决于实现）
-	// 场景2：对于未订阅的频道，底层可能返回错误或成功
+	// Scenario 1: For a Live channel, the underlying liveBroker.Unsubscribe may succeed even without a prior Subscribe (implementation-dependent).
+	// Scenario 2: For an unsubscribed channel, the underlying layer may return either an error or success.
 
-	// 这里我们只验证 channelTypes map 本身的行为是正确的
-	// 实际的 Subscribe/Unsubscribe 集成测试在更高层次覆盖
+	// Here we only verify that the channelTypes map itself behaves correctly.
+	// Real Subscribe/Unsubscribe integration tests are covered at a higher level.
 
-	// 注册一个新的频道用于测试清理行为
+	// Register a new channel to test cleanup behavior.
 	broker.RegisterChannelType("test-cleanup", Live)
 	_, err = broker.getChannelType("test-cleanup")
 	if err != nil {
 		t.Fatalf("unexpected error after RegisterChannelType: %v", err)
 	}
 
-	// 调用 Unsubscribe（可能成功也可能失败，取决于底层 broker）
-	// 我们只关心不会 panic，并且 channelTypes map 的行为是一致的
+	// Call Unsubscribe (may succeed or fail depending on the underlying broker).
+	// We only care that it does not panic and that the channelTypes map behaves consistently.
 	unsubErr := broker.Unsubscribe("test-cleanup")
 	if unsubErr == nil {
-		// Unsubscribe 成功，channel type 应该被清理
+		// Unsubscribe succeeded; the channel type should be cleaned up.
 		_, err = broker.getChannelType("test-cleanup")
 		if err == nil {
 			t.Error("expected error after successful Unsubscribe cleaned up channel type")
 		}
 	} else {
-		// Unsubscribe 失败，channel type 应该保留
+		// Unsubscribe failed; the channel type should be preserved.
 		_, err = broker.getChannelType("test-cleanup")
 		if err != nil {
 			t.Errorf("expected channel type to be preserved after failed Unsubscribe, but got error: %v", err)
@@ -2232,7 +2232,7 @@ func setupTestBroker(t *testing.T, prefix string, opts ...testBrokerOption) (*To
 	return broker, eh, cleanup
 }
 
-// ========== NewTopicBroker 参数校验测试 ==========
+// ========== NewTopicBroker parameter validation tests ==========
 
 func TestNewTopicBroker_EmptyRedisAddr(t *testing.T) {
 	config := TopicBrokerConfig{
@@ -2247,7 +2247,7 @@ func TestNewTopicBroker_EmptyRedisAddr(t *testing.T) {
 }
 
 func TestNewTopicBroker_DefaultPrefix(t *testing.T) {
-	// 空 prefix 应该使用默认值 "centrifuge"
+	// An empty prefix should use the default value "centrifube".
 	config := TopicBrokerConfig{
 		Prefix:    "",
 		RedisAddr: "localhost:6379",
@@ -2297,7 +2297,7 @@ func TestNewTopicBroker_NilLogger(t *testing.T) {
 	}
 	defer func() { _ = broker.Close(context.Background()) }()
 
-	// 应该使用 defaultLogger
+	// The defaultLogger should be used.
 	if broker.logger == nil {
 		t.Error("expected non-nil logger (defaultLogger fallback)")
 	}
@@ -2315,7 +2315,7 @@ func TestNewTopicBroker_InvalidRedisAddr(t *testing.T) {
 	}
 }
 
-// ========== TopicBroker.metaKey / pubSubKey 测试 ==========
+// ========== TopicBroker.metaKey / pubSubKey tests ==========
 
 func TestTopicBroker_MetaKey(t *testing.T) {
 	config := TopicBrokerConfig{
@@ -2357,7 +2357,7 @@ func TestTopicBroker_PubSubKey(t *testing.T) {
 	}
 }
 
-// ========== TopicBroker.BatchIncrby 边缘场景 ==========
+// ========== TopicBroker.BatchIncrby edge cases ==========
 
 func TestTopicBroker_BatchIncrby_EmptyRequest(t *testing.T) {
 	if testing.Short() {
@@ -2394,7 +2394,7 @@ func TestTopicBroker_BatchIncrby_SameChannelTwice(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 同一个 channel 在同一次 BatchIncrby 中出现两次应报错（使用 Count 字段替代）
+	// The same channel appearing twice in a single BatchIncrby call must report an error (use the Count field instead).
 	_, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{
 		{Channel: "ch-1"},
 		{Channel: "ch-1"},
@@ -2403,7 +2403,7 @@ func TestTopicBroker_BatchIncrby_SameChannelTwice(t *testing.T) {
 		t.Fatalf("expected error for duplicate channels, got nil")
 	}
 
-	// 用 Count=2 在单次调用里为同一 channel 预分配 2 个 offset
+	// Use Count=2 to pre-allocate 2 offsets for the same channel in a single call.
 	positions, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{
 		{Channel: "ch-2", Count: 2},
 	})
@@ -2413,12 +2413,12 @@ func TestTopicBroker_BatchIncrby_SameChannelTwice(t *testing.T) {
 	if len(positions) != 1 {
 		t.Fatalf("expected 1 position entry, got %d", len(positions))
 	}
-	// final offset 是 2，调用方可推导 [1, 2]
+	// The final offset is 2; callers can derive the range [1, 2].
 	if positions["ch-2"].Offset != 2 {
 		t.Errorf("expected final offset 2, got %d", positions["ch-2"].Offset)
 	}
 
-	// 后续再分配应接续
+	// Subsequent allocations should continue from there.
 	positions2, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{
 		{Channel: "ch-2"},
 	})
@@ -2430,7 +2430,7 @@ func TestTopicBroker_BatchIncrby_SameChannelTwice(t *testing.T) {
 	}
 }
 
-// ========== TopicBroker.History 边缘场景 ==========
+// ========== TopicBroker.History edge cases ==========
 
 func TestTopicBroker_History_MaxUint32Clamp(t *testing.T) {
 	if testing.Short() {
@@ -2443,10 +2443,10 @@ func TestTopicBroker_History_MaxUint32Clamp(t *testing.T) {
 	broker, _, cleanup := setupTestBroker(t, prefix)
 	defer cleanup()
 
-	// 发布一条消息以创建 meta key
+	// Publish a message to create the meta key.
 	_, _ = broker.Publish("ch-1", []byte(`{}`), centrifuge.PublishOptions{})
 
-	// History with Since.Offset > MaxUint32 应该被 clamp
+	// History with Since.Offset > MaxUint32 should be clamped.
 	_, _, err := broker.History("ch-1", centrifuge.HistoryOptions{
 		Filter: centrifuge.HistoryFilter{
 			Since: &centrifuge.StreamPosition{
@@ -2459,7 +2459,7 @@ func TestTopicBroker_History_MaxUint32Clamp(t *testing.T) {
 	}
 }
 
-// ========== DualBroker.getChannelType 测试 ==========
+// ========== DualBroker.getChannelType tests ==========
 
 func TestDualBroker_GetChannelType_Default(t *testing.T) {
 	if testing.Short() {
@@ -2501,13 +2501,13 @@ func TestDualBroker_GetChannelType_Default(t *testing.T) {
 	}
 	defer func() { _ = broker.Close(context.Background()) }()
 
-	// 未注册的 channel 应该返回错误
+	// An unregistered channel must return an error.
 	_, err = broker.getChannelType("unregistered-channel")
 	if err == nil {
 		t.Errorf("expected error for unregistered channel, got nil")
 	}
 
-	// 注册为 Topic 后应该返回 Topic
+	// After registering as Topic, it should return Topic.
 	broker.RegisterChannelType("topic-ch", Topic)
 	ct, err := broker.getChannelType("topic-ch")
 	if err != nil {
@@ -2517,7 +2517,7 @@ func TestDualBroker_GetChannelType_Default(t *testing.T) {
 		t.Errorf("expected Topic for registered channel, got %v", ct)
 	}
 
-	// 注册为 Live
+	// Register as Live.
 	broker.RegisterChannelType("live-ch", Live)
 	ct, err = broker.getChannelType("live-ch")
 	if err != nil {
@@ -2528,7 +2528,7 @@ func TestDualBroker_GetChannelType_Default(t *testing.T) {
 	}
 }
 
-// ========== BatchIncrby Count 边缘场景 ==========
+// ========== BatchIncrby Count edge cases ==========
 
 func TestTopicBroker_BatchIncrby_CountZero(t *testing.T) {
 	if testing.Short() {
@@ -2543,7 +2543,7 @@ func TestTopicBroker_BatchIncrby_CountZero(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Count=0 应该被规范化为 Count=1
+	// Count=0 should be normalized to Count=1.
 	positions, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{
 		{Channel: "ch-zero", Count: 0},
 	})
@@ -2568,7 +2568,7 @@ func TestTopicBroker_BatchIncrby_CountNegative(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Count=-5 应该被规范化为 Count=1
+	// Count=-5 should be normalized to Count=1.
 	positions, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{
 		{Channel: "ch-neg", Count: -5},
 	})
@@ -2593,7 +2593,7 @@ func TestTopicBroker_BatchIncrby_EmptyChannel(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Channel 为空字符串应报错
+	// An empty channel string must report an error.
 	_, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{
 		{Channel: ""},
 	})
@@ -2618,7 +2618,7 @@ func TestTopicBroker_BatchIncrby_LargeCount(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Count=10 一次性预分配 10 个 offset
+	// Count=10 pre-allocates 10 offsets in one call.
 	positions, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{
 		{Channel: "ch-large", Count: 10},
 	})
@@ -2629,7 +2629,7 @@ func TestTopicBroker_BatchIncrby_LargeCount(t *testing.T) {
 		t.Errorf("expected final offset 10, got %d", positions["ch-large"].Offset)
 	}
 
-	// 下一个分配应从 11 开始
+	// The next allocation should start at 11.
 	positions2, err := broker.BatchIncrby(ctx, []ChannelIncrbyRequest{
 		{Channel: "ch-large"},
 	})
@@ -2641,7 +2641,7 @@ func TestTopicBroker_BatchIncrby_LargeCount(t *testing.T) {
 	}
 }
 
-// ========== TopicBroker.IncrConversationOffset 测试 ==========
+// ========== TopicBroker.IncrConversationOffset tests ==========
 
 func TestTopicBroker_IncrConversationOffset(t *testing.T) {
 	if testing.Short() {
@@ -2658,7 +2658,7 @@ func TestTopicBroker_IncrConversationOffset(t *testing.T) {
 
 	convID := "test-conv-123"
 
-	// 第一次分配
+	// First allocation.
 	offset1, err := broker.IncrConversationOffset(ctx, convID)
 	if err != nil {
 		t.Fatalf("first IncrConversationOffset: %v", err)
@@ -2667,7 +2667,7 @@ func TestTopicBroker_IncrConversationOffset(t *testing.T) {
 		t.Errorf("expected offset 1, got %d", offset1)
 	}
 
-	// 第二次分配
+	// Second allocation.
 	offset2, err := broker.IncrConversationOffset(ctx, convID)
 	if err != nil {
 		t.Fatalf("second IncrConversationOffset: %v", err)
@@ -2676,7 +2676,7 @@ func TestTopicBroker_IncrConversationOffset(t *testing.T) {
 		t.Errorf("expected offset 2, got %d", offset2)
 	}
 
-	// 不同 conversation 独立计数
+	// Different conversations count independently.
 	offset3, err := broker.IncrConversationOffset(ctx, "other-conv")
 	if err != nil {
 		t.Fatalf("IncrConversationOffset other conv: %v", err)
@@ -2686,7 +2686,7 @@ func TestTopicBroker_IncrConversationOffset(t *testing.T) {
 	}
 }
 
-// ========== TopicBroker.Close 幂等测试 ==========
+// ========== TopicBroker.Close idempotency tests ==========
 
 func TestTopicBroker_Close_Idempotent(t *testing.T) {
 	config := TopicBrokerConfig{
@@ -2700,7 +2700,7 @@ func TestTopicBroker_Close_Idempotent(t *testing.T) {
 		t.Fatalf("NewTopicBroker: %v", err)
 	}
 
-	// 多次 Close 不应 panic
+	// Multiple Close calls must not panic.
 	if err := broker.Close(context.Background()); err != nil {
 		t.Errorf("first Close: %v", err)
 	}
@@ -2709,7 +2709,7 @@ func TestTopicBroker_Close_Idempotent(t *testing.T) {
 	}
 }
 
-// ========== TopicBroker.History 无 Since 过滤测试 ==========
+// ========== TopicBroker.History tests without Since filter ==========
 
 func TestTopicBroker_History_NoSince(t *testing.T) {
 	if testing.Short() {
@@ -2725,7 +2725,7 @@ func TestTopicBroker_History_NoSince(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 发布消息 — 使用 PublishWithUserOffset 并手动写入 channel:offset:{ch}
+	// Publish a message — use PublishWithUserOffset and manually write channel:offset:{ch}.
 	for i := 1; i <= 3; i++ {
 		data := fmt.Appendf(nil, `{"seq":%d}`, i)
 		setChannelOffset(t, "ch-nosince", uint64(i))
@@ -2738,7 +2738,7 @@ func TestTopicBroker_History_NoSince(t *testing.T) {
 		}, uint64(i))
 	}
 
-	// 不传 Since filter，应返回所有消息
+	// With no Since filter, all messages should be returned.
 	pubs, sp, err := broker.History("ch-nosince", centrifuge.HistoryOptions{})
 	if err != nil {
 		t.Fatalf("History: %v", err)
@@ -2751,7 +2751,7 @@ func TestTopicBroker_History_NoSince(t *testing.T) {
 	}
 }
 
-// ========== TopicBroker.PublishWithOffset_IdempotentTTL 测试 ==========
+// ========== TopicBroker.PublishWithOffset_IdempotentTTL tests ==========
 
 func TestTopicBroker_PublishWithOffset_IdempotentCustomTTL(t *testing.T) {
 	if testing.Short() {
@@ -2784,7 +2784,7 @@ func TestTopicBroker_PublishWithOffset_IdempotentCustomTTL(t *testing.T) {
 		t.Fatalf("PublishWithOffset: %v", err)
 	}
 
-	// 验证幂等缓存存在
+	// Verify the idempotency cache exists.
 	client, err := newTestRedisClient()
 	if err != nil {
 		t.Fatalf("create redis client: %v", err)

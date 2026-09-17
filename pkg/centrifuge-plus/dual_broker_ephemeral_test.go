@@ -8,10 +8,11 @@ import (
 	"github.com/centrifugal/centrifuge"
 )
 
-// TestDualBroker_PublishEphemeral 验证 PublishEphemeral 走 liveBroker 纯 PUB/SUB，不写 stream
+// TestDualBroker_PublishEphemeral verifies that PublishEphemeral routes through
+// the liveBroker as pure PUB/SUB without writing to the stream.
 func TestDualBroker_PublishEphemeral(t *testing.T) {
 	if testing.Short() {
-		t.Skip("需要 Redis，跳过")
+		t.Skip("requires Redis; skipping")
 	}
 
 	cleanupTestRedis(t, "test-ephemeral-live:")
@@ -58,19 +59,20 @@ func TestDualBroker_PublishEphemeral(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// PublishEphemeral 应该成功
+	// PublishEphemeral should succeed.
 	err = broker.PublishEphemeral(ctx, ch, data, opts)
 	if err != nil {
 		t.Fatalf("PublishEphemeral failed: %v", err)
 	}
 
-	// 验证 stream 中没有写入（纯 PUB/SUB，offset 应为 0）
-	// liveBroker 的 Publish 在 HistorySize=0 时不写 stream，返回空 StreamPosition
-	// 我们无法直接检查 Redis 中 stream 是否存在（因为 liveBroker 用的是自己的 prefix），
-	// 但可以验证 History 返回空
+	// Verify nothing was written to the stream (pure PUB/SUB; offset should be 0).
+	// liveBroker's Publish with HistorySize=0 does not write to the stream and
+	// returns an empty StreamPosition. We cannot directly check whether the
+	// stream exists in Redis (liveBroker uses its own prefix), but we can
+	// verify History returns empty.
 	pubs, sp, err := broker.History(ch, centrifuge.HistoryOptions{Filter: centrifuge.HistoryFilter{Limit: 10}})
 	if err != nil {
-		// live 频道可能不支持 History，这是正常的
+		// Live channels may not support History; this is expected.
 		t.Logf("History on live channel: %v (expected — live channels may not support history)", err)
 		return
 	}

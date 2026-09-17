@@ -36,7 +36,7 @@ func TestTruncateToTokens(t *testing.T) {
 		// CJK characters are 3 bytes each in UTF-8.
 		// Create a string of CJK characters.
 		cjk := strings.Repeat("中文测试", 20) // 80 bytes (20 * 4 chars * ~3 bytes each, actually 4*3=12 per "中文测试")
-		// Actually "中文测试" = 4 runes * 3 bytes = 12 bytes, 20 times = 240 bytes
+		// Actually "中文测试" (4 runes * 3 bytes = 12 bytes) * 20 = 240 bytes.
 		maxTokens := 10 // maxChars = 10 * 4 / 1.33 ≈ 30
 		result := truncateToTokens(cjk, maxTokens)
 

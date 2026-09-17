@@ -12,7 +12,8 @@ import (
 	"github.com/rtc-agent/server/internal/infra/middleware"
 )
 
-// TestGoroutinesHandler_Summary 验证 goroutines 端点摘要模式返回正确的 JSON 结构。
+// TestGoroutinesHandler_Summary verifies that the goroutines endpoint in
+// summary mode returns the expected JSON structure.
 func TestGoroutinesHandler_Summary(t *testing.T) {
 	handler := middleware.GoroutinesHandler()
 	req := httptest.NewRequest("GET", "/debug/goroutines", nil)
@@ -42,7 +43,7 @@ func TestGoroutinesHandler_Summary(t *testing.T) {
 		t.Errorf("expected positive goroutine count, got %d", resp.GoroutineCount)
 	}
 
-	// 应至少有一个 running 或 runnable 的 goroutine
+	// At least one goroutine should be in running or runnable state.
 	totalState := 0
 	for _, count := range resp.ByState {
 		totalState += count
@@ -56,7 +57,8 @@ func TestGoroutinesHandler_Summary(t *testing.T) {
 	}
 }
 
-// TestGoroutinesHandler_Detail 验证 goroutines 端点 detail 模式返回 goroutine 堆栈文本。
+// TestGoroutinesHandler_Detail verifies that the goroutines endpoint in detail
+// mode returns goroutine stack text.
 func TestGoroutinesHandler_Detail(t *testing.T) {
 	handler := middleware.GoroutinesHandler()
 	req := httptest.NewRequest("GET", "/debug/goroutines?detail=1", nil)
@@ -74,32 +76,34 @@ func TestGoroutinesHandler_Detail(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	// 至少应包含当前测试 goroutine
+	// Must include at least the current test goroutine.
 	if !strings.Contains(body, "goroutine") {
 		t.Error("expected goroutine stack dump to contain 'goroutine'")
 	}
 }
 
-// TestStartGoroutineCollector 验证后台采集器正常启动和停止。
+// TestStartGoroutineCollector verifies the background collector starts and
+// stops cleanly.
 func TestStartGoroutineCollector(t *testing.T) {
 	cancel := middleware.StartGoroutineCollector(10000)
 	if cancel == nil {
 		t.Fatal("expected non-nil cancel function")
 	}
 
-	// 等待至少一个采集周期（10s 太长，但应能正常启动不 panic）
+	// Wait for at least one collection cycle (10s is too long, but the
+	// collector should start without panicking).
 	time.Sleep(100 * time.Millisecond)
 
-	// 停止不应 panic
+	// Stopping must not panic.
 	cancel()
 }
 
-// TestRegisterPprofRoutes 验证 pprof 路由注册后可访问。
+// TestRegisterPprofRoutes verifies pprof routes are accessible once registered.
 func TestRegisterPprofRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	middleware.RegisterPprofRoutes(mux)
 
-	// 测试索引页
+	// Test the index page.
 	req := httptest.NewRequest("GET", "/debug/pprof/", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -113,7 +117,7 @@ func TestRegisterPprofRoutes(t *testing.T) {
 		t.Error("expected pprof index to mention profiles")
 	}
 
-	// 测试 cmdline
+	// Test cmdline.
 	req2 := httptest.NewRequest("GET", "/debug/pprof/cmdline", nil)
 	w2 := httptest.NewRecorder()
 	mux.ServeHTTP(w2, req2)
@@ -122,7 +126,7 @@ func TestRegisterPprofRoutes(t *testing.T) {
 	}
 }
 
-// TestBasicAuth 验证 BasicAuth 中间件的认证逻辑。
+// TestBasicAuth verifies the authentication logic of the BasicAuth middleware.
 func TestBasicAuth(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -175,7 +179,7 @@ func TestBasicAuth(t *testing.T) {
 	}
 }
 
-// TestHTTPMetrics_SkipsHealthz 验证 /healthz 路径不记录指标。
+// TestHTTPMetrics_SkipsHealthz verifies that the /healthz path does not record metrics.
 func TestHTTPMetrics_SkipsHealthz(t *testing.T) {
 	handler := middleware.HTTPMetrics()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -190,7 +194,8 @@ func TestHTTPMetrics_SkipsHealthz(t *testing.T) {
 	}
 }
 
-// TestHTTPMetrics_CapturesResponse 验证中间件正确捕获响应大小和状态码。
+// TestHTTPMetrics_CapturesResponse verifies the middleware captures response
+// size and status code correctly.
 func TestHTTPMetrics_CapturesResponse(t *testing.T) {
 	handler := middleware.HTTPMetrics()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -210,7 +215,7 @@ func TestHTTPMetrics_CapturesResponse(t *testing.T) {
 	}
 }
 
-// TestHTTPMetrics_SkipsWebSocket 验证 WebSocket 升级请求被跳过。
+// TestHTTPMetrics_SkipsWebSocket verifies that WebSocket upgrade requests are skipped.
 func TestHTTPMetrics_SkipsWebSocket(t *testing.T) {
 	handler := middleware.HTTPMetrics()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusSwitchingProtocols)
@@ -226,7 +231,7 @@ func TestHTTPMetrics_SkipsWebSocket(t *testing.T) {
 	}
 }
 
-// TestGoroutineCount 验证 runtime.NumGoroutine 返回合理值。
+// TestGoroutineCount verifies runtime.NumGoroutine returns a sensible value.
 func TestGoroutineCount(t *testing.T) {
 	n := runtime.NumGoroutine()
 	if n <= 0 {
