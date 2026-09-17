@@ -95,11 +95,23 @@ func (h *helpers) reactiveCompactLevel2(ctx context.Context, sessionID uuid.UUID
 	return h.persistCompressedMessages(ctx, compressed)
 }
 
+// Soft-delete oldest half of live messages (L3 strategy).
+// These constants define the L3 deletion parameters:
+//   - l3HistoryLimit: max messages loaded from DB (matches loadMessages historyLimit)
+//   - l3MinLiveMessages: minimum live messages required before deletion (guard against
+//     over-aggressive deletion when context is already small)
+//   - l3DeleteRatioDivisor: divisor for calculating delete count (2 = delete half)
+const (
+	l3HistoryLimit       = 200
+	l3MinLiveMessages    = 2
+	l3DeleteRatioDivisor = 2
+)
+
 // reactiveCompactLevel3: Soft-delete the oldest half of non-summary messages
 // from the DB. No LLM call needed — this is a pure data operation.
 func (h *helpers) reactiveCompactLevel3(ctx context.Context, sessionID uuid.UUID) error {
 	// 1. Load messages from DB.
-	dbMsgs, err := h.deps.MessageRepo.ListRecentBySession(ctx, sessionID, 200)
+	dbMsgs, err := h.deps.MessageRepo.ListRecentBySession(ctx, sessionID, l3HistoryLimit)
 	if err != nil {
 		return fmt.Errorf("reactive compact L3: list messages: %w", err)
 	}
@@ -124,13 +136,13 @@ func (h *helpers) reactiveCompactLevel3(ctx context.Context, sessionID uuid.UUID
 		liveMsgs = append(liveMsgs, dbMsgs[i])
 	}
 
-	if len(liveMsgs) <= 2 {
+	if len(liveMsgs) <= l3MinLiveMessages {
 		// Nothing meaningful to delete.
 		return fmt.Errorf("reactive compact L3: only %d live messages remain, cannot reduce further", len(liveMsgs))
 	}
 
 	// 4. Soft-delete the oldest half of live messages.
-	deleteCount := len(liveMsgs) / 2
+	deleteCount := len(liveMsgs) / l3DeleteRatioDivisor
 	idsToDelete := make([]uuid.UUID, 0, deleteCount)
 	for i := 0; i < deleteCount; i++ {
 		idsToDelete = append(idsToDelete, liveMsgs[i].ID)

@@ -11,8 +11,13 @@ import (
 )
 
 // eventIdleWarningTimeout is the duration after which an idle warning is
-// logged if no events are received from the AsyncIterator. AsyncIterator
-// does not support Close()/Cancel(), so this is warning-only (plan C).
+// logged if no events are received from the AsyncIterator.
+//
+// 10 minutes is chosen as a conservative threshold: tool executions (especially
+// file operations, searches, or shell commands) can legitimately take several
+// minutes. A shorter timeout would produce false-positive warnings that clutter
+// logs. The warning is informational only — AsyncIterator does not support
+// Close()/Cancel(), so we cannot exit the loop on idle (plan C: warn-only).
 const eventIdleWarningTimeout = 10 * time.Minute
 
 // prepareAgent creates the eino Agent with tools for the current turn.

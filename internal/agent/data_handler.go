@@ -90,7 +90,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	// (called above) already finalized and set state.markdownFinalized=true.
 	// The assignment below is therefore redundant in that path but provides
 	// defense-in-depth for the Content=="" path where finalizeStreamMessage
-	// handles the finalization.
+	// handles the finalization. The redundant assignment is harmless (idempotent).
 	if event.FinishReason != "" && state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
 		if event.Content == "" {
 			// No content in this chunk, but we need to finalize the stream
@@ -182,9 +182,14 @@ func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turn
 	}
 
 	// If the token target was already finalized (by handleStreamChunk via FinishReason),
-	// update its token usage from the aggregated data. This covers the case where the
-	// final chunk didn't carry Usage but the aggregated max-of-all-chunks does.
-	// Also covers thinking-only messages (intermediate ChatModel calls) that were
+	// update its token usage from the aggregated data. This is defense-in-depth:
+	// handleStreamChunk sets tokens from the final chunk, while handleStreamEnd uses
+	// the max-of-all-chunks aggregation. Both produce identical values (due to
+	// MergeMaxTokenUsage accumulating across chunks), so this is a redundant DB write
+	// that ensures correctness if the aggregation logic ever diverges. The call is
+	// idempotent — setting the same values twice is safe.
+	//
+	// This also covers thinking-only messages (intermediate ChatModel calls) that were
 	// just finalized above — UpdateTokenUsage is idempotent, so a redundant call is safe.
 	if tokenTargetID != uuid.Nil && event.TokenUsage != nil {
 		h.logger.Info(ctx, "handleStreamEnd.update_token_usage", map[string]any{

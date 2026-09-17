@@ -58,6 +58,11 @@ func (t *Throttle) Do(key string, fn func()) {
 	}
 
 	// Create a timer to check and execute the pending function after the interval.
+	// NOTE: The timer callback runs in its own goroutine (created by time.AfterFunc).
+	// It acquires t.mu independently, so if Stop() is called while the callback is
+	// waiting for the lock, Stop will cancel the timer but the callback will still
+	// execute. This is safe because the callback checks pendingFn (which Stop clears)
+	// and releases the lock promptly.
 	last := t.lastCall[key]
 	t.timers[key] = time.AfterFunc(t.minInterval, func() {
 		t.mu.Lock()

@@ -121,6 +121,9 @@ func (mgr *SessionTurnManager) handleStreamRecvError(
 	if errors.Is(recvErr, io.EOF) {
 		// For assistant messages, set lastMessage from accumulated content
 		// (needed for Sub Agent support to report the final result).
+		// NOTE: lastMessage is only set here on clean EOF, not on stream idle
+		// timeout. This is intentional: a timeout indicates an incomplete response,
+		// so we don't want to report partial content as the "last message".
 		if role == string(schema.Assistant) {
 			content := streamedContent.String()
 			reasoning := streamedReasoning.String()
