@@ -582,25 +582,7 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 			h.batchLifecyclePublish(ctx, tid, sid, "cancel")
 			// Cascade cancel: propagate to active child sessions even when
 			// GetByID failed. This prevents orphaned sub agents.
-			if h.queue != nil {
-				activeChildren, findErr := h.deps.SessionRepo.FindActiveByParent(ctx, sid)
-				if findErr == nil && len(activeChildren) > 0 {
-					h.logger.Info(ctx, "cancelTurn.cascade_cancel_start_fallback", map[string]any{
-						"turn_id":     turnID,
-						"session_id":  sid.String(),
-						"child_count": len(activeChildren),
-					})
-					for _, child := range activeChildren {
-						if err := h.queue.CancelSession(ctx, child.ID.String(), "parent session cancelled"); err != nil {
-							h.logger.Warn(ctx, "cancelTurn.cascade_cancel_failed", map[string]any{
-								"parent_session_id": sid.String(),
-								"child_session_id":  child.ID.String(),
-								"error":             err.Error(),
-							})
-						}
-					}
-				}
-			}
+			h.cascadeCancelChildren(ctx, turnID, sid)
 		}
 		h.logger.Warn(ctx, "cancelTurn.load_turn_failed", map[string]any{
 			"turn_id":  turnID,
@@ -639,30 +621,41 @@ func (h *helpers) cancelTurn(ctx context.Context, turnID string, reason string) 
 	// Cascade cancel: if this session has active child sessions (sub agents),
 	// cancel them as well. This prevents orphaned sub agents from continuing
 	// to run after the parent has been cancelled.
-	if sessErr == nil && h.queue != nil {
-		activeChildren, findErr := h.deps.SessionRepo.FindActiveByParent(ctx, turn.SessionID)
-		if findErr == nil && len(activeChildren) > 0 {
-			h.logger.Info(ctx, "cancelTurn.cascade_cancel_start", map[string]any{
-				"turn_id":     turnID,
-				"session_id":  turn.SessionID.String(),
-				"child_count": len(activeChildren),
-			})
-			for _, child := range activeChildren {
-				if err := h.queue.CancelSession(ctx, child.ID.String(), "parent session cancelled"); err != nil {
-					h.logger.Warn(ctx, "cancelTurn.cascade_cancel_failed", map[string]any{
-						"parent_session_id": turn.SessionID.String(),
-						"child_session_id":  child.ID.String(),
-						"error":             err.Error(),
-					})
-				}
-			}
-			h.logger.Info(ctx, "cancelTurn.cascade_cancel_done", map[string]any{
-				"turn_id":     turnID,
-				"session_id":  turn.SessionID.String(),
-				"child_count": len(activeChildren),
+	h.cascadeCancelChildren(ctx, turnID, turn.SessionID)
+
+	return nil
+}
+
+// cascadeCancelChildren propagates cancellation to all active child sessions
+// (sub agents) of the given parent session. This prevents orphaned sub agents
+// from continuing to run after the parent has been cancelled.
+//
+// The method is safe to call even when h.queue is nil or no children exist.
+func (h *helpers) cascadeCancelChildren(ctx context.Context, turnID string, parentSessionID uuid.UUID) {
+	if h.queue == nil {
+		return
+	}
+	activeChildren, findErr := h.deps.SessionRepo.FindActiveByParent(ctx, parentSessionID)
+	if findErr != nil || len(activeChildren) == 0 {
+		return
+	}
+	h.logger.Info(ctx, "cascadeCancelChildren.start", map[string]any{
+		"turn_id":     turnID,
+		"session_id":  parentSessionID.String(),
+		"child_count": len(activeChildren),
+	})
+	for _, child := range activeChildren {
+		if err := h.queue.CancelSession(ctx, child.ID.String(), "parent session cancelled"); err != nil {
+			h.logger.Warn(ctx, "cascadeCancelChildren.cancel_failed", map[string]any{
+				"parent_session_id": parentSessionID.String(),
+				"child_session_id":  child.ID.String(),
+				"error":             err.Error(),
 			})
 		}
 	}
-
-	return nil
+	h.logger.Info(ctx, "cascadeCancelChildren.done", map[string]any{
+		"turn_id":     turnID,
+		"session_id":  parentSessionID.String(),
+		"child_count": len(activeChildren),
+	})
 }
