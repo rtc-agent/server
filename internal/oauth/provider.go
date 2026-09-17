@@ -1,8 +1,9 @@
-// Package mockoauth2 实现简化的 Mock OAuth2 服务器，用于开发测试。
+// Package oauth implements a simplified Mock OAuth2 server for development
+// and testing.
 //
-// 流程：
-// 1. 访问授权页面 → 输入 User ID → 生成授权码
-// 2. 使用授权码 + client_id/client_secret 换取用户信息
+// Flow:
+// 1. Visit the authorization page -> enter User ID -> generate authorization code
+// 2. Exchange authorization code + client_id/client_secret for user info
 package oauth
 
 import (

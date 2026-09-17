@@ -342,7 +342,8 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 
 	channels := make([]string, 0, len(channelItemsMap))
 	batchSizes := make([]int, 0, len(channelItemsMap))
-	// 排序 channel 确保遍历顺序确定（map 迭代顺序不确定），便于调试与日志追踪。
+	// Sort channels for deterministic traversal order (map iteration is
+	// non-deterministic), aiding debugging and log tracing.
 	for ch := range channelItemsMap {
 		channels = append(channels, ch)
 	}
@@ -417,13 +418,14 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 	return userUpdates, nil
 }
 
-// convertUpdates 将瘦引用（model.UserUpdate）转换成富内容（protocol.Update）。
-// 按实体类型分组批量查询，避免 N+1 问题：N 个 item 只需 E 次 DB 查询（E = 实体类型数）。
+// convertUpdates converts thin references (model.UserUpdate) into rich
+// content (protocol.Update). Entities are batch-resolved by type to avoid
+// N+1 queries: N items require only E DB queries (E = number of entity types).
 //
-// 三阶段流程：
-//  1. collectEntityRefs — 按实体类型收集所有需要查询的 ID（去重）
-//  2. resolveEntities  — 按实体类型批量查询
-//  3. buildUpdates     — 按原始顺序回填 dataList
+// Three-phase flow:
+//  1. collectEntityRefs — collect all IDs to query by entity type (deduplicated)
+//  2. resolveEntities   — batch-resolve by entity type
+//  3. buildUpdates      — fill in dataList in original order
 func (u *UpdatePublisher) convertUpdates(ctx context.Context, uus []*model.UserUpdate) ([]*protocol.Update, error) {
 	allRefs, groupedIDs, err := collectEntityRefs(uus, u.resolvers)
 	if err != nil {
@@ -438,7 +440,7 @@ func (u *UpdatePublisher) convertUpdates(ctx context.Context, uus []*model.UserU
 	return buildUpdates(uus, allRefs, resolved), nil
 }
 
-// resolveEntities 按实体类型批量查询富内容。
+// resolveEntities batch-resolves rich content by entity type.
 func (u *UpdatePublisher) resolveEntities(ctx context.Context, groupedIDs map[string][]uuid.UUID) (map[string]map[uuid.UUID]any, error) {
 	resolved := make(map[string]map[uuid.UUID]any, len(groupedIDs))
 	for entity, ids := range groupedIDs {

@@ -80,8 +80,8 @@ func (d *DualBroker) RegisterBrokerEventHandler(handler centrifuge.BrokerEventHa
 }
 
 // Subscribe subscribes node to channels.
-// 注意：接口签名不含 context 参数（与 centrifuge.NodeBroker 保持一致），
-// 此处 context.Background() 仅用于 tracing span 创建，不影响业务逻辑。
+// Note: the interface signature does not include a context parameter (consistent with centrifuge.NodeBroker);
+// context.Background() here is only used for tracing span creation, not affecting business logic.
 func (d *DualBroker) Subscribe(channels ...string) error {
 	for _, ch := range channels {
 		ct, err := d.getChannelType(ch)
@@ -112,8 +112,8 @@ func (d *DualBroker) Subscribe(channels ...string) error {
 }
 
 // Unsubscribe unsubscribes node from channels.
-// 注意：接口签名不含 context 参数（与 centrifuge.NodeBroker 保持一致），
-// 此处 context.Background() 仅用于 tracing span 创建，不影响业务逻辑。
+// Note: the interface signature does not include a context parameter (consistent with centrifuge.NodeBroker);
+// context.Background() here is only used for tracing span creation, not affecting business logic.
 func (d *DualBroker) Unsubscribe(channels ...string) error {
 	for _, ch := range channels {
 		ct, err := d.getChannelType(ch)
@@ -141,7 +141,7 @@ func (d *DualBroker) Unsubscribe(channels ...string) error {
 			return unsubscribeErr
 		}
 
-		// 清理 channelType 注册，防止内存泄漏（仅在底层 unsubscribe 成功后执行）
+		// Clean up channelType registration to prevent memory leaks (only after underlying unsubscribe succeeds).
 		d.channelTypes.Delete(ch)
 	}
 	return nil
@@ -175,8 +175,8 @@ func (d *DualBroker) PublishWithContext(ctx context.Context, ch string, data []b
 		result, err = d.topicBroker.PublishWithContext(ctx, ch, data, opts)
 		return
 	default: // Live
-		// 已知限制：centrifuge.RedisBroker.Publish 不支持 context 参数，
-		// 内部使用 context.Background()，tracing 链路在此断裂。
+		// Known limitation: centrifuge.RedisBroker.Publish does not support context parameter;
+		// it uses context.Background() internally, so the tracing chain breaks here.
 		result, err = d.liveBroker.Publish(ch, data, opts)
 		return
 	}
@@ -212,7 +212,7 @@ func (d *DualBroker) PublishWithUserOffset(ctx context.Context, ch string, data 
 	case Topic:
 		result, err = d.topicBroker.PublishWithUserOffset(ctx, ch, data, offset, opts)
 		return
-	default: // Live — offset 无意义，直接走 liveBroker.Publish
+	default: // Live — offset is meaningless, directly use liveBroker.Publish
 		result, err = d.liveBroker.Publish(ch, data, opts)
 		return
 	}
@@ -224,8 +224,8 @@ func (d *DualBroker) PublishWithOffset(ctx context.Context, ch string, data []by
 	return d.topicBroker.PublishWithOffset(ctx, ch, data, opts, sp)
 }
 
-// PublishEphemeral 强制走 liveBroker，纯 PUB/SUB，不持久化到 stream。
-// 用于 typing 等瞬态事件：丢失可接受，不需要 offset 和 recovery。
+// PublishEphemeral forces routing through liveBroker, pure PUB/SUB, no persistence to stream.
+// Used for transient events like typing: loss is acceptable, no offset or recovery needed.
 func (d *DualBroker) PublishEphemeral(ctx context.Context, ch string, data []byte, opts centrifuge.PublishOptions) error {
 	_, span := d.tracer.Start(ctx, "centrifugeplus.dualbroker.publish_ephemeral",
 		trace.WithAttributes(
@@ -369,12 +369,12 @@ func (d *DualBroker) Close(ctx context.Context) error {
 	return nil
 }
 
-// IncrConversationOffset 为指定会话分配下一个 conversation offset
+// IncrConversationOffset allocates the next conversation offset for a given session.
 func (d *DualBroker) IncrConversationOffset(ctx context.Context, conversationID string) (uint32, error) {
 	return d.topicBroker.IncrConversationOffset(ctx, conversationID)
 }
 
-// SetConversationOffset 设置指定会话的 offset 值，用于 fork 等场景初始化计数器
+// SetConversationOffset sets the offset value for a given session, used to initialize the counter in fork scenarios.
 func (d *DualBroker) SetConversationOffset(ctx context.Context, conversationID string, value uint32) error {
 	return d.topicBroker.SetConversationOffset(ctx, conversationID, value)
 }
