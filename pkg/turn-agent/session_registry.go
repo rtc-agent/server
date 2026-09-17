@@ -46,6 +46,36 @@ func (r *SessionManagerRegistry) Get(sessionID string) *SessionTurnManager {
 	return r.managers[sessionID]
 }
 
+// scheduleCleanupTracking launches a goroutine that waits for mgr to finish
+// cleanup (done channel closed) and then removes it from removedManagers.
+// A timeout prevents goroutine accumulation if mgr.Done() is never closed
+// (e.g., manager cleanup hangs on unresponsive Redis).
+func (r *SessionManagerRegistry) scheduleCleanupTracking(sessionID string, mgr *SessionTurnManager, logPrefix string) {
+	go func() {
+		defer func() {
+			if rv := recover(); rv != nil {
+				mgr.log(context.Background(), LogLevelError, logPrefix+"_panic", map[string]any{
+					"session_id": mgr.sessionID,
+					"panic":      fmt.Sprintf("%v", rv),
+					"stack":      string(debug.Stack()),
+				})
+			}
+		}()
+		select {
+		case <-mgr.Done():
+		case <-time.After(5 * time.Minute):
+			mgr.log(context.Background(), LogLevelWarn, logPrefix+"_timeout", map[string]any{
+				"session_id": mgr.sessionID,
+			})
+		}
+		r.mu.Lock()
+		if r.removedManagers[sessionID] == mgr {
+			delete(r.removedManagers, sessionID)
+		}
+		r.mu.Unlock()
+	}()
+}
+
 // Remove deletes the manager for the given session.
 // The manager is tracked in removedManagers so that GetOrCreate can wait
 // for its cleanup to complete before retrying claims.
@@ -59,33 +89,7 @@ func (r *SessionManagerRegistry) Remove(sessionID string) {
 		r.removedManagers[sessionID] = mgr
 		r.mu.Unlock()
 
-		// Self-cleanup: automatically remove from removedManagers once
-		// the manager has fully stopped, preventing memory leaks.
-		// Use a timeout to prevent goroutine accumulation if mgr.Done()
-		// is never closed (e.g., manager cleanup hangs on unresponsive Redis).
-		go func() {
-			defer func() {
-				if rv := recover(); rv != nil {
-					mgr.log(context.Background(), LogLevelError, "session_registry.cleanup_panic", map[string]any{
-						"session_id": mgr.sessionID,
-						"panic":      fmt.Sprintf("%v", rv),
-						"stack":      string(debug.Stack()),
-					})
-				}
-			}()
-			select {
-			case <-mgr.Done():
-			case <-time.After(5 * time.Minute):
-				mgr.log(context.Background(), LogLevelWarn, "session_registry.cleanup_timeout", map[string]any{
-					"session_id": mgr.sessionID,
-				})
-			}
-			r.mu.Lock()
-			if r.removedManagers[sessionID] == mgr {
-				delete(r.removedManagers, sessionID)
-			}
-			r.mu.Unlock()
-		}()
+		r.scheduleCleanupTracking(sessionID, mgr, "session_registry.cleanup")
 	} else {
 		r.mu.Unlock()
 	}
@@ -261,29 +265,7 @@ func (r *SessionManagerRegistry) Replace(
 	// Use a timeout to prevent goroutine accumulation if oldMgr.Done()
 	// is never closed (e.g., manager cleanup hangs on unresponsive Redis).
 	if oldMgrTracked {
-		go func() {
-			defer func() {
-				if rv := recover(); rv != nil {
-					oldMgr.log(context.Background(), LogLevelError, "session_registry.replace_cleanup_panic", map[string]any{
-						"session_id": oldMgr.sessionID,
-						"panic":      fmt.Sprintf("%v", rv),
-						"stack":      string(debug.Stack()),
-					})
-				}
-			}()
-			select {
-			case <-oldMgr.Done():
-			case <-time.After(5 * time.Minute):
-				oldMgr.log(context.Background(), LogLevelWarn, "session_registry.replace_cleanup_timeout", map[string]any{
-					"session_id": oldMgr.sessionID,
-				})
-			}
-			r.mu.Lock()
-			if r.removedManagers[sessionID] == oldMgr {
-				delete(r.removedManagers, sessionID)
-			}
-			r.mu.Unlock()
-		}()
+		r.scheduleCleanupTracking(sessionID, oldMgr, "session_registry.replace_cleanup")
 	}
 
 	// Wait for the old manager's cleanup to complete before creating a new one.

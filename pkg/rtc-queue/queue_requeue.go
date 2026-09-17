@@ -53,6 +53,14 @@ func (q *Queue) RequeueGhostWorksBatch(ctx context.Context, sessionIDs []string)
 		return nil, nil
 	}
 
+	// Ensure the Lua script is loaded in Redis before executing the pipeline.
+	// Pipeline uses EVALSHA which requires the script to be cached in Redis.
+	// Without this, a Redis restart or SCRIPT FLUSH would cause NOSCRIPT errors.
+	// Load() is idempotent and fast if the script is already cached.
+	if err := requeueGhostWorkScript.Load(ctx, q.rdb).Err(); err != nil {
+		return nil, fmt.Errorf("rtcqueue: load requeue script: %w", err)
+	}
+
 	now := time.Now().Unix()
 	pipe := q.rdb.Pipeline()
 	cmds := make([]*redis.Cmd, len(sessionIDs))

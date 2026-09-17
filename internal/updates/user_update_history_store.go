@@ -18,7 +18,7 @@ import (
 	"github.com/centrifugal/centrifuge"
 )
 
-// Query 查询指定频道中从指定 offset 开始的 user_update 记录。
+// Query returns user_update publications from the given channel starting at sinceOffset.
 func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint32, latestOffset uint32) ([]*centrifuge.Publication, error) {
 	userIDStr, ok := channel.ParseUser(ch)
 	if !ok {
