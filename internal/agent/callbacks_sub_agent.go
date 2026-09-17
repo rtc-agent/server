@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/rtc-agent/server/internal/channel"
@@ -92,54 +91,64 @@ func (h *helpers) resumeParentAfterSubAgentNewToolCallOutput(callerCtx context.C
 	}
 
 	// Create the toolcall_output message in the parent session.
+	// The message creation and session lookup are intentionally split into
+	// separate steps: the message is created first (its own transaction),
+	// then the session is loaded for event publishing. If the session lookup
+	// fails, the message is preserved in DB — the frontend will see it on
+	// the next page load even if the real-time notification is missed.
+	// Splitting avoids a transaction rollback that would permanently lose
+	// the sub-agent result on a transient session load failure.
 	parentMsgID := inputMsg.ID
-	_, err = h.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
-		outputMsg, createErr := primitives.CreateMessage(
-			txCtx, h.deps,
-			inputMsg.SessionID, inputMsg.TurnID,
-			protocol.MessageRoleTool,
-			usecase.SystemCreator{},
-			outputContentData,
-			protocol.MessageStreamingCompleted,
-			"",
-			&parentMsgID,
-		)
-		if createErr != nil {
-			return nil, fmt.Errorf("create toolcall_output message: %w", createErr)
-		}
-
-		// Load session for event publishing.
-		session, sessErr := h.deps.SessionRepo.GetByID(txCtx, inputMsg.SessionID)
-		if sessErr != nil {
-			// Return error to rollback the transaction. Without the session we
-			// cannot determine the Centrifuge channel, and publishing the message
-			// without notifying the frontend would leave the DB and UI out of sync.
-			// The normalizer's repairToolPairing handles the resulting orphaned
-			// tool call gracefully on the next loadMessages invocation.
-			return nil, fmt.Errorf("load session for event publishing: %w", sessErr)
-		}
-
-		// Build updates for the new message.
-		items := []updates.UpdatePublishItem{
-			{
-				Channel: channel.UserTopic(session.OwnerRefID),
-				Items: []protocol.UpdateItem{
-					{
-						Entity:   protocol.EntityMessage,
-						Action:   protocol.ActionCreated,
-						EntityId: outputMsg.ID.String(),
-					},
-				},
-			},
-		}
-		return items, nil
-	})
-	if err != nil {
-		h.logger.Warn(ctx, "resumeParentAfterSubAgentNewToolCallOutput.publish_failed", map[string]any{
+	outputMsg, createErr := primitives.CreateMessage(
+		ctx, h.deps,
+		inputMsg.SessionID, inputMsg.TurnID,
+		protocol.MessageRoleTool,
+		usecase.SystemCreator{},
+		outputContentData,
+		protocol.MessageStreamingCompleted,
+		"",
+		&parentMsgID,
+	)
+	if createErr != nil {
+		h.logger.Warn(ctx, "resumeParentAfterSubAgentNewToolCallOutput.create_message_failed", map[string]any{
 			"message_id": messageID.String(),
-			"error":      err.Error(),
+			"error":      createErr.Error(),
 		})
 		return
+	}
+
+	// Publish message.created event. Session lookup is done separately so a
+	// transient failure here does not rollback the already-created message.
+	session, sessErr := h.deps.SessionRepo.GetByID(ctx, inputMsg.SessionID)
+	if sessErr != nil {
+		// Message is in DB; only the real-time notification is lost. The
+		// normalizer's repairToolPairing and the frontend's next page load
+		// will recover the message content.
+		h.logger.Warn(ctx, "resumeParentAfterSubAgentNewToolCallOutput.load_session_failed", map[string]any{
+			"message_id": messageID.String(),
+			"error":      sessErr.Error(),
+			"message":    "toolcall_output created in DB but frontend notification skipped",
+		})
+		return
+	}
+
+	items := []updates.UpdatePublishItem{
+		{
+			Channel: channel.UserTopic(session.OwnerRefID),
+			Items: []protocol.UpdateItem{
+				{
+					Entity:   protocol.EntityMessage,
+					Action:   protocol.ActionCreated,
+					EntityId: outputMsg.ID.String(),
+				},
+			},
+		},
+	}
+	if _, pubErr := h.deps.UpdatePublisher.Publish(ctx, items...); pubErr != nil {
+		h.logger.Warn(ctx, "resumeParentAfterSubAgentNewToolCallOutput.publish_failed", map[string]any{
+			"message_id": messageID.String(),
+			"error":      pubErr.Error(),
+		})
 	}
 
 	h.logger.Info(ctx, "resumeParentAfterSubAgentNewToolCallOutput.done", map[string]any{
@@ -190,7 +199,15 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 	var interruptID string
 	if parentSID, parseErr := uuid.Parse(parentSessionID); parseErr == nil {
 		activeTurns, findErr := h.deps.TurnRepo.FindActiveBySession(ctx, parentSID)
-		if findErr == nil {
+		if findErr != nil {
+			// Log the error so operators can diagnose DB issues. Without this,
+			// a transient query failure silently produces a Resume without
+			// InterruptID, potentially stalling the parent session.
+			h.logger.Warn(ctx, "resumeParentAfterSubAgent.find_active_turns_failed", map[string]any{
+				"parent_session_id": parentSessionID,
+				"error":             findErr.Error(),
+			})
+		} else {
 			for _, t := range activeTurns {
 				if protocol.TurnStatus(t.Status) == protocol.TurnStatusInterrupted {
 					interruptID = t.InterruptID
