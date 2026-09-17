@@ -14,9 +14,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// PrepareSession 复用已有 session 或构造待创建的新 session。
-// 对于已有 session：此处仅做归属读校验；closed 状态的严格判断推迟到事务内 TouchSession。
-// 对于新 session：OwnerKind/OwnerRefID 自动按 Creator 填充。
+// PrepareSession reuses an existing session or constructs a new one for creation.
+// For existing sessions: only an ownership read-check is performed here; the
+// strict closed-state validation is deferred to TouchSession inside the transaction.
+// For new sessions: OwnerKind/OwnerRefID are automatically populated from Creator.
 func PrepareSession(
 	ctx context.Context,
 	deps *usecase.Dependencies,
@@ -39,7 +40,7 @@ func PrepareSession(
 		return existing, false, nil
 	}
 
-	// 新建
+	// New session
 	session := &model.Session{
 		ID:         uuid.Must(uuid.NewV7()),
 		ClientID:   clientSessionID,
@@ -48,7 +49,7 @@ func PrepareSession(
 		Title:      initialTitle,
 		Status:     string(protocol.SessionStatusActive),
 	}
-	// 向后兼容：user-owned session 填充 DeviceID
+	// Backward compatibility: populate DeviceID for user-owned sessions.
 	if creator.Kind() == usecase.CreatorKindUser {
 		if uc, ok := creator.(usecase.UserCreator); ok {
 			session.DeviceID = uc.DeviceID
@@ -57,7 +58,7 @@ func PrepareSession(
 	return session, true, nil
 }
 
-// assertCreatorOwns 检查 session 的 owner 与 creator 是否匹配。
+// assertCreatorOwns checks whether the session owner matches the creator.
 func assertCreatorOwns(session *model.Session, creator usecase.Creator) error {
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
 		return fmt.Errorf("session %s does not belong to %s/%s",
@@ -66,13 +67,14 @@ func assertCreatorOwns(session *model.Session, creator usecase.Creator) error {
 	return nil
 }
 
-// CreateSession 在事务内创建 session（thin wrapper）。
+// CreateSession creates a session inside a transaction (thin wrapper).
 func CreateSession(txCtx context.Context, deps *usecase.Dependencies, session *model.Session) error {
 	return deps.SessionRepo.Create(txCtx, session)
 }
 
-// TouchSession 在事务内 touch 活跃 session 的 updated_at。
-// 若 session 已关闭或不存在，返回 repo.ErrSessionClosedOrNotFound（调用方据此判断语义）。
+// TouchSession touches the updated_at of an active session inside a transaction.
+// Returns repo.ErrSessionClosedOrNotFound if the session is closed or does not exist
+// (callers use this to determine semantics).
 func TouchSession(txCtx context.Context, deps *usecase.Dependencies, sessionID uuid.UUID) error {
 	if err := deps.SessionRepo.TouchActive(txCtx, sessionID); err != nil {
 		return fmt.Errorf("touch session: %w", err)
@@ -80,7 +82,8 @@ func TouchSession(txCtx context.Context, deps *usecase.Dependencies, sessionID u
 	return nil
 }
 
-// UpdateSessionFields 在事务内更新指定字段（仅对 active session 生效）。
+// UpdateSessionFields updates specified fields inside a transaction (only effective
+// for active sessions).
 func UpdateSessionFields(
 	txCtx context.Context,
 	deps *usecase.Dependencies,
@@ -96,7 +99,7 @@ func UpdateSessionFields(
 	return nil
 }
 
-// UpdateSessionStatus 在事务内更新 session 状态。
+// UpdateSessionStatus updates session status inside a transaction.
 func UpdateSessionStatus(
 	txCtx context.Context,
 	deps *usecase.Dependencies,

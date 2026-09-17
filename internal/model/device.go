@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// Device 设备模型
+// Device is the database model for a user's registered device.
 type Device struct {
 	ID           uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	UserID       uuid.UUID  `gorm:"type:uuid;not null;uniqueIndex:idx_user_device;index" json:"user_id"`

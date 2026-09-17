@@ -47,7 +47,8 @@ func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint
 	for _, update := range updates {
 		pubsForUpdate, err := u.buildPublications(ctx, update)
 		if err != nil {
-			// 单条记录转换失败不应中断整体查询；记录日志便于排查
+			// A single record conversion failure should not abort the entire query;
+			// log the error for diagnosis and continue.
 			logger.Error(ctx, "buildPublications failed for user_update",
 				zap.String("update_id", update.ID.String()),
 				zap.Error(err))
@@ -59,7 +60,7 @@ func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint
 	return fillGapPublications(sinceOffset, latestOffset, pubs), nil
 }
 
-// buildPublications 将 UserUpdate 转换为 centrifuge.Publication。
+// buildPublications converts a UserUpdate to centrifuge Publications.
 func (u *UpdatePublisher) buildPublications(ctx context.Context, uu model.UserUpdate) ([]*centrifuge.Publication, error) {
 	if len(uu.Items) == 0 {
 		return nil, nil

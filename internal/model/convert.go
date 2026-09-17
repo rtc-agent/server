@@ -1,6 +1,6 @@
 package model
 
-// StrPtr 将非空字符串转为 *string，空字符串返回 nil。
+// StrPtr converts a non-empty string to *string; returns nil for empty strings.
 func StrPtr(s string) *string {
 	if s == "" {
 		return nil
@@ -8,7 +8,7 @@ func StrPtr(s string) *string {
 	return &s
 }
 
-// DerefStr 解引用 *string，nil 返回空字符串。
+// DerefStr dereferences a *string; returns empty string for nil.
 func DerefStr(s *string) string {
 	if s == nil {
 		return ""
@@ -16,5 +16,5 @@ func DerefStr(s *string) string {
 	return *s
 }
 
-// ptrTo 返回指向 v 的指针（泛型版本）
+// ptrTo returns a pointer to v (generic version).
 func ptrTo[T any](v T) *T { return &v }

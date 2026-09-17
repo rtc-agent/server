@@ -1,7 +1,9 @@
-// Package usecase 包含业务逻辑的 UseCase 层。
+// Package usecase contains the UseCase layer for business logic.
 //
-// UseCase 层是协议无关的：它不知道调用方是 RPC、HTTP 还是 LLM，
-// 只关心业务规则和事务一致性。这样多个协议层可以复用同一份业务逻辑。
+// The UseCase layer is protocol-agnostic: it does not know whether the caller
+// is RPC, HTTP, or LLM. It only cares about business rules and transactional
+// consistency. This allows multiple protocol layers to reuse the same business
+// logic.
 package usecase
 
 import (
@@ -21,18 +23,18 @@ import (
 	"gorm.io/gorm"
 )
 
-// Publisher 定义 UpdatePublisher 的发布接口，便于测试 mock。
-// *updates.UpdatePublisher 实现了此接口。
+// Publisher defines the publishing interface for UpdatePublisher, facilitating
+// test mocking. *updates.UpdatePublisher implements this interface.
 type Publisher interface {
 	Publish(ctx context.Context, items ...updates.UpdatePublishItem) ([]*protocol.Update, error)
 	RunAndPublish(ctx context.Context, fn func(txCtx context.Context) ([]updates.UpdatePublishItem, error)) ([]*protocol.Update, error)
 	ResolveMessageContent(msg *model.Message) string
 }
 
-// Dependencies UseCase 层所需的依赖。
+// Dependencies holds the dependencies required by the UseCase layer.
 //
-// 仅持有 repos 和基础设施，不包含业务逻辑。
-// 由 server 层在启动时构造并注入。
+// Contains only repos and infrastructure — no business logic.
+// Constructed and injected by the server layer at startup.
 type Dependencies struct {
 	DB                *gorm.DB
 	Redis             redis.UniversalClient
@@ -78,14 +80,15 @@ type Dependencies struct {
 	TaskScheduler TaskScheduler
 }
 
-// TaskScheduler 延迟任务调度接口
+// TaskScheduler is the interface for delayed task scheduling.
 //
-// 用于 Loop 命令的定时触发。具体实现在批次三提供（基于 asynq）。
-// 批次二通过 nil 检查实现优雅降级。
+// Used by the Loop command for timed triggers. The concrete implementation
+// is provided in batch 3 (based on asynq). Batch 2 uses nil checks for
+// graceful degradation.
 type TaskScheduler interface {
-	// ScheduleDelayed 调度一个延迟任务，返回任务 ID
+	// ScheduleDelayed schedules a delayed task and returns the task ID.
 	ScheduleDelayed(ctx context.Context, taskType string, payload []byte, delay time.Duration) (taskID string, err error)
 
-	// Cancel 取消一个已调度的任务
+	// Cancel cancels a previously scheduled task.
 	Cancel(ctx context.Context, taskID string) error
 }

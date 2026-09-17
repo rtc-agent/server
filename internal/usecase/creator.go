@@ -12,7 +12,7 @@ const (
 	CreatorKindUser CreatorKind = "user"
 	// CreatorKindSystem means the action was initiated by the system (LLM/worker).
 	CreatorKindSystem CreatorKind = "system"
-	// 未来扩展：
+	// Future extensions:
 	// CreatorKindAgent CreatorKind = "agent"
 )
 

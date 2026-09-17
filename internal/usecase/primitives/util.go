@@ -7,8 +7,9 @@ import (
 	"unicode/utf8"
 )
 
-// TruncateTitle 截取 content 第一行的前 maxRunes 个 rune 作为标题。
-// 行为与旧 usecase/message.go 的 truncateTitle 完全一致。
+// TruncateTitle extracts the first line of content and truncates to maxRunes runes
+// for use as a title. Behavior is identical to the old truncateTitle in
+// usecase/message.go.
 func TruncateTitle(content string, maxRunes int) string {
 	if idx := strings.IndexByte(content, '\n'); idx >= 0 {
 		content = content[:idx]
@@ -21,7 +22,7 @@ func TruncateTitle(content string, maxRunes int) string {
 	return string(runes[:maxRunes])
 }
 
-// ValidateCreateMessageRequest 校验 SendMessage 请求。
+// ValidateCreateMessageRequest validates a SendMessage request.
 func ValidateCreateMessageRequest(content string) error {
 	if content == "" {
 		return fmt.Errorf("content must not be empty")

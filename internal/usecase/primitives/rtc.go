@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// ResolveRtcSessionID 通过 RTC ID 反查 session ID。
+// ResolveRtcSessionID resolves a session ID from an RTC ID.
 func ResolveRtcSessionID(
 	ctx context.Context,
 	deps *usecase.Dependencies,
@@ -24,7 +24,7 @@ func ResolveRtcSessionID(
 	return rtc.SessionID, nil
 }
 
-// UpdateRtcStatus 在事务内更新 RTC 状态（thin wrapper）。
+// UpdateRtcStatus updates RTC status inside a transaction (thin wrapper).
 func UpdateRtcStatus(
 	txCtx context.Context,
 	deps *usecase.Dependencies,
@@ -37,7 +37,8 @@ func UpdateRtcStatus(
 	return nil
 }
 
-// UpdateRtcResult 在事务内更新 RTC 结果（status + result + error + completed_at）。
+// UpdateRtcResult updates the RTC result (status + result + error + completed_at)
+// inside a transaction.
 func UpdateRtcResult(
 	txCtx context.Context,
 	deps *usecase.Dependencies,

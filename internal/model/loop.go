@@ -66,12 +66,12 @@ func (l *Loop) IsTerminal() bool {
 		l.Status == LoopStatusExhausted
 }
 
-// IsPausable 判断 loop 是否可暂停（仅 active 状态可暂停）
+// IsPausable reports whether the loop can be paused (only active loops are pausable).
 func (l *Loop) IsPausable() bool {
 	return l.Status == LoopStatusActive
 }
 
-// IsResumable 判断 loop 是否可恢复（仅 paused 状态可恢复）
+// IsResumable reports whether the loop can be resumed (only paused loops are resumable).
 func (l *Loop) IsResumable() bool {
 	return l.Status == LoopStatusPaused
 }

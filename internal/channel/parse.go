@@ -1,79 +1,81 @@
-// Package channel 提供频道名的构造与解析工具。
+// Package channel provides utilities for constructing and parsing Centrifuge
+// channel names.
 //
-// 频道格式约定：
+// Channel naming convention:
 //
-//	Topic 频道（持久化可恢复）：topic:u={userID}
-//	Live  频道（即发即弃瞬态）：live:u={userID}
+//	Topic channel (persistent, recoverable): topic:u={userID}
+//	Live  channel (ephemeral, fire-and-forget): live:u={userID}
 //
-// 本包为 handler、realtime 等包的频道解析提供统一实现，
-// 消除各包中重复的字符串处理逻辑。
+// This package centralises channel parsing so that handler, realtime, and
+// other packages share a single implementation instead of duplicating
+// string-processing logic.
 package channel
 
 import "strings"
 
 // ============================================================================
-// 频道格式常量
+// Channel format constants
 // ============================================================================
 
 const (
-	// TopicPrefix Topic 频道前缀
+	// TopicPrefix is the prefix for Topic channels (persistent, recoverable).
 	TopicPrefix = "topic:"
-	// LivePrefix Live 频道前缀
+	// LivePrefix is the prefix for Live channels (ephemeral, fire-and-forget).
 	LivePrefix = "live:"
 )
 
 // ============================================================================
-// 频道构造函数
+// Channel constructors
 // ============================================================================
 
-// UserTopic 构造用户 Topic 频道：topic:u={userID}
+// UserTopic constructs a user Topic channel: topic:u={userID}
 func UserTopic(uid string) string {
 	return "topic:u=" + uid
 }
 
-// UserLive 构造用户 Live 频道：live:u={userID}
+// UserLive constructs a user Live channel: live:u={userID}
 func UserLive(uid string) string {
 	return "live:u=" + uid
 }
 
-// ToLive 将 Topic 频道名转换为 Live 频道名
+// ToLive converts a Topic channel name to its Live counterpart.
 //
-//	"topic:u=abc" → "live:u=abc"
+//	"topic:u=abc" -> "live:u=abc"
 func ToLive(topicCh string) string {
 	return LivePrefix + strings.TrimPrefix(topicCh, TopicPrefix)
 }
 
 // ============================================================================
-// 频道类型判断函数
+// Channel type predicates
 // ============================================================================
 
-// IsLive 判断频道是否为有效的 Live 频道（需包含用户标识）
+// IsLive reports whether ch is a valid Live channel (must include user identifier).
 func IsLive(ch string) bool {
 	return strings.HasPrefix(ch, LivePrefix+"u=")
 }
 
-// IsTopic 判断频道是否为 Topic 频道（持久化可恢复）
+// IsTopic reports whether ch is a Topic channel (persistent, recoverable).
 func IsTopic(ch string) bool {
 	return strings.HasPrefix(ch, TopicPrefix+"u=")
 }
 
-// IsUser 判断频道是否为用户频道（topic:u={userID} 或 live:u={userID}）
+// IsUser reports whether ch is a user channel (topic:u={userID} or live:u={userID}).
 func IsUser(ch string) bool {
 	return strings.HasPrefix(ch, TopicPrefix+"u=") || strings.HasPrefix(ch, LivePrefix+"u=")
 }
 
 // ============================================================================
-// 频道解析函数
+// Channel parsing
 // ============================================================================
 
-// ParseUser 从频道名中提取 userID。
+// ParseUser extracts the userID from a channel name.
 //
-// 支持格式（均兼容 topic/live 前缀）：
+// Supported formats (both accept topic/live prefix):
 //
 //	topic:u={userID}
 //	live:u={userID}
 //
-// 返回 ok=false 表示不是用户频道。
+// Returns ok=false when the channel is not a user channel.
 func ParseUser(ch string) (userID string, ok bool) {
 	var after string
 	switch {

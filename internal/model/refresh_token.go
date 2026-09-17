@@ -7,7 +7,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// RefreshToken 刷新令牌模型（存储 SHA-256 哈希，不存明文）
+// RefreshToken is the database model for a refresh token.
+// The token is stored as a SHA-256 hash; plaintext is never persisted.
 type RefreshToken struct {
 	ID        uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	TokenHash string     `gorm:"size:64;not null;uniqueIndex" json:"-"`

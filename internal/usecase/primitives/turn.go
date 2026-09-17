@@ -17,12 +17,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// CreateTurn 在事务内创建 turn（thin wrapper）。
+// CreateTurn creates a turn inside a transaction (thin wrapper).
 func CreateTurn(txCtx context.Context, deps *usecase.Dependencies, turn *model.Turn) error {
 	return deps.TurnRepo.Create(txCtx, turn)
 }
 
-// UpdateTurnStatus 在事务内更新 turn 状态。
+// UpdateTurnStatus updates turn status inside a transaction.
 func UpdateTurnStatus(
 	txCtx context.Context,
 	deps *usecase.Dependencies,

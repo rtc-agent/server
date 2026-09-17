@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// GoalStatus goal 状态
+// GoalStatus represents the lifecycle state of a Goal.
 type GoalStatus string
 
 // Goal status constants define the lifecycle states of a Goal.
@@ -22,7 +22,7 @@ const (
 	GoalStatusExhausted GoalStatus = "exhausted"
 )
 
-// Goal 持久化目标
+// Goal is the database model for a persistent goal.
 type Goal struct {
 	ID             uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	SessionID      uuid.UUID  `gorm:"type:uuid;not null;index" json:"session_id"`
@@ -48,7 +48,7 @@ func (g *Goal) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// IsTerminal 判断 goal 是否处于终态
+// IsTerminal reports whether the goal is in a terminal state.
 func (g *Goal) IsTerminal() bool {
 	return g.Status == GoalStatusCompleted ||
 		g.Status == GoalStatusCancelled ||

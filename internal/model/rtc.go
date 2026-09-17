@@ -10,14 +10,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// Rtc 远程 Tool 调用模型
+// Rtc is the database model for a remote tool call (RTC).
 type Rtc struct {
 	ID              uuid.UUID   `gorm:"type:uuid;primaryKey" json:"id"`
-	ClientID        string      `gorm:"size:255;uniqueIndex" json:"client_id,omitempty"` // 客户端生成的幂等 ID
+	ClientID        string      `gorm:"size:255;uniqueIndex" json:"client_id,omitempty"` // client-generated idempotency key
 	SessionID       uuid.UUID   `gorm:"type:uuid;not null;index" json:"session_id"`
 	TurnID          uuid.UUID   `gorm:"type:uuid;not null;index" json:"turn_id"`
-	MessageID       uuid.UUID   `gorm:"type:uuid;index" json:"message_id,omitempty"`        // 关联的 toolcall_input Message
-	OutputMessageID *uuid.UUID  `gorm:"type:uuid;index" json:"output_message_id,omitempty"` // 关联的 toolcall_output Message
+	MessageID       uuid.UUID   `gorm:"type:uuid;index" json:"message_id,omitempty"`        // associated toolcall_input Message
+	OutputMessageID *uuid.UUID  `gorm:"type:uuid;index" json:"output_message_id,omitempty"` // associated toolcall_output Message
 	Offset          uint32      `gorm:"not null" json:"offset"`
 	ToolName        string      `gorm:"size:100;not null" json:"tool_name"`
 	Parameters      JSONBString `gorm:"type:jsonb" json:"parameters"`
@@ -42,7 +42,7 @@ func (r *Rtc) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// RTC 状态常量（protocol 为单一真相源）
+// RTC status constants (protocol is the single source of truth).
 const (
 	RtcStatusPending   = protocol.RtcStatusPending
 	RtcStatusSent      = protocol.RtcStatusSent
@@ -53,9 +53,10 @@ const (
 	RtcStatusRejected  = protocol.RtcStatusRejected
 )
 
-// ToProtocolRtc 将 dbmodel.Rtc 转换为 protocol.Rtc。
-// nil 输入返回零值 protocol.Rtc。
-// Parameters 与 Result 从 JSONB 字符串反序列化为 any；解析失败时保留为 nil。
+// ToProtocolRtc converts a dbmodel Rtc to a protocol.Rtc.
+// A nil input returns a zero-value protocol.Rtc.
+// Parameters and Result are deserialized from JSONB strings to any;
+// parse failures leave the fields as nil.
 func ToProtocolRtc(r *Rtc) protocol.Rtc {
 	if r == nil {
 		return protocol.Rtc{}

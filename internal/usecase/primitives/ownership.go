@@ -11,8 +11,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// CheckSessionOwnership 系统 Creator 直接放行；User Creator 必须 owner 匹配。
-// 供 User workflow 在"准备 session"之后、"修改 session"之前的显式归属校验使用。
+// CheckSessionOwnership passes through for System Creator; User Creator must
+// match the owner. Used by the User workflow for explicit ownership validation
+// between "prepare session" and "modify session".
 func CheckSessionOwnership(
 	ctx context.Context,
 	deps *usecase.Dependencies,
@@ -35,7 +36,7 @@ func CheckSessionOwnership(
 	return nil
 }
 
-// ResolveTurnSessionID 通过 turn ID 反查 session ID。
+// ResolveTurnSessionID resolves a session ID from a turn ID.
 func ResolveTurnSessionID(
 	ctx context.Context,
 	deps *usecase.Dependencies,

@@ -9,13 +9,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// Message 消息模型
+// Message is the database model for a conversation message.
 type Message struct {
 	ID              uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	ClientID        string     `gorm:"size:255;uniqueIndex" json:"client_id,omitempty"` // 客户端生成的幂等 ID
+	ClientID        string     `gorm:"size:255;uniqueIndex" json:"client_id,omitempty"` // client-generated idempotency key
 	SessionID       uuid.UUID  `gorm:"type:uuid;not null;index" json:"session_id"`
 	TurnID          *uuid.UUID `gorm:"type:uuid;index" json:"turn_id,omitempty"`
-	ParentMessageID *uuid.UUID `gorm:"type:uuid;index" json:"parent_message_id,omitempty"` // toolcall_output 指向 toolcall_input
+	ParentMessageID *uuid.UUID `gorm:"type:uuid;index" json:"parent_message_id,omitempty"` // toolcall_output points to toolcall_input
 	GlobalOffset    uint32     `gorm:"not null;index" json:"global_offset"`
 	TurnOffset      *uint32    `json:"turn_offset"`
 	Role            string     `gorm:"size:20;not null" json:"role"`
@@ -27,11 +27,14 @@ type Message struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 	DeletedAt       *time.Time `gorm:"index" json:"-"`
 
-	// Token 用量（仅 assistant 消息有值，其余角色通常为 NULL）
-	// 设计说明：toolcall_input / toolcall_output 消息不记录 token，因为：
-	// 1. Session 表已通过 AtomicAddTokenUsage 正确累加所有 token（无数据丢失）
-	// 2. 一次 LLM 调用可能返回多个 tool_calls，token 无法合理分摊到单个消息
-	// 3. 如需按消息维度统计，可通过 Session 表的累计字段查看总量
+	// Token usage (populated only for assistant messages; NULL for other roles).
+	// Design note: toolcall_input/toolcall_output messages do not record token
+	// usage because:
+	// 1. The Session table already accumulates all tokens via AtomicAddTokenUsage
+	//    (no data loss).
+	// 2. A single LLM call may produce multiple tool_calls, making it impossible
+	//    to fairly apportion tokens to individual messages.
+	// 3. For message-level statistics, use the Session table's cumulative fields.
 	InputTokens     *int `json:"input_tokens,omitempty"`
 	OutputTokens    *int `json:"output_tokens,omitempty"`
 	TotalTokens     *int `json:"total_tokens,omitempty"`
@@ -51,14 +54,14 @@ func (m *Message) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// 消息角色常量（protocol 为单一真相源）
+// Message role constants (protocol is the single source of truth).
 const (
 	MessageRoleUser      = protocol.MessageRoleUser
 	MessageRoleAssistant = protocol.MessageRoleAssistant
 	MessageRoleSystem    = protocol.MessageRoleSystem
 )
 
-// 消息流式状态常量（protocol 为单一真相源）
+// Message streaming status constants (protocol is the single source of truth).
 const (
 	MessageStreamingPending   = protocol.MessageStreamingPending
 	MessageStreamingStreaming = protocol.MessageStreamingStreaming
@@ -100,8 +103,8 @@ func (m *Message) TokenUsage() TokenUsageUpdate {
 	return u
 }
 
-// ToProtocolMessage 将 dbmodel.Message 转换为 protocol.Message。
-// nil 输入返回零值 protocol.Message。
+// ToProtocolMessage converts a dbmodel Message to a protocol.Message.
+// A nil input returns a zero-value protocol.Message.
 func ToProtocolMessage(m *Message) protocol.Message {
 	if m == nil {
 		return protocol.Message{}

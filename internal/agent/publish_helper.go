@@ -88,9 +88,15 @@ func (h *helpers) publishSessionUpdate(ctx context.Context, session *model.Sessi
 	}
 
 	doPublish := func() {
+		// Use WithoutCancel to decouple from the parent context lifecycle.
+		// When throttled, doPublish may be deferred via time.AfterFunc and
+		// executed after the caller's context (e.g., turn context) has been
+		// canceled. The publish must complete regardless to persist session
+		// state updates to the frontend.
+		publishCtx := context.WithoutCancel(ctx)
 		sessionUpdates := primitives.BuildSessionUpdateUpdates(session)
-		if _, err := h.deps.UpdatePublisher.Publish(ctx, sessionUpdates...); err != nil {
-			h.logger.Info(ctx, "publishSessionUpdate.failed", map[string]any{
+		if _, err := h.deps.UpdatePublisher.Publish(publishCtx, sessionUpdates...); err != nil {
+			h.logger.Info(publishCtx, "publishSessionUpdate.failed", map[string]any{
 				"session_id": session.ID,
 				"error":      err.Error(),
 			})

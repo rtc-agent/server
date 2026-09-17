@@ -19,8 +19,8 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
-// ServiceContext 服务上下文，用于依赖注入
-// 仅持有 repos 和基础设施（DB、Redis、Centrifuge），不包含业务逻辑
+// ServiceContext holds the service dependencies for dependency injection.
+// It contains only repos and infrastructure (DB, Redis, Centrifuge) — no business logic.
 //
 //nolint:dupl // struct fields mirror constructor params — unavoidable Go DI pattern
 type ServiceContext struct {
@@ -40,18 +40,18 @@ type ServiceContext struct {
 	SessionMemoryRepo   repo.SessionMemoryRepo
 	UserMemoryRepo      repo.UserMemoryRepo
 	ScriptExecutionRepo repo.ScriptExecutionRepo
-	MemoryRepo          memory.Repository // Phase 2: 统一 Memory 存储
+	MemoryRepo          memory.Repository // Phase 2: unified Memory storage
 	LoopRepo            repo.LoopRepo
 
-	// 基础设施
+	// Infrastructure
 	UpdatePublisher *updates.UpdatePublisher
 	CentrifugeNode  *centrifuge.Node
 	Broker          *centrifugeplus.DualBroker
 	JWTSigner       *auth.JWTSigner
 }
 
-// NewServiceContext 创建服务上下文
-// 保留原有签名以兼容非 Wire 调用方。内部委托给 NewServiceContextWithDeps。
+// NewServiceContext creates a ServiceContext.
+// Retains the original signature for non-Wire callers. Internally delegates to NewServiceContextWithDeps.
 func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClient) *ServiceContext {
 	sessionRepo := repo.NewSessionRepo(db)
 	messageRepo := repo.NewMessageRepo(db)
@@ -74,7 +74,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second,
 	)
 	if err != nil {
-		logger.Fatal(context.Background(), "初始化 JWT 签名器失败", zap.Error(err))
+		logger.Fatal(context.Background(), "init JWT signer", zap.Error(err))
 	}
 
 	node, err := centrifuge.New(centrifuge.Config{
@@ -99,8 +99,8 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		updatePublisher, node, dualBroker, jwtSigner)
 }
 
-// NewServiceContextWithDeps 创建服务上下文（Wire 兼容版本）。
-// 所有依赖由调用方提供，便于 Wire 注入。
+// NewServiceContextWithDeps creates a ServiceContext (Wire-compatible).
+// All dependencies are provided by the caller for Wire injection.
 //
 //nolint:dupl // constructor params mirror struct fields — unavoidable Go pattern
 func NewServiceContextWithDeps(
@@ -154,7 +154,7 @@ func NewServiceContextWithDeps(
 	}
 }
 
-// configureUpdatePublisher 设置压缩触发阈值（含 80% fallback 保护）
+// configureUpdatePublisher sets compression trigger thresholds (with 80% fallback protection).
 func configureUpdatePublisher(u *updates.UpdatePublisher, cfg *config.Config) {
 	contextLimit := cfg.Worker.ContextTokensLimit
 	if contextLimit <= 0 {
@@ -177,7 +177,7 @@ func configureUpdatePublisher(u *updates.UpdatePublisher, cfg *config.Config) {
 	u.SetCompressionThreshold(int64(threshold))
 }
 
-// initTokenCounter 初始化全局 TokenCounter
+// initTokenCounter initialises the global TokenCounter.
 func initTokenCounter(cfg *config.Config) {
 	tc := turnagent.NewTokenCounter(cfg.Worker.TokenCounterMode)
 	turnagent.SetGlobalTokenCounter(tc)
@@ -185,23 +185,23 @@ func initTokenCounter(cfg *config.Config) {
 		zap.String("mode", cfg.Worker.TokenCounterMode))
 }
 
-// createCentrifugeLogHandler 创建 Centrifuge 日志处理器，将日志转发到 zap logger
+// createCentrifugeLogHandler creates a Centrifuge log handler that forwards logs to the zap logger.
 func createCentrifugeLogHandler() centrifuge.LogHandler {
 	return func(entry centrifuge.LogEntry) {
 		ctx := context.Background()
 		fields := make([]zap.Field, 0, len(entry.Fields)+1)
 
-		// 添加 Centrifuge 的字段
+		// Add Centrifuge fields
 		for k, v := range entry.Fields {
 			fields = append(fields, zap.Any(k, v))
 		}
 
-		// 添加错误信息（如果有）
+		// Add error field (if present)
 		if entry.Error != nil {
 			fields = append(fields, zap.Error(entry.Error))
 		}
 
-		// 根据 Centrifuge 的日志级别映射到 zap 的日志级别
+		// Map Centrifuge log levels to zap log levels
 		switch entry.Level {
 		case centrifuge.LogLevelTrace, centrifuge.LogLevelDebug:
 			logger.Debug(ctx, "[centrifuge] "+entry.Message, fields...)

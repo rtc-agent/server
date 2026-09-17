@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// OAuth2User OAuth2 用户模型
+// OAuth2User is the database model for an OAuth2-authenticated user.
 type OAuth2User struct {
 	ID        uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	Provider  string     `gorm:"size:50;not null;uniqueIndex:idx_provider_sub,priority:1" json:"provider"`

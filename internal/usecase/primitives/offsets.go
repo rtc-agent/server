@@ -11,9 +11,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// AllocateOffsets 一次 Redis 调用同时为 session 和 turn 分配 offset。
-// turnID 为 nil 时只分配 globalOffset（消息不属于任何 Turn）。
-// count 指定批量分配数量（>=1），返回起始 offset。
+// AllocateOffsets allocates offsets for both session and turn in a single Redis call.
+// When turnID is nil, only globalOffset is allocated (message does not belong to any Turn).
+// count specifies the batch allocation size (>=1); returns the starting offset.
 func AllocateOffsets(
 	ctx context.Context,
 	deps *usecase.Dependencies,
@@ -42,7 +42,7 @@ func AllocateOffsets(
 	if !ok {
 		return 0, nil, fmt.Errorf("invalid global offset type: %T", arr[0])
 	}
-	// 返回起始 offset = 结束 offset - count + 1
+	// Starting offset = ending offset - count + 1
 	startGlobal := uint32(globalOff) - uint32(count) + 1
 	if turnID == nil {
 		return startGlobal, nil, nil
@@ -55,9 +55,10 @@ func AllocateOffsets(
 	return startGlobal, &startTurn, nil
 }
 
-// AllocateRtcOffset 为 RTC 记录分配独立的 offset。
-// 使用单独的 Redis 计数器（session:rtc_offset:{sessionID}），
-// 与消息 global_offset 计数器分离，避免 RTC 创建时消耗消息 offset 导致跳空。
+// AllocateRtcOffset allocates an independent offset for an RTC record.
+// Uses a separate Redis counter (session:rtc_offset:{sessionID}), isolated from
+// the message global_offset counter, so that RTC creation does not consume message
+// offsets and cause gaps.
 func AllocateRtcOffset(
 	ctx context.Context,
 	deps *usecase.Dependencies,

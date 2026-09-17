@@ -21,7 +21,7 @@ func MigrateOwnerStage4(db *gorm.DB) error {
 	return dropLegacyOwnerColumns(db)
 }
 
-// Stage 1: 加新列，nullable（带默认值）
+// Stage 1: add new nullable columns (with defaults).
 func addOwnerAndCreatorColumns(db *gorm.DB) error {
 	if err := db.Exec(`
 		ALTER TABLE sessions
@@ -40,9 +40,9 @@ func addOwnerAndCreatorColumns(db *gorm.DB) error {
 	return nil
 }
 
-// Stage 2: 回填现有数据（仅当 user_id 列存在时）
+// Stage 2: backfill existing data (only when user_id column exists).
 func backfillOwnerAndCreator(db *gorm.DB) error {
-	// 检查 user_id 列是否存在（新库可能没有）
+	// Check whether the user_id column exists (new databases may not have it).
 	var hasUserID bool
 	if err := db.Raw(`
 		SELECT EXISTS (
@@ -54,7 +54,8 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 	}
 
 	if hasUserID {
-		// 回填 sessions：owner_ref_id 为 NULL 说明还没回填（owner_kind 可能已被 AutoMigrate 设为默认值）
+		// Backfill sessions: owner_ref_id IS NULL means not yet backfilled
+		// (owner_kind may already have a default set by AutoMigrate).
 		if err := db.Exec(`
 			UPDATE sessions
 			SET owner_kind = 'user', owner_ref_id = user_id::text
@@ -62,7 +63,7 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 		`).Error; err != nil {
 			return err
 		}
-		// 回填 messages：creator_ref_id 为 NULL 说明还没回填
+		// Backfill messages: creator_ref_id IS NULL means not yet backfilled.
 		if err := db.Exec(`
 			UPDATE messages
 			SET creator_kind = 'user', creator_ref_id = s.owner_ref_id
@@ -75,7 +76,7 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 	return nil
 }
 
-// Stage 3: 改 NOT NULL
+// Stage 3: set NOT NULL constraints.
 func finalizeOwnerAndCreatorNotNull(db *gorm.DB) error {
 	if err := db.Exec(`
 		ALTER TABLE sessions
@@ -94,7 +95,7 @@ func finalizeOwnerAndCreatorNotNull(db *gorm.DB) error {
 	return nil
 }
 
-// Stage 4: 删旧列（仅删 user_id；device_id 暂时保留以兼容 protocol）
+// Stage 4: drop legacy columns (only user_id; device_id is kept for protocol compatibility).
 func dropLegacyOwnerColumns(db *gorm.DB) error {
 	if err := db.Exec(`
 		ALTER TABLE sessions DROP COLUMN IF EXISTS user_id;
