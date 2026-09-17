@@ -223,7 +223,7 @@ func (h *helpers) notifyParentAfterSubAgentSession(
 		return
 	}
 
-	if session.SubAgentMode == "async" {
+	if session.SubAgentMode == model.SubAgentModeAsync {
 		// Async mode: toolcall_output was already created when the tool returned.
 		// Create a notification message and trigger a new turn via Submit.
 		h.notifyParentAfterAsyncSubAgent(ctx, session, lastMessage, status, errorMessage)

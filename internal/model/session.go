@@ -16,6 +16,18 @@ type TodoItem struct {
 	ActiveForm string `json:"active_form"` // in-progress description (present tense)
 }
 
+// SubAgentMode constants define how a sub-agent communicates results back to
+// its parent session. Using typed constants prevents magic-string typos that
+// would silently skip the async or sync notification path.
+const (
+	// SubAgentModeSync is the default mode: the parent session is interrupted
+	// and resumes when the sub-agent completes (checkpoint-based).
+	SubAgentModeSync = "sync"
+	// SubAgentModeAsync: the sub-agent runs independently and publishes a
+	// notification message to the parent when complete (no checkpoint).
+	SubAgentModeAsync = "async"
+)
+
 // Session is the session model.
 type Session struct {
 	ID          uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`

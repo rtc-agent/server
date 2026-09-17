@@ -47,7 +47,7 @@ type subAgentTool struct {
 type subAgentArgs struct {
 	Title       string `json:"title"`
 	Instruction string `json:"instruction"`
-	Mode        string `json:"mode"` // "async" (default) or "sync"
+	Mode        string `json:"mode"` // model.SubAgentModeAsync (default) or model.SubAgentModeSync
 }
 
 // subAgentInterruptInfo is passed to StatefulInterrupt as the info parameter.
@@ -113,10 +113,10 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 
 	mode := args.Mode
 	if mode == "" {
-		mode = "async"
+		mode = model.SubAgentModeAsync
 	}
-	if mode != "sync" && mode != "async" {
-		return fmt.Sprintf("Error: mode must be \"sync\" or \"async\", got %q", mode), nil
+	if mode != model.SubAgentModeSync && mode != model.SubAgentModeAsync {
+		return fmt.Sprintf("Error: mode must be %q or %q, got %q", model.SubAgentModeSync, model.SubAgentModeAsync, mode), nil
 	}
 
 	callID := compose.GetToolCallID(ctx)
@@ -165,7 +165,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		return "", fmt.Errorf("sub_agent: failed to start sub-agent (cleaned up orphan session): %w", err)
 	}
 
-	if mode == "async" {
+	if mode == model.SubAgentModeAsync {
 		result, err := t.handleAsyncSubAgent(ctx, subSessionID, args.Title, parentMessageID, turnUUID, argumentsInJSON)
 		if err != nil {
 			// The sub-session is already running (work item published above).

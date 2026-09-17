@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -108,10 +109,16 @@ func NewWorker(q *Queue, cfg WorkerConfig) *Worker {
 }
 
 // log logs a message for debugging worker lifecycle.
+// Keys are sorted for deterministic output order (Go map iteration is random).
 func (w *Worker) log(event string, fields map[string]any) {
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	kv := make([]any, 0, len(fields)*2)
-	for k, v := range fields {
-		kv = append(kv, k, v)
+	for _, k := range keys {
+		kv = append(kv, k, fields[k])
 	}
 	w.cfg.Logger.Info(event, kv...)
 }
