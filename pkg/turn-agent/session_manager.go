@@ -402,7 +402,14 @@ func (mgr *SessionTurnManager) notifyPendingWork(ctx context.Context) {
 		return
 	}
 	// Use the exported channel constant to avoid duplicating the channel name.
-	mgr.queue.Client().Publish(ctx, rtcqueue.ChannelSessionNew, mgr.sessionID)
+	if pubErr := mgr.queue.Client().Publish(ctx, rtcqueue.ChannelSessionNew, mgr.sessionID).Err(); pubErr != nil {
+		mgr.log(ctx, LogLevelWarn, "session_manager.notify_pending_work_publish_failed", map[string]any{
+			"session_id":    mgr.sessionID,
+			"pending_count": count,
+			"error":         pubErr.Error(),
+		})
+		return
+	}
 	mgr.log(ctx, LogLevelInfo, "session_manager.notified_pending_work", map[string]any{
 		"session_id":    mgr.sessionID,
 		"pending_count": count,
