@@ -124,13 +124,13 @@ redis.call('DEL', KEYS[4])
 return sessions
 `)
 
-// SessionAssign 将 Session 分配给 Worker，若已分配给活跃 Worker 则保持原状。
+// SessionAssign assigns a Session to a Worker; if already assigned to an active Worker, keeps the current assignment.
 //
 //	KEYS[1] = session:affinity, KEYS[2] = worker:{targetWorkerID}:sessions
 //	KEYS[3] = workers:active
 //	ARGV[1] = sessionID, ARGV[2] = targetWorkerID, ARGV[3] = timestamp
 //
-// 返回：{assigned, worker, reassigned}。
+// Returns: {assigned, worker, reassigned}.
 var SessionAssign = redis.NewScript(`
 local current_worker = redis.call('HGET', KEYS[1], ARGV[1])
 if current_worker and current_worker ~= '' then
@@ -144,14 +144,14 @@ redis.call('HSET', KEYS[2], ARGV[1], ARGV[3])
 return {assigned = 1, worker = ARGV[2], reassigned = 1}
 `)
 
-// SessionReassign 将 Session 从失效 Worker 迁移到新 Worker。
+// SessionReassign migrates a Session from a failed Worker to a new Worker.
 //
 //	KEYS[1] = session:affinity
 //	KEYS[2] = worker:{deadWorkerID}:sessions
 //	KEYS[3] = worker:{newWorkerID}:sessions
 //	ARGV[1] = sessionID, ARGV[2] = newWorkerID, ARGV[3] = timestamp
 //
-// 返回：{reassigned = 1, worker = newWorkerID}。
+// Returns: {reassigned = 1, worker = newWorkerID}.
 var SessionReassign = redis.NewScript(`
 redis.call('HDEL', KEYS[2], ARGV[1])
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
@@ -159,7 +159,7 @@ redis.call('HSET', KEYS[3], ARGV[1], ARGV[3])
 return {reassigned = 1, worker = ARGV[2]}
 `)
 
-// TurnEnqueue 将一条 Turn 消息入队到 Worker 的 Stream 队列。
+// TurnEnqueue enqueues a Turn message into the Worker's Stream queue.
 //
 //	KEYS[1] = worker:{workerID}:queue
 //	KEYS[2] = session:affinity
@@ -169,7 +169,7 @@ return {reassigned = 1, worker = ARGV[2]}
 //	ARGV[4] = messageID, ARGV[5] = userID, ARGV[6] = deviceID
 //	ARGV[7] = content, ARGV[8] = created_at
 //
-// 返回：{enqueued = 1, stream_id = ...}。
+// Returns: {enqueued = 1, stream_id = ...}.
 var TurnEnqueue = redis.NewScript(`
 local assigned_worker = redis.call('HGET', KEYS[2], ARGV[2])
 if assigned_worker == '' or not assigned_worker then
@@ -191,28 +191,28 @@ local stream_id = redis.call('XADD', KEYS[1], '*',
 return {enqueued = 1, stream_id = stream_id}
 `)
 
-// AppendChunk 原子追加流式 chunk 到 Redis List 并刷新 TTL。
+// AppendChunk atomically appends a streaming chunk to a Redis List and refreshes TTL.
 //
 //	KEYS[1] = message:stream:{messageID}
 //	ARGV[1] = ttl_seconds, ARGV[2] = chunk
-//	返回：list 当前长度（RPUSH 的返回值）。
+//	Returns: current list length (RPUSH return value).
 //
-// 用途：流式消息生成期间，每个 chunk 原子追加到 List；
-// 最后一个 chunk 到达后，读取全部 chunks 拼接写入 DB，再删除该 key。
+// Use case: during streaming message generation, each chunk is atomically appended to the List;
+// after the last chunk arrives, all chunks are read, concatenated, written to DB, then the key is deleted.
 var AppendChunk = redis.NewScript(`
 local len = redis.call('RPUSH', KEYS[1], ARGV[2])
 redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
 return len
 `)
 
-// UpdateMaxStreamID 原子更新 Stream 消费位置（仅当新 ID 大于当前 ID 时）。
+// UpdateMaxStreamID atomically updates the Stream consumption position (only when new ID > current ID).
 //
-//	KEYS[1] = 存储 lastID 的 key
-//	ARGV[1] = 新的 Stream ID（格式 "timestamp-sequence"）
-//	返回：1 表示更新成功，0 表示未更新（当前 ID >= 新 ID）。
+//	KEYS[1] = key storing lastID
+//	ARGV[1] = new Stream ID (format "timestamp-sequence")
+//	Returns: 1 if updated, 0 if not updated (current ID >= new ID).
 //
-// 用途：BackgroundRunner 持久化消费位置，重启后从上次位置继续。
-// Lua 脚本保证原子性和单调递增，防止并发写入导致位置回退。
+// Use case: BackgroundRunner persists consumption position, resumes from last position after restart.
+// Lua script guarantees atomicity and monotonic increase, preventing concurrent writes from causing position regression.
 var UpdateMaxStreamID = redis.NewScript(`
 local key = KEYS[1]
 local new_id = ARGV[1]
@@ -245,33 +245,33 @@ else
 end
 `)
 
-// InterruptSetPublish 原子执行 SET + PUBLISH，保证答案存储与通知的一致性。
+// InterruptSetPublish atomically executes SET + PUBLISH, ensuring consistency between answer storage and notification.
 //
-//	KEYS[1] = answer key（interrupt:answer:{sessionID}:{interruptID}）
-//	KEYS[2] = pub/sub channel（interrupt:channel:{sessionID}:{interruptID}）
-//	ARGV[1] = answer 内容
-//	ARGV[2] = TTL（秒）
-//	返回：PUBLISH 的订阅者数量（int）
+//	KEYS[1] = answer key (interrupt:answer:{sessionID}:{interruptID})
+//	KEYS[2] = pub/sub channel (interrupt:channel:{sessionID}:{interruptID})
+//	ARGV[1] = answer content
+//	ARGV[2] = TTL (seconds)
+//	Returns: number of subscribers that received the PUBLISH (int).
 //
-// 原子性保证：SET 成功但 PUBLISH 失败的不一致状态不再可能出现。
-// 订阅方先 SUBSCRIBE 再 GET 的容错逻辑仍然保留，作为兜底。
+// Atomicity guarantee: the inconsistent state of SET succeeding but PUBLISH failing is no longer possible.
+// Subscriber tolerance logic (SUBSCRIBE before GET) is still retained as a safety net.
 var InterruptSetPublish = redis.NewScript(`
 redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
 return redis.call('PUBLISH', KEYS[2], ARGV[1])
 `)
 
-// BatchComplete 原子完成批量恢复中的一个 RTC：存储结果、从待完成集合移除、返回剩余数量。
+// BatchComplete atomically completes one RTC in a batch resume: stores result, removes from pending set, returns remaining count.
 //
-//	KEYS[1] = rtc:batch:pending:{turnID}   待完成 RTC 集合
-//	KEYS[2] = rtc:batch:results:{turnID}   结果存储 Hash
+//	KEYS[1] = rtc:batch:pending:{turnID}   pending RTC set
+//	KEYS[2] = rtc:batch:results:{turnID}   result storage Hash
 //	ARGV[1] = RTC ID
-//	ARGV[2] = RTC 结果字符串
-//	ARGV[3] = TTL（秒）
+//	ARGV[2] = RTC result string
+//	ARGV[3] = TTL (seconds)
 //
-//	返回：-1 表示 batch key 不存在（TTL 过期或未创建），>=0 表示移除后的剩余成员数。
+//	Returns: -1 if batch key does not exist (TTL expired or not created), >=0 is the remaining member count after removal.
 //
-//	原子性保证：HSET + SREM + SCARD + EXPIRE 在同一脚本中执行，避免多个 RTC 并发完成时的竞态。
-//	当返回值为 0 时，调用方知道所有 RTC 均已完成，可以触发批量恢复。
+//	Atomicity guarantee: HSET + SREM + SCARD + EXPIRE execute in a single script, avoiding races when multiple RTCs complete concurrently.
+//	When return value is 0, the caller knows all RTCs have completed and can trigger batch resume.
 var BatchComplete = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 0 then
     return -1
