@@ -187,7 +187,8 @@ func (t *subAgentTool) resumeSubAgent(ctx context.Context, state subAgentInterru
 		return t.reInterrupt(ctx, state)
 	}
 
-	// If sub session is still active or idle (not completed/failed/closed), re-interrupt.
+	// If sub session is still active (turn executing), re-interrupt to keep waiting.
+	// When status is Idle (turn completed) or Closed (terminal), fall through to fetch result.
 	if subSession.Status != string(protocol.SessionStatusIdle) && subSession.Status != string(protocol.SessionStatusClosed) {
 		return t.reInterrupt(ctx, state)
 	}
