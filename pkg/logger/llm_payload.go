@@ -87,7 +87,7 @@ func InitLLMPayloadLogger(cfg LLMPayloadConfig) {
 	core := zapcore.NewCore(
 		zapcore.NewJSONEncoder(encoderConfig),
 		zapcore.AddSync(lj),
-		//zapcore.DebugLevel, // payload 日志总是 debug 级别，按 msg 字段区分类型
+		//zapcore.DebugLevel, // payload log is always debug level; distinguish types via msg field
 		logLevel,
 	)
 

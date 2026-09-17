@@ -1,4 +1,5 @@
-// Package updates 提供 UpdatePublisher 实现，用于将实体变化事件保存并推送到 Centrifuge。
+// Package updates provides the UpdatePublisher implementation, which persists
+// entity change events and pushes them to Centrifuge for real-time delivery.
 package updates
 
 import (
@@ -26,39 +27,46 @@ import (
 	"gorm.io/gorm"
 )
 
-// ErrPushAfterCommit 表示事务已提交成功，但后续推送到 Centrifuge 失败。
-// 调用方可通过 errors.Is 检测此错误：数据已安全持久化，推送失败不影响业务结果。
+// ErrPushAfterCommit indicates that the transaction was committed successfully,
+// but the subsequent push to Centrifuge failed. Callers can detect this with
+// errors.Is: the data is safely persisted, and the push failure does not
+// affect the business result.
 var ErrPushAfterCommit = errors.New("push failed after successful commit")
 
-// Broker 发布接口，用于打断 UpdatePublisher 与具体 broker 实现的循环依赖。
+// Broker is the publish interface used to break the cyclic dependency between
+// UpdatePublisher and the concrete broker implementation.
 type Broker interface {
 	PublishWithContext(ctx context.Context, channel string, data []byte, opts centrifuge.PublishOptions) (centrifuge.PublishResult, error)
-	// PublishWithUserOffset 使用调用方预分配的 user_update offset 发布消息。
-	// 保证 push body 的外层 Publication.Offset 与内层 data.offset 一致。
+	// PublishWithUserOffset publishes a message using a caller-allocated
+	// user_update offset, guaranteeing that the outer Publication.Offset
+	// matches the inner data.offset.
 	PublishWithUserOffset(ctx context.Context, channel string, data []byte, offset uint32, opts centrifuge.PublishOptions) (centrifuge.PublishResult, error)
 }
 
-// EntityResolver 根据实体类型批量查询富内容。
-// 接收一组 UUID，返回 id→实体 的 map。未找到的 ID 不出现在 map 中（调用方按"已删除"处理）。
+// EntityResolver batch-resolves rich content by entity type.
+// Given a set of UUIDs, returns an id->entity map. IDs not found are
+// omitted from the map (callers treat them as "deleted").
 type EntityResolver func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error)
 
-// StreamStoreAccessor 提供读取流式消息 chunks 的能力。
-// 由 agent.NewStreamStore 实现，通过 SetStreamStore 注入。
-// 使用接口避免 updates 包导入 agent 包（潜在循环依赖），同时便于测试 mock。
+// StreamStoreAccessor provides the ability to read streaming message chunks.
+// Implemented by agent.NewStreamStore and injected via SetStreamStore.
+// The interface avoids importing the agent package from updates (potential
+// cyclic dependency) and simplifies test mocking.
 type StreamStoreAccessor interface {
 	GetAllChunks(messageID string) ([]string, error)
 }
 
-// UpdatePublisher 用户更新发布器
-// 负责将实体变化事件保存到数据库（Topic 频道）并通过 Centrifuge 推送给客户端
+// UpdatePublisher is the user update publisher.
+// It persists entity change events to the database (topic channel) and
+// pushes them to clients via Centrifuge.
 type UpdatePublisher struct {
 	db                   *gorm.DB
 	redis                redis.UniversalClient
-	mu                   sync.RWMutex // 保护 broker 和 streamStore 的并发读写
+	mu                   sync.RWMutex // guards concurrent read/write of broker and streamStore
 	broker               Broker
 	resolvers            map[string]EntityResolver
-	streamStore          StreamStoreAccessor // 可选：用于读取 streaming 状态消息的 chunks
-	compressionThreshold atomic.Int64        // 压缩触发阈值，用于计算 Token 预估字段
+	streamStore          StreamStoreAccessor // optional: reads chunks for streaming-status messages
+	compressionThreshold atomic.Int64        // compression trigger threshold, used for token estimate fields
 }
 
 // buildRepoResolver creates a resolver function for entities that follow the
