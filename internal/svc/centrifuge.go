@@ -19,20 +19,22 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
-// rpcHandlerInstance 全局 RPC 处理器实例，由 RegisterRPCHandler 设置。
-// 使用 sync.RWMutex 保护并发访问。
+// rpcHandlerInstance is the global RPC handler instance, set by RegisterRPCHandler.
+// Access is protected by sync.RWMutex.
 var (
 	rpcHandlerMu       sync.RWMutex
 	rpcHandlerInstance RPCHandler
 )
 
-// RPCHandler RPC 处理接口，用于打断 svc 对 rpchandler 的反向依赖。
+// RPCHandler is the RPC processing interface, used to break the reverse
+// dependency from svc to the rpchandler package.
 type RPCHandler interface {
 	HandleRPC(ctx stdcontext.Context, method string, data []byte) ([]byte, error)
 }
 
-// AssembleDualBroker 组装 DualBroker 的核心逻辑：创建 Redis shard → 构建 DualBroker → 配置事件处理。
-// 供 Wire 路径（provideDualBroker）和非 Wire 路径（servicecontext.go）共享。
+// AssembleDualBroker assembles the DualBroker core logic: create Redis shard,
+// build DualBroker, and configure event handlers. Shared between the Wire
+// path (provideDualBroker) and the non-Wire path (servicecontext.go).
 func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore centrifugeplus.HistoryStore, jwtSigner *auth.JWTSigner) (*centrifugeplus.DualBroker, error) {
 	redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
 		Address: cfg.Redis.Addr,
@@ -67,14 +69,15 @@ func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore 
 	return broker, nil
 }
 
-// clientInfo 存储在 Credentials.Info 中的额外信息
+// clientInfo holds additional information stored in Credentials.Info.
 type clientInfo struct {
 	UserID   uuid.UUID `json:"user_id"`
 	DeviceID string    `json:"device_id"`
 }
 
-// parseClientInfo 从 client.Info() JSON 解析出 clientInfo。
-// 解析失败时记录警告日志并返回零值，保证 OnConnect 不因 info 损坏而 panic。
+// parseClientInfo parses clientInfo from client.Info() JSON.
+// On parse failure, logs a warning and returns a zero value, ensuring
+// OnConnect does not panic due to corrupted info.
 func parseClientInfo(info []byte) *clientInfo {
 	ci := &clientInfo{}
 	if len(info) > 0 {
@@ -88,7 +91,8 @@ func parseClientInfo(info []byte) *clientInfo {
 	return ci
 }
 
-// setupCentrifuge 配置 centrifuge.Node 的事件处理（JWT 验证、频道订阅校验）
+// setupCentrifuge configures the centrifuge.Node event handlers (JWT
+// verification, channel subscription validation).
 func setupCentrifuge(
 	node *centrifuge.Node, broker *centrifugeplus.DualBroker,
 	signer *auth.JWTSigner, rpcTimeout time.Duration,
@@ -106,7 +110,7 @@ func setupCentrifuge(
 	return nil
 }
 
-// centrifugeLogger 适配器：将 zap logger 适配到 centrifuge-plus 的 Logger 接口
+// centrifugeLogger adapts the zap logger to the centrifuge-plus Logger interface.
 type centrifugeLogger struct {
 	ctx stdcontext.Context
 }
@@ -123,7 +127,8 @@ func (l *centrifugeLogger) Error(msg string, args ...any) {
 	logger.Error(l.ctx, msg, zap.Any("args", args))
 }
 
-// createOnConnectingHandler 返回 OnConnecting 回调：JWT 验证 → 提取身份 → 写入 Credentials。
+// createOnConnectingHandler returns the OnConnecting callback: JWT verification
+// -> extract identity -> write to Credentials.
 func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 	return func(ctx stdcontext.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		logger.Info(ctx, "[Centrifuge] OnConnecting started",
@@ -133,7 +138,7 @@ func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, 
 
 		claims, err := signer.ParseAccessToken(e.Token)
 		if err != nil {
-			logger.Error(ctx, "[Centrifuge] JWT 验证失败，拒绝连接",
+			logger.Error(ctx, "[Centrifuge] JWT verification failed, rejecting connection",
 				zap.Error(err),
 				zap.String("token_preview", previewToken(e.Token)),
 			)
@@ -146,7 +151,7 @@ func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, 
 		}
 		info, _ := json.Marshal(ci)
 
-		logger.Info(ctx, "[Centrifuge] OnConnecting 成功",
+		logger.Info(ctx, "[Centrifuge] OnConnecting succeeded",
 			zap.String("user_id", claims.UserID.String()),
 			zap.String("device_id", claims.DeviceID),
 		)
@@ -161,7 +166,8 @@ func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, 
 	}
 }
 
-// previewToken 截取 token 的前 20 个字符用于日志（避免记录完整 token）
+// previewToken truncates a token to the first 20 characters for logging
+// (avoids recording the full token).
 func previewToken(token string) string {
 	if len(token) == 0 {
 		return "<empty>"
@@ -172,10 +178,11 @@ func previewToken(token string) string {
 	return token[:20] + "..."
 }
 
-// createOnConnectHandler 返回 OnConnect 回调：订阅校验 + History + RPC 处理。
+// createOnConnectHandler returns the OnConnect callback: subscription
+// validation + History + RPC handling.
 func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.Duration) func(*centrifuge.Client) {
 	return func(client *centrifuge.Client) {
-		// 添加 panic recovery，捕获并记录任何未处理的错误
+		// Panic recovery to capture and log any unhandled errors.
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Error(stdcontext.Background(), "[Centrifuge] OnConnect panic",
@@ -200,7 +207,7 @@ func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.D
 				zap.String("user_id_str", userIDStr),
 				zap.String("client_id", client.ID()),
 			)
-			// 断开连接
+			// Disconnect the client.
 			client.Disconnect(centrifuge.DisconnectBadRequest)
 			return
 		}
@@ -224,12 +231,13 @@ func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.D
 	}
 }
 
-// setupSubscribeHandler 注册频道订阅回调：校验归属、注册频道类型、启用 recovery。
+// setupSubscribeHandler registers the channel subscription callback:
+// validates ownership, registers channel type, enables recovery.
 func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.DualBroker) {
 	client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 		ch := e.Channel
 
-		// 用户频道校验：userID 必须等于当前连接的 UserID
+		// User channel validation: userID must match the connected user.
 		if ownerIDStr, ok := channel.ParseUser(ch); ok {
 			if ownerIDStr != client.UserID() {
 				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
@@ -253,14 +261,16 @@ func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.Dua
 	})
 }
 
-// setupHistoryHandler 注册 History 命令处理：返回空 Result 使 centrifuge 回退到 node.History()。
+// setupHistoryHandler registers the History command handler: returns an
+// empty Result so centrifuge falls back to node.History().
 func setupHistoryHandler(client *centrifuge.Client) {
 	client.OnHistory(func(e centrifuge.HistoryEvent, cb centrifuge.HistoryCallback) {
 		cb(centrifuge.HistoryReply{}, nil)
 	})
 }
 
-// setupRPCHandler 注册 RPC 处理回调：注入身份 context → 分发到全局 RPCHandler。
+// setupRPCHandler registers the RPC handler callback: injects identity
+// context and dispatches to the global RPCHandler.
 func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, rpcTimeout time.Duration) {
 	client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
 		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), rpcTimeout)
@@ -282,8 +292,9 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 
 		resp, err := handler.HandleRPC(ctx, e.Method, e.Data)
 		if err != nil {
-			// 仅转发 APIError（已脱敏的安全错误），其他错误返回通用提示，
-			// 防止数据库语句、连接信息等内部细节泄露给客户端。
+			// Only forward APIError (sanitized, safe errors); other errors
+			// return a generic message to prevent leaking internal details
+			// (database statements, connection info) to the client.
 			if apiErr, ok := extractAPIError(err); ok {
 				cb(centrifuge.RPCReply{}, &centrifuge.Error{
 					Code:    500,
@@ -304,11 +315,12 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 	})
 }
 
-// extractAPIError 尝试从 error 中提取安全的客户端可见错误消息。
-// 通过检查 error 是否实现了包含 Code/Message 字段的结构体来判断。
+// extractAPIError attempts to extract a safe, client-visible error message
+// from an error. It checks whether the error implements a struct with
+// Code/Message fields.
 func extractAPIError(err error) (string, bool) {
-	// rpchandler.APIError 有 Code 和 Message 字段。
-	// 使用 structural typing 避免直接导入 rpchandler 包。
+	// rpchandler.APIError has Code and Message fields.
+	// Use structural typing to avoid directly importing the rpchandler package.
 	type safeError interface {
 		Error() string
 		SafeMessage() string
@@ -319,8 +331,9 @@ func extractAPIError(err error) (string, bool) {
 	return "", false
 }
 
-// RegisterRPCHandler 注册 RPC 处理器。
-// 由 server 层在创建 RPCHandler 后调用，供已建立的连接在 OnRPC 回调中分发。
+// RegisterRPCHandler registers the RPC handler.
+// Called by the server layer after creating the RPCHandler, so that
+// established connections can dispatch via OnRPC callbacks.
 func RegisterRPCHandler(handler RPCHandler) {
 	rpcHandlerMu.Lock()
 	rpcHandlerInstance = handler

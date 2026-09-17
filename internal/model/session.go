@@ -9,95 +9,99 @@ import (
 	"gorm.io/gorm"
 )
 
-// TodoItem 任务项（对齐 Claude Code 的 TodoItem 结构）
+// TodoItem represents a task item (aligned with Claude Code's TodoItem structure).
 type TodoItem struct {
-	Content    string `json:"content"`     // 任务描述（祈使句）
+	Content    string `json:"content"`     // task description (imperative)
 	Status     string `json:"status"`      // pending/in_progress/completed
-	ActiveForm string `json:"active_form"` // 执行中的描述（进行时）
+	ActiveForm string `json:"active_form"` // in-progress description (present tense)
 }
 
-// Session 会话模型
+// Session is the session model.
 type Session struct {
 	ID          uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`
-	ClientID    string          `gorm:"size:255;uniqueIndex" json:"client_id,omitempty"` // 客户端生成的幂等 ID
+	ClientID    string          `gorm:"size:255;uniqueIndex" json:"client_id,omitempty"` // client-generated idempotency ID
 	OwnerKind   string          `gorm:"size:32;default:'user'" json:"owner_kind"`
 	OwnerRefID  string          `gorm:"size:255;index" json:"owner_ref_id"`
-	DeviceID    string          `gorm:"size:255" json:"device_id,omitempty"` // 仅 user-owned session 使用，待 protocol 迁移后删除
+	DeviceID    string          `gorm:"size:255" json:"device_id,omitempty"` // only for user-owned sessions; remove after protocol migration
 	Title       string          `gorm:"size:255" json:"title,omitempty"`
 	Status      string          `gorm:"size:20;not null;default:active;index" json:"status"`
 	AgentPrompt string          `gorm:"type:text" json:"agent_prompt,omitempty"`
 	TodoList    JSONB[TodoItem] `gorm:"type:jsonb;not null;default:'[]'" json:"todo_list"`
-	// Sub Agent 层级关系
-	ParentClientSessionID   string    `gorm:"size:255;index" json:"parent_client_session_id,omitempty"`     // 父 session 的 client ID
-	ParentServerSessionID   uuid.UUID `gorm:"type:uuid;index" json:"parent_server_session_id,omitempty"`    // 父 session 的 server ID
-	RootClientSessionID     string    `gorm:"size:255;index" json:"root_client_session_id,omitempty"`       // 根 session 的 client ID
-	RootServerSessionID     uuid.UUID `gorm:"type:uuid;index" json:"root_server_session_id,omitempty"`      // 根 session 的 server ID
-	SubAgentParentMessageID uuid.UUID `gorm:"type:uuid;index" json:"sub_agent_parent_message_id,omitempty"` // 父 session 中 sub_agent_invocation 消息的 ID
-	SubAgentMode            string    `gorm:"size:20;default:''" json:"sub_agent_mode,omitempty"`           // sub agent 调用模式: "sync"(默认) 或 "async"
+	// Sub-agent hierarchy.
+	ParentClientSessionID   string    `gorm:"size:255;index" json:"parent_client_session_id,omitempty"`     // parent session's client ID
+	ParentServerSessionID   uuid.UUID `gorm:"type:uuid;index" json:"parent_server_session_id,omitempty"`    // parent session's server ID
+	RootClientSessionID     string    `gorm:"size:255;index" json:"root_client_session_id,omitempty"`       // root session's client ID
+	RootServerSessionID     uuid.UUID `gorm:"type:uuid;index" json:"root_server_session_id,omitempty"`      // root session's server ID
+	SubAgentParentMessageID uuid.UUID `gorm:"type:uuid;index" json:"sub_agent_parent_message_id,omitempty"` // sub_agent_invocation message ID in the parent session
+	SubAgentMode            string    `gorm:"size:20;default:''" json:"sub_agent_mode,omitempty"`           // sub-agent invocation mode: "sync" (default) or "async"
 
 	// ========================================================================
-	// Token 用量累计（Session 级别）
+	// Cumulative token usage (session-level)
 	// ========================================================================
 
-	// TotalInputTokens 累计纯输入 token 数（不含 cached read/write）
+	// TotalInputTokens cumulative pure input tokens (excluding cached read/write)
 	TotalInputTokens int64 `gorm:"default:0" json:"total_input_tokens"`
 
-	// TotalOutputTokens 累计输出 token 数
+	// TotalOutputTokens cumulative output tokens
 	TotalOutputTokens int64 `gorm:"default:0" json:"total_output_tokens"`
 
-	// TotalTokens 累计总 token 数（包含所有类型，与 eino TotalTokens 对齐）
+	// TotalTokens cumulative total tokens (includes all types, aligned with eino TotalTokens)
 	TotalTokens int64 `gorm:"default:0" json:"total_tokens"`
 
-	// CurrentContextTokens 当前上下文实际 token 数。
-	// 压缩后由 cumulativeTokenCounter 回写，非压缩轮次由 token_callback 近似更新。
-	// 用于前端压缩进度计算（替代 TotalTokens，解决累计值永不减少导致进度 100% 的 bug）。
-	// 默认 0 表示尚未初始化，ComputeTokenEstimate 会 fallback 到 TotalTokens。
+	// CurrentContextTokens is the actual current context token count.
+	// Written back by cumulativeTokenCounter after compaction; approximately
+	// updated by token_callback on non-compaction turns.
+	// Used for frontend compression progress calculation (replaces TotalTokens
+	// to fix the bug where cumulative values never decrease, causing 100% progress).
+	// Default 0 means not yet initialized; ComputeTokenEstimate falls back to TotalTokens.
 	CurrentContextTokens int64 `gorm:"default:0" json:"current_context_tokens"`
 
-	// TotalCachedReadTokens 累计缓存读取（cache hit）token 数
+	// TotalCachedReadTokens cumulative cache-hit tokens
 	TotalCachedReadTokens int64 `gorm:"default:0" json:"total_cached_read_tokens"`
 
-	// TotalCachedWriteTokens 累计缓存写入（cache creation）token 数
+	// TotalCachedWriteTokens cumulative cache-creation tokens
 	TotalCachedWriteTokens int64 `gorm:"default:0" json:"total_cached_write_tokens"`
 
-	// TotalReasoningTokens 累计推理（thinking）token 数
+	// TotalReasoningTokens cumulative reasoning (thinking) tokens
 	TotalReasoningTokens int64 `gorm:"default:0" json:"total_reasoning_tokens"`
 
 	// ========================================================================
-	// 成本统计
+	// Cost statistics
 	// ========================================================================
 
-	// TotalCostMicros 累计成本（微美元，1 USD = 1,000,000 micros）
+	// TotalCostMicros cumulative cost in micro-USD (1 USD = 1,000,000 micros)
 	TotalCostMicros int64 `gorm:"default:0" json:"total_cost_micros"`
 
 	// ========================================================================
-	// Token 预估（持久化 EWMA，派生字段在 ToProtocolSession 中计算）
+	// Token estimation (persisted EWMA; derived fields computed in ToProtocolSession)
 	// ========================================================================
 
-	// TokenEstimateEWMA 指数加权移动平均，用于预估下一轮 token 增量。
-	// 每次 LLM 调用后通过 EWMA 公式增量更新：ewma = α * old + (1-α) * roundDelta。
-	// 压缩后按压缩比率调整：new_ewma = old_ewma * (tokensAfter / tokensBefore)。
-	// 默认值 2000（首次调用前的初始增长率估计）。
+	// TokenEstimateEWMA is the exponentially weighted moving average used to
+	// estimate the next round's token increment.
+	// Incrementally updated after each LLM call: ewma = alpha * old + (1-alpha) * roundDelta.
+	// Adjusted after compaction by compression ratio: new_ewma = old_ewma * (tokensAfter / tokensBefore).
+	// Default 2000 (initial growth rate estimate before the first call).
 	TokenEstimateEWMA float64 `gorm:"default:2000" json:"token_estimate_ewma"`
 
 	// ========================================================================
-	// Memory 提取状态（用于 Session Memory 后台提取器）
+	// Memory extraction state (for session memory background extractor)
 	// ========================================================================
 
-	// MemoryExtractionLastTokens 上次提取 session memory 时的 token 数。
-	// 由 triggerSessionMemoryExtraction 在成功提取后更新。
-	// 0 表示从未提取过。
+	// MemoryExtractionLastTokens is the token count at the last session
+	// memory extraction. Updated by triggerSessionMemoryExtraction after
+	// a successful extraction. 0 means never extracted.
 	MemoryExtractionLastTokens int `gorm:"default:0" json:"memory_extraction_last_tokens"`
 
-	// MemoryExtractionLastMessages 上次提取 session memory 时的消息数。
-	// 用于计算自上次提取以来的增量 tool call 数量。
+	// MemoryExtractionLastMessages is the message count at the last session
+	// memory extraction. Used to compute the incremental tool call count
+	// since the last extraction.
 	MemoryExtractionLastMessages int `gorm:"default:0" json:"memory_extraction_last_messages"`
 
 	// ========================================================================
-	// 元数据
+	// Metadata
 	// ========================================================================
 
-	// LastTokenUpdateAt 最后一次 token 统计更新时间
+	// LastTokenUpdateAt is the last time token statistics were updated.
 	LastTokenUpdateAt *time.Time `json:"last_token_update_at"`
 
 	CreatedAt time.Time  `json:"created_at"`
@@ -118,25 +122,26 @@ func (s *Session) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// GetTotalCostUSD 返回美元成本
+// GetTotalCostUSD returns the cost in USD.
 func (s *Session) GetTotalCostUSD() float64 {
 	return float64(s.TotalCostMicros) / 1_000_000
 }
 
-// 会话状态常量（protocol 为单一真相源，此处 re-export 便于本包内使用）
+// Session status constants (protocol is the single source of truth; these
+// are re-exported here for convenience within this package).
 const (
 	SessionStatusActive = protocol.SessionStatusActive
 	SessionStatusIdle   = protocol.SessionStatusIdle
 	SessionStatusClosed = protocol.SessionStatusClosed
 )
 
-// ToProtocolSession 将 dbmodel.Session 转换为 protocol.Session。
-// nil 输入返回零值 protocol.Session。
+// ToProtocolSession converts a dbmodel.Session to a protocol.Session.
+// A nil input returns a zero-value protocol.Session.
 func ToProtocolSession(m *Session) protocol.Session {
 	if m == nil {
 		return protocol.Session{}
 	}
-	// 转换 TodoList
+	// Convert TodoList.
 	var todoList *[]protocol.TodoItem
 	if len(m.TodoList) > 0 {
 		items := make([]protocol.TodoItem, len(m.TodoList))
@@ -149,7 +154,7 @@ func ToProtocolSession(m *Session) protocol.Session {
 		}
 		todoList = &items
 	}
-	// 转换 Sub Agent 层级关系字段
+	// Convert sub-agent hierarchy fields.
 	var parentClientSessionID *string
 	if m.ParentClientSessionID != "" {
 		parentClientSessionID = &m.ParentClientSessionID
@@ -188,7 +193,7 @@ func ToProtocolSession(m *Session) protocol.Session {
 		RootClientSessionId:     rootClientSessionID,
 		RootServerSessionId:     rootServerSessionID,
 		SubAgentParentMessageId: subAgentParentMessageID,
-		// Token 用量累计
+		// Cumulative token usage.
 		TotalInputTokens:       ptrTo(m.TotalInputTokens),
 		TotalOutputTokens:      ptrTo(m.TotalOutputTokens),
 		TotalTokens:            ptrTo(m.TotalTokens),
@@ -224,8 +229,9 @@ func (s *Session) ComputeTokenEstimate(threshold int64) *TokenEstimateFields {
 	}
 
 	ewma := s.TokenEstimateEWMA
-	// 优先使用 CurrentContextTokens（压缩后回写的实际上下文大小），
-	// fallback 到 TotalTokens（旧 session 或压缩前的累计值）。
+	// Prefer CurrentContextTokens (actual context size written back after
+	// compaction); fall back to TotalTokens (cumulative value for old
+	// sessions or pre-compaction state).
 	currentTokens := s.CurrentContextTokens
 	if currentTokens <= 0 {
 		currentTokens = s.TotalTokens

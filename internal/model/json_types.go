@@ -10,12 +10,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// JSONB 是泛型 JSONB 列类型，支持任意 Go 元素类型的 PostgreSQL JSONB 序列化。
-// 底层类型为 []T，Value 将其序列化为 JSON 数组，Scan 从 JSON 数组反序列化回 []T。
+// JSONB is a generic JSONB column type, supporting PostgreSQL JSONB serialization for any Go element type.
+// The underlying type is []T; Value serializes it to a JSON array, Scan deserializes from JSON array back to []T.
 //
-// 替代此前 StringArray / UUIDArray / UpdateItemArray 各自重复的 Value/Scan 实现。
+// Replaces the previously duplicated Value/Scan implementations of StringArray / UUIDArray / UpdateItemArray.
 //
-// 用法：
+// Usage:
 //
 //	type UserUpdate struct {
 //	    Items UpdateItemArray `gorm:"type:jsonb"`
@@ -60,24 +60,24 @@ func (j *JSONB[T]) Scan(src any) error {
 	return nil
 }
 
-// ========== 具体类型别名 ==========
+// ========== Concrete type aliases ==========
 
-// StringArray 字符串切片（JSONB 存储）
+// StringArray is a string slice (JSONB storage).
 type StringArray = JSONB[string]
 
-// UUIDArray UUID 切片（JSONB 存储）
+// UUIDArray is a UUID slice (JSONB storage).
 type UUIDArray = JSONB[uuid.UUID]
 
-// UpdateItemArray protocol.UpdateItem 切片（JSONB 存储），用于 UserUpdate.Items
+// UpdateItemArray is a protocol.UpdateItem slice (JSONB storage), used for UserUpdate.Items.
 type UpdateItemArray = JSONB[protocol.UpdateItem]
 
-// JSONBString 是可选 JSONB 列的字符串类型。
-// 空字符串 → SQL NULL（避免 PostgreSQL 拒绝 ” 作为无效 JSONB），
-// 非空字符串 → 原样写入（调用方须保证是合法 JSON）。
-// 读取时 SQL NULL → 空字符串，非 NULL → 原始 JSON 文本。
+// JSONBString is a string type for optional JSONB columns.
+// Empty string -> SQL NULL (avoids PostgreSQL rejecting "" as invalid JSONB).
+// Non-empty string -> written as-is (caller must ensure valid JSON).
+// On read: SQL NULL -> empty string, non-NULL -> raw JSON text.
 type JSONBString string
 
-// Value 实现 driver.Valuer：空字符串返回 nil（SQL NULL），否则返回原字符串。
+// Value implements driver.Valuer: empty string returns nil (SQL NULL), otherwise returns the original string.
 func (j JSONBString) Value() (driver.Value, error) {
 	if j == "" {
 		return nil, nil
@@ -85,7 +85,7 @@ func (j JSONBString) Value() (driver.Value, error) {
 	return string(j), nil
 }
 
-// Scan 实现 sql.Scanner：SQL NULL → 空字符串，否则转为 string。
+// Scan implements sql.Scanner: SQL NULL -> empty string, otherwise convert to string.
 func (j *JSONBString) Scan(src any) error {
 	if src == nil {
 		*j = ""

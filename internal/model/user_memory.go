@@ -7,35 +7,36 @@ import (
 	"gorm.io/gorm"
 )
 
-// UserMemory 用户级记忆模型
-// 用于跨会话保持用户偏好、项目信息、技术栈等长期知识。
+// UserMemory is the user-level memory model.
+// Used to maintain user preferences, project info, tech stacks, and other
+// long-term knowledge across sessions.
 type UserMemory struct {
 	ID     uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
 	UserID uuid.UUID `gorm:"type:uuid;not null;index" json:"user_id"`
 
-	// 分类（对齐 Claude Code）: user/feedback/project/reference
+	// Category (aligned with Claude Code): user/feedback/project/reference
 	Category   string `gorm:"size:50;not null;index" json:"category"`
 	Importance string `gorm:"size:20;not null;default:'medium';index" json:"importance"` // low/medium/high/critical
 
-	// 内容
+	// Content
 	Title       string  `gorm:"size:200;not null" json:"title"`
 	Content     string  `gorm:"type:text;not null" json:"content"`
-	Description *string `gorm:"size:500" json:"description,omitempty"` // 一行描述（用于检索）
+	Description *string `gorm:"size:500" json:"description,omitempty"` // one-line description for retrieval
 
-	// 标签
-	Tags StringArray `gorm:"type:text[]" json:"tags,omitempty"` // 标签（用于关键词匹配）
+	// Tags for keyword matching
+	Tags StringArray `gorm:"type:text[]" json:"tags,omitempty"`
 
-	// 元数据
+	// Metadata
 	Metadata        JSONB[any] `gorm:"type:jsonb;default:'{}'" json:"metadata"`
 	SourceSessionID *uuid.UUID `gorm:"type:uuid" json:"source_session_id,omitempty"`
 
-	// 时间戳
+	// Timestamps
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	DeletedAt      *time.Time `gorm:"index" json:"-"`
 	LastAccessedAt *time.Time `json:"last_accessed_at,omitempty"`
 
-	// 检索统计
+	// Retrieval statistics
 	AccessCount int `gorm:"default:0" json:"access_count"`
 }
 
@@ -51,7 +52,7 @@ func (m *UserMemory) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// User Memory 分类常量（对齐 Claude Code）
+// User Memory category constants (aligned with Claude Code).
 const (
 	UserMemoryCategoryUser      = "user"
 	UserMemoryCategoryFeedback  = "feedback"
@@ -59,7 +60,7 @@ const (
 	UserMemoryCategoryReference = "reference"
 )
 
-// ValidUserMemoryCategories 所有有效的分类
+// ValidUserMemoryCategories lists all valid memory categories.
 var ValidUserMemoryCategories = []string{
 	UserMemoryCategoryUser,
 	UserMemoryCategoryFeedback,
@@ -67,7 +68,7 @@ var ValidUserMemoryCategories = []string{
 	UserMemoryCategoryReference,
 }
 
-// IsValidUserMemoryCategory 检查分类是否有效
+// IsValidUserMemoryCategory checks whether the given category is valid.
 func IsValidUserMemoryCategory(category string) bool {
 	for _, c := range ValidUserMemoryCategories {
 		if c == category {
@@ -77,7 +78,7 @@ func IsValidUserMemoryCategory(category string) bool {
 	return false
 }
 
-// Importance 级别常量
+// Importance level constants.
 const (
 	ImportanceLow      = "low"
 	ImportanceMedium   = "medium"
@@ -85,7 +86,7 @@ const (
 	ImportanceCritical = "critical"
 )
 
-// ValidImportances 所有有效的重要性级别
+// ValidImportances lists all valid importance levels.
 var ValidImportances = []string{
 	ImportanceLow,
 	ImportanceMedium,
@@ -93,7 +94,7 @@ var ValidImportances = []string{
 	ImportanceCritical,
 }
 
-// IsValidImportance 检查重要性级别是否有效
+// IsValidImportance checks whether the given importance level is valid.
 func IsValidImportance(importance string) bool {
 	for _, i := range ValidImportances {
 		if i == importance {
@@ -103,7 +104,7 @@ func IsValidImportance(importance string) bool {
 	return false
 }
 
-// ImportanceWeight 返回重要性级别的权重（用于检索排序）
+// ImportanceWeight returns the weight for a given importance level (used for retrieval ranking).
 func ImportanceWeight(importance string) float64 {
 	switch importance {
 	case ImportanceCritical:

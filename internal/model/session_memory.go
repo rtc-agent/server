@@ -7,26 +7,26 @@ import (
 	"gorm.io/gorm"
 )
 
-// SessionMemory 会话记忆模型
-// 用于在会话过程中持续提取关键信息，为自动压缩提供摘要内容。
+// SessionMemory is the session memory model.
+// Used to continuously extract key information during a session, providing summary content for automatic compression.
 type SessionMemory struct {
 	ID        uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
 	SessionID uuid.UUID `gorm:"type:uuid;not null;index" json:"session_id"`
 
-	// 分类: decision/context/progress/issue/learnings
+	// Category: decision/context/progress/issue/learnings.
 	Category string `gorm:"size:50;not null;index" json:"category"`
 
-	// 内容
+	// Content.
 	Title   string `gorm:"size:200;not null" json:"title"`
 	Content string `gorm:"type:text;not null" json:"content"`
 
-	// 元数据（JSON 格式，存储相关文件、代码片段等）
+	// Metadata in JSON format (stores related files, code snippets, etc.)
 	Metadata JSONB[any] `gorm:"type:jsonb;default:'{}'" json:"metadata"`
 
-	// 预估 token 数（用于限制总大小）
+	// Estimated token count (used to limit total size)
 	TokenCount *int `json:"token_count,omitempty"`
 
-	// 时间戳
+	// Timestamps
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `gorm:"index" json:"-"`
@@ -44,7 +44,7 @@ func (m *SessionMemory) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// Session Memory 分类常量
+// Session Memory category constants.
 const (
 	SessionMemoryCategoryDecision  = "decision"
 	SessionMemoryCategoryContext   = "context"
@@ -62,7 +62,7 @@ var ValidSessionMemoryCategories = []string{
 	SessionMemoryCategoryLearnings,
 }
 
-// IsValidCategory 检查分类是否有效
+// IsValidCategory checks whether the given category is valid.
 func IsValidCategory(category string) bool {
 	for _, c := range ValidSessionMemoryCategories {
 		if c == category {
@@ -72,6 +72,6 @@ func IsValidCategory(category string) bool {
 	return false
 }
 
-// ToProtocolSessionMemory 将 model.SessionMemory 转换为 protocol.SessionMemory。
-// 注意：当前 protocol 中没有 SessionMemory 的定义，这里预留用于未来扩展。
-// 如果需要暴露给客户端，需要在 protocol 中添加相应的类型定义。
+// ToProtocolSessionMemory converts model.SessionMemory to protocol.SessionMemory.
+// Note: the protocol currently has no SessionMemory definition; this is reserved for future use.
+// If exposed to the client, a corresponding type must be added to the protocol.

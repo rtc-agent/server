@@ -9,10 +9,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// Turn 消息轮次模型
+// Turn is the message turn model.
 type Turn struct {
 	ID           uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	ClientID     string     `gorm:"size:255;uniqueIndex" json:"client_id,omitempty"` // 客户端生成的幂等 ID
+	ClientID     string     `gorm:"size:255;uniqueIndex" json:"client_id,omitempty"` // client-generated idempotency ID
 	SessionID    uuid.UUID  `gorm:"type:uuid;not null;index" json:"session_id"`
 	Status       string     `gorm:"size:20;not null;default:pending;index" json:"status"`
 	ErrorMessage string     `gorm:"type:text" json:"error_message,omitempty"`
@@ -38,7 +38,7 @@ func (t *Turn) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// Turn 状态常量（protocol 为单一真相源）
+// Turn status constants (protocol is the single source of truth).
 const (
 	TurnStatusPending     = protocol.TurnStatusPending
 	TurnStatusRunning     = protocol.TurnStatusRunning
@@ -49,8 +49,8 @@ const (
 	TurnStatusInterrupted = protocol.TurnStatusInterrupted
 )
 
-// ToProtocolTurn 将 dbmodel.Turn 转换为 protocol.Turn。
-// nil 输入返回零值 protocol.Turn。
+// ToProtocolTurn converts a dbmodel.Turn to a protocol.Turn.
+// A nil input returns a zero-value protocol.Turn.
 func ToProtocolTurn(t *Turn) protocol.Turn {
 	if t == nil {
 		return protocol.Turn{}

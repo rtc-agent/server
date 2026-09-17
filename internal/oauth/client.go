@@ -1,4 +1,5 @@
-// Package oauth2provider 实现 ProviderClient，负责与上游 OAuth2 Provider 通信。
+// Package oauth implements the ProviderClient, responsible for communicating
+// with upstream OAuth2 providers.
 package oauth
 
 import (
@@ -12,7 +13,7 @@ import (
 	"time"
 )
 
-// ProviderUserInfo Provider 返回的用户信息
+// ProviderUserInfo holds user information returned by the provider.
 type ProviderUserInfo struct {
 	ProviderUserID string
 	Username       string
@@ -20,23 +21,23 @@ type ProviderUserInfo struct {
 	AvatarURL      string
 }
 
-// ProviderConfig 单个 Provider 的配置
+// ProviderConfig holds configuration for a single provider.
 type ProviderConfig struct {
 	Name         string
-	AuthURL      string // Provider 授权页面 URL（前端跳转）
-	TokenURL     string // 授权码换取 Token 的 URL（后端调用）
-	UserInfoURL  string // 可选：获取用户信息的 URL。为空表示 TokenURL 直接返回用户信息
+	AuthURL      string // Provider authorization page URL (frontend redirect)
+	TokenURL     string // Authorization code exchange URL (backend call)
+	UserInfoURL  string // Optional: URL to fetch user info. Empty means TokenURL returns user info directly.
 	ClientID     string
 	ClientSecret string
 }
 
-// Client ProviderClient 实现，支持多个 Provider 注册
+// Client is the ProviderClient implementation, supporting multiple registered providers.
 type Client struct {
 	providers map[string]*ProviderConfig
 	http      *http.Client
 }
 
-// NewClient 创建 ProviderClient
+// NewClient creates a new ProviderClient.
 func NewClient(providers []*ProviderConfig, httpTimeout time.Duration) *Client {
 	m := make(map[string]*ProviderConfig, len(providers))
 	for _, p := range providers {
@@ -48,7 +49,7 @@ func NewClient(providers []*ProviderConfig, httpTimeout time.Duration) *Client {
 	}
 }
 
-// GetProviders 返回已注册的 provider 名称列表
+// GetProviders returns the list of registered provider names.
 func (c *Client) GetProviders() []string {
 	names := make([]string, 0, len(c.providers))
 	for name := range c.providers {
@@ -57,9 +58,9 @@ func (c *Client) GetProviders() []string {
 	return names
 }
 
-// GetAuthorizationURL 拼接 Provider 授权页面 URL
-//
-// 如果 provider 不在已注册列表中，返回错误（用于拒绝"不支持的 provider"请求）。
+// GetAuthorizationURL constructs the provider authorization page URL.
+// Returns an error if the provider is not in the registered list
+// (used to reject requests for unsupported providers).
 func (c *Client) GetAuthorizationURL(provider string, state string, redirectURI string) (string, error) {
 	cfg, ok := c.providers[provider]
 	if !ok {
@@ -80,16 +81,16 @@ func (c *Client) GetAuthorizationURL(provider string, state string, redirectURI 
 	return u.String(), nil
 }
 
-// ExchangeCode 用授权码向 Provider 换取用户信息
+// ExchangeCode exchanges an authorization code with the provider for user info.
 func (c *Client) ExchangeCode(ctx context.Context, provider string, code string, redirectURI string) (*ProviderUserInfo, error) {
 	cfg, ok := c.providers[provider]
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider: %s", provider)
 	}
 
-	// 根据 UserInfoURL 判断流程
+	// Determine flow based on UserInfoURL.
 	if cfg.UserInfoURL != "" {
-		// 两步模式：code → access_token → userinfo
+		// Two-step mode: code -> access_token -> userinfo
 		accessToken, err := c.exchangeCodeForToken(ctx, cfg, code, redirectURI)
 		if err != nil {
 			return nil, err
@@ -97,11 +98,11 @@ func (c *Client) ExchangeCode(ctx context.Context, provider string, code string,
 		return c.fetchUserInfo(ctx, cfg.UserInfoURL, accessToken)
 	}
 
-	// 直接模式：TokenURL 直接返回用户信息（Mock provider）
+	// Direct mode: TokenURL returns user info directly (Mock provider).
 	return c.parseUserInfoFromTokenResponse(ctx, cfg, code, redirectURI)
 }
 
-// exchangeCodeForToken 用授权码换取 access_token
+// exchangeCodeForToken exchanges an authorization code for an access_token.
 func (c *Client) exchangeCodeForToken(ctx context.Context, cfg *ProviderConfig, code string, redirectURI string) (string, error) {
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -135,7 +136,7 @@ func (c *Client) exchangeCodeForToken(ctx context.Context, cfg *ProviderConfig, 
 		return "", fmt.Errorf("exchange code for token: provider returned status %d", resp.StatusCode)
 	}
 
-	// 尝试解析 JSON 格式的 access_token
+	// Try to parse access_token from JSON response.
 	var tokenResp struct {
 		AccessToken string `json:"access_token"`
 	}
@@ -149,7 +150,7 @@ func (c *Client) exchangeCodeForToken(ctx context.Context, cfg *ProviderConfig, 
 	return tokenResp.AccessToken, nil
 }
 
-// fetchUserInfo 使用 access_token 获取用户信息
+// fetchUserInfo uses an access_token to retrieve user information.
 func (c *Client) fetchUserInfo(ctx context.Context, userInfoURL string, accessToken string) (*ProviderUserInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, userInfoURL, nil)
 	if err != nil {
@@ -173,18 +174,18 @@ func (c *Client) fetchUserInfo(ctx context.Context, userInfoURL string, accessTo
 		return nil, fmt.Errorf("fetch user info: provider returned status %d", resp.StatusCode)
 	}
 
-	// 解析用户信息（支持多种常见字段名）
+	// Parse user info (supports multiple common field name conventions).
 	var result struct {
-		// GitHub/GitLab 风格（ID 可能是数字或字符串）
+		// GitHub/GitLab style (ID may be a number or string)
 		ID        interface{} `json:"id"`
 		Login     string      `json:"login"`
 		Email     string      `json:"email"`
 		AvatarURL string      `json:"avatar_url"`
-		// Google/Generic 风格
+		// Google/Generic style
 		Sub     string `json:"sub"`
 		Name    string `json:"name"`
 		Picture string `json:"picture"`
-		// 通用风格
+		// Generic style
 		ProviderUserID string `json:"provider_user_id"`
 		Username       string `json:"username"`
 	}
@@ -192,13 +193,13 @@ func (c *Client) fetchUserInfo(ctx context.Context, userInfoURL string, accessTo
 		return nil, fmt.Errorf("decode user info response: %w", err)
 	}
 
-	// 优先级：provider_user_id > sub > id
+	// Priority: provider_user_id > sub > id
 	providerUserID := result.ProviderUserID
 	if providerUserID == "" {
 		providerUserID = result.Sub
 	}
 	if providerUserID == "" && result.ID != nil {
-		// ID 可能是数字（GitHub）或字符串（Google）
+		// ID may be a number (GitHub) or string (Google).
 		switch v := result.ID.(type) {
 		case float64:
 			providerUserID = fmt.Sprintf("%.0f", v)

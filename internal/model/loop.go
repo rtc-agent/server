@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// LoopStatus loop 状态
+// LoopStatus represents the lifecycle state of a Loop.
 type LoopStatus string
 
 // Loop status constants define the lifecycle states of a Loop.
@@ -24,12 +24,13 @@ const (
 	LoopStatusExhausted LoopStatus = "exhausted"
 )
 
-// Loop 持久化循环任务
+// Loop represents a persistent recurring task.
 //
-// Loop 代表一个定时循环执行的任务，每隔 IntervalSeconds 秒触发一次，
-// 最多执行 MaxTurns 次。状态流转：active → paused/completed/cancelled/exhausted。
+// A Loop executes at regular intervals of IntervalSeconds, up to MaxTurns times.
+// State transitions: active -> paused/completed/cancelled/exhausted.
 //
-// 与 Goal 互斥：同一 session 不能同时存在 active goal 和 active loop。
+// Mutually exclusive with Goal: a session cannot have an active goal and an
+// active loop simultaneously.
 type Loop struct {
 	ID              uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
 	SessionID       uuid.UUID  `gorm:"type:uuid;not null;index" json:"session_id"`
@@ -58,7 +59,7 @@ func (l *Loop) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// IsTerminal 判断 loop 是否处于终态
+// IsTerminal reports whether the loop is in a terminal state.
 func (l *Loop) IsTerminal() bool {
 	return l.Status == LoopStatusCompleted ||
 		l.Status == LoopStatusCancelled ||
