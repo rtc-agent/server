@@ -136,9 +136,9 @@ func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, 
 	}
 
 	// Use submit payload (not resume) — see function docstring for rationale.
-	// Priority 100 matches ResumeWorkPriority (same as runtime scanner's submit recovery).
+	// Priority matches ResumeWorkPriority (same as runtime scanner's submit recovery).
 	payload := string(turnagent.MarshalSubmitPayload(sessionID, 0))
-	if _, err := s.queue.Publish(ctx, sessionID, payload, 100); err != nil {
+	if _, err := s.queue.Publish(ctx, sessionID, payload, rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[Server] recoverStaleTurns: publish submit",
 			zap.String("turn_id", turn.ID.String()),
 			zap.Error(err))
@@ -370,7 +370,7 @@ func (s *Server) publishRecoveryWorkItem(ctx context.Context, turn *model.Turn) 
 		return nil
 	}
 	payload := string(turnagent.MarshalSubmitPayload(turn.SessionID.String(), 0))
-	if _, err := s.queue.Publish(ctx, turn.SessionID.String(), payload, 100); err != nil {
+	if _, err := s.queue.Publish(ctx, turn.SessionID.String(), payload, rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[Server] publishRecoveryWorkItem: publish failed",
 			zap.String("turn_id", turn.ID.String()),
 			zap.Error(err))

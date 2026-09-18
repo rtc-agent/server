@@ -13,11 +13,13 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
+
 	"go.uber.org/zap"
 )
 
 // CompactSession triggers an explicit context compression for a session.
-// The compact work item is enqueued with the same priority as submit (0).
+// The compact work item is enqueued with SubmitWorkPriority (same as submit).
 //
 // Dedup: if a compact work item is already pending or processing for this
 // session, the request is rejected with "compact.already_pending".
@@ -84,7 +86,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		return nil, h.internalError(ctx, "compact.marshal_error", "internal error", marshalErr)
 	}
 
-	if _, err := h.deps.Queue.Publish(ctx, session.ID.String(), string(payload), 0); err != nil {
+	if _, err := h.deps.Queue.Publish(ctx, session.ID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 		return nil, h.internalError(ctx, "compact.queue_error", "failed to enqueue compact task", err)
 	}
 

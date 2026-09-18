@@ -16,6 +16,7 @@ import (
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -440,7 +441,7 @@ func (t *subAgentTool) publishSubAgentWork(ctx context.Context, subSessionID uui
 	if err != nil {
 		return fmt.Errorf("marshal work payload: %w", err)
 	}
-	if _, err := t.helpers.queue.Publish(ctx, subSessionID.String(), string(payload), 0); err != nil {
+	if _, err := t.helpers.queue.Publish(ctx, subSessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 		return fmt.Errorf("publish work item to sub session: %w", err)
 	}
 	t.helpers.logger.Info(ctx, "subAgent.work_submitted", map[string]any{

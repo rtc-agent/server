@@ -19,6 +19,8 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
+
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -217,7 +219,7 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID) 
 	if err != nil {
 		return fmt.Errorf("marshal work payload: %w", err)
 	}
-	if _, err := h.deps.Queue.Publish(txCtx, sessionID.String(), string(payload), 0); err != nil {
+	if _, err := h.deps.Queue.Publish(txCtx, sessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 		return fmt.Errorf("queue publish: %w", err)
 	}
 	return nil

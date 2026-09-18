@@ -227,7 +227,7 @@ func (h *Handler) publishOrphanSubmit(ctx context.Context, rtc *model.Rtc) {
 		logger.Error(ctx, "[resumeTurnAfterRtc] marshal submit payload", zap.Error(marshalErr))
 		return
 	}
-	if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), 0); err != nil {
+	if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 		if delErr := h.deps.Deps.Redis.Del(ctx, orphanKey).Err(); delErr != nil {
 			logger.Warn(ctx, "[resumeTurnAfterRtc] failed to del orphan key",
 				zap.String("key", orphanKey), zap.Error(delErr))

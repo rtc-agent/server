@@ -76,8 +76,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 		return fmt.Errorf("marshal work payload: %w", err)
 	}
 
-	const submitPriority int64 = 0
-	_, err = w.queue.Publish(ctx, payload.SessionID, string(workPayload), submitPriority)
+	_, err = w.queue.Publish(ctx, payload.SessionID, string(workPayload), rtcqueue.SubmitWorkPriority)
 	if err != nil {
 		return fmt.Errorf("publish to rtc-queue: %w", err)
 	}

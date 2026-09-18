@@ -6,6 +6,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/model"
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"gorm.io/gorm"
 )
@@ -161,8 +162,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 			})
 			return nil // degrade: log but do not interrupt main flow
 		}
-		const submitPriority int64 = 0
-		if _, err := g.helpers.queue.Publish(ctx, ctx.SessionID.String(), string(payload), submitPriority); err != nil {
+		if _, err := g.helpers.queue.Publish(ctx, ctx.SessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 			g.helpers.logger.Warn(ctx, "goalWorkflow.publish_failed", map[string]any{
 				"goal_id":    goal.ID.String(),
 				"session_id": ctx.SessionID.String(),
