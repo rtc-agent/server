@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -50,6 +51,14 @@ func formatToolCallOutput(toolCall protocol.ToolCall) string {
 
 	switch protocol.RtcStatus(status) {
 	case protocol.RtcStatusCompleted:
+		// If the output is a JSON-encoded string (e.g. "{\"logs\":...}"),
+		// unmarshal it to return the raw JSON object. This eliminates one
+		// layer of escape in the LLM context:
+		//   Before: "{\"logs\":[\"hello\"]}"  (escaped string)
+		//   After:  {"logs":["hello"]}        (raw JSON object)
+		if unquoted, err := unquoteJSONString(output); err == nil {
+			return unquoted
+		}
 		return output
 	case protocol.RtcStatusFailed:
 		return formatToolError(toolCall.ToolName, output)
@@ -60,6 +69,24 @@ func formatToolCallOutput(toolCall protocol.ToolCall) string {
 	default:
 		return formatToolPending(toolCall.ToolName, status)
 	}
+}
+
+// unquoteJSONString checks if s is a JSON-encoded string (starts with ")
+// and, if so, unmarshals it to return the raw string value.
+// This is used to unwrap one layer of JSON string encoding:
+//
+//	`"{\"key\":\"value\"}"` → `{"key":"value"}`
+//
+// Returns an error if s is not a valid JSON string.
+func unquoteJSONString(s string) (string, error) {
+	if len(s) < 2 || s[0] != '"' {
+		return "", fmt.Errorf("not a JSON string")
+	}
+	var result string
+	if err := json.Unmarshal([]byte(s), &result); err != nil {
+		return "", err
+	}
+	return result, nil
 }
 
 // createTools creates the tool list for a session's turn.

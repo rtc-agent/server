@@ -81,9 +81,40 @@ func SummaryContentDataWithMetadata(
 	}, nil
 }
 
+// ToolCallData is the DB storage representation of a ToolCall.
+// Unlike protocol.ToolCall (where Input/Output are strings), ToolCallData uses
+// json.RawMessage so that the JSON values are embedded directly in the parent
+// ContentData envelope — avoiding the extra escape layer that string fields
+// incur when json.Marshal serialises the parent.
+//
+// DB comparison (same tool result):
+//
+//	Before (protocol.ToolCall): "input":"{\"action\":\"eval\"}" (escaped)
+//	After  (ToolCallData):      "input":{"action":"eval"}       (raw JSON)
+type ToolCallData struct {
+	Id       string          `json:"id"`
+	ToolName string          `json:"tool_name"`
+	Input    json.RawMessage `json:"input"`
+	Output   json.RawMessage `json:"output,omitempty"`
+	Status   *string         `json:"status,omitempty"`
+}
+
 // SerializeContentData serializes a ContentData to a JSON string
 // (for persistence in the database Content column).
+//
+// Special case: when Data is a protocol.ToolCall, it is converted to
+// ToolCallData first so that Input/Output are stored as raw JSON objects
+// instead of escaped JSON strings. See ToolCallData for details.
 func SerializeContentData(cd protocol.ContentData) (string, error) {
+	// Convert protocol.ToolCall → ToolCallData for clean DB storage.
+	if tc, ok := cd.Data.(protocol.ToolCall); ok {
+		storage, convErr := toolCallToStorage(tc)
+		if convErr != nil {
+			return "", fmt.Errorf("convert tool call for storage: %w", convErr)
+		}
+		cd.Data = storage
+	}
+
 	jsonBytes, err := json.Marshal(cd)
 	if err != nil {
 		return "", fmt.Errorf("serialize content data: %w", err)
@@ -105,14 +136,120 @@ func ParseContentData(content string) (protocol.ContentData, error) {
 
 // ParseContentDataToolCall converts an arbitrary value into a protocol.ToolCall
 // by round-tripping through JSON serialization.
+//
+// Backward compatible: handles both old format (input/output as JSON strings)
+// and new format (input/output as raw JSON objects stored by ToolCallData).
 func ParseContentDataToolCall(data any) (protocol.ToolCall, error) {
 	bytes, err := json.Marshal(data)
 	if err != nil {
 		return protocol.ToolCall{}, fmt.Errorf("marshal tool call data: %w", err)
 	}
-	v := &protocol.ToolCall{}
-	e := json.Unmarshal(bytes, v)
-	return *v, e
+
+	// Inspect the raw map to handle both string and object formats for
+	// input/output. This is necessary because protocol.ToolCall uses string
+	// fields, but new DB records store input/output as JSON objects.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(bytes, &raw); err != nil {
+		return protocol.ToolCall{}, fmt.Errorf("unmarshal tool call raw: %w", err)
+	}
+
+	tc := protocol.ToolCall{}
+
+	// id
+	if v, ok := raw["id"]; ok {
+		_ = json.Unmarshal(v, &tc.Id)
+	}
+	// tool_name
+	if v, ok := raw["tool_name"]; ok {
+		_ = json.Unmarshal(v, &tc.ToolName)
+	}
+	// status
+	if v, ok := raw["status"]; ok && len(v) > 0 && string(v) != "null" {
+		var s string
+		_ = json.Unmarshal(v, &s)
+		tc.Status = &s
+	}
+
+	// input: old format = JSON string ("…"), new format = JSON object ({…})
+	if v, ok := raw["input"]; ok && len(v) > 0 {
+		trimmed := trimJSONNull(v)
+		if len(trimmed) > 0 && trimmed[0] == '"' {
+			// Old format: JSON string → use as-is (it's already a JSON string).
+			_ = json.Unmarshal(trimmed, &tc.Input)
+		} else {
+			// New format: JSON object → marshal to string for protocol.ToolCall.
+			tc.Input = string(trimmed)
+		}
+	}
+
+	// output: same dual-format handling
+	if v, ok := raw["output"]; ok && len(v) > 0 {
+		trimmed := trimJSONNull(v)
+		if len(trimmed) > 0 && trimmed[0] == '"' {
+			var s string
+			_ = json.Unmarshal(trimmed, &s)
+			tc.Output = &s
+		} else if len(trimmed) > 0 && string(trimmed) != "null" {
+			s := string(trimmed)
+			tc.Output = &s
+		}
+	}
+
+	return tc, nil
+}
+
+// toolCallToStorage converts a protocol.ToolCall (string fields) to
+// ToolCallData (json.RawMessage fields) for DB storage.
+//
+// The key transformation: JSON string values like `{"action":"eval"}` are
+// unmarshalled into interface{} and re-marshalled, producing clean JSON
+// objects instead of escaped JSON strings.
+func toolCallToStorage(tc protocol.ToolCall) (ToolCallData, error) {
+	s := ToolCallData{
+		Id:       tc.Id,
+		ToolName: tc.ToolName,
+		Status:   tc.Status,
+	}
+
+	// Input: parse the JSON string into an object, then store as raw JSON.
+	if tc.Input != "" {
+		var inputObj any
+		if err := json.Unmarshal([]byte(tc.Input), &inputObj); err != nil {
+			// Not valid JSON — store as a plain string.
+			s.Input, _ = json.Marshal(tc.Input)
+		} else {
+			var err error
+			s.Input, err = json.Marshal(inputObj)
+			if err != nil {
+				return ToolCallData{}, fmt.Errorf("marshal input: %w", err)
+			}
+		}
+	}
+
+	// Output: same transformation.
+	if tc.Output != nil && *tc.Output != "" {
+		var outputObj any
+		if err := json.Unmarshal([]byte(*tc.Output), &outputObj); err != nil {
+			s.Output, _ = json.Marshal(*tc.Output)
+		} else {
+			var err error
+			s.Output, err = json.Marshal(outputObj)
+			if err != nil {
+				return ToolCallData{}, fmt.Errorf("marshal output: %w", err)
+			}
+		}
+	}
+
+	return s, nil
+}
+
+// trimJSONNull strips a leading "null" literal from raw JSON bytes,
+// returning an empty slice if the value is JSON null.
+func trimJSONNull(v json.RawMessage) json.RawMessage {
+	if string(v) == "null" {
+		return nil
+	}
+	return v
 }
 
 // ContentDataBytes re-serializes ContentData.Data (any) to JSON bytes.
