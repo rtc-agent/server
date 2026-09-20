@@ -125,7 +125,7 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 	}
 
 	isCompress := isCompressContext(ctx)
-	currentCtxTokens, estimate := h.computeTokenEstimate(ctx, session, sessionID, fullUsage.TotalTokens)
+	currentCtxTokens, estimate := h.computeTokenEstimate(ctx, session, sessionID, fullUsage)
 
 	delta := h.buildTokenUsageDelta(fullUsage, costMicros, isCompress, session, currentCtxTokens, estimate)
 	if err := h.deps.SessionRepo.AtomicAddTokenUsage(ctx, sessionID, delta); err != nil {
@@ -167,17 +167,35 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 
 // computeTokenEstimate computes the current context tokens and token estimate
 // based on the session state.
-func (h *helpers) computeTokenEstimate(ctx context.Context, session *dbmodel.Session, sessionID uuid.UUID, totalTokens int64) (int64, *TokenEstimate) {
-	if session == nil {
+//
+// currentCtxTokens uses the API's reported PromptTokens (InputTokens + CachedRead
+// + CachedWrite) as the actual context size, avoiding double-counting that occurred
+// when accumulating TotalTokens (which itself already includes the full context).
+//
+// roundDelta (EWMA input) is the actual context growth this turn:
+// currentCtxTokens - previous CurrentContextTokens.
+func (h *helpers) computeTokenEstimate(ctx context.Context, session *dbmodel.Session, sessionID uuid.UUID, fullUsage *FullTokenUsage) (int64, *TokenEstimate) {
+	if session == nil || fullUsage == nil {
 		return 0, nil
 	}
-	currentCtxTokens := session.TotalTokens + totalTokens
+	// API's PromptTokens = actual context size sent to the model.
+	currentCtxTokens := fullUsage.InputTokens + fullUsage.CachedReadTokens + fullUsage.CachedWriteTokens
+
+	// roundDelta = actual context growth this turn.
+	// Fallback to currentCtxTokens when no previous value exists (first turn).
+	var roundDelta int64
 	if session.CurrentContextTokens > 0 {
-		currentCtxTokens = session.CurrentContextTokens + totalTokens
+		roundDelta = currentCtxTokens - session.CurrentContextTokens
+		if roundDelta < 0 {
+			roundDelta = 0
+		}
+	} else {
+		roundDelta = currentCtxTokens
 	}
+
 	var estimate *TokenEstimate
 	if h.tokenEstimator != nil {
-		estimate = h.tokenEstimator.Estimate(ctx, sessionID, currentCtxTokens, session.TokenEstimateEWMA, totalTokens)
+		estimate = h.tokenEstimator.Estimate(ctx, sessionID, currentCtxTokens, session.TokenEstimateEWMA, roundDelta)
 	}
 	return currentCtxTokens, estimate
 }
