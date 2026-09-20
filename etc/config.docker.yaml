@@ -1,5 +1,6 @@
-# RTC Agent Docker 部署配置（最小化版）
+# RTC Agent Docker 部署配置
 # 用于 docker-compose.yml，挂载到 /app/etc/config.yaml
+# Docker 内部服务名替代 localhost（postgres/redis/jaeger）
 
 server:
   host: "0.0.0.0"
@@ -17,29 +18,49 @@ redis:
 
 log:
   level: "info"
-  llm_payload: false
+  llm_payload: true
 
 auth:
-  jwt_secret: "rtc-agent-docker-jwt-secret-change-me-in-production"
+  jwt_secret: "rtc-agent-dev-jwt-secret-change-me-in-production"
   access_token_ttl_seconds: 3600
 
 providers:
   mock:
     enabled: false
+    url: "http://192.168.31.60:20060"
+    client_id: "test-client"
+    client_secret: "test-client-secret"
 
 cors:
   allow_origins: ["*"]
 
-# LLM 配置（需取消注释并填入实际配置）
+# LLM 配置
 llm:
-  provider: "openai"
+  provider: "claude"
   api_key: "${LLM_API_KEY}"
-  model: "gpt-4o"
+  model: "qwen3.7-plus"
+  base_url: "http://host.docker.internal:23000"
   max_tokens: 131072
+  retry_max_attempts: 10
+  retry_base_delay: 1s
 
+  # 模型定价配置（可选，用于成本计算）
+  # 未配置时使用默认价格（Claude 3.5 Sonnet）
+  # pricing:
+  #   input_per_million: 3.0        # 正常 input token 价格（USD）
+  #   output_per_million: 15.0      # output token 价格（USD）
+  #   cached_read_per_million: 0.3  # cache read 价格（USD），通常为 input 的 10%
+  #   cached_write_per_million: 3.75 # cache write 价格（USD），通常为 input 的 125%
+  #   reasoning_per_million: 0.0    # reasoning token 价格（USD）
+
+# Worker 配置
 worker:
-  system_prompt: |
-    You are an intelligent assistant. Detect the user's language and respond in that language.
+  context_tokens_limit: 600000
+  auto_compact_buffer_tokens: 100000
+  max_output_tokens_for_summary: 20000
 
+# OpenTelemetry 分布式追踪
 tracing:
-  enabled: false
+  enabled: true
+  endpoint: "jaeger:4317"
+  sample_rate: 1.0

@@ -28,13 +28,13 @@ func validateStructuredContent(content string) error {
 
 // validateMemoryUpdateArgs validates the update arguments against the existing memory.
 func validateMemoryUpdateArgs(args struct {
-	MemoryID    string           `json:"memory_id"`
-	Title       *string          `json:"title,omitempty"`
-	Content     *string          `json:"content,omitempty"`
-	Description *string          `json:"description,omitempty"`
-	Importance  *string          `json:"importance,omitempty"`
-	Tags        []string         `json:"tags,omitempty"`
-	Metadata    model.JSONB[any] `json:"metadata,omitempty"`
+	MemoryID    string         `json:"memory_id"`
+	Title       *string        `json:"title,omitempty"`
+	Content     *string        `json:"content,omitempty"`
+	Description *string        `json:"description,omitempty"`
+	Importance  *string        `json:"importance,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
 }, existing *model.UserMemory) error {
 	if args.Importance != nil && !model.IsValidImportance(*args.Importance) {
 		return fmt.Errorf("invalid importance: %s", *args.Importance)
@@ -50,13 +50,13 @@ func validateMemoryUpdateArgs(args struct {
 
 // buildMemoryUpdateFields builds the update fields map from the update arguments.
 func buildMemoryUpdateFields(args struct {
-	MemoryID    string           `json:"memory_id"`
-	Title       *string          `json:"title,omitempty"`
-	Content     *string          `json:"content,omitempty"`
-	Description *string          `json:"description,omitempty"`
-	Importance  *string          `json:"importance,omitempty"`
-	Tags        []string         `json:"tags,omitempty"`
-	Metadata    model.JSONB[any] `json:"metadata,omitempty"`
+	MemoryID    string         `json:"memory_id"`
+	Title       *string        `json:"title,omitempty"`
+	Content     *string        `json:"content,omitempty"`
+	Description *string        `json:"description,omitempty"`
+	Importance  *string        `json:"importance,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
 }) map[string]any {
 	fields := make(map[string]any)
 	if args.Title != nil {
@@ -75,7 +75,7 @@ func buildMemoryUpdateFields(args struct {
 		fields["tags"] = model.StringArray(args.Tags)
 	}
 	if args.Metadata != nil {
-		fields["metadata"] = args.Metadata
+		fields["metadata"] = model.JSONObject(args.Metadata)
 	}
 	return fields
 }

@@ -27,7 +27,7 @@ type UserMemory struct {
 	Tags StringArray `gorm:"type:text[]" json:"tags,omitempty"`
 
 	// Metadata
-	Metadata        JSONB[any] `gorm:"type:jsonb;default:'{}'" json:"metadata"`
+	Metadata        JSONObject `gorm:"type:jsonb;default:'{}'" json:"metadata"`
 	SourceSessionID *uuid.UUID `gorm:"type:uuid" json:"source_session_id,omitempty"`
 
 	// Timestamps

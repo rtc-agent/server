@@ -52,10 +52,10 @@ func (t *saveSessionMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, err
 
 func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args struct {
-		Category string           `json:"category"`
-		Title    string           `json:"title"`
-		Content  string           `json:"content"`
-		Metadata model.JSONB[any] `json:"metadata,omitempty"`
+		Category string         `json:"category"`
+		Title    string         `json:"title"`
+		Content  string         `json:"content"`
+		Metadata map[string]any `json:"metadata,omitempty"`
 	}
 	if ok, msg := parseToolArgs(ctx, t.helpers, "save_session_memory", argumentsInJSON, &args); !ok {
 		return msg, nil
@@ -86,7 +86,7 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 		Category:   args.Category,
 		Title:      args.Title,
 		Content:    args.Content,
-		Metadata:   args.Metadata,
+		Metadata:   model.JSONObject(args.Metadata),
 		TokenCount: &tokenCount,
 	}
 

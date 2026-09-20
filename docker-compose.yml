@@ -1,22 +1,26 @@
-# RTC Agent — 最小化 Docker 部署
-# 用途：验证 Docker 镜像基本可用性
-# 端口：PostgreSQL 15432, Redis 16379, Server 8888
-# 与 dev docker-compose (etc/dev/) 共享端口，不可同时运行
+# RTC Agent — 满配 Docker 部署（分布式验证 + 完整可观测性）
+# 用途：本地开发主力环境，替代 etc/dev/docker-compose.yml
+# 特性：2 Server + Nginx LB + 全套可观测性（Jaeger/Prometheus/Loki/Grafana/Pyroscope）
+# 端口：全部使用 2xxxx 段，与外部服务不冲突
 
-name: rtc-agent-docker
+name: rtc-agent-full
 
 services:
+  # ===========================================================================
+  # 基础设施
+  # ===========================================================================
+
   postgres:
     image: pgvector/pgvector:pg17
-    container_name: rtc-docker-postgres
+    container_name: rtc-full-postgres
     environment:
       POSTGRES_USER: rtc_agent
       POSTGRES_PASSWORD: rtc_agent
       POSTGRES_DB: rtc_agent
     ports:
-      - "15432:5432"
+      - "25432:5432"
     volumes:
-      - docker-postgres-data:/var/lib/postgresql/data
+      - full-postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rtc_agent"]
       interval: 5s
@@ -26,11 +30,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: rtc-docker-redis
+    container_name: rtc-full-redis
     ports:
-      - "16379:6379"
+      - "26379:6379"
     volumes:
-      - docker-redis-data:/data
+      - full-redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -38,11 +42,125 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ===========================================================================
+  # 可观测性栈（复用 etc/dev/ 配置）
+  # ===========================================================================
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    container_name: rtc-full-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "26686:16686"  # Jaeger UI
+      - "24317:4317"   # OTLP gRPC
+      - "24318:4318"   # OTLP HTTP
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: rtc-full-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    ports:
+      - "29090:9090"
+    volumes:
+      - ./etc/dev/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./etc/dev/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - full-prometheus-data:/prometheus
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.1.0
+    container_name: rtc-full-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "23100:3100"
+    volumes:
+      - full-loki-data:/loki
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.1.0
+    container_name: rtc-full-promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./etc/dev/promtail/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - full-promtail-positions:/tmp
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  pyroscope:
+    image: grafana/pyroscope:1.9.1
+    container_name: rtc-full-pyroscope
+    command:
+      - "server"
+      - "--storage.path=/var/lib/pyroscope"
+    ports:
+      - "24040:4040"
+    volumes:
+      - full-pyroscope-data:/var/lib/pyroscope
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: rtc-full-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "23001:3000"
+    volumes:
+      - ./etc/dev/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./etc/dev/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./etc/dev/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - full-grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+      - pyroscope
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: rtc-full-alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    ports:
+      - "29093:9093"
+    volumes:
+      - ./etc/dev/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - full-alertmanager-data:/alertmanager
+    restart: unless-stopped
+
+  # ===========================================================================
+  # OAuth2
+  # ===========================================================================
+
+  mock-oauth2:
+    build:
+      context: .
+      dockerfile: Dockerfile.mock-oauth2
+    container_name: rtc-full-mock-oauth2
+    ports:
+      - "20060:10060"
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 数据库迁移（一次性容器，server 启动前执行）
+  # ===========================================================================
+
   migrate:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: rtc-docker-migrate
+    container_name: rtc-full-migrate
     entrypoint: ["./rtc-agent", "migrate"]
     volumes:
       - ./etc/config.docker.yaml:/app/etc/config.yaml:ro
@@ -51,15 +169,22 @@ services:
         condition: service_healthy
     restart: "no"
 
-  server:
+  # ===========================================================================
+  # Server 集群（2 实例，验证分布式部署）
+  # ===========================================================================
+
+  server-1:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: rtc-docker-server
-    ports:
-      - "8888:8888"
+    container_name: rtc-full-server-1
+    env_file:
+      - .env
     environment:
+      DEBUG: true
       LLM_API_KEY: "${LLM_API_KEY}"
+    expose:
+      - "8888"
     volumes:
       - ./etc/config.docker.yaml:/app/etc/config.yaml:ro
     depends_on:
@@ -67,8 +192,59 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      jaeger:
+        condition: service_started
+      mock-oauth2:
+        condition: service_started
+    restart: unless-stopped
+
+  server-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rtc-full-server-2
+    env_file:
+      - .env
+    environment:
+      DEBUG: true
+      LLM_API_KEY: "${LLM_API_KEY}"
+    expose:
+      - "8888"
+    volumes:
+      - ./etc/config.docker.yaml:/app/etc/config.yaml:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+      mock-oauth2:
+        condition: service_started
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 负载均衡
+  # ===========================================================================
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: rtc-full-nginx
+    ports:
+      - "28080:80"
+    volumes:
+      - ./etc/dev/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - server-1
+      - server-2
     restart: unless-stopped
 
 volumes:
-  docker-postgres-data:
-  docker-redis-data:
+  full-postgres-data:
+  full-redis-data:
+  full-prometheus-data:
+  full-loki-data:
+  full-pyroscope-data:
+  full-grafana-data:
+  full-alertmanager-data:
+  full-promtail-positions:

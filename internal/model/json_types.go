@@ -60,6 +60,56 @@ func (j *JSONB[T]) Scan(src any) error {
 	return nil
 }
 
+// ========== JSON Object type ==========
+
+// JSONObject is a map type for JSONB object columns (PostgreSQL JSONB).
+// Unlike JSONB[T] which is an array, JSONObject represents a JSON object.
+// Value serializes it to a JSON object string, Scan deserializes from JSON object.
+//
+// Usage:
+//
+//	type SessionMemory struct {
+//	    Metadata JSONObject `gorm:"type:jsonb;default:'{}'"`
+//	}
+type JSONObject map[string]any
+
+// Value implements driver.Valuer, serializing the JSONObject to a JSON string
+// for storage in PostgreSQL JSONB columns.
+func (j JSONObject) Value() (driver.Value, error) {
+	if j == nil {
+		return "{}", nil
+	}
+	b, err := json.Marshal(map[string]any(j))
+	if err != nil {
+		return nil, fmt.Errorf("marshal JSONObject: %w", err)
+	}
+	return string(b), nil
+}
+
+// Scan implements sql.Scanner, deserializing a JSON string from PostgreSQL
+// back into the JSONObject map.
+func (j *JSONObject) Scan(src any) error {
+	if src == nil {
+		*j = JSONObject{}
+		return nil
+	}
+	var bytes []byte
+	switch v := src.(type) {
+	case string:
+		bytes = []byte(v)
+	case []byte:
+		bytes = v
+	default:
+		return fmt.Errorf("JSONObject.Scan: unsupported type %T", src)
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(bytes, &obj); err != nil {
+		return fmt.Errorf("unmarshal JSONObject: %w", err)
+	}
+	*j = obj
+	return nil
+}
+
 // ========== Concrete type aliases ==========
 
 // StringArray is a string slice (JSONB storage).

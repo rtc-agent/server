@@ -3,7 +3,6 @@ package turnagent
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/callbacks"
@@ -125,8 +124,19 @@ func (mgr *SessionTurnManager) genResumeImpl(
 		turnID = unhandled[0].TurnID
 	}
 
-	// Create a fresh context with timeout for this resume attempt.
-	resumeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// Create a fresh context for this resume attempt.
+	//
+	// IMPORTANT: No timeout is set here. The resume context becomes the RunCtx
+	// for the entire subsequent agent execution (including LLM streaming),
+	// which can last arbitrarily long for complex tasks. A fixed timeout would
+	// kill active streams mid-output — the user-visible symptom is "响应超时"
+	// even though chunks are still flowing.
+	//
+	// Cancellation is still possible: the caller's turnCtx (from Process) is
+	// the parent of the TurnLoop's execution, and StopTurn / lock-loss / worker
+	// shutdown all cancel that context. The resumeCancelMu + doCleanup path
+	// handles timer goroutine lifecycle (see session_manager.go doCleanup Step 2b).
+	resumeCtx, cancel := context.WithCancel(context.Background())
 	mgr.resumeCancel = cancel
 	mgr.resumeCancelMu.Unlock()
 

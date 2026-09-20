@@ -72,6 +72,7 @@ func (h *Handler) registerRoutes() {
 		protocol.MethodSessionList:    dispatch(h.ListSessions),
 		protocol.MethodSessionGet:     dispatch(h.GetSession),
 		protocol.MethodSessionClose:   dispatch(h.CloseSession),
+		protocol.MethodSessionOpen:    dispatch(h.OpenSession),
 		protocol.MethodSessionCompact: dispatch(h.CompactSession),
 		protocol.MethodSessionUpdate:  dispatch(h.UpdateSession),
 		protocol.MethodSessionFork:    dispatch(h.ForkSession),

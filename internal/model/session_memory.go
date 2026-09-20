@@ -21,7 +21,7 @@ type SessionMemory struct {
 	Content string `gorm:"type:text;not null" json:"content"`
 
 	// Metadata in JSON format (stores related files, code snippets, etc.)
-	Metadata JSONB[any] `gorm:"type:jsonb;default:'{}'" json:"metadata"`
+	Metadata JSONObject `gorm:"type:jsonb;default:'{}'" json:"metadata"`
 
 	// Estimated token count (used to limit total size)
 	TokenCount *int `json:"token_count,omitempty"`

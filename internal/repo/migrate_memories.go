@@ -50,10 +50,10 @@ func migrateSessionMemories(ctx context.Context, db *gorm.DB) error {
 			return fmt.Errorf("check existing memory %s: %w", old.ID, err)
 		}
 
-		// Convert Metadata: JSONB[any] (JSON array) -> JSONBString (JSON object or raw).
+		// Convert Metadata: JSONObject (JSON object) -> JSONBString (JSON object or raw).
 		var metadataStr memory.JSONBString
 		if len(old.Metadata) > 0 {
-			b, err := json.Marshal([]any(old.Metadata))
+			b, err := json.Marshal(map[string]any(old.Metadata))
 			if err == nil {
 				metadataStr = memory.JSONBString(b)
 			}

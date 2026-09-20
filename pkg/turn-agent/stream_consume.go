@@ -15,7 +15,12 @@ import (
 // (no data received) before it is considered stalled and closed.
 // This prevents turns from getting stuck indefinitely when the LLM
 // stream stops mid-response.
-const StreamIdleTimeout = 3 * time.Minute
+//
+// Note: This is a per-receive timeout, not a total turn timeout.
+// Increased from 3 to 10 minutes to accommodate long-form content
+// generation where the LLM may have extended thinking periods between
+// chunks, even when the stream is actively producing output overall.
+const StreamIdleTimeout = 10 * time.Minute
 
 // consumeStream drives a stream reader to completion.
 // The stream is always closed when the function returns, regardless of the exit path.

@@ -17,10 +17,11 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # RTC Agent server metrics (exposed on the main HTTP port)
+  # RTC Agent Server 集群（Docker 容器内部地址）
   - job_name: "rtc-agent-server"
     static_configs:
-      - targets: ["host.docker.internal:8888"]
+      - targets:
+          - "server-1:8888"
+          - "server-2:8888"
         labels:
           service: "rtc-agent"
-

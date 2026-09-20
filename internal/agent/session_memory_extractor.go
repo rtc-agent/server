@@ -362,9 +362,9 @@ func (t *saveSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 
 // memoryItem is used for tool argument parsing.
 type memoryItem struct {
-	Title    string           `json:"title"`
-	Content  string           `json:"content"`
-	Metadata model.JSONB[any] `json:"metadata"`
+	Title    string         `json:"title"`
+	Content  string         `json:"content"`
+	Metadata map[string]any `json:"metadata"`
 }
 
 // buildExtractPrompt builds the extraction prompt.

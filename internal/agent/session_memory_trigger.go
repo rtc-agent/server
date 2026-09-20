@@ -105,7 +105,12 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 // loadExtractionState loads the persisted ExtractionState from the session record.
 // Returns nil if the session cannot be loaded or no extraction has occurred yet.
 func (h *helpers) loadExtractionState(ctx context.Context, sessionID uuid.UUID) *ExtractionState {
-	session, err := h.deps.SessionRepo.GetByID(ctx, sessionID)
+	// Use a separate timeout for this query to prevent context deadline exceeded errors
+	// when the parent context is already near its timeout.
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	session, err := h.deps.SessionRepo.GetByID(queryCtx, sessionID)
 	if err != nil {
 		h.logger.Warn(ctx, "[loadExtractionState] failed to load session", map[string]any{
 			"session_id": sessionID.String(),

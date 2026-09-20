@@ -141,6 +141,7 @@ const (
 	MethodSessionFork     RpcMethod = "v1.session.fork"
 	MethodSessionGet      RpcMethod = "v1.session.get"
 	MethodSessionList     RpcMethod = "v1.session.list"
+	MethodSessionOpen     RpcMethod = "v1.session.open"
 	MethodSessionUpdate   RpcMethod = "v1.session.update"
 	MethodTurnGet         RpcMethod = "v1.turn.get"
 	MethodTurnList        RpcMethod = "v1.turn.list"
@@ -173,6 +174,8 @@ func (e RpcMethod) Valid() bool {
 	case MethodSessionGet:
 		return true
 	case MethodSessionList:
+		return true
+	case MethodSessionOpen:
 		return true
 	case MethodSessionUpdate:
 		return true
@@ -688,6 +691,23 @@ type OAuth2TokenRefreshResponse struct {
 
 	// ExpiresIn 新 access token 过期时间（秒）
 	ExpiresIn int64 `json:"expires_in"`
+}
+
+// OpenSessionRequest defines model for OpenSessionRequest.
+type OpenSessionRequest struct {
+	// SessionId protocol 内 UUID 类型，JSON 线上为字符串
+	SessionId UUID `json:"session_id"`
+}
+
+// OpenSessionResponse Response for reopening a closed session
+type OpenSessionResponse struct {
+	Result  OpenSessionResult `json:"result"`
+	Updates *[]Update         `json:"updates,omitempty"`
+}
+
+// OpenSessionResult defines model for OpenSessionResult.
+type OpenSessionResult struct {
+	Success bool `json:"success"`
 }
 
 // RpcMethod RPC 方法名，前后端统一从 protocol 导入，禁止硬编码字符串

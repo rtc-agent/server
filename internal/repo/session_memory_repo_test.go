@@ -31,7 +31,7 @@ func newTestSessionMemory(t *testing.T, sessionID uuid.UUID, category string) *m
 		Category:  category,
 		Title:     "test memory",
 		Content:   "test content",
-		Metadata:  model.JSONB[any]{},
+		Metadata:  model.JSONObject{},
 	}
 }
 
@@ -208,10 +208,10 @@ func TestSessionMemoryRepo_ListRecentForInjection_TokenBudget(t *testing.T) {
 
 	// Create memories with known token counts (insert in order so created_at is predictable).
 	memories := []*model.SessionMemory{
-		{SessionID: sessionID, Category: "context", Title: "m1", Content: "c1", Metadata: model.JSONB[any]{}, TokenCount: intPtr(100)},
-		{SessionID: sessionID, Category: "context", Title: "m2", Content: "c2", Metadata: model.JSONB[any]{}, TokenCount: intPtr(200)},
-		{SessionID: sessionID, Category: "context", Title: "m3", Content: "c3", Metadata: model.JSONB[any]{}, TokenCount: intPtr(300)},
-		{SessionID: sessionID, Category: "context", Title: "m4", Content: "c4", Metadata: model.JSONB[any]{}, TokenCount: intPtr(400)},
+		{SessionID: sessionID, Category: "context", Title: "m1", Content: "c1", Metadata: model.JSONObject{}, TokenCount: intPtr(100)},
+		{SessionID: sessionID, Category: "context", Title: "m2", Content: "c2", Metadata: model.JSONObject{}, TokenCount: intPtr(200)},
+		{SessionID: sessionID, Category: "context", Title: "m3", Content: "c3", Metadata: model.JSONObject{}, TokenCount: intPtr(300)},
+		{SessionID: sessionID, Category: "context", Title: "m4", Content: "c4", Metadata: model.JSONObject{}, TokenCount: intPtr(400)},
 	}
 	for _, mem := range memories {
 		require.NoError(t, repo.Create(ctx, mem))
@@ -248,7 +248,7 @@ func TestSessionMemoryRepo_ListRecentForInjection_SingleMemoryExceedsBudget(t *t
 		Category:   "context",
 		Title:      "big",
 		Content:    "huge content",
-		Metadata:   model.JSONB[any]{},
+		Metadata:   model.JSONObject{},
 		TokenCount: intPtr(5000),
 	}
 	require.NoError(t, repo.Create(ctx, mem))
@@ -274,7 +274,7 @@ func TestSessionMemoryRepo_ListRecentForInjection_NilTokenCount(t *testing.T) {
 		Category:   "context",
 		Title:      "no-tokens",
 		Content:    "content",
-		Metadata:   model.JSONB[any]{},
+		Metadata:   model.JSONObject{},
 		TokenCount: nil,
 	}
 	require.NoError(t, repo.Create(ctx, mem))
@@ -296,9 +296,9 @@ func TestSessionMemoryRepo_CountTokensBySession(t *testing.T) {
 
 	// Create memories with known token counts.
 	memories := []*model.SessionMemory{
-		{SessionID: sessionID, Category: "context", Title: "a", Content: "c", Metadata: model.JSONB[any]{}, TokenCount: intPtr(100)},
-		{SessionID: sessionID, Category: "context", Title: "b", Content: "c", Metadata: model.JSONB[any]{}, TokenCount: intPtr(250)},
-		{SessionID: sessionID, Category: "context", Title: "c", Content: "c", Metadata: model.JSONB[any]{}, TokenCount: intPtr(150)},
+		{SessionID: sessionID, Category: "context", Title: "a", Content: "c", Metadata: model.JSONObject{}, TokenCount: intPtr(100)},
+		{SessionID: sessionID, Category: "context", Title: "b", Content: "c", Metadata: model.JSONObject{}, TokenCount: intPtr(250)},
+		{SessionID: sessionID, Category: "context", Title: "c", Content: "c", Metadata: model.JSONObject{}, TokenCount: intPtr(150)},
 	}
 	for _, mem := range memories {
 		require.NoError(t, repo.Create(ctx, mem))
