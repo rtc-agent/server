@@ -89,16 +89,52 @@ func (a *Agent) startCancelListener(
 			}
 		}()
 		select {
-		case cm := <-cancel:
+		case cm, ok := <-cancel:
+			if !ok {
+				// cancel channel closed without delivering a message.
+				// This means the worker's cancel subscription ended (e.g. workCtx
+				// cancelled or Pub/Sub connection lost) before a cancel arrived.
+				a.log(context.Background(), LogLevelWarn, "cancel_listener.channel_closed", map[string]any{
+					"session_id": mgr.SessionID(),
+					"turn_id":    mgr.TurnID(),
+					"message":    "cancel channel closed without cancel message; worker may have lost subscription",
+				})
+				return
+			}
+			a.log(context.Background(), LogLevelInfo, "cancel_listener.received", map[string]any{
+				"session_id": mgr.SessionID(),
+				"turn_id":    mgr.TurnID(),
+				"work_id":    cm.WorkID,
+				"reason":     cm.Reason,
+			})
 			mgr.SetCancelledByQueue(cm.Reason)
 			if a.cfg.Cancel.GracePeriod > 0 {
+				a.log(context.Background(), LogLevelInfo, "cancel_listener.stop_graceful", map[string]any{
+					"session_id":   mgr.SessionID(),
+					"turn_id":      mgr.TurnID(),
+					"grace_period": a.cfg.Cancel.GracePeriod.String(),
+				})
 				mgr.Loop().Stop(adk.WithGracefulTimeout(a.cfg.Cancel.GracePeriod))
 			} else {
+				a.log(context.Background(), LogLevelInfo, "cancel_listener.stop_immediate", map[string]any{
+					"session_id": mgr.SessionID(),
+					"turn_id":    mgr.TurnID(),
+				})
 				mgr.Loop().Stop(adk.WithImmediate())
 			}
 			innerCancel()
 			turnCancel()
+			a.log(context.Background(), LogLevelInfo, "cancel_listener.cancel_sent", map[string]any{
+				"session_id": mgr.SessionID(),
+				"turn_id":    mgr.TurnID(),
+			})
 		case <-done:
+			a.log(context.Background(), LogLevelDebug, "cancel_listener.done_closed", map[string]any{
+				"session_id":   mgr.SessionID(),
+				"turn_id":      mgr.TurnID(),
+				"is_cancelled": mgr.IsCancelledByQueue(),
+				"message":      "Process() returned; cancel listener exiting",
+			})
 			return
 		}
 	}()

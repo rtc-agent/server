@@ -53,8 +53,8 @@ func (w *Worker) setupCancelListener(
 	// SubscribeCancel returns a subscription that won't deliver messages, but
 	// the cancel is already in cancelCh and adminCancelled is already set.
 	cancelSub := w.q.SubscribeCancel(workCtx, claim.SessionID)
-	defer func() { _ = cancelSub.Close() }()
 	go func() {
+		defer func() { _ = cancelSub.Close() }()
 		defer func() {
 			if r := recover(); r != nil {
 				w.logError("cancel listener panic",
@@ -64,8 +64,20 @@ func (w *Worker) setupCancelListener(
 		for msg := range cancelSub.Channel() {
 			var cm CancelMessage
 			if err := json.Unmarshal([]byte(msg.Payload), &cm); err != nil {
+				w.log("worker.cancel_msg_unmarshal_failed", map[string]any{
+					"session_id": claim.SessionID,
+					"work_id":    claim.WorkID,
+					"error":      err.Error(),
+				})
 				continue
 			}
+			w.log("worker.cancel_msg_received", map[string]any{
+				"session_id":   claim.SessionID,
+				"work_id":      claim.WorkID,
+				"msg_work_id":  cm.WorkID,
+				"msg_reason":   cm.Reason,
+				"work_id_match": cm.WorkID == claim.WorkID,
+			})
 			if cm.WorkID == claim.WorkID {
 				select {
 				case cancelCh <- cm:
@@ -73,9 +85,23 @@ func (w *Worker) setupCancelListener(
 				}
 				adminCancelled.Store(true)
 				workCancel()
+				w.log("worker.cancel_msg_delivered", map[string]any{
+					"session_id": claim.SessionID,
+					"work_id":    claim.WorkID,
+					"reason":     cm.Reason,
+				})
 				return
 			}
 		}
+		// Channel closed without delivering a matching cancel message.
+		// This means the Pub/Sub subscription ended (workCtx cancelled or
+		// connection lost) before a cancel for this work arrived.
+		w.log("worker.cancel_sub_channel_closed", map[string]any{
+			"session_id":        claim.SessionID,
+			"work_id":           claim.WorkID,
+			"admin_cancelled":   adminCancelled.Load(),
+			"message":           "cancel subscription channel closed; Pub/Sub subscription may have been lost",
+		})
 	}()
 
 	// Safety-net 2: re-check after subscribing to cover the race window
