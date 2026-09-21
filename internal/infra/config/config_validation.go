@@ -19,7 +19,7 @@ func (c *Config) Validate() error {
 
 	// Validate LLM configuration.
 	if c.LLM.APIKey == "" {
-		return fmt.Errorf("llm.api_key is required: set it directly or via ${LLM_API_KEY} environment variable")
+		return fmt.Errorf("llm.api_key is required: set it via LLM__API_KEY environment variable")
 	}
 
 	// Validate that at least one OAuth provider is enabled.

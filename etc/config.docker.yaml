@@ -35,9 +35,12 @@ cors:
   allow_origins: ["*"]
 
 # LLM 配置
+# 优先级说明：config file > environment variable > default
+# 敏感字段（如 api_key）建议通过环境变量配置，不在 YAML 中写明文
+# 环境变量命名规则：大写字母 + 双下划线分隔层级（如 llm.api_key → LLM__API_KEY）
 llm:
   provider: "claude"
-  api_key: "${LLM_API_KEY}"
+  # api_key 通过环境变量 LLM__API_KEY 配置，见 .env 文件
   model: "qwen3.7-plus"
   base_url: "http://host.docker.internal:23000"
   max_tokens: 131072

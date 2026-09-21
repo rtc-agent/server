@@ -400,6 +400,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("worker.lock_ttl_sec", 120)
 	v.SetDefault("worker.token_counter_mode", "heuristic")
 	v.SetDefault("worker.enable_strategic_cache_breakpoints", true)
+	v.SetDefault("llm.api_key", "")
 	v.SetDefault("llm.thinking_budget_tokens", 50000)
 	v.SetDefault("llm.reasoning_effort", "medium")
 	v.SetDefault("llm.retry_max_attempts", 0)

@@ -182,7 +182,7 @@ services:
       - .env
     environment:
       DEBUG: true
-      LLM_API_KEY: "${LLM_API_KEY}"
+      LLM__API_KEY: "${LLM__API_KEY}"
     expose:
       - "8888"
     volumes:
@@ -207,7 +207,7 @@ services:
       - .env
     environment:
       DEBUG: true
-      LLM_API_KEY: "${LLM_API_KEY}"
+      LLM__API_KEY: "${LLM__API_KEY}"
     expose:
       - "8888"
     volumes:
