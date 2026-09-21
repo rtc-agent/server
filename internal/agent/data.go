@@ -260,25 +260,25 @@ func (l *toolCallLogger) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return l.inner.Info(ctx)
 }
 
+// toolName extracts the tool name via Info(). Returns "unknown" on error.
+func (l *toolCallLogger) toolName(ctx context.Context) string {
+	if info, _ := l.inner.Info(ctx); info != nil {
+		return info.Name
+	}
+	return "unknown"
+}
+
 func (l *toolCallLogger) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	// Safe type assertion: if inner is not InvokableTool, return an error
 	// instead of panicking. This protects against future tool types that
 	// only implement BaseTool (e.g., read-only schema providers).
 	invokable, ok := l.inner.(tool.InvokableTool)
 	if !ok {
-		info, _ := l.inner.Info(ctx)
-		name := "unknown"
-		if info != nil {
-			name = info.Name
-		}
+		name := l.toolName(ctx)
 		return formatErrorWrapper("tool " + name + " does not support invocation"), nil
 	}
 
-	// Best-effort name extraction for logging; ignore Info errors.
-	toolName := "unknown"
-	if info, _ := invokable.Info(ctx); info != nil {
-		toolName = info.Name
-	}
+	toolName := l.toolName(ctx)
 
 	result, err := invokable.InvokableRun(ctx, argumentsInJSON, opts...)
 	if err != nil {
