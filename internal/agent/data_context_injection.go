@@ -46,6 +46,17 @@ func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID,
 		return messages
 	}
 
+	// Pre-activate commands from DB state before DetectAndInject.
+	// DetectAndInject only detects commands from the last user message prefix,
+	// but resume turns may not have a command-triggering message. Without
+	// DB-based pre-activation, SustainPrompt is skipped on servers that
+	// didn't handle the original trigger turn.
+	//
+	// Note: createTools already calls ensureCommandsActivated earlier in the
+	// turn, so this is a defense-in-depth measure. Since EnsureActivated is
+	// idempotent, the second call is a no-op when commands are already active.
+	h.ensureCommandsActivated(ctx, sessionID)
+
 	// Extract last user message content.
 	var lastUserContent string
 	for i := len(messages) - 1; i >= 0; i-- {

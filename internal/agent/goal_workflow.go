@@ -44,6 +44,10 @@ func (g *GoalWorkflow) TriggerPrompt(ctx command.Context, args string) (*command
 // SustainPrompt returns the goal management user prompt when there is an
 // active goal for the session. Returns nil when no goal is active or the
 // goal has reached a terminal state.
+//
+// IMPORTANT: Role is "user" (not "system") so the prompt is appended to the
+// end of the message array. This ensures the LLM sees the goal task as the
+// most recent instruction.
 func (g *GoalWorkflow) SustainPrompt(ctx command.Context, args string) (*command.PromptContribution, error) {
 	if g.helpers.deps.GoalRepo == nil {
 		return nil, nil
@@ -53,7 +57,7 @@ func (g *GoalWorkflow) SustainPrompt(ctx command.Context, args string) (*command
 		return nil, nil
 	}
 	return &command.PromptContribution{
-		Role:    "system",
+		Role:    "user",
 		Content: buildGoalManagementPrompt(goal),
 	}, nil
 }

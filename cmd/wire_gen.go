@@ -128,7 +128,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	worker := provideQueueWorker(queue, agent, cfg)
 	streamStore := provideStreamStore(universalClient, cfg)
 	asynqServer := provideAsynqServer(cfg)
-	serveMux := provideAsynqMux(queue, loopRepo)
+	serveMux := provideAsynqMux(queue, loopRepo, dependencies)
 	cancelFunc := provideRecoveryCancel(cfg, loopRepo, taskScheduler)
 	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, memoriesHandler, worker, queue, streamStore, asynqServer, serveMux, cancelFunc, prometheusMetrics)
 	return serverServer, nil
@@ -529,8 +529,10 @@ func provideAsynqServer(cfg *config.Config) *asynq.Server {
 }
 
 // provideAsynqMux creates the asynq ServeMux with loop task handlers registered.
-func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo) *asynq.ServeMux {
-	worker := loop.NewWorker(queue, loopRepo)
+func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, deps *usecase.Dependencies) *asynq.ServeMux {
+	// Create the notification creator callback for loop worker
+	notificationCreator := agent.CreateLoopNotification(deps)
+	worker := loop.NewWorker(queue, loopRepo, notificationCreator)
 	mux := asynq.NewServeMux()
 	worker.RegisterHandlers(mux)
 	return mux

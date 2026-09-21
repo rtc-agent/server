@@ -79,6 +79,7 @@ func (mgr *SessionTurnManager) genInput(
 			"turn_id":    turnID,
 		})
 	}
+
 	return &adk.GenInputResult[TurnWorkItem, *schema.Message]{
 		RunCtx: ctx,
 		Input: &adk.TypedAgentInput[*schema.Message]{

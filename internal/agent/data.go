@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/compose"
+	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -194,8 +195,16 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	}
 
 	// Slash-command framework: collect tools from all active commands.
-	// In PR1 the registry has no commands registered, so this is a no-op.
+	//
+	// IMPORTANT: pre-activate commands from DB state before CollectTools.
+	// DetectAndInject only runs on new user messages (gen_input). Resume
+	// turns (gen_resume) skip it, and rtc-queue may route turns to
+	// different server instances — each has its own in-memory
+	// CommandRegistry with no activation state. Without DB-based
+	// pre-activation, loop/goal tools vanish on resume turns.
 	if h.deps.CommandRegistry != nil {
+		h.ensureCommandsActivated(ctx, sid)
+
 		cmdCtx := command.Context{
 			Context:   ctx,
 			SessionID: sid,
@@ -209,12 +218,17 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	// the entire turn with NodeRunError. Interrupt errors are preserved (not wrapped).
 	// Use <error> XML tags to clearly delimit the error, following Claude Code's
 	// convention — this helps the LLM distinguish errors from normal output.
+	//
+	// Additionally, log tool call failures server-side so we can diagnose
+	// issues without relying on LLM to surface them.
 	errorHandler := func(ctx context.Context, err error) string {
 		return formatErrorWrapper(err.Error())
 	}
 	wrappedTools := make([]tool.BaseTool, len(tools))
 	for i, t := range tools {
-		wrappedTools[i] = utils.WrapToolWithErrorHandler(t, errorHandler)
+		// Wrap with logging first, then error handler.
+		logged := &toolCallLogger{inner: t, helpers: h, sessionID: sid, turnID: tid}
+		wrappedTools[i] = utils.WrapToolWithErrorHandler(logged, errorHandler)
 	}
 
 	h.logger.Info(ctx, "createTools.done", map[string]any{
@@ -224,6 +238,82 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	})
 
 	return wrappedTools, nil
+}
+
+// toolCallLogger wraps a tool to log invocations and errors server-side.
+// This provides observability into tool failures that would otherwise only
+// be visible to the LLM (via the error handler wrapper). Delegates all
+// interface methods to the inner tool.
+//
+// Implements InvokableTool by delegating to the inner tool. If the inner
+// tool is not invokable (BaseTool-only), InvokableRun returns an error
+// instead of panicking — this protects against future tool types that
+// don't implement InvokableTool.
+type toolCallLogger struct {
+	inner     tool.BaseTool
+	helpers   *helpers
+	sessionID uuid.UUID
+	turnID    uuid.UUID
+}
+
+func (l *toolCallLogger) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	return l.inner.Info(ctx)
+}
+
+func (l *toolCallLogger) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	// Safe type assertion: if inner is not InvokableTool, return an error
+	// instead of panicking. This protects against future tool types that
+	// only implement BaseTool (e.g., read-only schema providers).
+	invokable, ok := l.inner.(tool.InvokableTool)
+	if !ok {
+		info, _ := l.inner.Info(ctx)
+		name := "unknown"
+		if info != nil {
+			name = info.Name
+		}
+		return formatErrorWrapper("tool " + name + " does not support invocation"), nil
+	}
+
+	// Best-effort name extraction for logging; ignore Info errors.
+	toolName := "unknown"
+	if info, _ := invokable.Info(ctx); info != nil {
+		toolName = info.Name
+	}
+
+	result, err := invokable.InvokableRun(ctx, argumentsInJSON, opts...)
+	if err != nil {
+		l.helpers.logger.Warn(ctx, "tool.call_failed", map[string]any{
+			"tool_name":  toolName,
+			"session_id": l.sessionID.String(),
+			"turn_id":    l.turnID.String(),
+			"error":      err.Error(),
+		})
+	}
+	return result, err
+}
+
+// ensureCommandsActivated restores command activation state from DB.
+// This must be called before CollectTools or DetectAndInject to ensure
+// that commands (loop, goal) are available on resume turns that may
+// execute on a different server instance than the one that handled
+// the original trigger turn.
+//
+// Idempotent: no-op if the registry is nil, or commands are already activated.
+// Errors from DB lookups are silently ignored (degrade gracefully).
+func (h *helpers) ensureCommandsActivated(ctx context.Context, sessionID uuid.UUID) {
+	if h.deps.CommandRegistry == nil {
+		return
+	}
+	if h.deps.LoopRepo != nil {
+		if activeLoop, err := h.deps.LoopRepo.FindActive(ctx, sessionID); err == nil && activeLoop != nil {
+			h.deps.CommandRegistry.EnsureActivated("loop", sessionID, "")
+		}
+	}
+	if h.deps.GoalRepo != nil {
+		if activeGoal, err := h.deps.GoalRepo.FindActive(ctx, sessionID); err == nil && activeGoal != nil {
+			h.deps.CommandRegistry.EnsureActivated("goal", sessionID, "")
+		}
+	}
 }
 
 // createAgent builds the eino agent from the session's tools.

@@ -51,6 +51,34 @@ func (r *CommandRegistry) Registered() []Command {
 	return out
 }
 
+// EnsureActivated ensures a command is activated for the given session.
+// This is used to restore activation state from DB (e.g., active loop/goal)
+// when a turn is resumed on a different server instance that has no
+// in-memory activation state. Idempotent: no-op if already activated.
+func (r *CommandRegistry) EnsureActivated(cmdName string, sessionID uuid.UUID, args string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entries := r.activated[sessionID]
+	for _, e := range entries {
+		if e.cmd.Name() == cmdName {
+			return // already activated
+		}
+	}
+
+	// Find the registered command by name.
+	for _, cmd := range r.registered {
+		if cmd.Name() == cmdName {
+			r.activated[sessionID] = append(entries, &activatedEntry{
+				cmd:         cmd,
+				args:        args,
+				activatedAt: time.Now(),
+			})
+			return
+		}
+	}
+}
+
 // DetectAndInject scans lastUserMsg against registered commands, updates
 // activation state, and returns prompt contributions for this turn.
 //

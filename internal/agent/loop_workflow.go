@@ -7,6 +7,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/rtc-agent/server/internal/agent/command"
+	looppkg "github.com/rtc-agent/server/internal/loop"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -41,9 +42,13 @@ func (l *LoopWorkflow) TriggerPrompt(ctx command.Context, args string) (*command
 	}, nil
 }
 
-// SustainPrompt returns the loop management user prompt when there is an
+// SustainPrompt returns the loop management system prompt when there is an
 // active loop for the session. Returns nil when no loop is active or the
 // loop has reached a terminal state.
+//
+// This provides supplementary context about the loop state (progress, etc.)
+// as a system message. The primary trigger is the notification message created
+// by the loop worker (following the async sub-agent pattern).
 func (l *LoopWorkflow) SustainPrompt(ctx command.Context, args string) (*command.PromptContribution, error) {
 	if l.helpers.deps.LoopRepo == nil {
 		return nil, nil
@@ -210,7 +215,7 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 	}
 
 	delay := time.Duration(loop.IntervalSeconds) * time.Second
-	taskID, err := l.helpers.deps.TaskScheduler.ScheduleDelayed(ctx, "loop_turn", payload, delay)
+	taskID, err := l.helpers.deps.TaskScheduler.ScheduleDelayed(ctx, looppkg.LoopTaskType, payload, delay)
 	if err != nil {
 		l.helpers.logger.Warn(ctx, "loopWorkflow.schedule_failed", map[string]any{
 			"loop_id":    loop.ID.String(),
