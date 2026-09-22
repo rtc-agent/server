@@ -38,7 +38,7 @@ func (h *helpers) getUserIDFromContext(ctx context.Context) (uuid.UUID, error) {
 }
 
 // =============================================================================
-// save_user_memory
+// saveUserMemory
 // =============================================================================
 
 type saveUserMemoryTool struct {
@@ -51,7 +51,7 @@ func (h *helpers) createSaveUserMemoryTool() tool.InvokableTool {
 
 func (t *saveUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "save_user_memory",
+		Name: "saveUserMemory",
 		Desc: saveUserMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
@@ -96,7 +96,7 @@ func (t *saveUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 }
 
 func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.save_user_memory",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.saveUserMemory",
 		trace.WithAttributes(
 			attribute.String("turn_id", ""),
 		),
@@ -112,7 +112,7 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		Tags        []string       `json:"tags,omitempty"`
 		Metadata    map[string]any `json:"metadata,omitempty"`
 	}
-	if ok, msg := parseToolArgs(ctx, t.helpers, "save_user_memory", argumentsInJSON, &args); !ok {
+	if ok, msg := parseToolArgs(ctx, t.helpers, "saveUserMemory", argumentsInJSON, &args); !ok {
 		return msg, nil
 	}
 	if args.Category == "" || args.Title == "" || args.Content == "" {
@@ -182,7 +182,7 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	}
 
 	span.SetAttributes(attribute.String("memory_id", memory.ID.String()))
-	t.helpers.logger.Info(ctx, "save_user_memory.success", map[string]any{
+	t.helpers.logger.Info(ctx, "saveUserMemory.success", map[string]any{
 		"user_id":    userID.String(),
 		"memory_id":  memory.ID.String(),
 		"category":   args.Category,
@@ -193,7 +193,7 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 }
 
 // =============================================================================
-// update_user_memory
+// updateUserMemory
 // =============================================================================
 
 type updateUserMemoryTool struct {
@@ -206,7 +206,7 @@ func (h *helpers) createUpdateUserMemoryTool() tool.InvokableTool {
 
 func (t *updateUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "update_user_memory",
+		Name: "updateUserMemory",
 		Desc: updateUserMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"memory_id": {
@@ -250,7 +250,7 @@ func (t *updateUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, erro
 }
 
 func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.update_user_memory",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.updateUserMemory",
 		trace.WithAttributes(
 			attribute.String("turn_id", ""),
 		),
@@ -266,7 +266,7 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		Tags        []string       `json:"tags,omitempty"`
 		Metadata    map[string]any `json:"metadata,omitempty"`
 	}
-	if ok, msg := parseToolArgs(ctx, t.helpers, "update_user_memory", argumentsInJSON, &args); !ok {
+	if ok, msg := parseToolArgs(ctx, t.helpers, "updateUserMemory", argumentsInJSON, &args); !ok {
 		return msg, nil
 	}
 
@@ -323,7 +323,7 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 }
 
 // =============================================================================
-// delete_user_memory
+// deleteUserMemory
 // =============================================================================
 
 type deleteUserMemoryTool struct {
@@ -336,7 +336,7 @@ func (h *helpers) createDeleteUserMemoryTool() tool.InvokableTool {
 
 func (t *deleteUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "delete_user_memory",
+		Name: "deleteUserMemory",
 		Desc: deleteUserMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"memory_id": {
@@ -349,7 +349,7 @@ func (t *deleteUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, erro
 }
 
 func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.delete_user_memory",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.deleteUserMemory",
 		trace.WithAttributes(
 			attribute.String("turn_id", ""),
 		),
@@ -359,7 +359,7 @@ func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 	var args struct {
 		MemoryID string `json:"memory_id"`
 	}
-	if ok, msg := parseToolArgs(ctx, t.helpers, "delete_user_memory", argumentsInJSON, &args); !ok {
+	if ok, msg := parseToolArgs(ctx, t.helpers, "deleteUserMemory", argumentsInJSON, &args); !ok {
 		return msg, nil
 	}
 
@@ -405,7 +405,7 @@ func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 }
 
 // =============================================================================
-// list_user_memory
+// listUserMemory
 // =============================================================================
 
 type listUserMemoryTool struct {
@@ -418,7 +418,7 @@ func (h *helpers) createListUserMemoryTool() tool.InvokableTool {
 
 func (t *listUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "list_user_memory",
+		Name: "listUserMemory",
 		Desc: listUserMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
@@ -437,7 +437,7 @@ func (t *listUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 }
 
 func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.list_user_memory",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.listUserMemory",
 		trace.WithAttributes(
 			attribute.String("turn_id", ""),
 		),
@@ -448,7 +448,7 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		Category string `json:"category"`
 		Limit    int    `json:"limit"`
 	}
-	if ok, msg := parseToolArgs(ctx, t.helpers, "list_user_memory", argumentsInJSON, &args); !ok {
+	if ok, msg := parseToolArgs(ctx, t.helpers, "listUserMemory", argumentsInJSON, &args); !ok {
 		return msg, nil
 	}
 

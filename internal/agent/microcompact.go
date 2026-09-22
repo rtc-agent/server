@@ -101,7 +101,7 @@ func microcompactMessages(messages []*turnagent.Message, cfg MicrocompactConfig)
 	}
 
 	// Build a set of all compactable IDs for O(1) membership check.
-	// Non-compactable tool results (e.g., ask_user) must NOT be cleared.
+	// Non-compactable tool results (e.g., askUser) must NOT be cleared.
 	keepSet := make(map[string]struct{}, keepRecent)
 	for _, id := range compactableIDs[len(compactableIDs)-keepRecent:] {
 		keepSet[id] = struct{}{}

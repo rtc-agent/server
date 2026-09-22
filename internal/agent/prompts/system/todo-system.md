@@ -3,7 +3,7 @@
 You have a todo list to track your current tasks and progress.
 
 ### Usage Guidelines
-- Use todo_write to update the entire todo list (replaces the existing list)
+- Use todoWrite to update the entire todo list (replaces the existing list)
 - Keep at least one task in in_progress status at all times
 - Update proactively: when starting a new task, completing a task, or receiving new tasks
 - Each todo item requires three fields:

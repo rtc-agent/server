@@ -272,7 +272,7 @@ func (h *helpers) beginTurn(ctx context.Context, turnID string) error {
 		"turn_id": turnID,
 	})
 
-	// Sub Agent support: if this is a sub session, update the parent's sub_agent_invocation message status to "running".
+	// Sub Agent support: if this is a sub session, update the parent's subAgentInvocation message status to "running".
 	session, sessErr := h.deps.SessionRepo.GetByID(ctx, turn.SessionID)
 	if sessErr == nil && session.ParentServerSessionID != uuid.Nil && session.SubAgentParentMessageID != uuid.Nil {
 		h.updateSubAgentInvocationStatus(ctx, session.SubAgentParentMessageID, "running")
@@ -347,10 +347,16 @@ func (h *helpers) completeTurn(ctx context.Context, sessionID string, turnID str
 	}
 	h.notifyParentAfterSubAgentSession(ctx, session, lastMessage, "completed", nil)
 
-	// Cascade cancel: if this completed session has active child sessions (sub agents),
-	// cancel them as well. This prevents orphaned sub agents from continuing to run
-	// after the parent has completed. Mirrors failTurn and cancelTurn.
-	h.cascadeCancelChildren(ctx, turnID, sid)
+	// NOTE: Do NOT cascade cancel children on completeTurn.
+	// Async sub agents (subagent tool with mode="async") are designed to outlive
+	// the parent turn. They run independently and deliver results via
+	// notifyParentAfterAsyncSubAgent when complete.
+	//
+	// Unlike cancelTurn/failTurn (where the parent session is terminating and
+	// children should be cancelled), completeTurn is a normal lifecycle event.
+	// Cancelling active children here would break the async sub agent pattern.
+	//
+	// Only cancelTurn and failTurn should call cascadeCancelChildren.
 
 	// Slash-command framework: notify active commands of turn completion.
 	// The /goal execution loop is now handled by GoalWorkflow.OnTurnComplete

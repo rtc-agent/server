@@ -29,7 +29,7 @@ import (
 // the tool creates:
 // 1. A sub session with parent/ root session hierarchy
 // 2. A user message in the sub session (the instruction)
-// 3. A sub_agent_invocation message in the parent session (for frontend rendering)
+// 3. A subAgentInvocation message in the parent session (for frontend rendering)
 // 4. Submits a work item to the sub session's rtc-queue
 //
 // In **sync** mode:
@@ -47,7 +47,7 @@ type subAgentTool struct {
 	turnID  uuid.UUID
 }
 
-// subAgentArgs is the input schema for the sub_agent tool.
+// subAgentArgs is the input schema for the subAgent tool.
 type subAgentArgs struct {
 	Title       string `json:"title"`
 	Instruction string `json:"instruction"`
@@ -57,7 +57,7 @@ type subAgentArgs struct {
 // subAgentInterruptInfo is passed to StatefulInterrupt as the info parameter.
 // Must be gob-serializable.
 type subAgentInterruptInfo struct {
-	Type            string // "sub_agent"
+	Type            string // "subAgent"
 	SubSessionID    string
 	ParentMessageID string
 	Instruction     string
@@ -74,7 +74,7 @@ type subAgentInterruptState struct {
 
 func (t *subAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "sub_agent",
+		Name: "subAgent",
 		Desc: subAgentDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"title": {
@@ -97,7 +97,7 @@ func (t *subAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.sub_agent",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.subAgent",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.String("turn_id", t.turnID.String()),
@@ -112,7 +112,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		if !hasState {
 			span.RecordError(fmt.Errorf("state type mismatch"))
 			span.SetStatus(codes.Error, "state_type_mismatch")
-			return "", fmt.Errorf("sub_agent: state type mismatch on resume")
+			return "", fmt.Errorf("subAgent: state type mismatch on resume")
 		}
 		span.SetAttributes(attribute.Bool("resume", true))
 		result, err := t.resumeSubAgent(ctx, state)
@@ -125,7 +125,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 
 	// === First-call path ===
 	var args subAgentArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "sub_agent", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgs(ctx, t.helpers, "subAgent", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if validationErr := validateSubAgentArgs(args); validationErr != "" {
@@ -142,16 +142,16 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 
 	callID := compose.GetToolCallID(ctx)
 	if callID == "" {
-		return "", fmt.Errorf("sub_agent: tool_call_id not set in context")
+		return "", fmt.Errorf("subAgent: tool_call_id not set in context")
 	}
 
 	turnUUID := t.turnID
 	if turnUUID == uuid.Nil {
-		return "", fmt.Errorf("sub_agent: turn UUID is nil")
+		return "", fmt.Errorf("subAgent: turn UUID is nil")
 	}
 
 	if t.helpers.queue == nil {
-		return "", fmt.Errorf("sub_agent: queue not available")
+		return "", fmt.Errorf("subAgent: queue not available")
 	}
 
 	subSessionID := uuid.Must(uuid.NewV7())
@@ -183,7 +183,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 				"error":          closeErr.Error(),
 			})
 		}
-		return "", fmt.Errorf("sub_agent: failed to start sub-agent (cleaned up orphan session): %w", err)
+		return "", fmt.Errorf("subAgent: failed to start sub-agent (cleaned up orphan session): %w", err)
 	}
 
 	if mode == model.SubAgentModeAsync {
@@ -213,7 +213,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		ParentMessageID: parentMessageID.String(),
 	}
 	info := subAgentInterruptInfo{
-		Type:            "sub_agent",
+		Type:            "subAgent",
 		SubSessionID:    subSessionID.String(),
 		ParentMessageID: parentMessageID.String(),
 		Instruction:     args.Instruction,
@@ -228,7 +228,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 func (t *subAgentTool) resumeSubAgent(ctx context.Context, state subAgentInterruptState) (string, error) {
 	subSessionID, parseErr := uuid.Parse(state.SubSessionID)
 	if parseErr != nil {
-		return "", fmt.Errorf("sub_agent: invalid sub_session_id in state: %w", parseErr)
+		return "", fmt.Errorf("subAgent: invalid sub_session_id in state: %w", parseErr)
 	}
 
 	subSession, dbErr := t.helpers.deps.SessionRepo.GetByID(ctx, subSessionID)
@@ -264,7 +264,7 @@ func (t *subAgentTool) resumeSubAgent(ctx context.Context, state subAgentInterru
 // reInterrupt issues a StatefulInterrupt to keep waiting for the sub session.
 func (t *subAgentTool) reInterrupt(ctx context.Context, state subAgentInterruptState) (string, error) {
 	info := subAgentInterruptInfo{
-		Type:            "sub_agent",
+		Type:            "subAgent",
 		SubSessionID:    state.SubSessionID,
 		ParentMessageID: state.ParentMessageID,
 	}
@@ -352,7 +352,7 @@ func (t *subAgentTool) createSubSessionAndMessages(
 ) (parentMessageID uuid.UUID, subSessionMsgID uuid.UUID, err error) {
 	toolCallData := protocol.ToolCall{
 		Id:       callID,
-		ToolName: "sub_agent",
+		ToolName: "subAgent",
 		Input:    argumentsInJSON,
 	}
 	parentContent := protocol.ContentData{
@@ -411,7 +411,7 @@ func (t *subAgentTool) createSubSessionAndMessages(
 			"", nil,
 		)
 		if createErr != nil {
-			return nil, fmt.Errorf("create parent session sub_agent_invocation message: %w", createErr)
+			return nil, fmt.Errorf("create parent session subAgentInvocation message: %w", createErr)
 		}
 		parentMessageID = parentMsg.ID
 
@@ -495,7 +495,7 @@ func (t *subAgentTool) handleAsyncSubAgent(ctx context.Context, subSessionID uui
 		SessionID:       t.session.ID,
 		OwnerRefID:      t.session.OwnerRefID,
 		TurnID:          turnUUID,
-		ToolName:        "sub_agent",
+		ToolName:        "subAgent",
 		ArgumentsInJSON: argumentsInJSON,
 		Output:          asyncResult,
 		ParentMessageID: parentMessageID,

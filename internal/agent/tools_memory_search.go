@@ -30,7 +30,7 @@ func (h *helpers) createSearchMemoryTool() tool.InvokableTool {
 
 func (t *searchMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "search_memory",
+		Name: "searchMemory",
 		Desc: searchMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"query": {
@@ -59,7 +59,7 @@ func (t *searchMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.search_memory",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.searchMemory",
 		trace.WithAttributes(
 			attribute.String("turn_id", ""),
 		),
@@ -72,7 +72,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		MemoryType string `json:"memory_type"`
 		Limit      int    `json:"limit"`
 	}
-	if ok, msg := parseToolArgs(ctx, t.helpers, "search_memory", argumentsInJSON, &args); !ok {
+	if ok, msg := parseToolArgs(ctx, t.helpers, "searchMemory", argumentsInJSON, &args); !ok {
 		return msg, nil
 	}
 
@@ -103,7 +103,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		if err != nil {
 			span.RecordError(err)
 			span.SetAttributes(attribute.String("session_search_error", err.Error()))
-			t.helpers.logger.Warn(ctx, "search_memory.session_error", map[string]any{
+			t.helpers.logger.Warn(ctx, "searchMemory.session_error", map[string]any{
 				"error": err.Error(),
 			})
 			// Continue with other searches even if session memory fails
@@ -118,7 +118,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		if err != nil {
 			span.RecordError(err)
 			span.SetAttributes(attribute.String("user_search_error", err.Error()))
-			t.helpers.logger.Warn(ctx, "search_memory.user_error", map[string]any{
+			t.helpers.logger.Warn(ctx, "searchMemory.user_error", map[string]any{
 				"error": err.Error(),
 			})
 			// Continue with other searches even if user memory fails
@@ -230,7 +230,7 @@ func (t *searchMemoryTool) searchUserMemories(
 	// Keyword search.
 	keywordResults, err := t.helpers.deps.UserMemoryRepo.SearchByKeyword(ctx, userID, query, limit*2)
 	if err != nil {
-		t.helpers.logger.Warn(ctx, "search_memory.user_keyword_error", map[string]any{
+		t.helpers.logger.Warn(ctx, "searchMemory.user_keyword_error", map[string]any{
 			"error": err.Error(),
 		})
 		return nil, nil

@@ -146,12 +146,12 @@ func TestCollectCompactableToolCallIDs_EmptyAndNoMatches(t *testing.T) {
 		t.Errorf("expected empty for empty input, got %v", ids)
 	}
 
-	// Edge case: no compactable tools (only non-compactable like ask_user, ls, sub_agent)
+	// Edge case: no compactable tools (only non-compactable like askUser, ls, subAgent)
 	msgs := []*turnagent.Message{
 		{Role: turnagent.RoleAssistant, ToolCalls: []turnagent.ToolCall{
-			{ID: "tc1", Name: "ask_user"},
+			{ID: "tc1", Name: "askUser"},
 			{ID: "tc2", Name: "ls"},
-			{ID: "tc3", Name: "sub_agent"},
+			{ID: "tc3", Name: "subAgent"},
 		}},
 	}
 	if ids := collectCompactableToolCallIDs(msgs); len(ids) != 0 {

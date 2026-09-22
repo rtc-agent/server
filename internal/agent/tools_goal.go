@@ -13,12 +13,12 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// defaultGoalMaxTurns is the fixed max_turns for create_goal.
+// defaultGoalMaxTurns is the fixed max_turns for createGoal.
 // Per Phase 4 decision A1: not parameterizable.
 const defaultGoalMaxTurns = 50
 
 // ---------------------------------------------------------------------------
-// create_goal
+// createGoal
 // ---------------------------------------------------------------------------
 
 type createGoalTool struct {
@@ -42,7 +42,7 @@ type createGoalResult struct {
 
 func (t *createGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "create_goal",
+		Name: "createGoal",
 		Desc: createGoalDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"condition": {
@@ -55,7 +55,7 @@ func (t *createGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.create_goal",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.createGoal",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.String("turn_id", t.turnID.String()),
@@ -64,7 +64,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	defer span.End()
 
 	var args createGoalArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "create_goal", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgs(ctx, t.helpers, "createGoal", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Condition == "" {
@@ -77,7 +77,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "find_active_failed")
-		return "", fmt.Errorf("create_goal: find active goal: %w", err)
+		return "", fmt.Errorf("createGoal: find active goal: %w", err)
 	}
 	if existing != nil {
 		span.SetAttributes(attribute.Bool("conflict", true))
@@ -89,7 +89,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if conflictMsg, err := checkGoalLoopMutualExclusion(ctx, t.helpers.deps, t.session.ID, "goal"); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "mutual_exclusion_check_failed")
-		return "", fmt.Errorf("create_goal: %w", err)
+		return "", fmt.Errorf("createGoal: %w", err)
 	} else if conflictMsg != "" {
 		span.SetAttributes(attribute.Bool("conflict", true))
 		return conflictMsg, nil
@@ -107,7 +107,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if err := t.helpers.deps.GoalRepo.Create(ctx, goal); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "create_failed")
-		return "", fmt.Errorf("create_goal: create: %w", err)
+		return "", fmt.Errorf("createGoal: create: %w", err)
 	}
 
 	// 4. Build result + publish two messages (toolcall_input + toolcall_output).
@@ -122,7 +122,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "marshal_failed")
-		return "", fmt.Errorf("create_goal: marshal result: %w", err)
+		return "", fmt.Errorf("createGoal: marshal result: %w", err)
 	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
@@ -130,13 +130,13 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		SessionID:       t.session.ID,
 		OwnerRefID:      t.session.OwnerRefID,
 		TurnID:          t.turnID,
-		ToolName:        "create_goal",
+		ToolName:        "createGoal",
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "publish_failed")
-		return "", fmt.Errorf("create_goal: publish messages: %w", err)
+		return "", fmt.Errorf("createGoal: publish messages: %w", err)
 	}
 
 	span.SetAttributes(attribute.String("goal_id", goal.ID.String()))
@@ -150,7 +150,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 }
 
 // ---------------------------------------------------------------------------
-// complete_goal
+// completeGoal
 // ---------------------------------------------------------------------------
 
 type completeGoalTool struct {
@@ -163,8 +163,8 @@ type completeGoalArgs struct {
 	Reason string `json:"reason"`
 }
 
-// goalResult is the JSON returned to LLM for both complete_goal and
-// cancel_goal tools. Both produce structurally identical output.
+// goalResult is the JSON returned to LLM for both completeGoal and
+// cancelGoal tools. Both produce structurally identical output.
 type goalResult struct {
 	ID             string           `json:"id"`
 	Condition      string           `json:"condition"`
@@ -175,7 +175,7 @@ type goalResult struct {
 
 func (t *completeGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "complete_goal",
+		Name: "completeGoal",
 		Desc: completeGoalDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"reason": {
@@ -189,17 +189,17 @@ func (t *completeGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *completeGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args completeGoalArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "complete_goal", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgs(ctx, t.helpers, "completeGoal", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Reason == "" {
 		return "Error: reason is required and cannot be empty", nil
 	}
-	return finalizeGoalStatus(ctx, t.helpers, t.session, t.turnID, "complete_goal", "completeGoal.completed", model.GoalStatusCompleted, args.Reason, "no active goal to complete", argumentsInJSON)
+	return finalizeGoalStatus(ctx, t.helpers, t.session, t.turnID, "completeGoal", "completeGoal.completed", model.GoalStatusCompleted, args.Reason, "no active goal to complete", argumentsInJSON)
 }
 
 // ---------------------------------------------------------------------------
-// cancel_goal
+// cancelGoal
 // ---------------------------------------------------------------------------
 
 type cancelGoalTool struct {
@@ -214,7 +214,7 @@ type cancelGoalArgs struct {
 
 func (t *cancelGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "cancel_goal",
+		Name: "cancelGoal",
 		Desc: cancelGoalDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"reason": {
@@ -228,13 +228,13 @@ func (t *cancelGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args cancelGoalArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "cancel_goal", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgs(ctx, t.helpers, "cancelGoal", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Reason == "" {
 		return "Error: reason is required and cannot be empty", nil
 	}
-	return finalizeGoalStatus(ctx, t.helpers, t.session, t.turnID, "cancel_goal", "cancelGoal.completed", model.GoalStatusCancelled, args.Reason, "no active goal to cancel", argumentsInJSON)
+	return finalizeGoalStatus(ctx, t.helpers, t.session, t.turnID, "cancelGoal", "cancelGoal.completed", model.GoalStatusCancelled, args.Reason, "no active goal to cancel", argumentsInJSON)
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +244,7 @@ func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 // finalizeGoalStatus finds the active goal, updates its status, publishes tool
 // result messages, and returns the JSON-serialized result.
 //
-// Both complete_goal and cancel_goal share identical control flow; only the
+// Both completeGoal and cancelGoal share identical control flow; only the
 // target status, log event name, and "not found" message differ.
 func finalizeGoalStatus(
 	ctx context.Context,

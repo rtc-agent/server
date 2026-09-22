@@ -10,7 +10,7 @@ import (
 // TodoListAttachment injects the current todo list into LLM context.
 //
 // The todo list is stored in the Session model and is updated by the LLM
-// via the todo_write tool. This attachment ensures the LLM always knows
+// via the todoWrite tool. This attachment ensures the LLM always knows
 // the current task state.
 type TodoListAttachment struct {
 	helpers *helpers

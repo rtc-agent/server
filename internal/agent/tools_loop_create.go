@@ -13,17 +13,17 @@ import (
 	"gorm.io/gorm"
 )
 
-// defaultLoopMaxTurns is the default max_turns for create_loop.
+// defaultLoopMaxTurns is the default max_turns for createLoop.
 const defaultLoopMaxTurns = 10
 
-// defaultLoopIntervalSeconds is the default interval for create_loop.
+// defaultLoopIntervalSeconds is the default interval for createLoop.
 const defaultLoopIntervalSeconds = 60
 
 // loopExpiryDays is the number of days before a loop auto-expires.
 const loopExpiryDays = 7
 
 // ---------------------------------------------------------------------------
-// create_loop
+// createLoop
 // ---------------------------------------------------------------------------
 
 type createLoopTool struct {
@@ -50,7 +50,7 @@ type createLoopResult struct {
 
 func (t *createLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "create_loop",
+		Name: "createLoop",
 		Desc: createLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"prompt": {
@@ -74,7 +74,7 @@ func (t *createLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args createLoopArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "create_loop", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgs(ctx, t.helpers, "createLoop", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Prompt == "" {
@@ -84,7 +84,7 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	// 1. Check for existing active loop.
 	existing, err := t.helpers.deps.LoopRepo.FindActive(ctx, t.session.ID)
 	if err != nil {
-		return "", fmt.Errorf("create_loop: find active loop: %w", err)
+		return "", fmt.Errorf("createLoop: find active loop: %w", err)
 	}
 	if existing != nil {
 		return fmt.Sprintf("Error: an active loop already exists (id=%s, prompt=%q). Complete or cancel it before creating a new one.",
@@ -93,7 +93,7 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 
 	// 2. Check for existing active goal (mutual exclusion).
 	if conflictMsg, err := checkGoalLoopMutualExclusion(ctx, t.helpers.deps, t.session.ID, "loop"); err != nil {
-		return "", fmt.Errorf("create_loop: %w", err)
+		return "", fmt.Errorf("createLoop: %w", err)
 	} else if conflictMsg != "" {
 		return conflictMsg, nil
 	}
@@ -133,7 +133,7 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		}
 
 		// No need to schedule the first asynq task here.
-		// The LLM will immediately execute the first turn after create_loop returns
+		// The LLM will immediately execute the first turn after createLoop returns
 		// (as instructed by the loop-creation.md prompt).
 		// When that turn completes, OnTurnComplete will increment completed_turns
 		// and schedule the next asynq task automatically.
@@ -143,7 +143,7 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	})
 
 	if err != nil {
-		return "", fmt.Errorf("create_loop: transaction failed: %w", err)
+		return "", fmt.Errorf("createLoop: transaction failed: %w", err)
 	}
 
 	// Note: asynq_task_id will be set by OnTurnComplete after the first turn completes
@@ -159,7 +159,7 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	}
 	resultJSON, err := mustMarshalJSON(result)
 	if err != nil {
-		return "", fmt.Errorf("create_loop: marshal result: %w", err)
+		return "", fmt.Errorf("createLoop: marshal result: %w", err)
 	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
@@ -167,11 +167,11 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		SessionID:       t.session.ID,
 		OwnerRefID:      t.session.OwnerRefID,
 		TurnID:          t.turnID,
-		ToolName:        "create_loop",
+		ToolName:        "createLoop",
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
-		return "", fmt.Errorf("create_loop: publish messages: %w", err)
+		return "", fmt.Errorf("createLoop: publish messages: %w", err)
 	}
 
 	t.helpers.logger.Info(ctx, "createLoop.completed", map[string]any{

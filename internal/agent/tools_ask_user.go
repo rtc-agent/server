@@ -36,7 +36,7 @@ type askUserTool struct{ base *rtcToolBase }
 // so Eino emits the right JSON Schema.
 type (
 	// askUserResult is the shape the client must submit as RTC.Result for a
-	// completed ask_user call.
+	// completed askUser call.
 	askUserResult struct {
 		Answers     map[string]string            `json:"answers"`
 		Annotations map[string]askUserAnnotation `json:"annotations,omitempty"`
@@ -53,7 +53,7 @@ type (
 
 func (t *askUserTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "ask_user",
+		Name: "askUser",
 		Desc: askUserDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"questions": {
@@ -111,7 +111,7 @@ func (t *askUserTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *askUserTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	return t.base.InvokableRun(ctx, "ask_user", argumentsInJSON, opts...)
+	return t.base.InvokableRun(ctx, "askUser", argumentsInJSON, opts...)
 }
 
 // formatAskUserResult converts the client-submitted RTC result into the text

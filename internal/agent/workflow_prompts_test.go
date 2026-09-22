@@ -26,8 +26,8 @@ func TestBuildGoalManagementPrompt(t *testing.T) {
 	}{
 		{"condition", "All 42 tests pass"},
 		{"progress", "Turn 2/50"},
-		{"complete_tool", "complete_goal"},
-		{"cancel_tool", "cancel_goal"},
+		{"complete_tool", "completeGoal"},
+		{"cancel_tool", "cancelGoal"},
 		{"heading", "# Goal Management"},
 	}
 	for _, tt := range tests {
@@ -58,8 +58,8 @@ func TestBuildLoopManagementPrompt(t *testing.T) {
 		{"prompt_text", "Check deployment health"},
 		{"progress", "Turn 3/10"},
 		{"interval", "60 seconds"},
-		{"complete_tool", "complete_loop"},
-		{"cancel_tool", "cancel_loop"},
+		{"complete_tool", "completeLoop"},
+		{"cancel_tool", "cancelLoop"},
 		{"heading", "# Loop Management"},
 	}
 	for _, tt := range tests {
@@ -76,8 +76,8 @@ func TestGoalCreationPromptEmbedded(t *testing.T) {
 	if !strings.Contains(goalCreationPrompt, "# Goal Creation") {
 		t.Error("goalCreationPrompt missing heading")
 	}
-	if !strings.Contains(goalCreationPrompt, "create_goal") {
-		t.Error("goalCreationPrompt missing create_goal reference")
+	if !strings.Contains(goalCreationPrompt, "createGoal") {
+		t.Error("goalCreationPrompt missing createGoal reference")
 	}
 }
 
@@ -88,8 +88,8 @@ func TestLoopCreationPromptEmbedded(t *testing.T) {
 	if !strings.Contains(loopCreationPrompt, "# Loop Creation") {
 		t.Error("loopCreationPrompt missing heading")
 	}
-	if !strings.Contains(loopCreationPrompt, "create_loop") {
-		t.Error("loopCreationPrompt missing create_loop reference")
+	if !strings.Contains(loopCreationPrompt, "createLoop") {
+		t.Error("loopCreationPrompt missing createLoop reference")
 	}
 }
 

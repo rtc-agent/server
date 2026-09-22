@@ -28,7 +28,7 @@ type getSubAgentMessageTool struct {
 	turnID  uuid.UUID
 }
 
-// getSubAgentMessageArgs is the input schema for the get_sub_agent_message tool.
+// getSubAgentMessageArgs is the input schema for the getSubAgentMessage tool.
 type getSubAgentMessageArgs struct {
 	SubSessionID string `json:"sub_session_id"`
 }
@@ -46,12 +46,12 @@ type getSubAgentMessageResult struct {
 
 func (t *getSubAgentMessageTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "get_sub_agent_message",
+		Name: "getSubAgentMessage",
 		Desc: getSubAgentMessageDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"sub_session_id": {
 				Type:     schema.String,
-				Desc:     "The server-side UUID of the sub agent session to query. Use list_sub_agent to get available session IDs.",
+				Desc:     "The server-side UUID of the sub agent session to query. Use listSubAgent to get available session IDs.",
 				Required: true,
 			},
 		}),
@@ -59,7 +59,7 @@ func (t *getSubAgentMessageTool) Info(ctx context.Context) (*schema.ToolInfo, er
 }
 
 func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.get_sub_agent_message",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.getSubAgentMessage",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.String("turn_id", t.turnID.String()),
@@ -69,7 +69,7 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 
 	// 1. Parse arguments.
 	var args getSubAgentMessageArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "get_sub_agent_message", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgs(ctx, t.helpers, "getSubAgentMessage", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 
@@ -147,7 +147,7 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "marshal_failed")
-		return "", fmt.Errorf("get_sub_agent_message: marshal result: %w", err)
+		return "", fmt.Errorf("getSubAgentMessage: marshal result: %w", err)
 	}
 
 	// 6. Publish toolcall_input + toolcall_output messages.
@@ -156,13 +156,13 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 		SessionID:       t.session.ID,
 		OwnerRefID:      t.session.OwnerRefID,
 		TurnID:          t.turnID,
-		ToolName:        "get_sub_agent_message",
+		ToolName:        "getSubAgentMessage",
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "publish_messages_failed")
-		return "", fmt.Errorf("get_sub_agent_message: publish messages: %w", err)
+		return "", fmt.Errorf("getSubAgentMessage: publish messages: %w", err)
 	}
 
 	span.SetAttributes(attribute.Bool("has_message", result.MessageID != nil))

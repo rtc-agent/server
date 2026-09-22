@@ -35,7 +35,7 @@ type stopSubAgentTool struct {
 	turnID  uuid.UUID
 }
 
-// stopSubAgentArgs is the input schema for the stop_sub_agent tool.
+// stopSubAgentArgs is the input schema for the stopSubAgent tool.
 type stopSubAgentArgs struct {
 	SubSessionID string `json:"sub_session_id"`
 }
@@ -53,12 +53,12 @@ type stoppedSession struct {
 
 func (t *stopSubAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "stop_sub_agent",
+		Name: "stopSubAgent",
 		Desc: stopSubAgentDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"sub_session_id": {
 				Type:     schema.String,
-				Desc:     "The server-side UUID of the sub agent session to stop. Use list_sub_agent to get available session IDs.",
+				Desc:     "The server-side UUID of the sub agent session to stop. Use listSubAgent to get available session IDs.",
 				Required: true,
 			},
 		}),
@@ -66,7 +66,7 @@ func (t *stopSubAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.stop_sub_agent",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.stopSubAgent",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.String("turn_id", t.turnID.String()),
@@ -76,7 +76,7 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 
 	// 1. Parse arguments.
 	var args stopSubAgentArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "stop_sub_agent", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgs(ctx, t.helpers, "stopSubAgent", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 
@@ -122,7 +122,7 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "list_descendants_failed")
-		return "", fmt.Errorf("stop_sub_agent: list by root: %w", err)
+		return "", fmt.Errorf("stopSubAgent: list by root: %w", err)
 	}
 
 	// 6. Build parent→children map and DFS to find target + its descendants.
@@ -195,7 +195,7 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "marshal_failed")
-		return "", fmt.Errorf("stop_sub_agent: marshal result: %w", err)
+		return "", fmt.Errorf("stopSubAgent: marshal result: %w", err)
 	}
 
 	// 10. Publish toolcall_input + toolcall_output messages.
@@ -204,13 +204,13 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		SessionID:       t.session.ID,
 		OwnerRefID:      t.session.OwnerRefID,
 		TurnID:          t.turnID,
-		ToolName:        "stop_sub_agent",
+		ToolName:        "stopSubAgent",
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "publish_failed")
-		return "", fmt.Errorf("stop_sub_agent: publish messages: %w", err)
+		return "", fmt.Errorf("stopSubAgent: publish messages: %w", err)
 	}
 
 	span.SetAttributes(attribute.Int("total_stopped", len(stopped)))

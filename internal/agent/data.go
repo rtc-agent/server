@@ -167,6 +167,12 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 			helpers: h,
 			turnID:  tid,
 		},
+		// sendMessageToSubAgentTool sends a message to an async sub-agent session.
+		&sendMessageToSubAgentTool{
+			session: session,
+			helpers: h,
+			turnID:  tid,
+		},
 	}
 
 	// Add Session Memory tools
@@ -202,7 +208,7 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	// problem.
 	//
 	// The LLM is guided to use these tools appropriately by TriggerPrompt
-	// injections (e.g., "only call create_loop after user confirms").
+	// injections (e.g., "only call createLoop after user confirms").
 	if h.deps.CommandRegistry != nil {
 		cmdCtx := command.Context{
 			Context:   ctx,

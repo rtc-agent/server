@@ -14,7 +14,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// list_loops
+// listLoops
 // ---------------------------------------------------------------------------
 
 type listLoopsTool struct {
@@ -46,7 +46,7 @@ type listLoopsResult struct {
 
 func (t *listLoopsTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "list_loops",
+		Name: "listLoops",
 		Desc: listLoopsDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"cursor": {
@@ -64,7 +64,7 @@ func (t *listLoopsTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.list_loops",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.listLoops",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.String("turn_id", t.turnID.String()),
@@ -73,7 +73,7 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	defer span.End()
 
 	var args listLoopsArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "list_loops", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgs(ctx, t.helpers, "listLoops", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 
@@ -91,7 +91,7 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "list_failed")
-		return "", fmt.Errorf("list_loops: list loops: %w", err)
+		return "", fmt.Errorf("listLoops: list loops: %w", err)
 	}
 
 	hasMore := len(loops) > limit
@@ -125,7 +125,7 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "marshal_failed")
-		return "", fmt.Errorf("list_loops: marshal result: %w", err)
+		return "", fmt.Errorf("listLoops: marshal result: %w", err)
 	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
@@ -133,13 +133,13 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		SessionID:       t.session.ID,
 		OwnerRefID:      t.session.OwnerRefID,
 		TurnID:          t.turnID,
-		ToolName:        "list_loops",
+		ToolName:        "listLoops",
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "publish_failed")
-		return "", fmt.Errorf("list_loops: publish messages: %w", err)
+		return "", fmt.Errorf("listLoops: publish messages: %w", err)
 	}
 
 	span.SetAttributes(attribute.Int("count", len(summaries)), attribute.Bool("has_more", hasMore))

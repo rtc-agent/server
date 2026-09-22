@@ -24,7 +24,7 @@ type todoWriteTool struct {
 
 func (t *todoWriteTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "todo_write",
+		Name: "todoWrite",
 		Desc: todoWriteDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"todos": {
@@ -58,7 +58,7 @@ func (t *todoWriteTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helper.tracer.Start(ctx, "tool.todo_write",
+	ctx, span := t.helper.tracer.Start(ctx, "tool.todoWrite",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.Int("args_length", len(argumentsInJSON)),

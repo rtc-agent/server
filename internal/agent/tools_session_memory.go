@@ -25,7 +25,7 @@ func (h *helpers) createSaveSessionMemoryTool() tool.InvokableTool {
 
 func (t *saveSessionMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "save_session_memory",
+		Name: "saveSessionMemory",
 		Desc: saveSessionMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
@@ -54,7 +54,7 @@ func (t *saveSessionMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, err
 }
 
 func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.save_session_memory",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.saveSessionMemory",
 		trace.WithAttributes(
 			attribute.String("turn_id", ""),
 		),
@@ -67,7 +67,7 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 		Content  string         `json:"content"`
 		Metadata map[string]any `json:"metadata,omitempty"`
 	}
-	if ok, msg := parseToolArgs(ctx, t.helpers, "save_session_memory", argumentsInJSON, &args); !ok {
+	if ok, msg := parseToolArgs(ctx, t.helpers, "saveSessionMemory", argumentsInJSON, &args); !ok {
 		return msg, nil
 	}
 
@@ -119,7 +119,7 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 		attribute.String("memory_id", memory.ID.String()),
 		attribute.Int("token_count", tokenCount),
 	)
-	t.helpers.logger.Info(ctx, "save_session_memory.success", map[string]any{
+	t.helpers.logger.Info(ctx, "saveSessionMemory.success", map[string]any{
 		"session_id":  sessionID.String(),
 		"memory_id":   memory.ID.String(),
 		"category":    args.Category,
@@ -140,7 +140,7 @@ func (h *helpers) createListSessionMemoriesTool() tool.InvokableTool {
 
 func (t *listSessionMemoriesTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "list_session_memories",
+		Name: "listSessionMemories",
 		Desc: listSessionMemoriesDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
@@ -158,7 +158,7 @@ func (t *listSessionMemoriesTool) Info(ctx context.Context) (*schema.ToolInfo, e
 }
 
 func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.list_session_memories",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.listSessionMemories",
 		trace.WithAttributes(
 			attribute.String("turn_id", ""),
 		),
@@ -169,7 +169,7 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 		Category string `json:"category"`
 		Limit    int    `json:"limit"`
 	}
-	if ok, msg := parseToolArgs(ctx, t.helpers, "list_session_memories", argumentsInJSON, &args); !ok {
+	if ok, msg := parseToolArgs(ctx, t.helpers, "listSessionMemories", argumentsInJSON, &args); !ok {
 		return msg, nil
 	}
 

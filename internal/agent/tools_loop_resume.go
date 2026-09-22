@@ -14,7 +14,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// resume_loop
+// resumeLoop
 // ---------------------------------------------------------------------------
 
 type resumeLoopTool struct {
@@ -33,14 +33,14 @@ type resumeLoopResult struct {
 
 func (t *resumeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name:        "resume_loop",
+		Name:        "resumeLoop",
 		Desc:        resumeLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{}),
 	}, nil
 }
 
 func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.resume_loop",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.resumeLoop",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.String("turn_id", t.turnID.String()),
@@ -54,7 +54,7 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "list_failed")
-		return "", fmt.Errorf("resume_loop: list loops: %w", err)
+		return "", fmt.Errorf("resumeLoop: list loops: %w", err)
 	}
 	for _, l := range loops {
 		if l.Status == model.LoopStatusPaused {
@@ -73,7 +73,7 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "find_active_failed")
-		return "", fmt.Errorf("resume_loop: find active loop: %w", err)
+		return "", fmt.Errorf("resumeLoop: find active loop: %w", err)
 	}
 	if existingActive != nil {
 		span.SetAttributes(attribute.Bool("conflict_active_loop", true))
@@ -85,7 +85,7 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if conflictMsg, err := checkGoalLoopMutualExclusion(ctx, t.helpers.deps, t.session.ID, "loop"); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "mutual_exclusion_check_failed")
-		return "", fmt.Errorf("resume_loop: %w", err)
+		return "", fmt.Errorf("resumeLoop: %w", err)
 	} else if conflictMsg != "" {
 		span.SetAttributes(attribute.Bool("conflict_active_goal", true))
 		return conflictMsg, nil
@@ -96,7 +96,7 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	}); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "update_failed")
-		return "", fmt.Errorf("resume_loop: update: %w", err)
+		return "", fmt.Errorf("resumeLoop: update: %w", err)
 	}
 
 	result := resumeLoopResult{
@@ -110,7 +110,7 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "marshal_failed")
-		return "", fmt.Errorf("resume_loop: marshal result: %w", err)
+		return "", fmt.Errorf("resumeLoop: marshal result: %w", err)
 	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
@@ -118,13 +118,13 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		SessionID:       t.session.ID,
 		OwnerRefID:      t.session.OwnerRefID,
 		TurnID:          t.turnID,
-		ToolName:        "resume_loop",
+		ToolName:        "resumeLoop",
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "publish_failed")
-		return "", fmt.Errorf("resume_loop: publish messages: %w", err)
+		return "", fmt.Errorf("resumeLoop: publish messages: %w", err)
 	}
 
 	t.helpers.logger.Info(ctx, "resumeLoop.completed", map[string]any{

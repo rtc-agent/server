@@ -14,7 +14,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// cancel_loop
+// cancelLoop
 // ---------------------------------------------------------------------------
 
 type cancelLoopTool struct {
@@ -27,8 +27,8 @@ type cancelLoopArgs struct {
 	Reason string `json:"reason"`
 }
 
-// loopResult is the JSON-serializable response for both cancel_loop and
-// complete_loop tools. Both produce structurally identical output.
+// loopResult is the JSON-serializable response for both cancelLoop and
+// completeLoop tools. Both produce structurally identical output.
 type loopResult struct {
 	ID             string           `json:"id"`
 	Prompt         string           `json:"prompt"`
@@ -39,7 +39,7 @@ type loopResult struct {
 
 func (t *cancelLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "cancel_loop",
+		Name: "cancelLoop",
 		Desc: cancelLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"reason": {
@@ -53,17 +53,17 @@ func (t *cancelLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args cancelLoopArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "cancel_loop", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgs(ctx, t.helpers, "cancelLoop", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Reason == "" {
 		return "Error: reason is required and cannot be empty", nil
 	}
-	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "cancel_loop", "cancelLoop.completed", model.LoopStatusCancelled, args.Reason, "no active loop to cancel", argumentsInJSON)
+	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "cancelLoop", "cancelLoop.completed", model.LoopStatusCancelled, args.Reason, "no active loop to cancel", argumentsInJSON)
 }
 
 // ---------------------------------------------------------------------------
-// complete_loop (internal, called by LLM when objective is achieved)
+// completeLoop (internal, called by LLM when objective is achieved)
 // ---------------------------------------------------------------------------
 
 type completeLoopTool struct {
@@ -78,7 +78,7 @@ type completeLoopArgs struct {
 
 func (t *completeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "complete_loop",
+		Name: "completeLoop",
 		Desc: completeLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"reason": {
@@ -92,13 +92,13 @@ func (t *completeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args completeLoopArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "complete_loop", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgs(ctx, t.helpers, "completeLoop", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Reason == "" {
 		return "Error: reason is required and cannot be empty", nil
 	}
-	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "complete_loop", "completeLoop.completed", model.LoopStatusCompleted, args.Reason, "no active loop to complete", argumentsInJSON)
+	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "completeLoop", "completeLoop.completed", model.LoopStatusCompleted, args.Reason, "no active loop to complete", argumentsInJSON)
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +109,7 @@ func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON str
 // value, cancels any scheduled asynq task, publishes tool result messages,
 // and returns the JSON-serialized result.
 //
-// Both cancel_loop and complete_loop share identical control flow; only the
+// Both cancelLoop and completeLoop share identical control flow; only the
 // target status, log event name, and "not found" message differ.
 func finalizeLoopStatus(
 	ctx context.Context,

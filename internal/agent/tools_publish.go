@@ -127,7 +127,7 @@ func publishToolMessages(ctx context.Context, in publishToolMessagesInput) error
 // ---------------------------------------------------------------------------
 
 // publishOutputOnlyInput holds parameters for creating a toolcall_output message
-// when the parent toolcall_input already exists (async sub_agent pattern).
+// when the parent toolcall_input already exists (async subAgent pattern).
 type publishOutputOnlyInput struct {
 	Helpers         *helpers
 	SessionID       uuid.UUID
@@ -141,7 +141,7 @@ type publishOutputOnlyInput struct {
 
 // publishOutputOnly creates only a toolcall_output message (parent is an
 // existing toolcall_input) and publishes EntityMessage.created event.
-// Used by the async branch of sub_agent tool.
+// Used by the async branch of subAgent tool.
 func publishOutputOnly(ctx context.Context, in publishOutputOnlyInput) error {
 	completedStatus := "completed"
 

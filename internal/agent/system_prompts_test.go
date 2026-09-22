@@ -34,7 +34,7 @@ func TestBuildDefaultSystemPrompt(t *testing.T) {
 		"Session Memory",
 		"User Memory",
 		"Todo List",
-		"todo_write",
+		"todoWrite",
 	}
 	for _, substr := range required {
 		if !strings.Contains(prompt, substr) {
@@ -163,10 +163,10 @@ func TestDefaultSystemPrompt_MatchesOriginal(t *testing.T) {
 		"Parallel Tool Calls",
 		"Detect the language used by the user",
 		"ALWAYS use tools to complete tasks",
-		"save_session_memory tool",
-		"save_user_memory tool",
-		"search_memory",
-		"todo_write to update the entire todo list",
+		"saveSessionMemory tool",
+		"saveUserMemory tool",
+		"searchMemory",
+		"todoWrite to update the entire todo list",
 		"in_progress status at all times",
 	}
 	for _, phrase := range originalPhrases {

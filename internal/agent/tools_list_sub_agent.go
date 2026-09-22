@@ -18,7 +18,7 @@ import (
 // listSubAgentTool lists all running (active) sub agent sessions
 // that are descendants of the current session tree.
 //
-// Unlike sub_agent tool, this tool does NOT interrupt the turn.
+// Unlike subAgent tool, this tool does NOT interrupt the turn.
 // It creates two messages (toolcall_input + toolcall_output) and
 // publishes them in a single transaction, then returns the result
 // directly to the LLM.
@@ -30,7 +30,7 @@ type listSubAgentTool struct {
 
 func (t *listSubAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name:        "list_sub_agent",
+		Name:        "listSubAgent",
 		Desc:        listSubAgentDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{}),
 	}, nil
@@ -46,7 +46,7 @@ type listSubAgentItem struct {
 }
 
 func (t *listSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.list_sub_agent",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.listSubAgent",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.String("turn_id", t.turnID.String()),
@@ -66,7 +66,7 @@ func (t *listSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "list_by_root_failed")
-		return "", fmt.Errorf("list_sub_agent: list by root: %w", err)
+		return "", fmt.Errorf("listSubAgent: list by root: %w", err)
 	}
 
 	// 3. Build result JSON.
@@ -84,7 +84,7 @@ func (t *listSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "marshal_failed")
-		return "", fmt.Errorf("list_sub_agent: marshal result: %w", err)
+		return "", fmt.Errorf("listSubAgent: marshal result: %w", err)
 	}
 
 	// 4. Publish toolcall_input + toolcall_output messages.
@@ -93,13 +93,13 @@ func (t *listSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		SessionID:       t.session.ID,
 		OwnerRefID:      t.session.OwnerRefID,
 		TurnID:          t.turnID,
-		ToolName:        "list_sub_agent",
+		ToolName:        "listSubAgent",
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "publish_failed")
-		return "", fmt.Errorf("list_sub_agent: publish messages: %w", err)
+		return "", fmt.Errorf("listSubAgent: publish messages: %w", err)
 	}
 
 	span.SetAttributes(attribute.Int("count", len(items)))

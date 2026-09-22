@@ -12,7 +12,7 @@ import (
 // newTestRtc builds a minimal *model.Rtc with the given status/result for testing formatAskUserResult.
 func newTestRtc(status protocol.RtcStatus, resultJSON string, errMsg string) *model.Rtc {
 	return &model.Rtc{
-		ToolName:     "ask_user",
+		ToolName:     "askUser",
 		Status:       string(status),
 		Result:       model.JSONBString(resultJSON),
 		ErrorMessage: errMsg,
@@ -118,7 +118,7 @@ func TestFormatAskUserResult_Failed(t *testing.T) {
 	if !strings.Contains(got, "encountered an error") {
 		t.Errorf("expected error message, got: %s", got)
 	}
-	if !strings.Contains(got, "ask_user") {
+	if !strings.Contains(got, "askUser") {
 		t.Errorf("missing tool name: %s", got)
 	}
 	// ErrorMessage takes precedence over Result for failed status.

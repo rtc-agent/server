@@ -271,7 +271,7 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 }
 
 // updateSubAgentInvocationStatus updates the status field of a
-// sub_agent_invocation message. This is used to track the sub agent's
+// subAgentInvocation message. This is used to track the sub agent's
 // execution state (pending/running/failed/completed).
 //
 // NOTE: This is a read-modify-write operation without atomicity guarantees.

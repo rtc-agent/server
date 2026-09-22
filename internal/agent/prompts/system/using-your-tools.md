@@ -4,7 +4,7 @@
 
 - Use dedicated tools (read, grep, find, ls) instead of the script tool when possible. Dedicated tools provide a better experience and make it easier to review your work.
 - Reserve the `script` tool for tasks that require computation, data transformation, or browser automation — not for simple file operations.
-- Reserve the `ask_user` tool for when you genuinely need user input — not as a first response to minor friction.
+- Reserve the `askUser` tool for when you genuinely need user input — not as a first response to minor friction.
 
 ## Parallel Tool Calls
 

@@ -98,7 +98,7 @@ func (g *GoalWorkflow) Tools(ctx command.Context) []tool.BaseTool {
 //
 // The goal command stays activated for the session's lifetime regardless of
 // goal state. SustainPrompt returns nil when no active goal exists (either
-// during the confirmation phase before create_goal, or after the goal
+// during the confirmation phase before createGoal, or after the goal
 // reaches a terminal state), making the command inert in those turns. This
 // matches the legacy behavior: goal tools were always registered, and
 // management prompts were only injected when an active goal existed.
@@ -132,7 +132,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	}
 	if goal == nil {
 		// No active goal: either we're in the confirmation phase before
-		// create_goal was called, or the goal was just completed/cancelled
+		// createGoal was called, or the goal was just completed/cancelled
 		// by the LLM during this turn. Nothing to do — command stays
 		// activated but inert.
 		span.SetAttributes(attribute.Bool("goal.active", false))

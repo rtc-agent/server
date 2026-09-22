@@ -105,7 +105,7 @@ func (l *LoopWorkflow) Tools(ctx command.Context) []tool.BaseTool {
 //
 // The loop command stays activated for the session's lifetime regardless of
 // loop state. SustainPrompt returns nil when no active loop exists (either
-// during the confirmation phase before create_loop, or after the loop
+// during the confirmation phase before createLoop, or after the loop
 // reaches a terminal state), making the command inert in those turns.
 //
 // IMPORTANT: this hook must NOT call registry methods (Deactivate, etc.)
@@ -137,7 +137,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 	}
 	if loop == nil {
 		// No active loop: either we're in the confirmation phase before
-		// create_loop was called, or the loop was just completed/cancelled
+		// createLoop was called, or the loop was just completed/cancelled
 		// by the LLM during this turn. Nothing to do — command stays
 		// activated but inert.
 		span.SetAttributes(attribute.Bool("loop.active", false))
