@@ -72,7 +72,10 @@ type mockTaskScheduler struct {
 	cancelled []string
 }
 
-func (m *mockTaskScheduler) ScheduleDelayed(ctx context.Context, taskType string, payload []byte, delay time.Duration) (string, error) {
+func (m *mockTaskScheduler) ScheduleDelayed(ctx context.Context, taskType string, payload []byte, delay time.Duration, taskID string) (string, error) {
+	if taskID != "" {
+		return taskID, nil
+	}
 	return "mock-task-id", nil
 }
 func (m *mockTaskScheduler) Cancel(ctx context.Context, taskID string) error {

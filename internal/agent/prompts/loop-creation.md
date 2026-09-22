@@ -26,6 +26,12 @@ Help the user transform a vague intent into a concrete, recurring task with clea
 ### 4. Create
 - After user confirms, **call `create_loop` tool** with the final parameters
 
+### 5. Execute First Turn
+- After calling `create_loop`, **immediately execute the first turn** of the loop task
+- This is mandatory — do not wait for the scheduled asynq task
+- The loop has already counted this as turn 1 (completed_turns=1)
+- Subsequent turns will be triggered by the scheduled asynq tasks
+
 ## Constraints
 
 - You **MUST** follow the workflow in order — do not skip investigation

@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
+	hibikenasynq "github.com/hibiken/asynq"
 	"github.com/rtc-agent/server/internal/agent/command"
 	looppkg "github.com/rtc-agent/server/internal/loop"
 	"github.com/rtc-agent/server/internal/model"
@@ -178,15 +180,14 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 		return nil
 	}
 
-	// Update completed turns and clear asynq_task_id atomically.
-	// The asynq_task_id is cleared before scheduling the next task to avoid
-	// stale references. The new task ID will be set by the scheduler.
+	// Update completed turns.
+	// Note: asynq_task_id is no longer maintained since we use loop.ID as the task ID
+	// for idempotent scheduling. This simplifies state management and avoids race conditions.
 	err = l.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
 		// Inject transaction into context so LoopRepo.Update uses it
 		txCtx := repo.WithTx(ctx, tx)
 		return l.helpers.deps.LoopRepo.Update(txCtx, loop.ID, map[string]any{
 			"completed_turns": newTurns,
-			"asynq_task_id":   "",
 			"last_run_at":     time.Now(),
 		})
 	})
@@ -282,8 +283,23 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 	}
 
 	delay := time.Duration(loop.IntervalSeconds) * time.Second
-	taskID, err := l.helpers.deps.TaskScheduler.ScheduleDelayed(ctx, looppkg.LoopTaskType, payload, delay)
+
+	// Use loop ID as task ID for idempotency.
+	// If a task with this ID already exists (pending/processing), asynq returns
+	// ErrTaskIDConflict, making repeated scheduling safe (e.g., from recovery).
+	taskID := loop.ID.String()
+
+	scheduledTaskID, err := l.helpers.deps.TaskScheduler.ScheduleDelayed(ctx, looppkg.LoopTaskType, payload, delay, taskID)
 	if err != nil {
+		// Check if task already exists (idempotent)
+		if errors.Is(err, hibikenasynq.ErrTaskIDConflict) {
+			span.SetAttributes(attribute.String("task.idempotent", "true"))
+			l.helpers.logger.Debug(ctx, "loopWorkflow.task_already_exists", map[string]any{
+				"loop_id": loop.ID.String(),
+				"task_id": taskID,
+			})
+			return // Idempotent: task already scheduled
+		}
 		span.SetStatus(codes.Error, err.Error())
 		span.RecordError(err)
 		l.helpers.logger.Warn(ctx, "loopWorkflow.schedule_failed", map[string]any{
@@ -294,19 +310,12 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 		return
 	}
 	span.SetAttributes(
-		attribute.String("task.id", taskID),
+		attribute.String("task.id", scheduledTaskID),
 		attribute.String("task.delay", delay.String()),
 	)
 
-	// Update loop with the new task ID.
-	if updateErr := l.helpers.deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
-		"asynq_task_id": taskID,
-	}); updateErr != nil {
-		l.helpers.logger.Warn(ctx, "loopWorkflow.update_task_id_failed", map[string]any{
-			"loop_id": loop.ID.String(),
-			"error":   updateErr.Error(),
-		})
-	}
+	// Note: No need to update loop.asynq_task_id since it always equals loop.ID
+	// This simplifies state management and avoids race conditions.
 
 	l.helpers.logger.Info(ctx, "loopWorkflow.scheduled_next", map[string]any{
 		"loop_id":    loop.ID.String(),

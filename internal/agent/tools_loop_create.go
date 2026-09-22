@@ -2,14 +2,12 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
-	looppkg "github.com/rtc-agent/server/internal/loop"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"gorm.io/gorm"
@@ -121,13 +119,12 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		Prompt:          args.Prompt,
 		IntervalSeconds: intervalSeconds,
 		MaxTurns:        maxTurns,
-		CompletedTurns:  0,
+		CompletedTurns:  1,
 		Status:          model.LoopStatusActive,
 		ExpiresAt:       &expiresAt,
 		LastRunAt:       &now,
 	}
 
-	var taskID string
 	err = t.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
 		// Create loop within transaction
 		txCtx := repo.WithTx(ctx, tx)
@@ -135,28 +132,13 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 			return err
 		}
 
-		// Schedule first task within transaction (ensures atomicity)
-		if t.helpers.deps.TaskScheduler != nil {
-			payload, _ := json.Marshal(struct {
-				LoopID    string `json:"loop_id"`
-				SessionID string `json:"session_id"`
-			}{
-				LoopID:    loop.ID.String(),
-				SessionID: loop.SessionID.String(),
-			})
+		// No need to schedule the first asynq task here.
+		// The LLM will immediately execute the first turn after create_loop returns
+		// (as instructed by the loop-creation.md prompt).
+		// When that turn completes, OnTurnComplete will increment completed_turns
+		// and schedule the next asynq task automatically.
+		// This avoids redundant scheduling and keeps the flow simple.
 
-			delay := time.Duration(loop.IntervalSeconds) * time.Second
-			id, err := t.helpers.deps.TaskScheduler.ScheduleDelayed(
-				txCtx,
-				looppkg.LoopTaskType,
-				payload,
-				delay,
-			)
-			if err != nil {
-				return fmt.Errorf("schedule first loop task: %w", err)
-			}
-			taskID = id
-		}
 		return nil
 	})
 
@@ -164,19 +146,7 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return "", fmt.Errorf("create_loop: transaction failed: %w", err)
 	}
 
-	// 6. Update asynq_task_id (outside transaction since scheduling succeeded)
-	if taskID != "" {
-		if err := t.helpers.deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
-			"asynq_task_id": taskID,
-		}); err != nil {
-			// Non-fatal: recovery will reschedule in 5 minutes if needed
-			t.helpers.logger.Warn(ctx, "createLoop.update_task_id_failed", map[string]any{
-				"loop_id": loop.ID.String(),
-				"task_id": taskID,
-				"error":   err.Error(),
-			})
-		}
-	}
+	// Note: asynq_task_id will be set by OnTurnComplete after the first turn completes
 
 	// 7. Build result + publish two messages (toolcall_input + toolcall_output).
 	result := createLoopResult{

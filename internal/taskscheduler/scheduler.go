@@ -34,21 +34,34 @@ func NewTaskScheduler(redisAddr string) (usecase.TaskScheduler, error) {
 }
 
 // ScheduleDelayed enqueues a task for execution after the specified delay.
+// If taskID is empty, asynq generates a unique ID.
+// If taskID is provided and a task with that ID already exists (pending/processing),
+// asynq returns ErrTaskIDConflict, making this operation idempotent.
 // It returns the asynq task ID, which can be used to cancel the task later.
 func (s *Impl) ScheduleDelayed(
 	ctx context.Context,
 	taskType string,
 	payload []byte,
 	delay time.Duration,
+	taskID string,
 ) (string, error) {
 	task := hibikenasynq.NewTask(taskType, payload)
-	// Use EnqueueContext to propagate context (including timeout/cancellation and trace information)
-	// to the Redis operation, preventing potential goroutine leaks if Redis is unresponsive.
-	info, err := s.client.EnqueueContext(ctx, task,
+
+	// Build enqueue options
+	opts := []hibikenasynq.Option{
 		hibikenasynq.ProcessIn(delay),
 		hibikenasynq.Queue(LoopQueue),
 		hibikenasynq.MaxRetry(3),
-	)
+	}
+
+	// If taskID is provided, use it for idempotency
+	if taskID != "" {
+		opts = append(opts, hibikenasynq.TaskID(taskID))
+	}
+
+	// Use EnqueueContext to propagate context (including timeout/cancellation and trace information)
+	// to the Redis operation, preventing potential goroutine leaks if Redis is unresponsive.
+	info, err := s.client.EnqueueContext(ctx, task, opts...)
 	if err != nil {
 		return "", err
 	}

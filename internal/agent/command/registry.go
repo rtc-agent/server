@@ -244,33 +244,52 @@ func (r *CommandRegistry) CollectAllTools(ctx Context) []tool.BaseTool {
 	return tools
 }
 
-// OnTurnComplete invokes TurnHook.OnTurnComplete for all active commands in
-// registration order, then deactivates one-shot commands. Errors from hooks
-// are collected and returned; they do not interrupt other hooks.
+// OnTurnComplete invokes TurnHook.OnTurnComplete for all registered commands
+// that implement the TurnHook interface. Each command is responsible for
+// querying the database to check if it has active records for the session.
+//
+// This implementation fixes a distributed system bug where the previous
+// activation state (r.activated) was stored in memory and not shared across
+// servers. Now we iterate all registered commands and let each command query
+// the database directly using the session ID.
+//
+// One-shot commands are still cleaned up from the in-memory activated map
+// after each turn to maintain backward compatibility with DetectAndInject.
+//
+// Errors from hooks are collected and returned; they do not interrupt other hooks.
 func (r *CommandRegistry) OnTurnComplete(ctx Context) []error {
+	// Clean up one-shot commands from in-memory state
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	entries := r.activated[ctx.SessionID]
-	var errs []error
 	var surviving []*activatedEntry
 	for _, e := range entries {
-		if h, ok := e.cmd.(TurnHook); ok {
-			cmdCtx := ctx
-			cmdCtx.Args = e.args
-			if err := h.OnTurnComplete(cmdCtx); err != nil {
-				errs = append(errs, err)
-			}
-		}
 		if scopeOf(e.cmd) == ScopeSession {
 			e.triggeredThisTurn = false
 			surviving = append(surviving, e)
 		}
-		// OneShot commands are dropped here.
+		// OneShot commands are dropped here
 	}
 	if len(surviving) == 0 {
 		delete(r.activated, ctx.SessionID)
 	} else {
 		r.activated[ctx.SessionID] = surviving
+	}
+
+	// Copy registered commands to avoid holding lock during hook invocation
+	registered := make([]Command, len(r.registered))
+	copy(registered, r.registered)
+	r.mu.Unlock()
+
+	var errs []error
+	for _, cmd := range registered {
+		if hook, ok := cmd.(TurnHook); ok {
+			cmdCtx := ctx
+			// Args not used by LoopWorkflow/GoalWorkflow; they query DB directly
+			cmdCtx.Args = ""
+			if err := hook.OnTurnComplete(cmdCtx); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
 	return errs
 }

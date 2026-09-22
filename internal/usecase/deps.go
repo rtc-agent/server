@@ -87,7 +87,10 @@ type Dependencies struct {
 // graceful degradation.
 type TaskScheduler interface {
 	// ScheduleDelayed schedules a delayed task and returns the task ID.
-	ScheduleDelayed(ctx context.Context, taskType string, payload []byte, delay time.Duration) (taskID string, err error)
+	// If taskID is empty, asynq will generate a unique ID.
+	// If taskID is provided and a task with that ID already exists (pending/processing),
+	// asynq returns ErrTaskIDConflict, making this operation idempotent.
+	ScheduleDelayed(ctx context.Context, taskType string, payload []byte, delay time.Duration, taskID string) (string, error)
 
 	// Cancel cancels a previously scheduled task.
 	Cancel(ctx context.Context, taskID string) error
