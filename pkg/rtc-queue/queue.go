@@ -539,12 +539,49 @@ func (q *Queue) CompleteWorkAndClaimNext(ctx context.Context, currentWorkID, wor
 	}, nil
 }
 
-// ReleaseSession drops the session lock and the active-work pointer
-// unconditionally. Used during graceful shutdown.
-func (q *Queue) ReleaseSession(ctx context.Context, sessionID string) error {
+// ReleaseSession atomically releases the session lock and active-work pointer
+// only if the caller holds the correct worker_id + credential. This prevents
+// a race where one worker's ReleaseSession deletes another worker's lock
+// after a lock handoff.
+//
+// Returns (true, nil) if the lock was successfully released.
+// Returns (false, nil) if the lock is missing or owned by someone else.
+// Returns (false, err) on Redis errors.
+func (q *Queue) ReleaseSession(ctx context.Context, sessionID, workerID, credential string) (bool, error) {
 	ctx, span := queueTracer().Start(ctx, "Queue.ReleaseSession",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
+			attribute.String("worker.id", workerID),
+		),
+	)
+	defer span.End()
+
+	result, err := releaseSessionWithCredentialScript.Run(ctx, q.rdb, []string{
+		keyLock(sessionID),
+		keyActive(sessionID),
+	}, workerID, credential).Int()
+
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return false, fmt.Errorf("rtcqueue: release session: %w", err)
+	}
+
+	released := result == 1
+	span.SetAttributes(attribute.Bool("queue.released", released))
+	return released, nil
+}
+
+// ForceReleaseSession unconditionally drops the session lock and the
+// active-work pointer. Used ONLY during recovery scenarios (e.g., service
+// startup when recovering stale turns) where no credential is available.
+//
+// WARNING: This method can cause split-brain if called while a worker
+// legitimately holds the lock. Use ReleaseSession for normal operation.
+func (q *Queue) ForceReleaseSession(ctx context.Context, sessionID string) error {
+	ctx, span := queueTracer().Start(ctx, "Queue.ForceReleaseSession",
+		trace.WithAttributes(
+			attribute.String("session.id", sessionID),
+			attribute.String("release.mode", "force"),
 		),
 	)
 	defer span.End()

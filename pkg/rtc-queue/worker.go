@@ -444,10 +444,17 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 			// Release lock on error. Use Background() with timeout because ctx
 			// may be cancelled (worker shutdown), which would prevent the lock
 			// from being released and leave the session locked until TTL expires.
+			// Only release if we still hold the lock (credential check).
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := w.q.ReleaseSession(releaseCtx, sessionID); err != nil {
+			released, releaseErr := w.q.ReleaseSession(releaseCtx, sessionID, w.cfg.WorkerID, credential)
+			if releaseErr != nil {
 				w.logError(ctx, "worker.release_session_failed",
-					"session", sessionID, "error", err.Error())
+					"session", sessionID, "error", releaseErr.Error())
+			} else if !released {
+				w.log(ctx, "worker.release_session_skipped", map[string]any{
+					"session_id": sessionID,
+					"reason":     "lock_already_lost",
+				})
 			}
 			releaseCancel()
 			span.SetAttributes(attribute.Int("worker.works_processed", workCount))
@@ -456,13 +463,20 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 		if nextClaim == nil {
 			// Queue is empty, release lock.
 			// Use Background() with timeout for the same reason as above.
+			// Only release if we still hold the lock (credential check).
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			w.log(ctx, "worker.queue_empty_releasing_lock", map[string]any{
 				"session_id": sessionID,
 			})
-			if err := w.q.ReleaseSession(releaseCtx, sessionID); err != nil {
+			released, releaseErr := w.q.ReleaseSession(releaseCtx, sessionID, w.cfg.WorkerID, credential)
+			if releaseErr != nil {
 				w.logError(ctx, "worker.release_session_failed",
-					"session", sessionID, "error", err.Error())
+					"session", sessionID, "error", releaseErr.Error())
+			} else if !released {
+				w.log(ctx, "worker.release_session_skipped", map[string]any{
+					"session_id": sessionID,
+					"reason":     "lock_already_lost",
+				})
 			}
 			releaseCancel()
 			span.SetAttributes(attribute.Int("worker.works_processed", workCount))

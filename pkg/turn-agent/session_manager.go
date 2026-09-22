@@ -368,14 +368,24 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 	} else {
 		// Use a timeout context to prevent cleanup from blocking
 		// indefinitely if Redis is unresponsive.
+		// Pass worker_id and credential for atomic ownership check.
 		cleanupSpan.AddEvent("release_session")
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer releaseCancel()
-		if err := mgr.queue.ReleaseSession(releaseCtx, mgr.sessionID); err != nil {
-			cleanupSpan.RecordError(err)
+		released, releaseErr := mgr.queue.ReleaseSession(releaseCtx, mgr.sessionID, mgr.workerID, mgr.getCredential())
+		if releaseErr != nil {
+			cleanupSpan.RecordError(releaseErr)
 			mgr.log(cleanupCtx, LogLevelWarn, "session_manager.release_session_failed", map[string]any{
 				"session_id": mgr.sessionID,
-				"error":      err.Error(),
+				"error":      releaseErr.Error(),
+			})
+		} else if !released {
+			// Lock was already lost to another worker between the lockLost check
+			// and the ReleaseSession call (TOCTOU window). This is expected in
+			// rare race conditions — the other worker's lock is preserved.
+			mgr.log(cleanupCtx, LogLevelInfo, "session_manager.release_session_skipped", map[string]any{
+				"session_id": mgr.sessionID,
+				"reason":     "lock ownership changed during cleanup",
 			})
 		}
 	}

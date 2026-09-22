@@ -480,3 +480,24 @@ end
 
 return 0
 `)
+
+// releaseSessionWithCredentialScript atomically releases the session lock
+// only if the caller holds the correct worker_id + credential. This prevents
+// a race where one worker's ReleaseSession deletes another worker's lock
+// after a lock handoff.
+//
+// KEYS[1] = session lock (hash: worker_id, credential)
+// KEYS[2] = session active work pointer
+// ARGV[1] = worker_id (expected owner)
+// ARGV[2] = credential (expected credential)
+// Returns 1 if released, 0 if lock missing or owned by someone else.
+var releaseSessionWithCredentialScript = redis.NewScript(`
+local stored_worker = redis.call("HGET", KEYS[1], "worker_id")
+local stored_cred = redis.call("HGET", KEYS[1], "credential")
+if stored_worker ~= ARGV[1] or stored_cred ~= ARGV[2] then
+    return 0
+end
+redis.call("DEL", KEYS[1])
+redis.call("DEL", KEYS[2])
+return 1
+`)
