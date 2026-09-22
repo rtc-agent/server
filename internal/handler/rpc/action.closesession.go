@@ -17,32 +17,51 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
 // CloseSession closes a session.
 func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRequest) (*protocol.CloseSessionResponse, error) {
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.closeSession",
+		trace.WithAttributes(
+			attribute.String("session.id", req.SessionId),
+		),
+	)
+	defer span.End()
+
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
+		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
 	creator := usecase.UserCreator{UserID: userID}
 
 	sessionUUID, apiErr := parseUUID(req.SessionId, "session_id")
 	if apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
 		return nil, apiErr
 	}
+
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 
 	logger.Info(ctx, "[CloseSession]", zap.String("user", userID.String()), zap.String("session", req.SessionId))
 
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionUUID)
 	if err != nil {
 		if repo.IsNotFound(err) {
+			span.SetStatus(codes.Error, "session.not_found")
 			return nil, &APIError{Code: "session.not_found", Message: fmt.Sprintf("session %s not found", req.SessionId)}
 		}
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
+		span.SetStatus(codes.Error, "permission_denied")
 		return nil, &APIError{Code: "permission_denied", Message: fmt.Sprintf("session %s does not belong to user", session.ID)}
 	}
 	if protocol.SessionStatus(session.Status) == protocol.SessionStatusClosed {
@@ -73,6 +92,8 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[CloseSession] push failed after commit (data safe)", zap.Error(err))
 		} else {
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 			return nil, h.internalError(ctx, "close.error", "internal error", err)
 		}
 	}

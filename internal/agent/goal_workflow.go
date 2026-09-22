@@ -8,6 +8,9 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 )
 
@@ -104,12 +107,23 @@ func (g *GoalWorkflow) Tools(ctx command.Context) []tool.BaseTool {
 // because the registry holds its mutex while invoking hooks — doing so
 // would deadlock.
 func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
+	innerCtx, span := g.helpers.tracer.Start(ctx.Context, "goalWorkflow.onTurnComplete",
+		trace.WithAttributes(
+			attribute.String("session.id", ctx.SessionID.String()),
+			attribute.String("turn.id", ctx.TurnID.String()),
+		),
+	)
+	defer span.End()
+	ctx.Context = innerCtx
+
 	if g.helpers.deps.GoalRepo == nil {
 		return nil
 	}
 
 	goal, err := g.helpers.deps.GoalRepo.FindActive(ctx, ctx.SessionID)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		g.helpers.logger.Warn(ctx, "goalWorkflow.find_active_failed", map[string]any{
 			"session_id": ctx.SessionID.String(),
 			"error":      err.Error(),
@@ -121,12 +135,19 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 		// create_goal was called, or the goal was just completed/cancelled
 		// by the LLM during this turn. Nothing to do — command stays
 		// activated but inert.
+		span.SetAttributes(attribute.Bool("goal.active", false))
 		return nil
 	}
+	span.SetAttributes(
+		attribute.String("goal.id", goal.ID.String()),
+		attribute.Int("goal.max_turns", goal.MaxTurns),
+	)
 
 	newTurns := goal.CompletedTurns + 1
+	span.SetAttributes(attribute.Int("goal.completed_turns", newTurns))
 
 	if newTurns > goal.MaxTurns {
+		span.SetAttributes(attribute.String("goal.status", "exhausted"))
 		err = g.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
 			return g.helpers.deps.GoalRepo.Update(ctx, goal.ID, map[string]any{
 				"status":          model.GoalStatusExhausted,
@@ -134,6 +155,8 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 			})
 		})
 		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 			g.helpers.logger.Warn(ctx, "goalWorkflow.update_exhausted_failed", map[string]any{
 				"goal_id": goal.ID.String(),
 				"error":   err.Error(),
@@ -156,6 +179,8 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 		})
 	})
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		g.helpers.logger.Warn(ctx, "goalWorkflow.update_goal_failed", map[string]any{
 			"goal_id": goal.ID.String(),
 			"error":   err.Error(),
@@ -166,11 +191,17 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	// Re-queue a submit work item to trigger the next turn.
 	// Use log+degrade pattern: re-queue failure should not interrupt the main flow, only log.
 	if g.helpers.queue != nil {
+		// Extract trace context for cross-process propagation.
+		traceID, spanID := turnagent.ExtractTraceFromCtx(ctx)
 		payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 			Kind:      turnagent.WorkKindSubmit,
 			SessionID: ctx.SessionID.String(),
+			TraceID:   traceID,
+			SpanID:    spanID,
 		})
 		if marshalErr != nil {
+			span.SetStatus(codes.Error, marshalErr.Error())
+			span.RecordError(marshalErr)
 			g.helpers.logger.Warn(ctx, "goalWorkflow.marshal_failed", map[string]any{
 				"goal_id": goal.ID.String(),
 				"error":   marshalErr.Error(),
@@ -178,6 +209,8 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 			return nil // degrade: log but do not interrupt main flow
 		}
 		if _, err := g.helpers.queue.Publish(ctx, ctx.SessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 			g.helpers.logger.Warn(ctx, "goalWorkflow.publish_failed", map[string]any{
 				"goal_id":    goal.ID.String(),
 				"session_id": ctx.SessionID.String(),
@@ -185,6 +218,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 			})
 			return nil // degrade: log but do not interrupt main flow
 		}
+		span.SetAttributes(attribute.String("goal.status", "extended"))
 	}
 
 	g.helpers.logger.Info(ctx, "goalWorkflow.goal_extended", map[string]any{

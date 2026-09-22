@@ -19,6 +19,9 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -201,17 +204,39 @@ func (t *scriptTool) InvokableRun(ctx context.Context, argumentsInJSON string, o
 //   - r.manager.deps -> r.helpers.deps (the integration struct is helpers, not Manager)
 //   - Logger calls use h.logger.Info instead of logger.Debug/Info directly.
 func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumentsInJSON string, _ ...tool.Option) (string, error) {
+	ctx, span := r.helpers.tracer.Start(ctx, "rtcTool."+toolName,
+		trace.WithAttributes(
+			attribute.String("session_id", r.session.ID.String()),
+			attribute.String("turn_id", r.turnID.String()),
+			attribute.String("tool_name", toolName),
+			attribute.Int("args_length", len(argumentsInJSON)),
+		),
+	)
+	defer span.End()
+
 	// === Resume path ===
 	wasInterrupted, hasState, state := tool.GetInterruptState[rtcInterruptState](ctx)
 	if wasInterrupted {
 		if !hasState {
+			span.RecordError(fmt.Errorf("state type mismatch"))
+			span.SetStatus(codes.Error, "state_type_mismatch")
 			return "", fmt.Errorf("rtc: state type mismatch on resume")
 		}
-		return r.handleRtcResume(ctx, state)
+		span.SetAttributes(attribute.Bool("resume", true))
+		result, err := r.handleRtcResume(ctx, state)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "resume_failed")
+		}
+		return result, err
 	}
 
 	// === First-call path ===
-	return r.handleRtcFirstCall(ctx, toolName, argumentsInJSON)
+	result, err := r.handleRtcFirstCall(ctx, toolName, argumentsInJSON)
+	// handleRtcFirstCall always returns an error (the interrupt), so record it unconditionally.
+	span.RecordError(err)
+	span.SetStatus(codes.Error, "first_call_interrupted")
+	return result, err
 }
 
 // handleRtcResume handles the resume path for RTC tools: checks if the RTC

@@ -372,7 +372,8 @@ func mergeTokenUsageMax(dst *model.TokenUsage, src *model.TokenUsage) {
 func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.StreamReader[*model.CallbackOutput]) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Error(context.Background(), "token_callback.stream_drain_panic",
+			// Use the original ctx (not context.Background()) to preserve trace context in panic logs.
+			logger.Error(ctx, "token_callback.stream_drain_panic",
 				zap.Any("recover", r),
 				zap.String("stack", string(debug.Stack())),
 			)

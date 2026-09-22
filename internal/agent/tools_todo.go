@@ -10,6 +10,9 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // todoWriteTool implements a Claude Code-style TodoWrite tool.
@@ -55,27 +58,41 @@ func (t *todoWriteTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helper.tracer.Start(ctx, "tool.todo_write",
+		trace.WithAttributes(
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.Int("args_length", len(argumentsInJSON)),
+		),
+	)
+	defer span.End()
+
 	// Parse arguments.
 	var args struct {
 		Todos []model.TodoItem `json:"todos,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "parse_failed")
 		return "", fmt.Errorf("parse todos: %w", err)
 	}
 
 	if len(args.Todos) == 0 {
 		args.Todos = make([]model.TodoItem, 0)
 	}
+	span.SetAttributes(attribute.Int("todo_count", len(args.Todos)))
 
 	// Validate todos.
 	for i, todo := range args.Todos {
 		if todo.Content == "" {
+			span.SetStatus(codes.Error, "missing_content")
 			return "", fmt.Errorf("todo[%d].content is required but was empty. Ensure all required fields (content, status, active_form) are present with correct snake_case names", i)
 		}
 		if todo.ActiveForm == "" {
+			span.SetStatus(codes.Error, "missing_active_form")
 			return "", fmt.Errorf("todo[%d].active_form is required but was empty. Make sure you use 'active_form' (snake_case), not 'activeForm'", i)
 		}
 		if todo.Status != "pending" && todo.Status != "in_progress" && todo.Status != "completed" {
+			span.SetStatus(codes.Error, "invalid_status")
 			return "", fmt.Errorf("todo[%d].status must be one of: pending, in_progress, completed. Got: %q", i, todo.Status)
 		}
 	}
@@ -86,6 +103,8 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		"todo_list": todoList,
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "update_failed")
 		return "", fmt.Errorf("update todo_list: %w", err)
 	}
 
@@ -100,6 +119,7 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	})
 	if err != nil {
 		// Log but do not return error (todo was updated successfully).
+		span.RecordError(err)
 		t.helper.logger.Info(ctx, "todoWriteTool.publish_update", map[string]any{
 			"session_id": t.session.ID.String(),
 			"error":      err.Error(),

@@ -42,7 +42,9 @@ func (s *Impl) ScheduleDelayed(
 	delay time.Duration,
 ) (string, error) {
 	task := hibikenasynq.NewTask(taskType, payload)
-	info, err := s.client.Enqueue(task,
+	// Use EnqueueContext to propagate context (including timeout/cancellation and trace information)
+	// to the Redis operation, preventing potential goroutine leaks if Redis is unresponsive.
+	info, err := s.client.EnqueueContext(ctx, task,
 		hibikenasynq.ProcessIn(delay),
 		hibikenasynq.Queue(LoopQueue),
 		hibikenasynq.MaxRetry(3),

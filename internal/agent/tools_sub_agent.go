@@ -18,6 +18,9 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // subAgentTool enables the LLM to create sub agent sessions for task decomposition.
@@ -94,13 +97,30 @@ func (t *subAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.sub_agent",
+		trace.WithAttributes(
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.String("turn_id", t.turnID.String()),
+			attribute.Int("args_length", len(argumentsInJSON)),
+		),
+	)
+	defer span.End()
+
 	// === Resume path ===
 	wasInterrupted, hasState, state := tool.GetInterruptState[subAgentInterruptState](ctx)
 	if wasInterrupted {
 		if !hasState {
+			span.RecordError(fmt.Errorf("state type mismatch"))
+			span.SetStatus(codes.Error, "state_type_mismatch")
 			return "", fmt.Errorf("sub_agent: state type mismatch on resume")
 		}
-		return t.resumeSubAgent(ctx, state)
+		span.SetAttributes(attribute.Bool("resume", true))
+		result, err := t.resumeSubAgent(ctx, state)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "resume_failed")
+		}
+		return result, err
 	}
 
 	// === First-call path ===
@@ -434,16 +454,33 @@ func (t *subAgentTool) logSubAgentCreated(ctx context.Context, subSessionID, par
 
 // publishSubAgentWork submits a work item to the sub session's queue.
 func (t *subAgentTool) publishSubAgentWork(ctx context.Context, subSessionID uuid.UUID) error {
+	// Extract trace context for cross-process propagation.
+	ctx, span := t.helpers.tracer.Start(ctx, "subAgent.publishWork",
+		trace.WithAttributes(
+			attribute.String("sub_session_id", subSessionID.String()),
+			attribute.String("parent_session_id", t.session.ID.String()),
+		),
+	)
+	defer span.End()
+
+	traceID, spanID := turnagent.ExtractTraceFromCtx(ctx)
 	payload, err := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: subSessionID.String(),
+		TraceID:   traceID,
+		SpanID:    spanID,
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal_failed")
 		return fmt.Errorf("marshal work payload: %w", err)
 	}
 	if _, err := t.helpers.queue.Publish(ctx, subSessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
 		return fmt.Errorf("publish work item to sub session: %w", err)
 	}
+	span.SetStatus(codes.Ok, "")
 	t.helpers.logger.Info(ctx, "subAgent.work_submitted", map[string]any{
 		"sub_session_id": subSessionID.String(),
 	})

@@ -8,6 +8,9 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ---------------------------------------------------------------------------
@@ -61,6 +64,14 @@ func (t *listLoopsTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.list_loops",
+		trace.WithAttributes(
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.String("turn_id", t.turnID.String()),
+		),
+	)
+	defer span.End()
+
 	var args listLoopsArgs
 	if ok, errMsg := parseToolArgs(ctx, t.helpers, "list_loops", argumentsInJSON, &args); !ok {
 		return errMsg, nil
@@ -70,9 +81,16 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	if limit <= 0 {
 		limit = 50
 	}
+	span.SetAttributes(attribute.Int("limit", limit))
+	if args.Cursor != nil {
+		span.SetAttributes(attribute.String("cursor", *args.Cursor))
+	}
+
 	// Fetch one extra to determine if there are more pages.
 	loops, err := t.helpers.deps.LoopRepo.ListBySession(ctx, t.session.ID, args.Cursor, limit+1)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "list_failed")
 		return "", fmt.Errorf("list_loops: list loops: %w", err)
 	}
 
@@ -105,6 +123,8 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	}
 	resultJSON, err := mustMarshalJSON(result)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal_failed")
 		return "", fmt.Errorf("list_loops: marshal result: %w", err)
 	}
 
@@ -117,9 +137,12 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
 		return "", fmt.Errorf("list_loops: publish messages: %w", err)
 	}
 
+	span.SetAttributes(attribute.Int("count", len(summaries)), attribute.Bool("has_more", hasMore))
 	t.helpers.logger.Info(ctx, "listLoops.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"count":      len(summaries),

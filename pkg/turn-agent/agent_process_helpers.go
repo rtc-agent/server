@@ -2,6 +2,7 @@ package turnagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -79,6 +80,16 @@ func (a *Agent) handleNonOwnerCompletion(
 			})
 			return nil
 		}
+
+		_, requeueSpan := a.startSpanIfEnabled(ctx, "requeue_abandoned_work",
+			trace.WithAttributes(
+				attribute.String("session.id", sessionID),
+				attribute.String("turn.id", turnID),
+				attribute.String("work.id", workID),
+			),
+		)
+		defer requeueSpan.End()
+
 		a.log(ctx, LogLevelWarn, "turn.work_abandoned", map[string]any{
 			"session_id": sessionID,
 			"turn_id":    turnID,
@@ -90,12 +101,15 @@ func (a *Agent) handleNonOwnerCompletion(
 		requeueCtx, requeueCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer requeueCancel()
 		if reErr := a.queue.RequeueWork(requeueCtx, workID); reErr != nil {
+			requeueSpan.RecordError(reErr)
+			requeueSpan.SetAttributes(attribute.String("requeue.status", "failed"))
 			a.log(ctx, LogLevelWarn, "turn.requeue_abandoned_failed", map[string]any{
 				"work_id": workID,
 				"error":   reErr.Error(),
 			})
 			return fmt.Errorf("turnagent: work %s abandoned AND requeue failed: %w", workID, reErr)
 		}
+		requeueSpan.SetAttributes(attribute.String("requeue.status", "success"))
 		// Requeue succeeded — work will be picked up by another worker.
 		// Return nil so rtc-queue does not treat this as a failure.
 		return nil
@@ -259,6 +273,15 @@ func (a *Agent) pushOrReplace(
 		"turn_id":    turnID,
 	})
 
+	_, replaceSpan := a.startSpanIfEnabled(ctx, "push_or_replace",
+		trace.WithAttributes(
+			attribute.String("session.id", sessionID),
+			attribute.String("turn.id", turnID),
+			attribute.String("checkpoint.id", checkpointID),
+		),
+	)
+	defer replaceSpan.End()
+
 	replacedMgr, replacedIsNew, err := a.registry.Replace(
 		ctx, a.queue, sessionID, a.workerID, turnID, checkpointID,
 		mgr, credential, a.cfg,
@@ -267,8 +290,10 @@ func (a *Agent) pushOrReplace(
 		},
 	)
 	if err != nil {
+		replaceSpan.RecordError(err)
 		return nil, false, fmt.Errorf("turnagent: Replace: %w", err)
 	}
+	replaceSpan.SetAttributes(attribute.Bool("manager.replaced", true))
 
 	if replacedIsNew {
 		isNew = true
@@ -319,6 +344,15 @@ func (a *Agent) handleOwnerLifecycleEnd(
 				"message":    "owner's work abandoned but session cancelled; skipping requeue",
 			})
 		} else {
+			_, requeueSpan := a.startSpanIfEnabled(ctx, "requeue_owner_work",
+				trace.WithAttributes(
+					attribute.String("session.id", p.SessionID),
+					attribute.String("turn.id", turnID),
+					attribute.String("work.id", workID),
+				),
+			)
+			defer requeueSpan.End()
+
 			a.log(ctx, LogLevelWarn, "turn.owner_work_abandoned", map[string]any{
 				"session_id": p.SessionID,
 				"turn_id":    turnID,
@@ -330,10 +364,14 @@ func (a *Agent) handleOwnerLifecycleEnd(
 			requeueCtx, requeueCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer requeueCancel()
 			if reErr := a.queue.RequeueWork(requeueCtx, workID); reErr != nil {
+				requeueSpan.RecordError(reErr)
+				requeueSpan.SetAttributes(attribute.String("requeue.status", "failed"))
 				a.log(ctx, LogLevelWarn, "turn.requeue_owner_failed", map[string]any{
 					"work_id": workID,
 					"error":   reErr.Error(),
 				})
+			} else {
+				requeueSpan.SetAttributes(attribute.String("requeue.status", "success"))
 			}
 		}
 	}
@@ -423,6 +461,16 @@ func (a *Agent) tryReactiveCompactRecovery(
 	turnDuration time.Duration,
 	exitReason error,
 ) bool {
+	recoveryCtx, recoverySpan := a.startSpanIfEnabled(ctx, "reactive_compact_recovery",
+		trace.WithAttributes(
+			attribute.String("session.id", p.SessionID),
+			attribute.String("turn.id", turnID),
+			attribute.Int("attempt", p.ReactiveCompactAttempt+1),
+			attribute.Int("max_attempts", a.cfg.MaxReactiveCompactAttempts),
+		),
+	)
+	defer recoverySpan.End()
+
 	// Escalate: use the attempt from the incoming payload + 1 so each
 	// Process restart advances the compression level (L1 → L2 → L3).
 	attempt := p.ReactiveCompactAttempt + 1
@@ -433,9 +481,10 @@ func (a *Agent) tryReactiveCompactRecovery(
 			"attempt":    attempt,
 			"max":        a.cfg.MaxReactiveCompactAttempts,
 		})
+		recoverySpan.SetAttributes(attribute.String("recovery.status", "attempts_exhausted"))
 		return false
 	}
-	a.log(ctx, LogLevelWarn, "turn.prompt_too_long_recovering", map[string]any{
+	a.log(recoveryCtx, LogLevelWarn, "turn.prompt_too_long_recovering", map[string]any{
 		"session_id": p.SessionID,
 		"turn_id":    turnID,
 		"attempt":    attempt,
@@ -443,21 +492,25 @@ func (a *Agent) tryReactiveCompactRecovery(
 	})
 
 	// Step 1: call reactive compact callback to compress context.
-	if recoverErr := a.cfg.RecoverFromPromptTooLong(ctx, p.SessionID, attempt); recoverErr != nil {
-		a.log(ctx, LogLevelError, "turn.reactive_compact_failed", map[string]any{
+	recoverySpan.AddEvent("compact_context")
+	if recoverErr := a.cfg.RecoverFromPromptTooLong(recoveryCtx, p.SessionID, attempt); recoverErr != nil {
+		a.log(recoveryCtx, LogLevelError, "turn.reactive_compact_failed", map[string]any{
 			"error": recoverErr.Error(),
 		})
+		recoverySpan.SetAttributes(attribute.String("recovery.status", "compact_failed"))
+		recoverySpan.RecordError(recoverErr)
 		return false
 	}
 
 	// Step 2: insert "compressing" feedback message.
 	if a.cfg.InsertFeedbackMessage != nil {
-		if err := a.cfg.InsertFeedbackMessage(ctx, p.SessionID, turnID,
+		recoverySpan.AddEvent("insert_feedback_message")
+		if err := a.cfg.InsertFeedbackMessage(recoveryCtx, p.SessionID, turnID,
 			"context",
 			"上下文超出限制",
 			"对话内容太长，系统正在自动压缩后重试。请稍等片刻。",
 			true, ""); err != nil {
-			a.log(ctx, LogLevelWarn, "turn.insert_feedback_message_failed", map[string]any{
+			a.log(recoveryCtx, LogLevelWarn, "turn.insert_feedback_message_failed", map[string]any{
 				"session_id": p.SessionID,
 				"turn_id":    turnID,
 				"error":      err.Error(),
@@ -468,32 +521,60 @@ func (a *Agent) tryReactiveCompactRecovery(
 	// Step 3: end current Turn (FailTurn must be before Publish).
 	// Use WithSkipErrorMessage to prevent failTurn callback from
 	// inserting a duplicate error message.
+	recoverySpan.AddEvent("fail_turn")
 	a.recordTurnEnd(ctx, span, p.SessionID, turnID, string(p.Kind), turnDuration, "failed", fmt.Errorf("prompt_too_long_recovering"))
-	skipCtx := WithSkipErrorMessage(ctx)
+	skipCtx := WithSkipErrorMessage(recoveryCtx)
 	if err := a.cfg.FailTurn(skipCtx, turnID, exitReason); err != nil {
 		// NOTE: Unlike the normal FailTurn path, we log but do NOT propagate
 		// this error. The reactive compact path has already compressed the
 		// context and is about to publish a new work item; stopping here would
 		// waste the compression work and leave the user stuck.
-		a.log(ctx, LogLevelError, "turn.fail_callback_failed", map[string]any{
+		a.log(recoveryCtx, LogLevelError, "turn.fail_callback_failed", map[string]any{
 			"error": err.Error(),
 		})
 	}
 
 	// Step 4: publish submit work item to trigger a new Process lifecycle.
-	// Use context.Background() (with timeout) because ctx may be cancelled.
-	// The 10s timeout prevents indefinite blocking if Redis is unresponsive.
-	payload := string(MarshalSubmitPayload(p.SessionID, attempt))
-	publishCtx, publishCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer publishCancel()
-	if _, err := a.queue.Publish(publishCtx, p.SessionID, payload, rtcqueue.ResumeWorkPriority); err != nil {
-		a.log(ctx, LogLevelError, "turn.submit_publish_failed", map[string]any{
+	// Use context.WithoutCancel(recoveryCtx) (with timeout) to preserve trace context while
+	// stripping the cancel signal. The 10s timeout prevents indefinite blocking if
+	// Redis is unresponsive.
+	//
+	// Extract trace context explicitly (instead of using MarshalSubmitPayload) to
+	// propagate trace_id across the queue boundary.
+	recoverySpan.AddEvent("publish_submit")
+	traceID, spanID := ExtractTraceFromCtx(recoveryCtx)
+	payloadBytes, err := json.Marshal(WorkPayload{
+		Kind:                   WorkKindSubmit,
+		SessionID:              p.SessionID,
+		ReactiveCompactAttempt: attempt,
+		TraceID:                traceID,
+		SpanID:                 spanID,
+	})
+	if err != nil {
+		a.log(recoveryCtx, LogLevelError, "turn.submit_marshal_failed", map[string]any{
 			"error":   err.Error(),
 			"attempt": attempt,
 		})
+		recoverySpan.SetAttributes(attribute.String("recovery.status", "marshal_failed"))
+		recoverySpan.RecordError(err)
+		return false
+	}
+	payload := string(payloadBytes)
+
+	detachedCtx := context.WithoutCancel(recoveryCtx) // Preserve trace values, strip cancel
+	publishCtx, publishCancel := context.WithTimeout(detachedCtx, 10*time.Second)
+	defer publishCancel()
+	if _, err := a.queue.Publish(publishCtx, p.SessionID, payload, rtcqueue.ResumeWorkPriority); err != nil {
+		a.log(recoveryCtx, LogLevelError, "turn.submit_publish_failed", map[string]any{
+			"error":   err.Error(),
+			"attempt": attempt,
+		})
+		recoverySpan.SetAttributes(attribute.String("recovery.status", "publish_failed"))
+		recoverySpan.RecordError(err)
 		return false
 	}
 
 	// Recovery published successfully.
+	recoverySpan.SetAttributes(attribute.String("recovery.status", "success"))
 	return true
 }

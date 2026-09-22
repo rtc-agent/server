@@ -20,8 +20,8 @@ import (
 
 	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/agent/command"
-	"github.com/rtc-agent/server/internal/handler/http"
-	"github.com/rtc-agent/server/internal/handler/rpc"
+	httphandler "github.com/rtc-agent/server/internal/handler/http"
+	rpchandler "github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/loop"

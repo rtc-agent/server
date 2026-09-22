@@ -6,12 +6,17 @@ import (
 	"time"
 
 	hibikenasynq "github.com/hibiken/asynq"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/taskscheduler"
 	"github.com/rtc-agent/server/pkg/logger"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // RecoveryDeps holds the dependencies for the Loop Recovery goroutine.
@@ -22,6 +27,11 @@ type RecoveryDeps struct {
 	Interval       time.Duration
 	StaleThreshold time.Duration
 	RetryMax       int
+}
+
+// recoveryTracer returns the tracer for loop recovery operations.
+func recoveryTracer() trace.Tracer {
+	return otel.GetTracerProvider().Tracer("loop.recovery")
 }
 
 // RunRecovery starts the loop recovery goroutine.
@@ -49,6 +59,9 @@ func RunRecovery(ctx context.Context, deps RecoveryDeps) {
 
 // scanAndRecover performs one recovery scan.
 func scanAndRecover(ctx context.Context, deps RecoveryDeps) {
+	ctx, span := recoveryTracer().Start(ctx, "loopRecovery.scanAndRecover")
+	defer span.End()
+
 	// 1. Handle expired loops
 	recoverExpired(ctx, deps)
 
@@ -58,12 +71,19 @@ func scanAndRecover(ctx context.Context, deps RecoveryDeps) {
 
 // recoverExpired marks expired loops as cancelled.
 func recoverExpired(ctx context.Context, deps RecoveryDeps) {
+	ctx, span := recoveryTracer().Start(ctx, "loopRecovery.scanExpired")
+	defer span.End()
+
 	expired, err := deps.LoopRepo.FindExpiredLoops(ctx)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		logger.Error(ctx, "[loop.Recovery] find expired loops",
 			zap.Error(err))
 		return
 	}
+
+	span.SetAttributes(attribute.Int("loop.count", len(expired)))
 
 	for _, loop := range expired {
 		// Cancel asynq task if present (best effort — task may already be gone)
@@ -102,6 +122,9 @@ const staleLoopThreshold = 5 * time.Minute
 
 // recoverStale re-enqueues loops that are stale (active but missing asynq task).
 func recoverStale(ctx context.Context, deps RecoveryDeps) {
+	ctx, span := recoveryTracer().Start(ctx, "loopRecovery.scanStale")
+	defer span.End()
+
 	// Use configured StaleThreshold, fallback to default if not set
 	threshold := deps.StaleThreshold
 	if threshold <= 0 {
@@ -111,10 +134,14 @@ func recoverStale(ctx context.Context, deps RecoveryDeps) {
 
 	stale, err := deps.LoopRepo.FindStaleLoops(ctx, staleThreshold)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		logger.Error(ctx, "[loop.Recovery] find stale loops",
 			zap.Error(err))
 		return
 	}
+
+	span.SetAttributes(attribute.Int("loop.count", len(stale)))
 
 	for _, loop := range stale {
 		reenqueueLoop(ctx, deps, loop)
@@ -123,14 +150,31 @@ func recoverStale(ctx context.Context, deps RecoveryDeps) {
 
 // reenqueueLoop re-enqueues a single stale loop.
 func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
+	ctx, span := recoveryTracer().Start(ctx, "loopRecovery.reenqueue",
+		trace.WithAttributes(
+			attribute.String("loop.id", loop.ID.String()),
+			attribute.String("session.id", loop.SessionID.String()),
+		),
+	)
+	defer span.End()
+
+	// Extract trace context for cross-process propagation.
+	traceID, spanID := turnagent.ExtractTraceFromCtx(ctx)
+
 	payload, err := json.Marshal(struct {
 		LoopID    string `json:"loop_id"`
 		SessionID string `json:"session_id"`
+		TraceID   string `json:"trace_id,omitempty"`
+		SpanID    string `json:"span_id,omitempty"`
 	}{
 		LoopID:    loop.ID.String(),
 		SessionID: loop.SessionID.String(),
+		TraceID:   traceID,
+		SpanID:    spanID,
 	})
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		logger.Error(ctx, "[loop.Recovery] marshal payload",
 			zap.String("loop_id", loop.ID.String()),
 			zap.Error(err))
@@ -151,16 +195,22 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 		hibikenasynq.MaxRetry(retryMax),
 	)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		logger.Error(ctx, "[loop.Recovery] reenqueue failed",
 			zap.String("loop_id", loop.ID.String()),
 			zap.Error(err))
 		return
 	}
 
+	span.SetAttributes(attribute.String("task.id", info.ID))
+
 	// Update the loop with the new task ID
 	if err := deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
 		"asynq_task_id": info.ID,
 	}); err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		logger.Error(ctx, "[loop.Recovery] update task_id failed",
 			zap.String("loop_id", loop.ID.String()),
 			zap.Error(err))

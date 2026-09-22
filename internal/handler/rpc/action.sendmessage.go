@@ -22,23 +22,27 @@ import (
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
 // extractMessageContent extracts text content from ContentData.
-func extractMessageContent(cd protocol.ContentData) string {
+func extractMessageContent(ctx context.Context, cd protocol.ContentData) string {
 	switch cd.Type {
 	case protocol.ContentTypeText:
 		s, err := primitives.ContentDataString(cd.Data)
 		if err != nil {
-			logger.Warn(context.Background(), "[SendMessage] ContentDataString failed", zap.Error(err))
+			logger.Warn(ctx, "[SendMessage] ContentDataString failed", zap.Error(err))
 			return ""
 		}
 		return s
 	case protocol.ContentTypeUserMessage:
 		umc, err := primitives.ParseUserMessageContent(cd.Data)
 		if err != nil {
-			logger.Warn(context.Background(), "[SendMessage] ParseUserMessageContent failed", zap.Error(err))
+			logger.Warn(ctx, "[SendMessage] ParseUserMessageContent failed", zap.Error(err))
 			return ""
 		}
 		return umc.Text
@@ -69,11 +73,14 @@ func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Sessio
 				zap.String("session", session.ID.String()), zap.Error(err))
 			return
 		}
-		if _, err := h.UpdateSession(detachedCtx, &protocol.UpdateSessionRequest{
+		// Use a separate timeout for UpdateSession to prevent goroutine leaks if DB is unresponsive.
+		updateCtx, updateCancel := context.WithTimeout(detachedCtx, 10*time.Second)
+		defer updateCancel()
+		if _, err := h.UpdateSession(updateCtx, &protocol.UpdateSessionRequest{
 			SessionId: session.ID.String(),
 			Title:     &title,
 		}); err != nil {
-			logger.Warn(detachedCtx, "[SendMessage] UpdateSession title failed",
+			logger.Warn(updateCtx, "[SendMessage] UpdateSession title failed",
 				zap.String("session", session.ID.String()), zap.Error(err))
 		}
 	})
@@ -81,27 +88,44 @@ func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Sessio
 
 // SendMessage sends a message (auto-creates session + turn).
 func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequest) (*protocol.SendMessageResponse, error) {
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.sendMessage",
+		trace.WithAttributes(
+			attribute.String("client.session_id", req.ClientSessionId),
+			attribute.String("client.id", req.ClientId),
+		),
+	)
+	defer span.End()
+
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
+		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
 	deviceID, _ := contextx.GetDeviceID(ctx)
 	creator := usecase.UserCreator{UserID: userID, DeviceID: deviceID}
 
-	content := extractMessageContent(req.ContentData)
+	content := extractMessageContent(ctx, req.ContentData)
 
 	if err := primitives.ValidateCreateMessageRequest(content); err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return nil, &APIError{Code: "invalid_argument", Message: err.Error()}
 	}
 
 	sessionUUIDPtr, apiErr := parseUUIDPtr(req.ServerSessionId, "server_session_id")
 	if apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
 		return nil, apiErr
 	}
 
 	if apiErr := h.checkClientIdIdempotency(ctx, req.ClientId); apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
 		return nil, apiErr
 	}
+
+	span.SetAttributes(
+		attribute.String("user.id", userID.String()),
+		attribute.Int("content.len", len(content)),
+	)
 
 	logger.Info(ctx, "[SendMessage]",
 		zap.String("user", userID.String()),
@@ -113,13 +137,17 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	initialTitle := primitives.TruncateTitle(content, 50)
 	session, isNew, err := primitives.PrepareSession(ctx, h.deps.Deps, sessionUUIDPtr, req.ClientSessionId, creator, initialTitle)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
+	span.SetAttributes(attribute.String("session.id", session.ID.String()))
 	if isNew && req.AgentPrompt != nil {
 		session.AgentPrompt = *req.AgentPrompt
 	}
 	if !isNew {
 		if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, session.ID, creator); err != nil {
+			span.SetStatus(codes.Error, err.Error())
 			return nil, h.ownershipError(ctx, err)
 		}
 	}
@@ -158,7 +186,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 					systemCreator,
 					promptContent,
 					protocol.MessageStreamingCompleted, // Prompt messages are immediately complete.
-					"",                                  // Empty client_id; CreateMessage generates UUID.
+					"",                                 // Empty client_id; CreateMessage generates UUID.
 					nil,
 				)
 				if createErr != nil {
@@ -206,9 +234,16 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[SendMessage] push failed after commit (data safe)", zap.Error(err))
 		} else {
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 			return nil, h.internalError(ctx, "send.error", "internal error", err)
 		}
 	}
+
+	span.SetAttributes(
+		attribute.Bool("session.is_new", isNew),
+		attribute.String("message.id", createdMessage.ID.String()),
+	)
 
 	if isNew {
 		h.summarizeTitleAsync(ctx, session)
@@ -247,9 +282,13 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID) 
 	if h.deps.Queue == nil {
 		return nil
 	}
+	// Extract trace context from the transaction context for cross-process propagation.
+	traceID, spanID := turnagent.ExtractTraceFromCtx(txCtx)
 	payload, err := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: sessionID.String(),
+		TraceID:   traceID,
+		SpanID:    spanID,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal work payload: %w", err)

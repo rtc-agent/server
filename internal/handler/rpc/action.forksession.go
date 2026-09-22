@@ -17,6 +17,10 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -130,8 +134,17 @@ func buildForkMessages(
 //   - Replace the last message with the new content_data
 //   - Trigger the AI flow (via rtc-queue Publish)
 func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequest) (*protocol.ForkSessionResponse, error) {
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.forkSession",
+		trace.WithAttributes(
+			attribute.String("old_session.id", req.OldServerSessionId),
+			attribute.String("old_message.id", req.OldServerMessageId),
+		),
+	)
+	defer span.End()
+
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
+		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
 	deviceID, _ := contextx.GetDeviceID(ctx)
@@ -139,14 +152,21 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 
 	oldSessionID, apiErr := parseUUID(req.OldServerSessionId, "old_server_session_id")
 	if apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
 		return nil, apiErr
 	}
 	oldMessageID, apiErr := parseUUID(req.OldServerMessageId, "old_server_message_id")
 	if apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
 		return nil, apiErr
 	}
 
 	limit := clampForkLimit(req.Limit)
+
+	span.SetAttributes(
+		attribute.String("user.id", userID.String()),
+		attribute.Int("limit", limit),
+	)
 
 	logger.Info(ctx, "[ForkSession] start",
 		zap.String("user", userID.String()),
@@ -156,22 +176,31 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 
 	oldSession, err := h.validateForkSource(ctx, oldSessionID, creator)
 	if err != nil {
+		if apiErr, ok := err.(*APIError); ok {
+			span.SetStatus(codes.Error, apiErr.Code)
+		}
 		return nil, err
 	}
 
 	oldMessage, err := h.deps.Deps.MessageRepo.GetByID(ctx, oldMessageID)
 	if err != nil {
 		if repo.IsNotFound(err) {
+			span.SetStatus(codes.Error, "message.not_found")
 			return nil, &APIError{Code: "message.not_found", Message: fmt.Sprintf("old message %s not found", req.OldServerMessageId)}
 		}
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		return nil, h.internalError(ctx, "message.error", "internal error", err)
 	}
 
 	oldMessages, err := h.deps.Deps.MessageRepo.ListBySessionBeforeOffset(ctx, oldSessionID, oldMessage.GlobalOffset, limit)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		return nil, h.internalError(ctx, "message.error", "internal error", err)
 	}
 	if len(oldMessages) == 0 {
+		span.SetStatus(codes.Error, "message.not_found")
 		return nil, &APIError{Code: "message.not_found", Message: "no messages found to fork"}
 	}
 
@@ -200,6 +229,8 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[ForkSession] push failed after commit (data safe)", zap.Error(err))
 		} else {
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 			return nil, h.internalError(ctx, "fork.error", "internal error", err)
 		}
 	}
@@ -208,6 +239,8 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	for i, msg := range createdMessages {
 		messageIDs[i] = msg.ID.String()
 	}
+
+	span.SetAttributes(attribute.String("session.id", newSession.ID.String()))
 
 	return &protocol.ForkSessionResponse{
 		Result: protocol.ForkSessionResult{

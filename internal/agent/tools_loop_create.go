@@ -2,13 +2,17 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	looppkg "github.com/rtc-agent/server/internal/loop"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/repo"
+	"gorm.io/gorm"
 )
 
 // defaultLoopMaxTurns is the default max_turns for create_loop.
@@ -109,7 +113,9 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	// 4. Calculate expiry time.
 	expiresAt := time.Now().Add(loopExpiryDays * 24 * time.Hour)
 
-	// 5. Create the loop.
+	// 5. Create the loop and schedule first task in a transaction.
+	// Set last_run_at to now so recovery can capture it if needed.
+	now := time.Now()
 	loop := &model.Loop{
 		SessionID:       t.session.ID,
 		Prompt:          args.Prompt,
@@ -118,12 +124,61 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		CompletedTurns:  0,
 		Status:          model.LoopStatusActive,
 		ExpiresAt:       &expiresAt,
-	}
-	if err := t.helpers.deps.LoopRepo.Create(ctx, loop); err != nil {
-		return "", fmt.Errorf("create_loop: create: %w", err)
+		LastRunAt:       &now,
 	}
 
-	// 6. Build result + publish two messages (toolcall_input + toolcall_output).
+	var taskID string
+	err = t.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
+		// Create loop within transaction
+		txCtx := repo.WithTx(ctx, tx)
+		if err := t.helpers.deps.LoopRepo.Create(txCtx, loop); err != nil {
+			return err
+		}
+
+		// Schedule first task within transaction (ensures atomicity)
+		if t.helpers.deps.TaskScheduler != nil {
+			payload, _ := json.Marshal(struct {
+				LoopID    string `json:"loop_id"`
+				SessionID string `json:"session_id"`
+			}{
+				LoopID:    loop.ID.String(),
+				SessionID: loop.SessionID.String(),
+			})
+
+			delay := time.Duration(loop.IntervalSeconds) * time.Second
+			id, err := t.helpers.deps.TaskScheduler.ScheduleDelayed(
+				txCtx,
+				looppkg.LoopTaskType,
+				payload,
+				delay,
+			)
+			if err != nil {
+				return fmt.Errorf("schedule first loop task: %w", err)
+			}
+			taskID = id
+		}
+		return nil
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("create_loop: transaction failed: %w", err)
+	}
+
+	// 6. Update asynq_task_id (outside transaction since scheduling succeeded)
+	if taskID != "" {
+		if err := t.helpers.deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
+			"asynq_task_id": taskID,
+		}); err != nil {
+			// Non-fatal: recovery will reschedule in 5 minutes if needed
+			t.helpers.logger.Warn(ctx, "createLoop.update_task_id_failed", map[string]any{
+				"loop_id": loop.ID.String(),
+				"task_id": taskID,
+				"error":   err.Error(),
+			})
+		}
+	}
+
+	// 7. Build result + publish two messages (toolcall_input + toolcall_output).
 	result := createLoopResult{
 		ID:              loop.ID.String(),
 		Prompt:          loop.Prompt,

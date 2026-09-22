@@ -40,7 +40,7 @@ func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint
 	}
 
 	if len(updates) == 0 {
-		return fillGapPublications(sinceOffset, latestOffset, nil), nil
+		return fillGapPublications(ctx, sinceOffset, latestOffset, nil), nil
 	}
 
 	pubs := make([]*centrifuge.Publication, 0, len(updates))
@@ -57,7 +57,7 @@ func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint
 		pubs = append(pubs, pubsForUpdate...)
 	}
 
-	return fillGapPublications(sinceOffset, latestOffset, pubs), nil
+	return fillGapPublications(ctx, sinceOffset, latestOffset, pubs), nil
 }
 
 // buildPublications converts a UserUpdate to centrifuge Publications.

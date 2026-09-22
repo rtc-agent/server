@@ -11,6 +11,9 @@ import (
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // stopSubAgentTool stops a specific sub agent session and all its descendants.
@@ -63,6 +66,14 @@ func (t *stopSubAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.stop_sub_agent",
+		trace.WithAttributes(
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.String("turn_id", t.turnID.String()),
+		),
+	)
+	defer span.End()
+
 	// 1. Parse arguments.
 	var args stopSubAgentArgs
 	if ok, errMsg := parseToolArgs(ctx, t.helpers, "stop_sub_agent", argumentsInJSON, &args); !ok {
@@ -70,37 +81,47 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	}
 
 	if args.SubSessionID == "" {
+		span.SetStatus(codes.Error, "missing_sub_session_id")
 		return "Error: sub_session_id is required", nil
 	}
 
 	subSessionID, parseErr := uuid.Parse(args.SubSessionID)
 	if parseErr != nil {
+		span.SetStatus(codes.Error, "invalid_sub_session_id")
 		return fmt.Sprintf("Error: invalid sub_session_id format: %s", parseErr.Error()), nil
 	}
+	span.SetAttributes(attribute.String("target_session_id", subSessionID.String()))
 
 	// 2. Determine current root session ID.
 	rootSessionID := t.session.ID
 	if t.session.RootServerSessionID != uuid.Nil {
 		rootSessionID = t.session.RootServerSessionID
 	}
+	span.SetAttributes(attribute.String("root_session_id", rootSessionID.String()))
 
 	// 3. Query target session.
 	targetSession, dbErr := t.helpers.deps.SessionRepo.GetByID(ctx, subSessionID)
 	if dbErr != nil {
+		span.RecordError(dbErr)
+		span.SetStatus(codes.Error, "session_lookup_failed")
 		return fmt.Sprintf("Error: sub agent session not found: %s", dbErr.Error()), nil
 	}
 
 	// 4. Verify target is a descendant of the same session tree.
 	if targetSession.RootServerSessionID != rootSessionID {
+		span.SetStatus(codes.Error, "not_descendant")
 		return "Error: target session is not a descendant of the current session tree", nil
 	}
 	if targetSession.ID == t.session.ID {
+		span.SetStatus(codes.Error, "self_stop")
 		return "Error: cannot stop the current session itself", nil
 	}
 
 	// 5. Query all active descendants of the root session.
 	allActive, err := t.helpers.deps.SessionRepo.ListByRoot(ctx, rootSessionID, string(protocol.SessionStatusActive))
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "list_descendants_failed")
 		return "", fmt.Errorf("stop_sub_agent: list by root: %w", err)
 	}
 
@@ -172,6 +193,8 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	}
 	resultJSON, err := mustMarshalJSON(result)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal_failed")
 		return "", fmt.Errorf("stop_sub_agent: marshal result: %w", err)
 	}
 
@@ -185,9 +208,12 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
 		return "", fmt.Errorf("stop_sub_agent: publish messages: %w", err)
 	}
 
+	span.SetAttributes(attribute.Int("total_stopped", len(stopped)))
 	t.helpers.logger.Info(ctx, "stopSubAgent.completed", map[string]any{
 		"session_id":     t.session.ID.String(),
 		"target_session": subSessionID.String(),

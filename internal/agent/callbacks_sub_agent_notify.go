@@ -11,6 +11,9 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // notifyParentAfterAsyncSubAgent handles the async sub-agent notification path.
@@ -68,11 +71,26 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 	}
 
 	// Publish Submit work item to parent session's rtc-queue to trigger a new turn.
+	// Extract trace context for cross-process propagation.
+	ctx, span := h.tracer.Start(ctx, "subAgent.notify",
+		trace.WithAttributes(
+			attribute.String("sub_session_id", subSession.ID.String()),
+			attribute.String("parent_session_id", parentSessionID.String()),
+			attribute.String("status", status),
+		),
+	)
+	defer span.End()
+
+	traceID, spanID := turnagent.ExtractTraceFromCtx(ctx)
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: parentSessionID.String(),
+		TraceID:   traceID,
+		SpanID:    spanID,
 	})
 	if marshalErr != nil {
+		span.RecordError(marshalErr)
+		span.SetStatus(codes.Error, "marshal_failed")
 		h.logger.Warn(ctx, "notifyParentAfterAsyncSubAgent.marshal_failed", map[string]any{
 			"parent_session_id": parentSessionID.String(),
 			"error":             marshalErr.Error(),
@@ -81,6 +99,8 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 	}
 
 	if _, err := h.queue.Publish(ctx, parentSessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
 		h.logger.Warn(ctx, "notifyParentAfterAsyncSubAgent.submit_failed", map[string]any{
 			"parent_session_id": parentSessionID.String(),
 			"error":             err.Error(),
@@ -88,6 +108,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 		return
 	}
 
+	span.SetStatus(codes.Ok, "")
 	h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.done", map[string]any{
 		"sub_session_id":    subSession.ID.String(),
 		"parent_session_id": parentSessionID.String(),

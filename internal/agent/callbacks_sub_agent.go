@@ -15,6 +15,9 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // =============================================================================
@@ -218,14 +221,28 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 	}
 
 	// Publish Resume work item to parent session's rtc-queue.
+	// Extract trace context for cross-process propagation.
+	ctx, span := h.tracer.Start(ctx, "subAgent.resumeParent",
+		trace.WithAttributes(
+			attribute.String("sub_session_id", subSession.ID.String()),
+			attribute.String("parent_session_id", parentSessionID),
+		),
+	)
+	defer span.End()
+
+	traceID, spanID := turnagent.ExtractTraceFromCtx(ctx)
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:            turnagent.WorkKindResume,
 		SessionID:       parentSessionID,
 		SubAgentResult:  subAgentResult,
 		InterruptID:     interruptID,
 		InterruptResult: subAgentResult, // Sub agent result is the interrupt resolution
+		TraceID:         traceID,
+		SpanID:          spanID,
 	})
 	if marshalErr != nil {
+		span.RecordError(marshalErr)
+		span.SetStatus(codes.Error, "marshal_failed")
 		h.logger.Warn(ctx, "resumeParentAfterSubAgent.marshal_failed", map[string]any{
 			"parent_session_id": parentSessionID,
 			"error":             marshalErr.Error(),
@@ -236,6 +253,8 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 	// Use ResumeWorkPriority to ensure the resume is claimed before any pending
 	// Submit items, so the parent's checkpoint is still intact.
 	if _, err := h.queue.Publish(ctx, parentSessionID, string(payload), rtcqueue.ResumeWorkPriority); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
 		h.logger.Warn(ctx, "resumeParentAfterSubAgent.publish_failed", map[string]any{
 			"parent_session_id": parentSessionID,
 			"error":             err.Error(),
@@ -243,6 +262,7 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 		return
 	}
 
+	span.SetStatus(codes.Ok, "")
 	h.logger.Info(ctx, "resumeParentAfterSubAgent.done", map[string]any{
 		"sub_session_id":    subSession.ID.String(),
 		"parent_session_id": parentSessionID,

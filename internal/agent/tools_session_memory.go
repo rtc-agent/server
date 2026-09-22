@@ -9,6 +9,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // saveSessionMemoryTool saves a session memory.
@@ -51,6 +54,13 @@ func (t *saveSessionMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, err
 }
 
 func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.save_session_memory",
+		trace.WithAttributes(
+			attribute.String("turn_id", ""),
+		),
+	)
+	defer span.End()
+
 	var args struct {
 		Category string         `json:"category"`
 		Title    string         `json:"title"`
@@ -64,16 +74,24 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 	// Extract session ID from context
 	sessionID := getSessionIDFromContext(ctx)
 	if sessionID == uuid.Nil {
+		span.SetStatus(codes.Error, "no_session_id")
 		return "", fmt.Errorf("no session ID in context")
 	}
+	span.SetAttributes(
+		attribute.String("session_id", sessionID.String()),
+		attribute.String("category", args.Category),
+		attribute.Int("content_length", len(args.Content)),
+	)
 
 	// Validate required fields
 	if args.Category == "" || args.Title == "" || args.Content == "" {
+		span.SetStatus(codes.Error, "missing_required_fields")
 		return "", fmt.Errorf("category, title, and content are required")
 	}
 
 	// Validate category
 	if !model.IsValidCategory(args.Category) {
+		span.SetStatus(codes.Error, "invalid_category")
 		return "", fmt.Errorf("invalid category: %s (must be one of: decision, context, progress, issue, learnings)", args.Category)
 	}
 
@@ -92,9 +110,15 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 
 	// Save to database
 	if err := t.helpers.deps.SessionMemoryRepo.Create(ctx, memory); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "create_failed")
 		return "", fmt.Errorf("save memory: %w", err)
 	}
 
+	span.SetAttributes(
+		attribute.String("memory_id", memory.ID.String()),
+		attribute.Int("token_count", tokenCount),
+	)
 	t.helpers.logger.Info(ctx, "save_session_memory.success", map[string]any{
 		"session_id":  sessionID.String(),
 		"memory_id":   memory.ID.String(),
@@ -134,6 +158,13 @@ func (t *listSessionMemoriesTool) Info(ctx context.Context) (*schema.ToolInfo, e
 }
 
 func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.list_session_memories",
+		trace.WithAttributes(
+			attribute.String("turn_id", ""),
+		),
+	)
+	defer span.End()
+
 	var args struct {
 		Category string `json:"category"`
 		Limit    int    `json:"limit"`
@@ -145,19 +176,26 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 	// Extract session ID from context
 	sessionID := getSessionIDFromContext(ctx)
 	if sessionID == uuid.Nil {
+		span.SetStatus(codes.Error, "no_session_id")
 		return "", fmt.Errorf("no session ID in context")
 	}
+	span.SetAttributes(attribute.String("session_id", sessionID.String()))
 
 	// Set default limit
 	if args.Limit <= 0 {
 		args.Limit = 20
 	}
+	span.SetAttributes(
+		attribute.String("category", args.Category),
+		attribute.Int("limit", args.Limit),
+	)
 
 	// Query memories
 	var memories []*model.SessionMemory
 	var err error
 	if args.Category != "" {
 		if !model.IsValidCategory(args.Category) {
+			span.SetStatus(codes.Error, "invalid_category")
 			return fmt.Sprintf("Error: invalid category %q. Valid categories: %v",
 				args.Category, model.ValidSessionMemoryCategories), nil
 		}
@@ -166,10 +204,13 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 		memories, err = t.helpers.deps.SessionMemoryRepo.ListBySession(ctx, sessionID, args.Limit)
 	}
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "list_failed")
 		return "", fmt.Errorf("list memories: %w", err)
 	}
 
 	if len(memories) == 0 {
+		span.SetAttributes(attribute.Int("count", 0))
 		return formatNoSessionMemories(), nil
 	}
 
@@ -189,5 +230,6 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 		}
 	}
 
+	span.SetAttributes(attribute.Int("count", len(memories)))
 	return formatSessionMemoriesList(len(memories), items), nil
 }

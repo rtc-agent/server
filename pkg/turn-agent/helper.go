@@ -60,3 +60,63 @@ func (a *Agent) addEventIfEnabled(ctx context.Context, name string, attrs ...att
 		span.AddEvent(name, trace.WithAttributes(attrs...))
 	}
 }
+
+// =============================================================================
+// SessionTurnManager observability helpers
+// =============================================================================
+
+// startSpanIfEnabled starts a span if tracer is not nil.
+// When tracing is disabled, returns a cached noop span so callers can invoke
+// SetAttributes/End unconditionally without polluting an unrelated parent span.
+func (mgr *SessionTurnManager) startSpanIfEnabled(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+	if mgr.cfg.Tracer != nil {
+		return mgr.cfg.Tracer.Start(ctx, name, opts...)
+	}
+	return ctx, cachedNoopSpan
+}
+
+// =============================================================================
+// Trace context propagation helpers (for cross-process boundaries)
+// =============================================================================
+
+// ExtractTraceFromCtx extracts OpenTelemetry trace information from the context.
+// Returns trace_id and span_id as strings (empty strings if no valid span exists).
+// This is useful for serializing trace context when passing it across process boundaries
+// (e.g., when enqueuing tasks to Redis queues).
+func ExtractTraceFromCtx(ctx context.Context) (traceID, spanID string) {
+	if ctx == nil {
+		return "", ""
+	}
+	span := trace.SpanFromContext(ctx)
+	if span == nil || !span.SpanContext().IsValid() {
+		return "", ""
+	}
+	sc := span.SpanContext()
+	return sc.TraceID().String(), sc.SpanID().String()
+}
+
+// WithTraceContext restores OpenTelemetry trace context from serialized trace_id and span_id.
+// This is useful when deserializing trace context from cross-process boundaries (e.g., Redis queues).
+// The restored span context is marked as Remote=true, so subsequent span creation will create
+// child spans that inherit the same TraceID.
+func WithTraceContext(ctx context.Context, traceID, spanID string) context.Context {
+	if traceID == "" || spanID == "" {
+		return ctx
+	}
+
+	traceIDParsed, err1 := trace.TraceIDFromHex(traceID)
+	spanIDParsed, err2 := trace.SpanIDFromHex(spanID)
+	if err1 != nil || err2 != nil {
+		return ctx
+	}
+
+	sc := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceIDParsed,
+		SpanID:     spanIDParsed,
+		TraceFlags: trace.FlagsSampled,
+		Remote:     true, // Mark as remote span context
+	})
+
+	// Use ContextWithRemoteSpanContext to mark this as a remote span
+	return trace.ContextWithRemoteSpanContext(ctx, sc)
+}

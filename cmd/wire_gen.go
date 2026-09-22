@@ -8,6 +8,8 @@ package cmd
 
 import (
 	"context"
+	"time"
+
 	"github.com/centrifugal/centrifuge"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/google/uuid"
@@ -16,8 +18,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/agent/command"
-	"github.com/rtc-agent/server/internal/handler/http"
-	"github.com/rtc-agent/server/internal/handler/rpc"
+	httphandler "github.com/rtc-agent/server/internal/handler/http"
+	rpchandler "github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/loop"
@@ -28,13 +30,12 @@ import (
 	"github.com/rtc-agent/server/internal/taskscheduler"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
-	"github.com/rtc-agent/server/pkg/centrifuge-plus"
+	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/logger"
-	"github.com/rtc-agent/server/pkg/rtc-queue"
-	"github.com/rtc-agent/server/pkg/turn-agent"
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
-	"time"
 )
 
 // Injectors from wire.go:

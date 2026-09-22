@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // RequeueGhostWork requeues a work item that was claimed but never completed.
@@ -20,6 +23,13 @@ import (
 // The check is safe: if the lock still exists, the worker is likely alive
 // and we should not interfere.
 func (q *Queue) RequeueGhostWork(ctx context.Context, sessionID string) (string, error) {
+	ctx, span := queueTracer().Start(ctx, "Queue.RequeueGhostWork",
+		trace.WithAttributes(
+			attribute.String("session.id", sessionID),
+		),
+	)
+	defer span.End()
+
 	now := time.Now().Unix()
 	res, err := requeueGhostWorkScript.Run(ctx, q.rdb, []string{
 		keyLock(sessionID),
@@ -27,19 +37,27 @@ func (q *Queue) RequeueGhostWork(ctx context.Context, sessionID string) (string,
 		keyQueue(sessionID),
 	}, now).Result()
 	if errors.Is(err, redis.Nil) {
+		span.SetAttributes(attribute.Bool("queue.requeued", false))
 		return "", nil
 	}
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return "", fmt.Errorf("rtcqueue: requeue ghost work: %w", err)
 	}
 	arr, ok := res.([]interface{})
 	if !ok || len(arr) == 0 {
+		span.SetAttributes(attribute.Bool("queue.requeued", false))
 		return "", nil
 	}
 	workID, ok := arr[0].(string)
 	if !ok {
+		span.SetAttributes(attribute.Bool("queue.requeued", false))
 		return "", nil
 	}
+	span.SetAttributes(
+		attribute.Bool("queue.requeued", true),
+		attribute.String("work.id", workID),
+	)
 	return workID, nil
 }
 
@@ -49,6 +67,13 @@ func (q *Queue) RequeueGhostWork(ctx context.Context, sessionID string) (string,
 // This is more efficient than calling RequeueGhostWork in a loop when
 // recovering many sessions at once (e.g., during server restart).
 func (q *Queue) RequeueGhostWorksBatch(ctx context.Context, sessionIDs []string) (map[string]string, error) {
+	ctx, span := queueTracer().Start(ctx, "Queue.RequeueGhostWorksBatch",
+		trace.WithAttributes(
+			attribute.Int("session.count", len(sessionIDs)),
+		),
+	)
+	defer span.End()
+
 	if len(sessionIDs) == 0 {
 		return nil, nil
 	}
@@ -58,6 +83,7 @@ func (q *Queue) RequeueGhostWorksBatch(ctx context.Context, sessionIDs []string)
 	// Without this, a Redis restart or SCRIPT FLUSH would cause NOSCRIPT errors.
 	// Load() is idempotent and fast if the script is already cached.
 	if err := requeueGhostWorkScript.Load(ctx, q.rdb).Err(); err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("rtcqueue: load requeue script: %w", err)
 	}
 
@@ -76,6 +102,7 @@ func (q *Queue) RequeueGhostWorksBatch(ctx context.Context, sessionIDs []string)
 
 	// Execute pipeline
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("rtcqueue: batch requeue ghost works: %w", err)
 	}
 
@@ -99,6 +126,7 @@ func (q *Queue) RequeueGhostWorksBatch(ctx context.Context, sessionIDs []string)
 		}
 	}
 
+	span.SetAttributes(attribute.Int("queue.requeued_count", len(result)))
 	return result, nil
 }
 
@@ -110,13 +138,23 @@ func (q *Queue) RequeueGhostWorksBatch(ctx context.Context, sessionIDs []string)
 // Returns nil on success. Returns an error if the work is not found or not in
 // "processing" state.
 func (q *Queue) RequeueWork(ctx context.Context, workID string) error {
+	ctx, span := queueTracer().Start(ctx, "Queue.RequeueWork",
+		trace.WithAttributes(
+			attribute.String("work.id", workID),
+		),
+	)
+	defer span.End()
+
 	work, err := q.LoadWork(ctx, workID)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("rtcqueue: requeue work: load work: %w", err)
 	}
 	if work == nil {
+		span.SetAttributes(attribute.Bool("work.found", false))
 		return fmt.Errorf("rtcqueue: work %s not found", workID)
 	}
+	span.SetAttributes(attribute.String("session.id", work.SessionID))
 
 	now := time.Now().Unix()
 	n, err := requeueWorkScript.Run(ctx, q.rdb, []string{
@@ -124,10 +162,13 @@ func (q *Queue) RequeueWork(ctx context.Context, workID string) error {
 		keyQueue(work.SessionID),
 	}, now).Int()
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("rtcqueue: requeue work: %w", err)
 	}
 	if n == 0 {
+		span.SetAttributes(attribute.Bool("work.requeued", false))
 		return fmt.Errorf("rtcqueue: work %s not in processing state", workID)
 	}
+	span.SetAttributes(attribute.Bool("work.requeued", true))
 	return nil
 }

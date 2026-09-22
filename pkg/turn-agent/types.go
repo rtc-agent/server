@@ -159,6 +159,16 @@ type WorkPayload struct {
 	// carries the next attempt number so RecoverFromPromptTooLong can
 	// escalate (L1 → L2 → L3) instead of repeating L1 forever.
 	ReactiveCompactAttempt int `json:"reactive_compact_attempt,omitempty"`
+
+	// TraceID is the OpenTelemetry trace ID from the request that enqueued this work.
+	// Used to propagate trace context across process boundaries (Redis queue).
+	// Empty for legacy payloads or when no trace context is available.
+	TraceID string `json:"trace_id,omitempty"`
+
+	// SpanID is the OpenTelemetry span ID from the request that enqueued this work.
+	// Paired with TraceID to restore the full span context on the worker side.
+	// Empty for legacy payloads or when no trace context is available.
+	SpanID string `json:"span_id,omitempty"`
 }
 
 // BatchResumeItem represents a single interrupt result in a batch resume.

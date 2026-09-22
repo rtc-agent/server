@@ -11,6 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // getSubAgentMessageTool queries the last message of a specific sub agent session.
@@ -56,6 +59,14 @@ func (t *getSubAgentMessageTool) Info(ctx context.Context) (*schema.ToolInfo, er
 }
 
 func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.get_sub_agent_message",
+		trace.WithAttributes(
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.String("turn_id", t.turnID.String()),
+		),
+	)
+	defer span.End()
+
 	// 1. Parse arguments.
 	var args getSubAgentMessageArgs
 	if ok, errMsg := parseToolArgs(ctx, t.helpers, "get_sub_agent_message", argumentsInJSON, &args); !ok {
@@ -70,6 +81,7 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 	if parseErr != nil {
 		return fmt.Sprintf("Error: invalid sub_session_id format: %s", parseErr.Error()), nil
 	}
+	span.SetAttributes(attribute.String("target_session_id", subSessionID.String()))
 
 	// 2. Determine current root session ID.
 	rootSessionID := t.session.ID
@@ -80,20 +92,26 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 	// 3. Query target session.
 	targetSession, dbErr := t.helpers.deps.SessionRepo.GetByID(ctx, subSessionID)
 	if dbErr != nil {
+		span.RecordError(dbErr)
+		span.SetStatus(codes.Error, "session_lookup_failed")
 		return fmt.Sprintf("Error: sub agent session not found: %s", dbErr.Error()), nil
 	}
 
 	// 4. Verify target is a descendant of the same session tree.
 	if targetSession.RootServerSessionID != rootSessionID {
+		span.SetStatus(codes.Error, "not_descendant")
 		return "Error: target session is not a descendant of the current session tree", nil
 	}
 	if targetSession.ID == t.session.ID {
+		span.SetStatus(codes.Error, "self_query")
 		return "Error: cannot query the current session itself", nil
 	}
 
 	// 5. Query recent messages and find the last one.
 	recentMsgs, msgErr := t.helpers.deps.MessageRepo.ListRecentBySession(ctx, subSessionID, 50)
 	if msgErr != nil {
+		span.RecordError(msgErr)
+		span.SetStatus(codes.Error, "list_messages_failed")
 		return fmt.Sprintf("Error: failed to list messages: %s", msgErr.Error()), nil
 	}
 
@@ -127,6 +145,8 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 
 	resultJSON, err := mustMarshalJSON(result)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal_failed")
 		return "", fmt.Errorf("get_sub_agent_message: marshal result: %w", err)
 	}
 
@@ -140,9 +160,12 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_messages_failed")
 		return "", fmt.Errorf("get_sub_agent_message: publish messages: %w", err)
 	}
 
+	span.SetAttributes(attribute.Bool("has_message", result.MessageID != nil))
 	t.helpers.logger.Info(ctx, "getSubAgentMessage.completed", map[string]any{
 		"session_id":     t.session.ID.String(),
 		"target_session": subSessionID.String(),

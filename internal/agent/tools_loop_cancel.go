@@ -8,6 +8,9 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ---------------------------------------------------------------------------
@@ -120,11 +123,24 @@ func finalizeLoopStatus(
 	notFoundMsg string,
 	argumentsInJSON string,
 ) (string, error) {
+	ctx, span := h.tracer.Start(ctx, "tool."+toolName,
+		trace.WithAttributes(
+			attribute.String("session_id", session.ID.String()),
+			attribute.String("turn_id", turnID.String()),
+			attribute.String("target_status", string(status)),
+			attribute.Int("reason_length", len(reason)),
+		),
+	)
+	defer span.End()
+
 	loop, err := h.deps.LoopRepo.FindActive(ctx, session.ID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "find_active_failed")
 		return "", fmt.Errorf("%s: find active loop: %w", toolName, err)
 	}
 	if loop == nil {
+		span.SetAttributes(attribute.Bool("not_found", true))
 		return fmt.Sprintf("Error: %s", notFoundMsg), nil
 	}
 
@@ -137,6 +153,8 @@ func finalizeLoopStatus(
 	cancelLoopAsynqTask(ctx, h.deps, h.logger, loop, updateFields)
 
 	if err := h.deps.LoopRepo.Update(ctx, loop.ID, updateFields); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "update_failed")
 		return "", fmt.Errorf("%s: update: %w", toolName, err)
 	}
 
@@ -149,6 +167,8 @@ func finalizeLoopStatus(
 	}
 	resultJSON, err := mustMarshalJSON(result)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal_failed")
 		return "", fmt.Errorf("%s: marshal result: %w", toolName, err)
 	}
 
@@ -161,9 +181,12 @@ func finalizeLoopStatus(
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
 		return "", fmt.Errorf("%s: publish messages: %w", toolName, err)
 	}
 
+	span.SetAttributes(attribute.String("loop_id", loop.ID.String()))
 	h.logger.Info(ctx, logEvent, map[string]any{
 		"session_id": session.ID.String(),
 		"loop_id":    loop.ID.String(),

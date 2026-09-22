@@ -8,6 +8,9 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // defaultGoalMaxTurns is the fixed max_turns for create_goal.
@@ -52,6 +55,14 @@ func (t *createGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.create_goal",
+		trace.WithAttributes(
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.String("turn_id", t.turnID.String()),
+		),
+	)
+	defer span.End()
+
 	var args createGoalArgs
 	if ok, errMsg := parseToolArgs(ctx, t.helpers, "create_goal", argumentsInJSON, &args); !ok {
 		return errMsg, nil
@@ -59,21 +70,28 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if args.Condition == "" {
 		return "Error: condition is required and cannot be empty", nil
 	}
+	span.SetAttributes(attribute.Int("condition_length", len(args.Condition)))
 
 	// 1. Check for existing active goal.
 	existing, err := t.helpers.deps.GoalRepo.FindActive(ctx, t.session.ID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "find_active_failed")
 		return "", fmt.Errorf("create_goal: find active goal: %w", err)
 	}
 	if existing != nil {
+		span.SetAttributes(attribute.Bool("conflict", true))
 		return fmt.Sprintf("Error: an active goal already exists (id=%s, condition=%q). Complete or cancel it before creating a new one.",
 			existing.ID.String(), existing.Condition), nil
 	}
 
 	// 2. Check for existing active loop (mutual exclusion).
 	if conflictMsg, err := checkGoalLoopMutualExclusion(ctx, t.helpers.deps, t.session.ID, "goal"); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "mutual_exclusion_check_failed")
 		return "", fmt.Errorf("create_goal: %w", err)
 	} else if conflictMsg != "" {
+		span.SetAttributes(attribute.Bool("conflict", true))
 		return conflictMsg, nil
 	}
 
@@ -87,6 +105,8 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		TokenUsage:     0,
 	}
 	if err := t.helpers.deps.GoalRepo.Create(ctx, goal); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "create_failed")
 		return "", fmt.Errorf("create_goal: create: %w", err)
 	}
 
@@ -100,6 +120,8 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	}
 	resultJSON, err := mustMarshalJSON(result)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal_failed")
 		return "", fmt.Errorf("create_goal: marshal result: %w", err)
 	}
 
@@ -112,9 +134,12 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
 		return "", fmt.Errorf("create_goal: publish messages: %w", err)
 	}
 
+	span.SetAttributes(attribute.String("goal_id", goal.ID.String()))
 	t.helpers.logger.Info(ctx, "createGoal.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"goal_id":    goal.ID.String(),
@@ -233,11 +258,24 @@ func finalizeGoalStatus(
 	notFoundMsg string,
 	argumentsInJSON string,
 ) (string, error) {
+	ctx, span := h.tracer.Start(ctx, "tool."+toolName,
+		trace.WithAttributes(
+			attribute.String("session_id", session.ID.String()),
+			attribute.String("turn_id", turnID.String()),
+			attribute.String("target_status", string(status)),
+			attribute.Int("reason_length", len(reason)),
+		),
+	)
+	defer span.End()
+
 	goal, err := h.deps.GoalRepo.FindActive(ctx, session.ID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "find_active_failed")
 		return "", fmt.Errorf("%s: find active goal: %w", toolName, err)
 	}
 	if goal == nil {
+		span.SetAttributes(attribute.Bool("not_found", true))
 		return fmt.Sprintf("Error: %s", notFoundMsg), nil
 	}
 
@@ -246,6 +284,8 @@ func finalizeGoalStatus(
 		"last_reason": reason,
 	}
 	if err := h.deps.GoalRepo.Update(ctx, goal.ID, updateFields); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "update_failed")
 		return "", fmt.Errorf("%s: update: %w", toolName, err)
 	}
 
@@ -258,6 +298,8 @@ func finalizeGoalStatus(
 	}
 	resultJSON, err := mustMarshalJSON(result)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal_failed")
 		return "", fmt.Errorf("%s: marshal result: %w", toolName, err)
 	}
 
@@ -270,9 +312,12 @@ func finalizeGoalStatus(
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
 		return "", fmt.Errorf("%s: publish messages: %w", toolName, err)
 	}
 
+	span.SetAttributes(attribute.String("goal_id", goal.ID.String()))
 	h.logger.Info(ctx, logEvent, map[string]any{
 		"session_id": session.ID.String(),
 		"goal_id":    goal.ID.String(),

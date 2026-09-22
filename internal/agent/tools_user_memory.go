@@ -10,6 +10,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // getUserIDFromContext gets the user ID from context.
@@ -93,6 +96,13 @@ func (t *saveUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 }
 
 func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.save_user_memory",
+		trace.WithAttributes(
+			attribute.String("turn_id", ""),
+		),
+	)
+	defer span.End()
+
 	var args struct {
 		Category    string         `json:"category"`
 		Importance  string         `json:"importance"`
@@ -106,11 +116,18 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		return msg, nil
 	}
 	if args.Category == "" || args.Title == "" || args.Content == "" {
+		span.SetStatus(codes.Error, "missing_required_fields")
 		return "", fmt.Errorf("category, title, and content are required")
 	}
+	span.SetAttributes(
+		attribute.String("category", args.Category),
+		attribute.String("importance", args.Importance),
+		attribute.Int("content_length", len(args.Content)),
+	)
 
 	// Validate category
 	if !model.IsValidUserMemoryCategory(args.Category) {
+		span.SetStatus(codes.Error, "invalid_category")
 		return "", fmt.Errorf("invalid category: %s (must be one of: %s)",
 			args.Category, strings.Join(model.ValidUserMemoryCategories, ", "))
 	}
@@ -120,6 +137,7 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		args.Importance = model.ImportanceMedium
 	}
 	if !model.IsValidImportance(args.Importance) {
+		span.SetStatus(codes.Error, "invalid_importance")
 		return "", fmt.Errorf("invalid importance: %s (must be one of: %s)",
 			args.Importance, strings.Join(model.ValidImportances, ", "))
 	}
@@ -127,6 +145,7 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	// Tool-layer validation: feedback and project must include Why/How structure
 	if args.Category == model.UserMemoryCategoryFeedback || args.Category == model.UserMemoryCategoryProject {
 		if err := validateStructuredContent(args.Content); err != nil {
+			span.SetStatus(codes.Error, "content_validation_failed")
 			return "", fmt.Errorf("content validation failed for %s category: %w", args.Category, err)
 		}
 	}
@@ -134,8 +153,11 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	// Get user ID from context
 	userID, err := t.helpers.getUserIDFromContext(ctx)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "get_user_id_failed")
 		return "", fmt.Errorf("get user ID: %w", err)
 	}
+	span.SetAttributes(attribute.String("user_id", userID.String()))
 
 	// Get session ID for source tracking
 	sessionID := getSessionIDFromContext(ctx)
@@ -154,9 +176,12 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	}
 
 	if err := t.helpers.deps.UserMemoryRepo.Create(ctx, memory); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "create_failed")
 		return "", fmt.Errorf("save user memory: %w", err)
 	}
 
+	span.SetAttributes(attribute.String("memory_id", memory.ID.String()))
 	t.helpers.logger.Info(ctx, "save_user_memory.success", map[string]any{
 		"user_id":    userID.String(),
 		"memory_id":  memory.ID.String(),
@@ -225,6 +250,13 @@ func (t *updateUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, erro
 }
 
 func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.update_user_memory",
+		trace.WithAttributes(
+			attribute.String("turn_id", ""),
+		),
+	)
+	defer span.End()
+
 	var args struct {
 		MemoryID    string         `json:"memory_id"`
 		Title       *string        `json:"title,omitempty"`
@@ -239,37 +271,51 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 	}
 
 	if args.MemoryID == "" {
+		span.SetStatus(codes.Error, "missing_memory_id")
 		return "", fmt.Errorf("memory_id is required")
 	}
+	span.SetAttributes(attribute.String("memory_id", args.MemoryID))
 
 	memoryID, err := uuid.Parse(args.MemoryID)
 	if err != nil {
+		span.SetStatus(codes.Error, "invalid_memory_id")
 		return "", fmt.Errorf("invalid memory_id: %w", err)
 	}
 
 	userID, err := t.helpers.getUserIDFromContext(ctx)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "get_user_id_failed")
 		return "", fmt.Errorf("get user ID: %w", err)
 	}
+	span.SetAttributes(attribute.String("user_id", userID.String()))
 
 	existing, err := t.helpers.deps.UserMemoryRepo.GetByID(ctx, memoryID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "get_failed")
 		return "", fmt.Errorf("get memory: %w", err)
 	}
 	if existing.UserID != userID {
+		span.SetStatus(codes.Error, "not_owner")
 		return "", fmt.Errorf("memory %s does not belong to current user", args.MemoryID)
 	}
 
 	if validationErr := validateMemoryUpdateArgs(args, existing); validationErr != nil {
+		span.SetStatus(codes.Error, "validation_failed")
 		return "", validationErr
 	}
 
 	fields := buildMemoryUpdateFields(args)
 	if len(fields) == 0 {
+		span.SetAttributes(attribute.Bool("no_fields", true))
 		return "No fields to update.", nil
 	}
+	span.SetAttributes(attribute.Int("field_count", len(fields)))
 
 	if err := t.helpers.deps.UserMemoryRepo.Update(ctx, memoryID, fields); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "update_failed")
 		return "", fmt.Errorf("update memory: %w", err)
 	}
 
@@ -303,6 +349,13 @@ func (t *deleteUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, erro
 }
 
 func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.delete_user_memory",
+		trace.WithAttributes(
+			attribute.String("turn_id", ""),
+		),
+	)
+	defer span.End()
+
 	var args struct {
 		MemoryID string `json:"memory_id"`
 	}
@@ -311,29 +364,40 @@ func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 	}
 
 	if args.MemoryID == "" {
+		span.SetStatus(codes.Error, "missing_memory_id")
 		return "", fmt.Errorf("memory_id is required")
 	}
+	span.SetAttributes(attribute.String("memory_id", args.MemoryID))
 
 	memoryID, err := uuid.Parse(args.MemoryID)
 	if err != nil {
+		span.SetStatus(codes.Error, "invalid_memory_id")
 		return "", fmt.Errorf("invalid memory_id: %w", err)
 	}
 
 	// Verify ownership
 	userID, err := t.helpers.getUserIDFromContext(ctx)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "get_user_id_failed")
 		return "", fmt.Errorf("get user ID: %w", err)
 	}
+	span.SetAttributes(attribute.String("user_id", userID.String()))
 
 	existing, err := t.helpers.deps.UserMemoryRepo.GetByID(ctx, memoryID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "get_failed")
 		return "", fmt.Errorf("get memory: %w", err)
 	}
 	if existing.UserID != userID {
+		span.SetStatus(codes.Error, "not_owner")
 		return "", fmt.Errorf("memory %s does not belong to current user", args.MemoryID)
 	}
 
 	if err := t.helpers.deps.UserMemoryRepo.Delete(ctx, memoryID); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "delete_failed")
 		return "", fmt.Errorf("delete memory: %w", err)
 	}
 
@@ -373,6 +437,13 @@ func (t *listUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 }
 
 func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.list_user_memory",
+		trace.WithAttributes(
+			attribute.String("turn_id", ""),
+		),
+	)
+	defer span.End()
+
 	var args struct {
 		Category string `json:"category"`
 		Limit    int    `json:"limit"`
@@ -383,16 +454,24 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 
 	userID, err := t.helpers.getUserIDFromContext(ctx)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "get_user_id_failed")
 		return "", fmt.Errorf("get user ID: %w", err)
 	}
+	span.SetAttributes(
+		attribute.String("user_id", userID.String()),
+		attribute.String("category", args.Category),
+	)
 
 	if args.Limit <= 0 {
 		args.Limit = 20
 	}
+	span.SetAttributes(attribute.Int("limit", args.Limit))
 
 	var memories []*model.UserMemory
 	if args.Category != "" {
 		if !model.IsValidUserMemoryCategory(args.Category) {
+			span.SetStatus(codes.Error, "invalid_category")
 			return "", fmt.Errorf("invalid category: %s", args.Category)
 		}
 		memories, err = t.helpers.deps.UserMemoryRepo.ListByCategory(ctx, userID, args.Category, args.Limit)
@@ -400,10 +479,13 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		memories, err = t.helpers.deps.UserMemoryRepo.ListByUser(ctx, userID, args.Limit)
 	}
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "list_failed")
 		return "", fmt.Errorf("list user memories: %w", err)
 	}
 
 	if len(memories) == 0 {
+		span.SetAttributes(attribute.Int("count", 0))
 		return formatNoUserMemories(), nil
 	}
 
@@ -421,6 +503,7 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		}
 	}
 
+	span.SetAttributes(attribute.Int("count", len(memories)))
 	return formatUserMemoriesList(len(memories), items), nil
 }
 

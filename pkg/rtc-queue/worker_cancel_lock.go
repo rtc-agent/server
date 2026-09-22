@@ -72,10 +72,10 @@ func (w *Worker) setupCancelListener(
 				continue
 			}
 			w.log("worker.cancel_msg_received", map[string]any{
-				"session_id":   claim.SessionID,
-				"work_id":      claim.WorkID,
-				"msg_work_id":  cm.WorkID,
-				"msg_reason":   cm.Reason,
+				"session_id":    claim.SessionID,
+				"work_id":       claim.WorkID,
+				"msg_work_id":   cm.WorkID,
+				"msg_reason":    cm.Reason,
 				"work_id_match": cm.WorkID == claim.WorkID,
 			})
 			if cm.WorkID == claim.WorkID {
@@ -97,10 +97,10 @@ func (w *Worker) setupCancelListener(
 		// This means the Pub/Sub subscription ended (workCtx cancelled or
 		// connection lost) before a cancel for this work arrived.
 		w.log("worker.cancel_sub_channel_closed", map[string]any{
-			"session_id":        claim.SessionID,
-			"work_id":           claim.WorkID,
-			"admin_cancelled":   adminCancelled.Load(),
-			"message":           "cancel subscription channel closed; Pub/Sub subscription may have been lost",
+			"session_id":      claim.SessionID,
+			"work_id":         claim.WorkID,
+			"admin_cancelled": adminCancelled.Load(),
+			"message":         "cancel subscription channel closed; Pub/Sub subscription may have been lost",
 		})
 	}()
 
