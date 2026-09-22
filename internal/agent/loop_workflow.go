@@ -33,11 +33,22 @@ func (l *LoopWorkflow) Prefix() string { return "/loop" }
 // Scope returns ScopeSession, keeping the loop command active for the session.
 func (l *LoopWorkflow) Scope() command.Scope { return command.ScopeSession }
 
+// PromptPersistConfig declares that TriggerPrompt should be persisted as a prompt message.
+// The prompt is stored with name="command", title="loop", role="user" so it will be
+// merged with consecutive user messages by normalizeMessagesForLLM.
+func (l *LoopWorkflow) PromptPersistConfig() command.PromptPersistConfig {
+	return command.PromptPersistConfig{
+		Persist: true,
+		Name:    "command",
+		Title:   "loop",
+	}
+}
+
 // TriggerPrompt returns the loop creation user prompt. Called on the turn
 // the user types "/loop ...".
 func (l *LoopWorkflow) TriggerPrompt(ctx command.Context, args string) (*command.PromptContribution, error) {
 	return &command.PromptContribution{
-		Role:    "system",
+		Role:    "user",
 		Content: loopCreationPrompt,
 	}, nil
 }

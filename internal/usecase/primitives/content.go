@@ -286,6 +286,49 @@ func UserMessageContentData(text string, scenarios []protocol.ScenarioRef) (prot
 	}, nil
 }
 
+// PromptContentData builds a ContentData of prompt type.
+// Used for persisting system-level instructions (e.g., scenarios, goals) as messages.
+func PromptContentData(name, title, prompt string) (protocol.ContentData, error) {
+	return PromptContentDataWithRole(name, title, prompt, "")
+}
+
+// PromptContentDataWithRole builds a ContentData of prompt type with role override.
+// Role controls how the prompt is injected into LLM context:
+// - "" or "system": injected as system message (default)
+// - "user": injected as user message (will be merged with consecutive user messages)
+func PromptContentDataWithRole(name, title, prompt, role string) (protocol.ContentData, error) {
+	content := protocol.PromptContent{
+		Name:   name,
+		Prompt: prompt,
+	}
+	if title != "" {
+		content.Title = &title
+	}
+	if role != "" && role != "system" {
+		r := protocol.PromptContentRole(role)
+		content.Role = &r
+	}
+	return protocol.ContentData{
+		Type: protocol.ContentTypePrompt,
+		Data: content,
+	}, nil
+}
+
+// ParsePromptContent parses a PromptContent from an arbitrary value.
+// The input arrives as map[string]interface{} after JSON deserialization and
+// requires a second conversion pass through JSON round-tripping.
+func ParsePromptContent(data any) (protocol.PromptContent, error) {
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return protocol.PromptContent{}, fmt.Errorf("marshal prompt content: %w", err)
+	}
+	var pc protocol.PromptContent
+	if err := json.Unmarshal(bytes, &pc); err != nil {
+		return protocol.PromptContent{}, fmt.Errorf("unmarshal prompt content: %w", err)
+	}
+	return pc, nil
+}
+
 // ContentDataString extracts ContentData.Data (any) as a string.
 // JSON strings are returned as-is (after unquoting); other types are
 // serialized to a JSON string.

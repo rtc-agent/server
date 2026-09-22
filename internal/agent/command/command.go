@@ -75,6 +75,23 @@ type PromptContributor interface {
 	SustainPrompt(ctx Context, args string) (*PromptContribution, error)
 }
 
+// PromptPersistConfig describes how a command's TriggerPrompt should be persisted.
+type PromptPersistConfig struct {
+	// Persist indicates whether the TriggerPrompt should be persisted as a DB message.
+	Persist bool
+	// Name is the prompt name for DB storage (typically the command name).
+	Name string
+	// Title is the display title for the prompt message.
+	Title string
+}
+
+// PersistablePrompt is implemented by commands whose TriggerPrompt should be
+// persisted as a prompt message in DB (rather than dynamically injected each turn).
+// This enables the prompt to survive across turns via extractAndInjectPrompts.
+type PersistablePrompt interface {
+	PromptPersistConfig() PromptPersistConfig
+}
+
 // ToolProvider contributes tools to the LLM call.
 // Called during createTools. Commands that don't need tools can omit this.
 type ToolProvider interface {

@@ -39,6 +39,10 @@ func clampForkLimit(ptr *int) int {
 // buildForkMessages constructs the message list for a fork operation.
 // All messages are copied from the old session, except the last one which
 // is replaced with the new content.
+//
+// If newContent carries scenarios, old prompt messages with name="scenarios"
+// are filtered out and a fresh prompt message is prepended, preventing stale
+// scenario content from persisting in the forked session.
 func buildForkMessages(
 	oldMessages []*model.Message,
 	creator usecase.UserCreator,
@@ -47,18 +51,53 @@ func buildForkMessages(
 	oldMsgID uuid.UUID,
 	ctx context.Context,
 ) []primitives.MessageToCreate {
-	result := make([]primitives.MessageToCreate, len(oldMessages))
-	lastIdx := len(oldMessages) - 1
+	// Determine if new content needs a fresh prompt message.
+	needsNewPrompt := needsPromptMessage(newContent)
 
-	for i, oldMsg := range oldMessages {
+	// Filter out old prompt messages that would conflict with the new one.
+	// When forking with new scenarios, the old "scenarios" prompt is stale.
+	var filteredMessages []*model.Message
+	for _, oldMsg := range oldMessages {
+		if needsNewPrompt {
+			contentData, parseErr := primitives.ParseContentData(oldMsg.Content)
+			if parseErr == nil && contentData.Type == protocol.ContentTypePrompt {
+				pc, pcErr := primitives.ParsePromptContent(contentData.Data)
+				if pcErr == nil && pc.Name == "scenarios" {
+					// Skip old scenarios prompt — a fresh one will be prepended.
+					continue
+				}
+			}
+		}
+		filteredMessages = append(filteredMessages, oldMsg)
+	}
+
+	result := make([]primitives.MessageToCreate, 0, len(filteredMessages)+1)
+	lastIdx := len(filteredMessages) - 1
+
+	// Prepend new prompt message if needed (before all other messages).
+	if needsNewPrompt {
+		promptContent, buildErr := buildPromptContent(newContent)
+		if buildErr != nil {
+			logger.Warn(ctx, "[ForkSession] build prompt content failed", zap.Error(buildErr))
+		} else if promptContent.Type == protocol.ContentTypePrompt {
+			result = append(result, primitives.MessageToCreate{
+				Role:    protocol.MessageRoleSystem,
+				Creator: usecase.SystemCreator{},
+				Content: promptContent,
+				Status:  protocol.MessageStreamingCompleted,
+			})
+		}
+	}
+
+	for i, oldMsg := range filteredMessages {
 		if i == lastIdx {
-			result[i] = primitives.MessageToCreate{
+			result = append(result, primitives.MessageToCreate{
 				Role:     protocol.MessageRoleUser,
 				Creator:  creator,
 				Content:  newContent,
 				Status:   protocol.MessageStreamingPending,
 				ClientID: newClientMsgID,
-			}
+			})
 		} else {
 			content, parseErr := primitives.ParseContentData(oldMsg.Content)
 			if parseErr != nil {
@@ -67,7 +106,7 @@ func buildForkMessages(
 					zap.Error(parseErr))
 			}
 			tokenUsage := oldMsg.TokenUsage()
-			result[i] = primitives.MessageToCreate{
+			result = append(result, primitives.MessageToCreate{
 				Role:       protocol.MessageRole(oldMsg.Role),
 				Creator:    creator,
 				Content:    content,
@@ -76,7 +115,7 @@ func buildForkMessages(
 				CreatedAt:  oldMsg.CreatedAt,
 				UpdatedAt:  oldMsg.UpdatedAt,
 				TokenUsage: &tokenUsage,
-			}
+			})
 		}
 	}
 	return result

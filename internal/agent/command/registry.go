@@ -218,6 +218,32 @@ func (r *CommandRegistry) CollectTools(ctx Context) []tool.BaseTool {
 	return tools
 }
 
+// CollectAllTools returns tools from ALL registered commands,
+// regardless of activation state. Used for static tool registration.
+//
+// This ensures tools are always available to the LLM, eliminating
+// the need to track command activation state across interrupt/resume cycles.
+// The LLM is responsible for using these tools only when appropriate
+// (guided by TriggerPrompt injections).
+func (r *CommandRegistry) CollectAllTools(ctx Context) []tool.BaseTool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var tools []tool.BaseTool
+	for _, cmd := range r.registered {
+		tp, ok := cmd.(ToolProvider)
+		if !ok {
+			continue
+		}
+		cmdCtx := ctx
+		// Note: Args is empty for non-activated commands.
+		// This is acceptable because tool creation typically doesn't depend on args.
+		cmdCtx.Args = ""
+		tools = append(tools, tp.Tools(cmdCtx)...)
+	}
+	return tools
+}
+
 // OnTurnComplete invokes TurnHook.OnTurnComplete for all active commands in
 // registration order, then deactivates one-shot commands. Errors from hooks
 // are collected and returned; they do not interrupt other hooks.
@@ -318,4 +344,30 @@ func scopeOf(cmd Command) Scope {
 		return s.Scope()
 	}
 	return ScopeOneShot
+}
+
+// FindByName returns the registered command with the given name, or nil if not found.
+func (r *CommandRegistry) FindByName(name string) Command {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, cmd := range r.registered {
+		if cmd.Name() == name {
+			return cmd
+		}
+	}
+	return nil
+}
+
+// IsNewlyTriggered reports whether the named command was freshly triggered
+// (not sustained) in the most recent DetectAndInject call for the session.
+func (r *CommandRegistry) IsNewlyTriggered(sessionID uuid.UUID, cmdName string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entries := r.activated[sessionID]
+	for _, e := range entries {
+		if e.cmd.Name() == cmdName {
+			return e.triggeredThisTurn
+		}
+	}
+	return false
 }

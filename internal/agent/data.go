@@ -194,23 +194,22 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 		tools = append(tools, listUserMemoryTool)
 	}
 
-	// Slash-command framework: collect tools from all active commands.
+	// Slash-command framework: collect tools from ALL registered commands.
 	//
-	// IMPORTANT: pre-activate commands from DB state before CollectTools.
-	// DetectAndInject only runs on new user messages (gen_input). Resume
-	// turns (gen_resume) skip it, and rtc-queue may route turns to
-	// different server instances — each has its own in-memory
-	// CommandRegistry with no activation state. Without DB-based
-	// pre-activation, loop/goal tools vanish on resume turns.
+	// Static registration: tools are always available to the LLM, regardless
+	// of command activation state. This eliminates the need to track activation
+	// state across interrupt/resume cycles, solving the "tools disappear on resume"
+	// problem.
+	//
+	// The LLM is guided to use these tools appropriately by TriggerPrompt
+	// injections (e.g., "only call create_loop after user confirms").
 	if h.deps.CommandRegistry != nil {
-		h.ensureCommandsActivated(ctx, sid)
-
 		cmdCtx := command.Context{
 			Context:   ctx,
 			SessionID: sid,
 			TurnID:    tid,
 		}
-		tools = append(tools, h.deps.CommandRegistry.CollectTools(cmdCtx)...)
+		tools = append(tools, h.deps.CommandRegistry.CollectAllTools(cmdCtx)...)
 	}
 
 	// Wrap all tools with error handler: convert tool errors to string results
@@ -290,30 +289,6 @@ func (l *toolCallLogger) InvokableRun(ctx context.Context, argumentsInJSON strin
 		})
 	}
 	return result, err
-}
-
-// ensureCommandsActivated restores command activation state from DB.
-// This must be called before CollectTools or DetectAndInject to ensure
-// that commands (loop, goal) are available on resume turns that may
-// execute on a different server instance than the one that handled
-// the original trigger turn.
-//
-// Idempotent: no-op if the registry is nil, or commands are already activated.
-// Errors from DB lookups are silently ignored (degrade gracefully).
-func (h *helpers) ensureCommandsActivated(ctx context.Context, sessionID uuid.UUID) {
-	if h.deps.CommandRegistry == nil {
-		return
-	}
-	if h.deps.LoopRepo != nil {
-		if activeLoop, err := h.deps.LoopRepo.FindActive(ctx, sessionID); err == nil && activeLoop != nil {
-			h.deps.CommandRegistry.EnsureActivated("loop", sessionID, "")
-		}
-	}
-	if h.deps.GoalRepo != nil {
-		if activeGoal, err := h.deps.GoalRepo.FindActive(ctx, sessionID); err == nil && activeGoal != nil {
-			h.deps.CommandRegistry.EnsureActivated("goal", sessionID, "")
-		}
-	}
 }
 
 // createAgent builds the eino agent from the session's tools.

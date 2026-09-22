@@ -141,6 +141,34 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 			}
 		}
 
+		// Create prompt message if needed (before user message to ensure correct global_offset).
+		// Prompt messages persist system-level instructions (e.g., scenarios) across turns.
+		var promptMsg *model.Message
+		if needsPromptMessage(req.ContentData) {
+			promptContent, buildErr := buildPromptContent(req.ContentData)
+			if buildErr != nil {
+				logger.Warn(ctx, "[SendMessage] build prompt content failed", zap.Error(buildErr))
+				// Degrade gracefully: continue without prompt message.
+			} else if promptContent.Type == protocol.ContentTypePrompt {
+				systemCreator := usecase.SystemCreator{}
+				var createErr error
+				promptMsg, createErr = primitives.CreateMessage(
+					txCtx, h.deps.Deps, session.ID, nil,
+					protocol.MessageRoleSystem,
+					systemCreator,
+					promptContent,
+					protocol.MessageStreamingCompleted, // Prompt messages are immediately complete.
+					"",                                  // Empty client_id; CreateMessage generates UUID.
+					nil,
+				)
+				if createErr != nil {
+					return nil, fmt.Errorf("create prompt message: %w", createErr)
+				}
+				logger.Info(ctx, "[SendMessage] created prompt message",
+					zap.String("prompt_msg_id", promptMsg.ID.String()))
+			}
+		}
+
 		// Create message WITHOUT a turnID — the turn is created by turn-agent
 		// when the worker processes the work item published below.
 		msg, err := primitives.CreateMessage(
@@ -165,7 +193,14 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 				zap.String("work_id", workID))
 		}
 
-		return primitives.BuildSendMessageUpdates(session, isNew, nil, msg.ID), nil
+		// Collect message IDs for updates (prompt message + user message).
+		var messageIDs []uuid.UUID
+		if promptMsg != nil {
+			messageIDs = append(messageIDs, promptMsg.ID)
+		}
+		messageIDs = append(messageIDs, msg.ID)
+
+		return primitives.BuildSendMessageUpdates(session, isNew, nil, messageIDs), nil
 	})
 	if err != nil {
 		if errors.Is(err, updates.ErrPushAfterCommit) {

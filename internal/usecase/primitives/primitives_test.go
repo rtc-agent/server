@@ -54,7 +54,7 @@ func TestCheckSessionOwnership_SystemAlwaysPass(t *testing.T) {
 func TestBuildSendMessageUpdates_SkipsForSystemSession(t *testing.T) {
 	s := &model.Session{ID: uuid.New(), OwnerKind: string(usecase.CreatorKindSystem), OwnerRefID: "system"}
 	turnID := uuid.New()
-	if items := primitives.BuildSendMessageUpdates(s, true, &turnID, uuid.New()); len(items) != 0 {
+	if items := primitives.BuildSendMessageUpdates(s, true, &turnID, []uuid.UUID{uuid.New()}); len(items) != 0 {
 		t.Fatalf("system session should produce no updates, got %d", len(items))
 	}
 }
@@ -63,9 +63,22 @@ func TestBuildSendMessageUpdates_UserSessionProducesPush(t *testing.T) {
 	uid := uuid.New()
 	s := &model.Session{ID: uuid.New(), OwnerKind: string(usecase.CreatorKindUser), OwnerRefID: uid.String()}
 	turnID := uuid.New()
-	items := primitives.BuildSendMessageUpdates(s, true, &turnID, uuid.New())
+	items := primitives.BuildSendMessageUpdates(s, true, &turnID, []uuid.UUID{uuid.New()})
 	if len(items) != 1 || len(items[0].Items) != 3 {
 		t.Fatalf("expected 1 channel with 3 items, got %+v", items)
+	}
+}
+
+func TestBuildSendMessageUpdates_MultipleMessageIDs(t *testing.T) {
+	uid := uuid.New()
+	s := &model.Session{ID: uuid.New(), OwnerKind: string(usecase.CreatorKindUser), OwnerRefID: uid.String()}
+	turnID := uuid.New()
+	msgID1 := uuid.New()
+	msgID2 := uuid.New()
+	items := primitives.BuildSendMessageUpdates(s, true, &turnID, []uuid.UUID{msgID1, msgID2})
+	// Expected: 1 session + 1 turn + 2 messages = 4 items
+	if len(items) != 1 || len(items[0].Items) != 4 {
+		t.Fatalf("expected 1 channel with 4 items, got %+v", items)
 	}
 }
 

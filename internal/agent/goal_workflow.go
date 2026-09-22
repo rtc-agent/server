@@ -32,11 +32,22 @@ func (g *GoalWorkflow) Prefix() string { return "/goal" }
 // Scope returns ScopeSession, keeping the goal command active for the session.
 func (g *GoalWorkflow) Scope() command.Scope { return command.ScopeSession }
 
+// PromptPersistConfig declares that TriggerPrompt should be persisted as a prompt message.
+// The prompt is stored with name="command", title="goal", role="user" so it will be
+// merged with consecutive user messages by normalizeMessagesForLLM.
+func (g *GoalWorkflow) PromptPersistConfig() command.PromptPersistConfig {
+	return command.PromptPersistConfig{
+		Persist: true,
+		Name:    "command",
+		Title:   "goal",
+	}
+}
+
 // TriggerPrompt returns the goal creation user prompt. Called on the turn
 // the user types "/goal ...".
 func (g *GoalWorkflow) TriggerPrompt(ctx command.Context, args string) (*command.PromptContribution, error) {
 	return &command.PromptContribution{
-		Role:    "system",
+		Role:    "user",
 		Content: goalCreationPrompt,
 	}, nil
 }

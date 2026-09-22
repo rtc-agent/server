@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/stringutil"
@@ -48,19 +47,38 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// Summary truncation: find the most recent summary message and truncate
 	// history to start from it. Messages before the summary are already
 	// compressed into it and would not be sent to the agent.
-	tmpMsgs := make([]*model.Message, 0, len(dbMsgs))
+	//
+	// Exception: prompt-type messages are always preserved regardless of
+	// position, because they contain persistent system instructions that
+	// must survive compaction (design principle: "系统提示词应该一直存在于上下文中").
+	summaryIdx := -1
 	for i := len(dbMsgs) - 1; i >= 0; i-- {
-		msg := dbMsgs[i]
-		tmpMsgs = append(tmpMsgs, msg)
-		contentData, parseErr := primitives.ParseContentData(msg.Content)
+		contentData, parseErr := primitives.ParseContentData(dbMsgs[i].Content)
 		if parseErr == nil && contentData.Type == protocol.ContentTypeSummary {
+			summaryIdx = i
 			break
 		}
 	}
-	sort.Slice(tmpMsgs, func(i, j int) bool {
-		return tmpMsgs[i].GlobalOffset < tmpMsgs[j].GlobalOffset
-	})
-	dbMsgs = tmpMsgs
+
+	if summaryIdx > 0 {
+		// Collect prompt messages that are before the summary boundary.
+		// These would be lost by truncation but must be preserved.
+		var preservedPrompts []*model.Message
+		for i := 0; i < summaryIdx; i++ {
+			contentData, parseErr := primitives.ParseContentData(dbMsgs[i].Content)
+			if parseErr == nil && contentData.Type == protocol.ContentTypePrompt {
+				preservedPrompts = append(preservedPrompts, dbMsgs[i])
+			}
+		}
+		// Truncate to summary boundary, then prepend preserved prompt messages.
+		// preservedPrompts are in global_offset order (scanned left to right).
+		dbMsgs = append(preservedPrompts, dbMsgs[summaryIdx:]...)
+	} else if summaryIdx == 0 {
+		// Summary is the first message — keep all messages from summary onward.
+		// No messages before summary to preserve.
+		dbMsgs = dbMsgs[summaryIdx:]
+	}
+	// If summaryIdx < 0, no summary found — keep all messages as-is.
 
 	// Convert DB messages to turn-agent Messages.
 	// The conversion logic mirrors the old SchemaMessages method in context.go,
@@ -83,7 +101,12 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 			})
 		}
 		if len(converted) == 0 {
-			droppedCount++
+			// Only count as dropped if there was a parse error.
+			// Prompt messages intentionally return (nil, nil) — they are
+			// handled separately by extractAndInjectPrompts, not dropped.
+			if convErr != nil {
+				droppedCount++
+			}
 			continue
 		}
 		for _, cm := range converted {
@@ -121,12 +144,23 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	//
 	// Injection timing: command prompts and scenario prompts are injected
 	// BEFORE attachments are prepended, so the final message order is:
-	//   [system] Attachments → [system] Scenarios → [system] Command prompts → [conversation]
+	//   [system] Attachments → [system] Prompts → [system] Scenarios → [system] Command prompts → [conversation]
 	// (Attachments win the front position because they are prepended last.)
-	messages = h.injectCommandPrompts(ctx, sid, messages)
+	//
+	// dbMsgs is passed to injectCommandPrompts so that newly persisted prompt
+	// messages can be appended to it, making them visible to extractAndInjectPrompts.
+	messages, dbMsgs = h.injectCommandPrompts(ctx, sid, messages, dbMsgs)
+
+	// Extract and inject persistent prompt messages from DB.
+	// These are system-level instructions (e.g., scenarios) that must survive
+	// across turns. Must be called BEFORE injectScenarioPrompts so the detection
+	// logic in injectScenarioPrompts can skip duplicate injection.
+	messages = h.extractAndInjectPrompts(ctx, messages, dbMsgs)
 
 	// Inject scenario prompts from the last user message's scenarios field.
 	// Pass the already-loaded dbMsgs to avoid a redundant DB query.
+	// Note: if scenarios have been persisted as prompt messages (see Phase 2),
+	// this function detects them and skips injection to avoid duplicates.
 	messages = h.injectScenarioPrompts(messages, dbMsgs)
 
 	// Build and inject all attachments (TodoList, SessionMemory, UserMemory).

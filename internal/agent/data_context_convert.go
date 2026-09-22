@@ -123,6 +123,11 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 			CreatedAt:  msg.CreatedAt,
 		}}, nil
 
+	case protocol.ContentTypePrompt:
+		// Prompt messages are handled separately by extractAndInjectPrompts.
+		// Skip here to keep them out of the conversation history.
+		return nil, nil
+
 	default:
 		// Unrecognized content type — silently skip (not a parse error).
 		return nil, nil
