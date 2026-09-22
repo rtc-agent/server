@@ -49,6 +49,7 @@ import (
 	"github.com/cloudwego/eino/callbacks"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // Config holds the dependencies needed to build a turnagent.Agent.
@@ -368,6 +369,11 @@ type helpers struct {
 // applyHelperDefaults fills in zero-value fields on helpers with sensible
 // defaults. Extracted from New() to reduce its length.
 func applyHelperDefaults(h *helpers) {
+	// Default tracer: noop tracer if not provided
+	if h.tracer == nil {
+		h.tracer = noop.NewTracerProvider().Tracer("rtc-agent")
+	}
+
 	if h.contextTokensLimit <= 0 {
 		h.contextTokensLimit = 25000
 	}

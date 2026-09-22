@@ -421,3 +421,93 @@ func TestEnsureActivated_NoDoubleEntry(t *testing.T) {
 		t.Fatalf("after EnsureActivated, active = %v (want 1)", got)
 	}
 }
+
+// --- OnTurnComplete distributed system tests ---
+
+// TestOnTurnComplete_CallsAllRegisteredHooks verifies that OnTurnComplete
+// iterates all registered commands (not just activated ones) and calls their
+// OnTurnComplete hooks. This fixes the distributed system bug where activation
+// state was not shared across servers.
+func TestOnTurnComplete_CallsAllRegisteredHooks(t *testing.T) {
+	r := NewCommandRegistry()
+
+	// Register two commands that implement TurnHook
+	hook1 := &hookCmd{fakeCmd: fakeCmd{name: "loop", prefix: "/loop", scope: ScopeSession}}
+	hook2 := &hookCmd{fakeCmd: fakeCmd{name: "goal", prefix: "/goal", scope: ScopeSession}}
+	r.Register(hook1)
+	r.Register(hook2)
+
+	ctx := newCtx("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+	// Do NOT activate any commands (simulating a different server that didn't
+	// receive the /loop or /goal command)
+
+	// OnTurnComplete should still call hooks for all registered commands
+	errs := r.OnTurnComplete(ctx)
+	if len(errs) != 0 {
+		t.Errorf("unexpected errors: %v", errs)
+	}
+
+	// Both hooks should have been called
+	if hook1.turnCalls != 1 {
+		t.Errorf("hook1.turnCalls = %d; want 1", hook1.turnCalls)
+	}
+	if hook2.turnCalls != 1 {
+		t.Errorf("hook2.turnCalls = %d; want 1", hook2.turnCalls)
+	}
+}
+
+// TestOnTurnComplete_Idempotent verifies that OnTurnComplete can be called
+// multiple times safely (idempotent behavior).
+func TestOnTurnComplete_Idempotent(t *testing.T) {
+	r := NewCommandRegistry()
+	hook := &hookCmd{fakeCmd: fakeCmd{name: "loop", prefix: "/loop", scope: ScopeSession}}
+	r.Register(hook)
+
+	ctx := newCtx("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+	// Call OnTurnComplete multiple times (simulating repeated calls from
+	// recovery mechanisms or concurrent turn completions)
+	for i := 0; i < 3; i++ {
+		errs := r.OnTurnComplete(ctx)
+		if len(errs) != 0 {
+			t.Errorf("iteration %d: unexpected errors: %v", i, errs)
+		}
+	}
+
+	// Hook should have been called 3 times
+	if hook.turnCalls != 3 {
+		t.Errorf("hook.turnCalls = %d; want 3", hook.turnCalls)
+	}
+}
+
+// TestOnTurnComplete_HookErrorIsolation verifies that errors from one hook
+// don't prevent other hooks from being called.
+func TestOnTurnComplete_HookErrorIsolation(t *testing.T) {
+	r := NewCommandRegistry()
+
+	hook1 := &hookCmd{
+		fakeCmd: fakeCmd{name: "loop", prefix: "/loop", scope: ScopeSession},
+		hookErr: errors.New("hook1 failed"),
+	}
+	hook2 := &hookCmd{fakeCmd: fakeCmd{name: "goal", prefix: "/goal", scope: ScopeSession}}
+	r.Register(hook1)
+	r.Register(hook2)
+
+	ctx := newCtx("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+	errs := r.OnTurnComplete(ctx)
+
+	// Should have 1 error (from hook1)
+	if len(errs) != 1 {
+		t.Errorf("len(errs) = %d; want 1", len(errs))
+	}
+
+	// Both hooks should have been called (error isolation)
+	if hook1.turnCalls != 1 {
+		t.Errorf("hook1.turnCalls = %d; want 1", hook1.turnCalls)
+	}
+	if hook2.turnCalls != 1 {
+		t.Errorf("hook2.turnCalls = %d; want 1", hook2.turnCalls)
+	}
+}
