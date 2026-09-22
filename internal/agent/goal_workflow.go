@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/rtc-agent/server/internal/agent/command"
@@ -188,6 +189,24 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 		return err
 	}
 
+	// Create user-role notification message before triggering next turn.
+	// This follows the async sub-agent pattern (same as loop workflow):
+	// - Notification becomes the new "last user message" in conversation history
+	// - Prevents DetectAndInject from re-detecting the original /goal command
+	// - Ensures SustainPrompt is called (not TriggerPrompt) on the next turn
+	//
+	// Use log+degrade pattern: notification failure should not interrupt the main flow.
+	prompt := buildGoalTaskNotificationPrompt(goal)
+	if err := createNotificationMessage(ctx, g.helpers.deps, ctx.SessionID, prompt); err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		g.helpers.logger.Warn(ctx, "goalWorkflow.create_notification_failed", map[string]any{
+			"goal_id": goal.ID.String(),
+			"error":   err.Error(),
+		})
+		// degrade: continue even if notification creation fails
+	}
+
 	// Re-queue a submit work item to trigger the next turn.
 	// Use log+degrade pattern: re-queue failure should not interrupt the main flow, only log.
 	if g.helpers.queue != nil {
@@ -237,4 +256,29 @@ func registerGoalCommand(registry *command.CommandRegistry, h *helpers) {
 		return
 	}
 	registry.Register(&GoalWorkflow{helpers: h, registry: registry})
+}
+
+// buildGoalTaskNotificationPrompt constructs the notification text for a goal turn continuation.
+// Following the async sub-agent pattern: user-role message with <system-reminder>
+// XML tags telling the LLM "this is system-level context, not user input".
+//
+// The notification is a simple "wake up" call. Detailed goal management instructions
+// are provided by SustainPrompt (goal-management.md.tmpl), which tells the LLM to:
+// - Check goal status
+// - Call completeGoal if condition is satisfied
+// - Call cancelGoal if condition cannot be achieved
+// - Otherwise continue working toward the goal
+func buildGoalTaskNotificationPrompt(goal *model.Goal) string {
+	return fmt.Sprintf(`<system-reminder>
+Continue working on the active goal.
+
+Goal ID: %s
+Progress: Turn %d of %d
+
+Review the goal condition and your current progress. If the goal is complete, call the completeGoal tool to mark it as completed.
+</system-reminder>`,
+		goal.ID.String(),
+		goal.CompletedTurns+1,
+		goal.MaxTurns,
+	)
 }

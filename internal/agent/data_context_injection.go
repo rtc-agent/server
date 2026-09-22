@@ -26,10 +26,9 @@ import (
 // Final message order after all injection steps:
 //
 //	[system] Attachments (TodoList, SessionMemory, UserMemory)
-//	[system] Prompts (extractAndInjectPrompts — persistent prompts from DB)
 //	[system] Scenarios (injectScenarioPrompts)
 //	[system] Command prompts (injectCommandPrompts)
-//	[user/assistant] Conversation history
+//	[user/assistant] Conversation history (includes prompt messages at natural position)
 
 // injectCommandPrompts runs the slash-command framework's DetectAndInject,
 // converting the returned PromptContributions to turnagent Messages.
@@ -44,13 +43,10 @@ import (
 // (Claude API requires system messages at the start). User messages are
 // injected here on every turn so they remain in the LLM context.
 //
-// dbMsgs is the in-memory snapshot of DB messages from loadMessages.
-// Newly persisted prompt messages are appended to dbMsgs so that
-// extractAndInjectPrompts (called after this function) can see them.
-//
-// For PersistablePrompt commands, TriggerPrompt is skipped from dynamic
-// injection (it's handled by extractAndInjectPrompts via DB path).
-// SustainPrompt is always dynamically injected.
+// For PersistablePrompt commands, TriggerPrompt is persisted to DB and
+// included in the conversation history by convertDBMessage at its natural
+// position (based on global_offset). SustainPrompt is always dynamically
+// injected (not persisted).
 //
 // Returns updated (messages, dbMsgs).
 func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID, messages []*turnagent.Message, dbMsgs []*model.Message) ([]*turnagent.Message, []*model.Message) {
@@ -58,13 +54,17 @@ func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID,
 		return messages, dbMsgs
 	}
 
-	// Extract last user message content.
+	// Extract last user message content, but ONLY if the last message overall
+	// is a user message. This prevents re-detecting commands from historical
+	// user messages when the conversation has moved on (e.g., after assistant
+	// responses or tool results).
+	//
+	// Command detection should only trigger on fresh user input, not on
+	// historical messages. If the last message is assistant/tool, the user
+	// hasn't sent a new command, so we skip detection entirely.
 	var lastUserContent string
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == turnagent.RoleUser {
-			lastUserContent = messages[i].Content
-			break
-		}
+	if len(messages) > 0 && messages[len(messages)-1].Role == turnagent.RoleUser {
+		lastUserContent = messages[len(messages)-1].Content
 	}
 
 	cmdCtx := command.Context{
@@ -77,14 +77,14 @@ func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID,
 	}
 
 	// Persist TriggerPrompt for commands that implement PersistablePrompt.
-	// Newly created messages are appended to dbMsgs so extractAndInjectPrompts
-	// can see them on this turn (not just subsequent turns).
+	// Newly created messages are appended to dbMsgs so they can be converted
+	// by convertDBMessage on this turn (not just subsequent turns).
 	newPromptMsgs := h.persistCommandPromptsIfNeeded(ctx, sessionID, contributions)
 	dbMsgs = append(dbMsgs, newPromptMsgs...)
 
 	// Separate system and user contributions.
 	// For PersistablePrompt commands, skip TriggerPrompt from dynamic injection
-	// (it's handled by extractAndInjectPrompts via the DB path we just updated).
+	// (it's persisted to DB and included by convertDBMessage).
 	// SustainPrompt is always dynamically injected (not persisted).
 	var systemMsgs, userMsgs []*turnagent.Message
 	for _, nc := range contributions {
@@ -132,16 +132,15 @@ func wrapWithTag(name, content string) string {
 // model.Message (lost during convertDBMessage).
 //
 // Detection: if scenarios have already been persisted as prompt messages
-// (by Handler layer), extractAndInjectPrompts will have injected them.
+// (by Handler layer), convertDBMessage will include them.
 // This function detects that case and skips injection to avoid duplicates.
 //
 // Injection order (final):
 //
 //	[system] Attachments (TodoList, SessionMemory, UserMemory)
-//	[system] Prompts (extractAndInjectPrompts — persistent prompts from DB)
 //	[system] Scenarios (this function — fallback when not persisted)
 //	[system] Command prompts (/goal, /persona, etc.)
-//	[user/assistant] Conversation history
+//	[user/assistant] Conversation history (includes persisted prompt messages)
 func (h *helpers) injectScenarioPrompts(
 	messages []*turnagent.Message,
 	dbMsgs []*model.Message,
@@ -158,7 +157,7 @@ func (h *helpers) injectScenarioPrompts(
 	}
 
 	// Check if scenarios have already been persisted as prompt messages.
-	// If so, extractAndInjectPrompts has already injected them — skip to avoid duplicates.
+	// If so, convertDBMessage will include them — skip to avoid duplicates.
 	for _, dbMsg := range dbMsgs {
 		contentData, err := primitives.ParseContentData(dbMsg.Content)
 		if err != nil {
@@ -238,122 +237,11 @@ func (h *helpers) injectScenarioPrompts(
 	// Insert at the beginning of the message array (system messages must come first).
 	// Note: attachments will be prepended later, so the final order is:
 	// [system] Attachments
-	// [system] Prompts (injected by extractAndInjectPrompts)
 	// [system] Scenarios (injected by this function)
 	// [system] Command prompts
-	// [conversation history]
+	// [conversation history] (includes persisted prompt messages)
 	messages = append([]*turnagent.Message{scenarioMsg}, messages...)
 
-	return messages
-}
-
-// extractAndInjectPrompts scans dbMsgs for prompt-type messages, converts
-// them to system Messages, and prepends them to the message array.
-//
-// Prompt messages are stored persistently in DB (created by Handler layer)
-// and injected here on every turn so they remain in the LLM context.
-//
-// Role support: prompts with role="user" are injected as user messages
-// (will be merged with consecutive user messages by normalizeMessagesForLLM).
-//
-// Deduplication: when multiple prompt messages share the same dedup key,
-// only the latest one is kept. The dedup key is:
-// - name:title (for name="command", to distinguish goal/loop prompts)
-// - name (for other prompts like "scenarios")
-//
-// This prevents token waste from duplicate content while preserving the
-// most recent version of each prompt.
-//
-// Note: normalizeMessagesForLLM will later extract all system messages to
-// the front of the array, so exact position here is not critical.
-func (h *helpers) extractAndInjectPrompts(
-	ctx context.Context,
-	messages []*turnagent.Message,
-	dbMsgs []*model.Message,
-) []*turnagent.Message {
-	if len(dbMsgs) == 0 {
-		return messages
-	}
-
-	// Collect prompt messages, deduplicating by dedup key (keep latest).
-	// Use ordered map pattern: track insertion order for deterministic output.
-	type promptEntry struct {
-		dedupKey string
-		msg      *turnagent.Message
-	}
-	seen := make(map[string]int) // dedupKey → index in kept slice
-	var kept []promptEntry
-
-	for _, dbMsg := range dbMsgs {
-		contentData, err := primitives.ParseContentData(dbMsg.Content)
-		if err != nil {
-			continue
-		}
-		if contentData.Type != protocol.ContentTypePrompt {
-			continue
-		}
-		pc, err := primitives.ParsePromptContent(contentData.Data)
-		if err != nil {
-			h.logger.Debug(ctx, "extractAndInjectPrompts.parse_failed", map[string]any{
-				"message_id": dbMsg.ID.String(),
-				"error":      err.Error(),
-			})
-			continue
-		}
-
-		// Determine role: use pc.Role if set, otherwise default to system.
-		msgRole := turnagent.RoleSystem
-		if pc.Role != nil && string(*pc.Role) == "user" {
-			msgRole = turnagent.RoleUser
-		}
-
-		// Build dedup key: name:title for command prompts, name for others.
-		dedupKey := pc.Name
-		if pc.Name == "command" && pc.Title != nil && *pc.Title != "" {
-			dedupKey = pc.Name + ":" + *pc.Title
-		}
-
-		entry := promptEntry{
-			dedupKey: dedupKey,
-			msg: &turnagent.Message{
-				Role:      msgRole,
-				Content:   formatPromptAsXML(pc),
-				CreatedAt: dbMsg.CreatedAt,
-			},
-		}
-		if idx, exists := seen[dedupKey]; exists {
-			// Replace earlier entry with this newer one (same dedup key).
-			kept[idx] = entry
-		} else {
-			seen[dedupKey] = len(kept)
-			kept = append(kept, entry)
-		}
-	}
-
-	if len(kept) == 0 {
-		return messages
-	}
-
-	// Separate system and user prompts.
-	var systemPrompts, userPrompts []*turnagent.Message
-	for _, entry := range kept {
-		if entry.msg.Role == turnagent.RoleSystem {
-			systemPrompts = append(systemPrompts, entry.msg)
-		} else {
-			userPrompts = append(userPrompts, entry.msg)
-		}
-	}
-
-	// Prepend system prompts, append user prompts.
-	// System prompts go before the conversation history.
-	// User prompts go after the conversation history (will be merged with
-	// the last user message by normalizeMessagesForLLM).
-	if len(systemPrompts) > 0 {
-		messages = append(systemPrompts, messages...)
-	}
-	if len(userPrompts) > 0 {
-		messages = append(messages, userPrompts...)
-	}
 	return messages
 }
 
@@ -377,15 +265,14 @@ func formatPromptAsXML(pc protocol.PromptContent) string {
 // 1. The command was newly triggered this turn (not sustain)
 // 2. The command implements PersistablePrompt interface
 //
-// On re-trigger, a new prompt message is always created. extractAndInjectPrompts
-// handles dedup (keeps latest per dedup key), so old prompt messages in DB are
-// harmless — they remain for prompt cache stability but are not injected.
+// Dedup is not needed here because command detection only fires on fresh user
+// input (last message is user role), and genResume skips detection entirely.
 //
 // The persisted prompt message uses role="system" in DB (for frontend rendering)
 // but PromptContent.Role controls how it's injected into LLM context.
 //
 // Returns the newly created model.Message entries so the caller can append them
-// to the in-memory dbMsgs snapshot, making them visible to extractAndInjectPrompts.
+// to the in-memory dbMsgs snapshot.
 func (h *helpers) persistCommandPromptsIfNeeded(
 	ctx context.Context,
 	sessionID uuid.UUID,

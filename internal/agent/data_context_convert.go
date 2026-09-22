@@ -124,9 +124,22 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 		}}, nil
 
 	case protocol.ContentTypePrompt:
-		// Prompt messages are handled separately by extractAndInjectPrompts.
-		// Skip here to keep them out of the conversation history.
-		return nil, nil
+		// Prompt messages are converted to regular messages and included in the
+		// conversation history at their natural position (based on global_offset).
+		// Deduplication is handled in loadMessages before conversion.
+		pc, err := primitives.ParsePromptContent(contentData.Data)
+		if err != nil {
+			return nil, fmt.Errorf("parse prompt content: %w", err)
+		}
+		role := turnagent.RoleSystem
+		if pc.Role != nil && string(*pc.Role) == "user" {
+			role = turnagent.RoleUser
+		}
+		return []*turnagent.Message{{
+			Role:      role,
+			Content:   formatPromptAsXML(pc),
+			CreatedAt: msg.CreatedAt,
+		}}, nil
 
 	default:
 		// Unrecognized content type — silently skip (not a parse error).

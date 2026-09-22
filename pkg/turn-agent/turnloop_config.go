@@ -45,12 +45,18 @@ func (mgr *SessionTurnManager) genInput(
 		}
 	}
 	if isResumeWork {
-		mgr.log(ctx, LogLevelWarn, "gen_input.resume_work_fallback", map[string]any{
+		// UPGRADED to Error: Checkpoint loss during resume is a serious data
+		// consistency issue. The LLM will see tool results in the DB but eino's
+		// ToolNode won't know the tools were already executed, potentially causing
+		// duplicate tool_result messages or incorrect state. This should trigger
+		// monitoring alerts for immediate investigation.
+		mgr.log(ctx, LogLevelError, "gen_input.checkpoint_lost_fallback", map[string]any{
 			"session_id":    mgr.sessionID,
 			"turn_id":       turnID,
 			"interrupt_id":  resumeInterruptID,
-			"message":       "Resume work item in GenInput - checkpoint was NOT found, starting fresh turn",
 			"checkpoint_id": mgr.checkpointID,
+			"message":       "CRITICAL: Checkpoint NOT found during resume - falling back to fresh turn. This may cause tool result duplicates and state inconsistency. Investigate checkpoint store health immediately.",
+			"action":        "Monitor for duplicate tool_results in LLM requests and checkpoint store errors",
 		})
 	}
 
@@ -64,6 +70,7 @@ func (mgr *SessionTurnManager) genInput(
 
 	ctx = WithSessionID(ctx, mgr.sessionID)
 	ctx = WithTurnID(ctx, turnID)
+	ctx = WithLoadSource(ctx, LoadSourceGenInput)
 
 	if len(mgr.cfg.Callbacks) > 0 {
 		ctx = callbacks.InitCallbacks(ctx, &callbacks.RunInfo{}, mgr.cfg.Callbacks...)
@@ -198,6 +205,23 @@ func (mgr *SessionTurnManager) genResumeImpl(
 	// missing any new user messages added to the database during the interrupt.
 	runOpts := []adk.AgentRunOption{
 		adk.WithHistoryModifier(func(ctx context.Context, msgs []*schema.Message) []*schema.Message {
+			// Mark this as a resume load so loadMessages can skip command detection
+			// and prompt persistence (avoid duplicates on checkpoint resume).
+			ctx = WithLoadSource(ctx, LoadSourceGenResume)
+
+			// Extract pending tool call IDs from checkpoint messages.
+			// "Pending" means: the checkpoint has an assistant tool_call but no
+			// matching tool result. On resume, eino's ToolNode will re-invoke
+			// the tool and create a tool result message. We must skip these
+			// from DB loading to avoid duplicate tool_result messages.
+			//
+			// This replaces the old crude approach of skipping ALL toolcall_output
+			// on resume, which incorrectly dropped non-RTC tool results.
+			pendingIDs := extractPendingToolCallIDs(msgs)
+			if len(pendingIDs) > 0 {
+				ctx = WithPendingToolCallIDs(ctx, pendingIDs)
+			}
+
 			// Reload messages from database to pick up any new user messages
 			// that were added while the turn was interrupted.
 			freshMsgs, err := mgr.cfg.LoadMessages(ctx, mgr.sessionID)
@@ -297,4 +321,32 @@ func (mgr *SessionTurnManager) buildResumeParams(
 		}
 	}
 	return resumeParams
+}
+
+// extractPendingToolCallIDs identifies tool call IDs that have assistant tool
+// calls but no matching tool results in the given messages. These are the
+// tool calls that eino's ToolNode will create results for during resume.
+//
+// During checkpoint resume, the eino framework's ToolNode re-invokes interrupted
+// tools and creates tool result messages from their return values. If we also
+// load these tool results from the database via HistoryModifier, we get duplicates.
+// By identifying which tool calls are "pending" (no matching result in checkpoint),
+// we can skip loading their results from DB and let eino create them.
+func extractPendingToolCallIDs(msgs []*schema.Message) map[string]bool {
+	// Collect all tool call IDs from assistant messages.
+	allCallIDs := make(map[string]bool)
+	for _, msg := range msgs {
+		if msg.Role == schema.Assistant {
+			for _, tc := range msg.ToolCalls {
+				allCallIDs[tc.ID] = true
+			}
+		}
+	}
+	// Remove IDs that have matching tool results.
+	for _, msg := range msgs {
+		if msg.Role == schema.Tool && msg.ToolCallID != "" {
+			delete(allCallIDs, msg.ToolCallID)
+		}
+	}
+	return allCallIDs
 }

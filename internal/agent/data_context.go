@@ -84,6 +84,9 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// The conversion logic mirrors the old SchemaMessages method in context.go,
 	// but produces turnagent.Message instead of schema.Message.
 	//
+	// Prompt messages are included at their natural position (based on global_offset).
+	// Deduplication is handled by persistCommandPromptsIfNeeded when creating new prompts.
+	//
 	// convertDBMessage may return nil for unparseable or unrecognized content
 	// types; skip those to prevent nil entries from reaching the LLM adapter
 	// (which would produce nil schema.Message entries and risk a panic).
@@ -102,8 +105,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		}
 		if len(converted) == 0 {
 			// Only count as dropped if there was a parse error.
-			// Prompt messages intentionally return (nil, nil) — they are
-			// handled separately by extractAndInjectPrompts, not dropped.
+			// Empty conversions (e.g., unrecognized content types) are skipped.
 			if convErr != nil {
 				droppedCount++
 			}
@@ -144,18 +146,24 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	//
 	// Injection timing: command prompts and scenario prompts are injected
 	// BEFORE attachments are prepended, so the final message order is:
-	//   [system] Attachments → [system] Prompts → [system] Scenarios → [system] Command prompts → [conversation]
+	//   [system] Attachments → [system] Scenarios → [system] Command prompts → [conversation]
 	// (Attachments win the front position because they are prepended last.)
 	//
-	// dbMsgs is passed to injectCommandPrompts so that newly persisted prompt
-	// messages can be appended to it, making them visible to extractAndInjectPrompts.
-	messages, dbMsgs = h.injectCommandPrompts(ctx, sid, messages, dbMsgs)
-
-	// Extract and inject persistent prompt messages from DB.
-	// These are system-level instructions (e.g., scenarios) that must survive
-	// across turns. Must be called BEFORE injectScenarioPrompts so the detection
-	// logic in injectScenarioPrompts can skip duplicate injection.
-	messages = h.extractAndInjectPrompts(ctx, messages, dbMsgs)
+	// Prompt messages (e.g., goal prompts) are persisted to DB and included
+	// in the conversation history by convertDBMessage at their natural position.
+	//
+	// IMPORTANT: Skip command detection on checkpoint resume (genResume) to avoid
+	// re-detecting commands and persisting duplicate prompt messages. The command
+	// was already detected and persisted on the original genInput call.
+	loadSource := turnagent.LoadSourceFromContext(ctx)
+	if loadSource != turnagent.LoadSourceGenResume {
+		messages, dbMsgs = h.injectCommandPrompts(ctx, sid, messages, dbMsgs)
+	} else {
+		h.logger.Debug(ctx, "loadMessages.skip_command_detection", map[string]any{
+			"session_id":  sid.String(),
+			"load_source": string(loadSource),
+		})
+	}
 
 	// Inject scenario prompts from the last user message's scenarios field.
 	// Pass the already-loaded dbMsgs to avoid a redundant DB query.
@@ -180,6 +188,64 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		return nil, fmt.Errorf("loadMessages: normalize: %w", err)
 	}
 
+	// Filter out tool results for pending tool calls (checkpoint resume only).
+	//
+	// On checkpoint resume (genResume), the eino framework's ToolNode will re-invoke
+	// the interrupted tool's InvokableRun, which returns the result and causes the
+	// ToolNode to create a tool result message. If we also load the toolcall_output
+	// from DB, we get duplicate tool_result messages with the same tool_call_id.
+	//
+	// Instead of skipping ALL toolcall_output (which loses non-RTC tool results),
+	// we skip only the tool results whose tool_call_id matches a pending tool call
+	// in the checkpoint. Pending IDs are extracted by the HistoryModifier from the
+	// checkpoint's State.Messages and passed via context.
+	//
+	// Filtering happens AFTER normalizeMessagesForLLM so that repairToolPairing
+	// correctly validates the full message set before we surgically remove pending
+	// results. The assistant messages with pending tool calls are preserved because
+	// repairToolPairing already ran and validated them.
+	pendingIDs := turnagent.PendingToolCallIDsFromContext(ctx)
+	if len(pendingIDs) > 0 {
+		filtered := make([]*turnagent.Message, 0, len(messages))
+		var skippedCount int
+		for _, msg := range messages {
+			if msg.Role == turnagent.RoleTool && msg.ToolCallID != "" && pendingIDs[msg.ToolCallID] {
+				skippedCount++
+				continue
+			}
+			filtered = append(filtered, msg)
+		}
+		if skippedCount > 0 {
+			// Verification: check if any pending tool results remain after filtering.
+			// This should be 0; if > 0, it indicates the eino framework behavior has
+			// changed or there's a bug in extractPendingToolCallIDs.
+			var residualCount int
+			for _, msg := range filtered {
+				if msg.Role == turnagent.RoleTool && msg.ToolCallID != "" && pendingIDs[msg.ToolCallID] {
+					residualCount++
+				}
+			}
+
+			h.logger.Info(ctx, "loadMessages.filtered_pending_tool_results", map[string]any{
+				"session_id":     sid.String(),
+				"skipped_count":  skippedCount,
+				"pending_ids":    len(pendingIDs),
+				"residual_count": residualCount,
+			})
+
+			if residualCount > 0 {
+				h.logger.Error(ctx, "loadMessages.pending_filter_verification_failed", map[string]any{
+					"session_id":     sid.String(),
+					"residual_count": residualCount,
+					"skipped_count":  skippedCount,
+					"pending_ids":    len(pendingIDs),
+					"message":        "Pending tool results still present after filtering - eino framework behavior may have changed or extractPendingToolCallIDs has a bug",
+				})
+			}
+		}
+		messages = filtered
+	}
+
 	// Set strategic cache breakpoints to protect stable content from invalidation
 	// caused by microcompact or tool result budget modifications.
 	// MUST be called AFTER normalizeMessagesForLLM (which reorders system messages).
@@ -190,8 +256,20 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// Trigger background Session Memory extraction (async, non-blocking).
 	// The extractor checks whether extraction is needed based on token growth
 	// and tool call count.
-	if len(messages) > 0 {
+	//
+	// IMPORTANT: Skip extraction on checkpoint resume (genResume) to avoid
+	// redundant LLM calls. The extraction was already triggered on the original
+	// genInput call for this turn. Resume is just continuing the same turn,
+	// not a new conversation point that warrants re-extraction. Extracting on
+	// resume wastes tokens without adding value (the token growth threshold
+	// already accounts for the work done before interrupt).
+	if len(messages) > 0 && loadSource != turnagent.LoadSourceGenResume {
 		h.triggerSessionMemoryExtraction(ctx, sid, messages)
+	} else if len(messages) > 0 {
+		h.logger.Debug(ctx, "loadMessages.skip_session_memory_extraction", map[string]any{
+			"session_id":  sid.String(),
+			"load_source": string(loadSource),
+		})
 	}
 
 	// Debug logging: record all loaded message previews (Debug level to avoid production noise).

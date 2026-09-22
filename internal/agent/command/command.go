@@ -87,7 +87,7 @@ type PromptPersistConfig struct {
 
 // PersistablePrompt is implemented by commands whose TriggerPrompt should be
 // persisted as a prompt message in DB (rather than dynamically injected each turn).
-// This enables the prompt to survive across turns via extractAndInjectPrompts.
+// This enables the prompt to survive across turns via convertDBMessage.
 type PersistablePrompt interface {
 	PromptPersistConfig() PromptPersistConfig
 }

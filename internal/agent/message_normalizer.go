@@ -178,6 +178,13 @@ func mergeConsecutiveSameRole(messages []*turnagent.Message) []*turnagent.Messag
 				}
 				prev.Content = joinContent(prev.Content, curr.Content)
 				prev.ReasoningContent = joinContent(prev.ReasoningContent, curr.ReasoningContent)
+				// Merge ToolCalls for assistant messages.
+				// DB stores each toolcall_input as a separate message, but the LLM
+				// expects all tool calls from one turn to be in a single assistant message.
+				// Without this merge, tool_results become orphaned (no matching tool_use).
+				if curr.Role == turnagent.RoleAssistant && len(curr.ToolCalls) > 0 {
+					prev.ToolCalls = append(prev.ToolCalls, curr.ToolCalls...)
+				}
 				continue
 			}
 		}

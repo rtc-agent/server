@@ -42,6 +42,46 @@ type TokenUsage struct {
 // on the key type, so distinct empty struct types cannot collide).
 type ctxSessionIDKey struct{}
 type ctxTurnIDKey struct{}
+type ctxLoadSourceKey struct{}
+type ctxPendingToolCallIDsKey struct{}
+
+// LoadSource identifies the source of a LoadMessages call.
+type LoadSource string
+
+const (
+	// LoadSourceGenInput indicates LoadMessages was called from genInput (fresh turn).
+	// Full injection pipeline should run: command detection, prompt persistence, etc.
+	LoadSourceGenInput LoadSource = "genInput"
+
+	// LoadSourceGenResume indicates LoadMessages was called from genResume (checkpoint resume).
+	// Command detection and prompt persistence should be skipped to avoid duplicates.
+	LoadSourceGenResume LoadSource = "genResume"
+)
+
+// WithLoadSource returns a child context carrying the given load source.
+func WithLoadSource(ctx context.Context, source LoadSource) context.Context {
+	return context.WithValue(ctx, ctxLoadSourceKey{}, source)
+}
+
+// LoadSourceFromContext reads the load source from ctx, or returns "" if unset.
+func LoadSourceFromContext(ctx context.Context) LoadSource {
+	source, _ := ctx.Value(ctxLoadSourceKey{}).(LoadSource)
+	return source
+}
+
+// WithPendingToolCallIDs returns a context carrying the set of tool call IDs
+// that are pending (have tool calls but no matching results) in the checkpoint.
+// During resume, these tool results will be created by eino's ToolNode,
+// so loadMessages must skip them from DB loading to avoid duplicates.
+func WithPendingToolCallIDs(ctx context.Context, ids map[string]bool) context.Context {
+	return context.WithValue(ctx, ctxPendingToolCallIDsKey{}, ids)
+}
+
+// PendingToolCallIDsFromContext reads the pending tool call IDs from ctx.
+func PendingToolCallIDsFromContext(ctx context.Context) map[string]bool {
+	ids, _ := ctx.Value(ctxPendingToolCallIDsKey{}).(map[string]bool)
+	return ids
+}
 
 // WithSessionID returns a child context carrying the given session ID.
 // turn-agent's GenInput injects this so eino callback handlers (metrics,
