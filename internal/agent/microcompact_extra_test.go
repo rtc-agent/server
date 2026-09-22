@@ -17,8 +17,8 @@ func TestMicrocompactMessages_NonCompactableMixedWithCompactable(t *testing.T) {
 	msgs := []*turnagent.Message{
 		{Role: turnagent.RoleAssistant, Content: "thinking", CreatedAt: old,
 			ToolCalls: []turnagent.ToolCall{
-				{ID: "tc1", Name: "read"},     // compactable
-				{ID: "tc2", Name: "grep"},     // compactable
+				{ID: "tc1", Name: "read"},    // compactable
+				{ID: "tc2", Name: "grep"},    // compactable
 				{ID: "tc3", Name: "askUser"}, // NOT compactable
 			}},
 		{Role: turnagent.RoleTool, Content: "read_result", ToolCallID: "tc1", ToolName: "read", CreatedAt: old},
