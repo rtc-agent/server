@@ -110,6 +110,11 @@ var noSearchResultsTmpl string
 //go:embed prompts/outputs/search-results-list.md.tmpl
 var searchResultsListTmpl string
 
+// --- Loop output templates ---
+
+//go:embed prompts/outputs/loop-created.md.tmpl
+var loopCreatedTmpl string
+
 // =============================================================================
 // Rendering helpers
 // =============================================================================
@@ -309,5 +314,16 @@ func formatSearchResultsList(count int, memories []searchResultItem) string {
 	return templateutil.MustRender("search-results-list", searchResultsListTmpl, map[string]any{
 		"Count":    count,
 		"Memories": memories,
+	})
+}
+
+// --- Loop ---
+
+func formatLoopCreated(id, prompt string, intervalSeconds, maxTurns int) string {
+	return templateutil.MustRender("loop-created", loopCreatedTmpl, map[string]any{
+		"ID":              id,
+		"Prompt":          prompt,
+		"IntervalSeconds": intervalSeconds,
+		"MaxTurns":        maxTurns,
 	})
 }

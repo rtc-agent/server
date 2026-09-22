@@ -38,7 +38,8 @@ type createLoopArgs struct {
 	MaxTurns        int    `json:"max_turns"`
 }
 
-// createLoopResult is the JSON returned to LLM and persisted in toolcall_output.
+// createLoopResult is the JSON persisted in toolcall_output (for event stream).
+// The LLM receives a friendly text message via formatLoopCreated().
 type createLoopResult struct {
 	ID              string           `json:"id"`
 	Prompt          string           `json:"prompt"`
@@ -180,5 +181,5 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		"prompt":     loop.Prompt,
 	})
 
-	return resultJSON, nil
+	return formatLoopCreated(loop.ID.String(), loop.Prompt, loop.IntervalSeconds, loop.MaxTurns), nil
 }
