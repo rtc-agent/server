@@ -189,6 +189,45 @@ func (mgr *SessionTurnManager) genResumeImpl(
 		})
 	}
 
+	// Build RunOpts with HistoryModifier to reload messages from database.
+	// This fixes the bug where user messages sent during turn execution
+	// (while the turn was interrupted waiting for tool results) were not
+	// included in the LLM context after checkpoint resume.
+	//
+	// Without this, genResume would use the checkpoint's message snapshot,
+	// missing any new user messages added to the database during the interrupt.
+	runOpts := []adk.AgentRunOption{
+		adk.WithHistoryModifier(func(ctx context.Context, msgs []*schema.Message) []*schema.Message {
+			// Reload messages from database to pick up any new user messages
+			// that were added while the turn was interrupted.
+			freshMsgs, err := mgr.cfg.LoadMessages(ctx, mgr.sessionID)
+			if err != nil {
+				// Log error but return original messages to avoid breaking the turn.
+				// The turn can still complete with stale messages; losing it would be worse.
+				mgr.log(ctx, LogLevelWarn, "gen_resume.history_modifier_load_failed", map[string]any{
+					"session_id": mgr.sessionID,
+					"turn_id":    turnID,
+					"error":      err.Error(),
+					"message":    "Failed to reload messages during checkpoint resume; using checkpoint messages",
+				})
+				return msgs
+			}
+
+			// Convert turn-agent messages to eino schema messages.
+			freshSchemaMsgs := toEinoMessages(freshMsgs)
+
+			mgr.log(ctx, LogLevelInfo, "gen_resume.history_modified", map[string]any{
+				"session_id":      mgr.sessionID,
+				"turn_id":         turnID,
+				"checkpoint_msgs": len(msgs),
+				"reloaded_msgs":   len(freshSchemaMsgs),
+				"message":         "Reloaded messages from database during checkpoint resume",
+			})
+
+			return freshSchemaMsgs
+		}),
+	}
+
 	mgr.log(resumeCtx, LogLevelInfo, "gen_resume.result", map[string]any{
 		"session_id":        mgr.sessionID,
 		"turn_id":           turnID,
@@ -203,6 +242,7 @@ func (mgr *SessionTurnManager) genResumeImpl(
 		RunCtx:       resumeCtx,
 		Consumed:     allItems,
 		ResumeParams: resumeParams,
+		RunOpts:      runOpts,
 	}, nil
 }
 

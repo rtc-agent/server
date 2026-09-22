@@ -132,7 +132,9 @@ func buildAsyncSubAgentNotificationText(subSession *model.Session, lastMessage *
 			result = lastMessage.Content
 		}
 		content = fmt.Sprintf(
-			"The async sub agent task has completed.\n- Session ID: %s\n- Title: %s\n- Status: completed\n\nResult:\n%s",
+			"The async sub agent has produced output.\n- Session ID: %s\n- Title: %s\n\nOutput:\n%s\n\n"+
+				"<tip>\nIf the output indicates the sub agent is waiting for confirmation, clarification, or additional input, "+
+				"use `sendMessageToSubAgent` to respond and continue the conversation instead of dispatching a new sub agent.\n</tip>",
 			sessionID, title, result,
 		)
 	case "failed":
