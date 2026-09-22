@@ -69,8 +69,8 @@ type WorkerConfig struct {
 // WorkerLogger is the logging interface used by Worker.
 // Compatible with most structured loggers via adapter.
 type WorkerLogger interface {
-	Info(msg string, keysAndValues ...any)
-	Error(msg string, keysAndValues ...any)
+	Info(ctx context.Context, msg string, keysAndValues ...any)
+	Error(ctx context.Context, msg string, keysAndValues ...any)
 }
 
 // Worker manages the lifecycle of processing work items from a Queue.
@@ -107,7 +107,7 @@ func NewWorker(q *Queue, cfg WorkerConfig) *Worker {
 	}
 	if cfg.OnError == nil {
 		cfg.OnError = func(err error) {
-			cfg.Logger.Error("worker error", "error", err)
+			cfg.Logger.Error(context.Background(), "worker error", "error", err)
 		}
 	}
 	return &Worker{
@@ -120,7 +120,7 @@ func NewWorker(q *Queue, cfg WorkerConfig) *Worker {
 
 // log logs a message for debugging worker lifecycle.
 // Keys are sorted for deterministic output order (Go map iteration is random).
-func (w *Worker) log(event string, fields map[string]any) {
+func (w *Worker) log(ctx context.Context, event string, fields map[string]any) {
 	keys := make([]string, 0, len(fields))
 	for k := range fields {
 		keys = append(keys, k)
@@ -130,12 +130,12 @@ func (w *Worker) log(event string, fields map[string]any) {
 	for _, k := range keys {
 		kv = append(kv, k, fields[k])
 	}
-	w.cfg.Logger.Info(event, kv...)
+	w.cfg.Logger.Info(ctx, event, kv...)
 }
 
 // logError logs an error message using the configured logger.
-func (w *Worker) logError(msg string, keysAndValues ...any) {
-	w.cfg.Logger.Error(msg, keysAndValues...)
+func (w *Worker) logError(ctx context.Context, msg string, keysAndValues ...any) {
+	w.cfg.Logger.Error(ctx, msg, keysAndValues...)
 }
 
 // Run starts the worker loop. It blocks until ctx is cancelled or an
@@ -180,7 +180,7 @@ func (w *Worker) Run(ctx context.Context) error {
 				return nil
 			}
 			sessionID := msg.Payload
-			w.log("worker.received_notification", map[string]any{
+			w.log(ctx, "worker.received_notification", map[string]any{
 				"session_id": sessionID,
 			})
 			w.wg.Add(1)
@@ -188,7 +188,7 @@ func (w *Worker) Run(ctx context.Context) error {
 				defer w.wg.Done()
 				defer func() {
 					if r := recover(); r != nil {
-						w.logError("goroutine panic",
+						w.logError(ctx, "goroutine panic",
 							"session", sessionID, "recover", r, "stack", string(debug.Stack()))
 					}
 				}()
@@ -241,7 +241,7 @@ func (w *Worker) Stop(ctx context.Context) error {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				w.logError("stop wait panic",
+				w.logError(ctx, "stop wait panic",
 					"recover", r, "stack", string(debug.Stack()))
 			}
 		}()
@@ -289,7 +289,7 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 	if active {
 		w.sessionClaims.Unlock()
 		span.SetAttributes(attribute.Bool("worker.skipped", true))
-		w.log("worker.session_already_active", map[string]any{
+		w.log(ctx, "worker.session_already_active", map[string]any{
 			"session_id": sessionID,
 			"message":    "skipping concurrent processSession",
 		})
@@ -328,7 +328,7 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 	default:
 	}
 
-	w.log("worker.claiming", map[string]any{
+	w.log(ctx, "worker.claiming", map[string]any{
 		"session_id": sessionID,
 		"worker_id":  w.cfg.WorkerID,
 	})
@@ -354,7 +354,7 @@ func (w *Worker) processSessionNormal(ctx context.Context, sessionID string) {
 	claim, err := w.q.Claim(ctx, sessionID, w.cfg.WorkerID)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
-		w.log("worker.claim_failed", map[string]any{
+		w.log(ctx, "worker.claim_failed", map[string]any{
 			"session_id": sessionID,
 			"error":      err.Error(),
 		})
@@ -364,7 +364,7 @@ func (w *Worker) processSessionNormal(ctx context.Context, sessionID string) {
 	if claim == nil {
 		// queue empty or lost the race
 		span.SetAttributes(attribute.Bool("queue.claimed", false))
-		w.log("worker.claim_empty", map[string]any{
+		w.log(ctx, "worker.claim_empty", map[string]any{
 			"session_id": sessionID,
 		})
 		return
@@ -374,7 +374,7 @@ func (w *Worker) processSessionNormal(ctx context.Context, sessionID string) {
 		attribute.Bool("queue.claimed", true),
 		attribute.String("work.id", claim.WorkID),
 	)
-	w.log("worker.claimed", map[string]any{
+	w.log(ctx, "worker.claimed", map[string]any{
 		"session_id": sessionID,
 		"work_id":    claim.WorkID,
 	})
@@ -399,7 +399,7 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 	claim, err := w.q.ClaimWithCredential(ctx, sessionID, w.cfg.WorkerID, "")
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
-		w.log("worker.claim_failed", map[string]any{
+		w.log(ctx, "worker.claim_failed", map[string]any{
 			"session_id": sessionID,
 			"error":      err.Error(),
 		})
@@ -409,7 +409,7 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 	if claim == nil {
 		// queue empty or lost the race
 		span.SetAttributes(attribute.Bool("queue.claimed", false))
-		w.log("worker.claim_empty", map[string]any{
+		w.log(ctx, "worker.claim_empty", map[string]any{
 			"session_id": sessionID,
 		})
 		return
@@ -419,7 +419,7 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 		attribute.Bool("queue.claimed", true),
 		attribute.String("work.id", claim.WorkID),
 	)
-	w.log("worker.claimed", map[string]any{
+	w.log(ctx, "worker.claimed", map[string]any{
 		"session_id": sessionID,
 		"work_id":    claim.WorkID,
 		"credential": claim.Credential,
@@ -437,7 +437,7 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 		nextClaim, err := w.q.ClaimWithCredential(ctx, sessionID, w.cfg.WorkerID, credential)
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			w.log("worker.claim_next_failed", map[string]any{
+			w.log(ctx, "worker.claim_next_failed", map[string]any{
 				"session_id": sessionID,
 				"error":      err.Error(),
 			})
@@ -446,7 +446,7 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 			// from being released and leave the session locked until TTL expires.
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if err := w.q.ReleaseSession(releaseCtx, sessionID); err != nil {
-				w.logError("worker.release_session_failed",
+				w.logError(ctx, "worker.release_session_failed",
 					"session", sessionID, "error", err.Error())
 			}
 			releaseCancel()
@@ -457,11 +457,11 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 			// Queue is empty, release lock.
 			// Use Background() with timeout for the same reason as above.
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			w.log("worker.queue_empty_releasing_lock", map[string]any{
+			w.log(ctx, "worker.queue_empty_releasing_lock", map[string]any{
 				"session_id": sessionID,
 			})
 			if err := w.q.ReleaseSession(releaseCtx, sessionID); err != nil {
-				w.logError("worker.release_session_failed",
+				w.logError(ctx, "worker.release_session_failed",
 					"session", sessionID, "error", err.Error())
 			}
 			releaseCancel()
@@ -469,7 +469,7 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 			return
 		}
 
-		w.log("worker.claimed_next", map[string]any{
+		w.log(ctx, "worker.claimed_next", map[string]any{
 			"session_id": sessionID,
 			"work_id":    nextClaim.WorkID,
 		})
@@ -501,7 +501,7 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	)
 	defer span.End()
 
-	w.log("worker.processing_work", map[string]any{
+	w.log(ctx, "worker.processing_work", map[string]any{
 		"work_id":    claim.WorkID,
 		"session_id": claim.SessionID,
 		"hold_lock":  holdLock,
@@ -528,7 +528,7 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	// (e.g. turn-agent) can use it without re-claiming the lock.
 	work.Credential = credential
 
-	w.log("worker.loaded_work", map[string]any{
+	w.log(ctx, "worker.loaded_work", map[string]any{
 		"work_id":    claim.WorkID,
 		"session_id": work.SessionID,
 	})
@@ -551,7 +551,7 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	defer close(lockLost.done)
 
 	// call the user's callback
-	w.log("worker.calling_onwork", map[string]any{
+	w.log(ctx, "worker.calling_onwork", map[string]any{
 		"work_id":    work.ID,
 		"session_id": work.SessionID,
 	})
@@ -564,7 +564,7 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 		onworkFields["error"] = err.Error()
 		span.SetStatus(codes.Error, err.Error())
 	}
-	w.log("worker.onwork_returned", onworkFields)
+	w.log(ctx, "worker.onwork_returned", onworkFields)
 
 	// Handle completion (extracted for complexity).
 	w.handleWorkCompletion(claim, err, holdLock, lockLost.lost, &adminCancelled)

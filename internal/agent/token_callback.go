@@ -263,13 +263,13 @@ func (h *helpers) publishSessionUpdateWithWarnings(ctx context.Context, session 
 		if totalRelevant > 0 {
 			hitRate := float64(totalCached) / float64(totalRelevant)
 			if hitRate < h.cacheHitRateWarnThreshold {
-				logger.Warn(ctx, "cache hit rate below threshold",
-					zap.String("session_id", sessionID.String()),
-					zap.Float64("cache_hit_rate", hitRate),
-					zap.Float64("threshold", h.cacheHitRateWarnThreshold),
-					zap.Int64("cached_read_tokens", totalCached),
-					zap.Int64("input_tokens", totalInput),
-				)
+				h.logger.Warn(ctx, "cache hit rate below threshold", map[string]any{
+					"session_id":         sessionID.String(),
+					"cache_hit_rate":     hitRate,
+					"threshold":          h.cacheHitRateWarnThreshold,
+					"cached_read_tokens": totalCached,
+					"input_tokens":       totalInput,
+				})
 			}
 		}
 	}

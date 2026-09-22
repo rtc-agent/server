@@ -232,6 +232,8 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 	// Use context.Background() for cleanup so that a cancelled parent context
 	// does not prevent critical cleanup operations (ReleaseSession, requeue).
 	// Use mgr.Wait() (not mgr.loop.Wait()) so the sync.Once protection applies.
+	// Preserve trace context from the original ctx for logging correlation.
+	originalSpan := trace.SpanFromContext(ctx)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -245,7 +247,12 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 		mgr.Wait()
 		// Use a timeout context to prevent the goroutine from hanging
 		// indefinitely if Redis is unresponsive.
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Preserve trace context from the original span for logging.
+		cleanupBaseCtx := context.Background()
+		if originalSpan != nil && originalSpan.SpanContext().IsValid() {
+			cleanupBaseCtx = trace.ContextWithRemoteSpanContext(cleanupBaseCtx, originalSpan.SpanContext())
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(cleanupBaseCtx, 30*time.Second)
 		defer cleanupCancel()
 		mgr.Cleanup(cleanupCtx)
 	}()

@@ -15,6 +15,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -256,6 +257,7 @@ func provideAgent(
 		CheckpointTTL:                   cfg.Worker.CheckpointTTL,
 		StreamChunkTTL:                  cfg.Worker.StreamChunkTTL,
 		Logger:                          agent.NewLogger(),
+		Tracer:                          otel.GetTracerProvider().Tracer("turnagent"),
 		Metrics:                         metrics,
 		ModelPricing:                    convertModelPricing(cfg.LLM.Pricing),
 		EnableStrategicCacheBreakpoints: cfg.Worker.EnableStrategicCacheBreakpoints,
@@ -307,12 +309,12 @@ func provideQueueWorker(
 // workerLogger adapts the application logger to rtcqueue.WorkerLogger interface.
 type workerLogger struct{}
 
-func (l *workerLogger) Info(msg string, keysAndValues ...any) {
-	logger.Info(context.Background(), "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+func (l *workerLogger) Info(ctx context.Context, msg string, keysAndValues ...any) {
+	logger.Info(ctx, "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
 }
 
-func (l *workerLogger) Error(msg string, keysAndValues ...any) {
-	logger.Error(context.Background(), "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+func (l *workerLogger) Error(ctx context.Context, msg string, keysAndValues ...any) {
+	logger.Error(ctx, "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
 }
 
 // toZapFields converts key-value pairs to []zap.Field.
