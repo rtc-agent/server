@@ -29,7 +29,7 @@ Help the user transform a vague intent into a concrete, recurring task with clea
 ### 5. Execute First Turn
 - After calling `create_loop`, **immediately execute the first turn** of the loop task
 - This is mandatory — do not wait for the scheduled asynq task
-- The loop has already counted this as turn 1 (completed_turns=1)
+- The loop starts with completed_turns=0; your immediate execution will be counted as turn 1
 - Subsequent turns will be triggered by the scheduled asynq tasks
 
 ## Constraints

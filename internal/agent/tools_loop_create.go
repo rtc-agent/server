@@ -119,7 +119,7 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		Prompt:          args.Prompt,
 		IntervalSeconds: intervalSeconds,
 		MaxTurns:        maxTurns,
-		CompletedTurns:  1,
+		CompletedTurns:  0, // 0 turns completed; will be incremented to 1 after immediate execution
 		Status:          model.LoopStatusActive,
 		ExpiresAt:       &expiresAt,
 		LastRunAt:       &now,
