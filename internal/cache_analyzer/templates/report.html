@@ -291,13 +291,34 @@
                     <div class="stat-label">总请求数</div>
                     <div class="stat-value">{{.Summary.TotalRequests}}</div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-label">平均命中率</div>
-                    <div class="stat-value">{{.Summary.AvgHitRateStr}}</div>
+                <div class="stat-card" style="border-left-color: #0969da;">
+                    <div class="stat-label">整体缓存命中率</div>
+                    <div class="stat-value {{hitRateClass .Summary.OverallHitRate}}">{{.Summary.OverallHitRateStr}}</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">会话数</div>
                     <div class="stat-value">{{.Summary.SessionCount}}</div>
+                </div>
+            </div>
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #d0d7de;">
+                <h3 style="font-size: 16px; margin-bottom: 12px; color: #24292f;">Token 使用详情</h3>
+                <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+                    <div class="stat-card" style="border-left-color: #57606a;">
+                        <div class="stat-label">总输入 Tokens</div>
+                        <div class="stat-value" style="font-size: 20px;">{{.Summary.TotalInputTokens}}</div>
+                    </div>
+                    <div class="stat-card" style="border-left-color: #9a6700;">
+                        <div class="stat-label">Cache Write</div>
+                        <div class="stat-value" style="font-size: 20px;">{{.Summary.TotalCacheWriteTokens}}</div>
+                    </div>
+                    <div class="stat-card" style="border-left-color: #1a7f37;">
+                        <div class="stat-label">Cache Read</div>
+                        <div class="stat-value" style="font-size: 20px;">{{.Summary.TotalCacheReadTokens}}</div>
+                    </div>
+                    <div class="stat-card" style="border-left-color: #0969da;">
+                        <div class="stat-label">总计</div>
+                        <div class="stat-value" style="font-size: 20px;">{{add (add .Summary.TotalInputTokens .Summary.TotalCacheWriteTokens) .Summary.TotalCacheReadTokens}}</div>
+                    </div>
                 </div>
             </div>
         </div>

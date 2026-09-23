@@ -114,7 +114,7 @@ func (t *askUserTool) InvokableRun(ctx context.Context, argumentsInJSON string, 
 	return t.base.InvokableRun(ctx, "askUser", argumentsInJSON, opts...)
 }
 
-// formatAskUserResult converts the client-submitted RTC result into the text
+// FormatAskUserResult converts the client-submitted RTC result into the text
 // that will be fed back to the LLM. The format mirrors Claude Code's
 // mapToolResultToToolResultBlockParam:
 //
@@ -124,7 +124,11 @@ func (t *askUserTool) InvokableRun(ctx context.Context, argumentsInJSON string, 
 //
 // On status != completed, falls back to the default formatToolCallOutput so
 // errors/timeouts/rejections are reported consistently with other RTC tools.
-func formatAskUserResult(dbRtc *model.Rtc) string {
+//
+// BUG 12 fix: Exported as FormatAskUserResult so it can be called from
+// SubmitRtcResult to persist the formatted text to DB, ensuring consistency
+// between ReAct resume path and DB load path.
+func FormatAskUserResult(dbRtc *model.Rtc) string {
 	status := protocol.RtcStatus(dbRtc.Status)
 
 	// Non-completed statuses: delegate to the generic formatter so errors,

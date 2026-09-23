@@ -201,13 +201,20 @@ A scheduled loop task is now due for execution.
 
 Loop ID: %s
 Progress: Turn %d of %d
-Task: Continue executing the loop's recurring task as defined when the loop was created.
+Task: Execute the loop's recurring task for THIS TURN ONLY (Turn %d).
 
-Please proceed with the next iteration of the loop task.
+IMPORTANT:
+- Execute the loop prompt for this turn only
+- Do NOT execute subsequent turns proactively
+- After completing this turn, STOP and wait for the next system-reminder
+- Each turn is triggered separately by the system
+
+Please proceed with this turn of the loop task.
 </system-reminder>`,
 		loop.ID.String(),
 		loop.CompletedTurns+1,
 		loop.MaxTurns,
+		loop.CompletedTurns+1,
 	)
 }
 

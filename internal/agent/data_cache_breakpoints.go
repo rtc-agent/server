@@ -16,9 +16,9 @@ import (
 //
 // Breakpoint allocation (Anthropic API limit: 4 per request):
 //   - bp1: summary message (protects all stable content)
-//   - bp2: last conversation message (protects latest context)
+//   - bp2: REMOVED (BUG 14 fix) - let AutoCacheControl handle last message
 //   - bp3: last tool definition (set automatically by AutoCacheControl)
-//   - Total: 2 manual + 1 auto = 3, leaving 1 spare
+//   - Total: 1 manual + 1 auto = 2, leaving 2 spare
 
 // setCacheBreakpoints sets strategic cache breakpoints to protect stable content
 // from invalidation caused by microcompact or applyToolResultBudget modifications.
@@ -31,12 +31,17 @@ import (
 //   - bp1 (summary, TTL=1h): Set on the last summary message identified by
 //     ExtraKeySummaryBoundary. Protects all stable content (system + attachments
 //   - summary). Uses 1h TTL because summary content is long-lived.
-//   - bp2 (last msg, TTL=5m): Set on the last user/assistant message. Protects
-//     the latest conversation context. Uses 5m TTL (default).
 //
-// Why bp2 is necessary: AutoCacheControl detects any manual message breakpoint
-// and skips its automatic breakpoint on the last message. We must explicitly set
-// bp2 to ensure the last message is cached.
+// BUG 14 fix: bp2 (last conversation message) has been REMOVED.
+// Previously, bp2 was set on the last user/assistant message with TTL=5m.
+// However, this caused cache invalidation because:
+// 1. bp2 moves to the new last message when messages are appended
+// 2. The old position loses its cache_control metadata
+// 3. cache_control is part of the content byte sequence in Anthropic API
+// 4. The content change at the old bp2 position invalidates the cache prefix
+//
+// Now we rely on AutoCacheControl to automatically set a breakpoint on the
+// last message, avoiding the movement issue.
 func (h *helpers) setCacheBreakpoints(msgs []*turnagent.Message) []*turnagent.Message {
 	if len(msgs) == 0 {
 		return msgs
@@ -52,16 +57,8 @@ func (h *helpers) setCacheBreakpoints(msgs []*turnagent.Message) []*turnagent.Me
 		}
 	}
 
-	// bp2: Set on the last conversation message (user or assistant).
-	// This ensures the latest context is cached, compensating for AutoCacheControl's
-	// skip behavior when manual breakpoints are detected.
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == turnagent.RoleUser || msgs[i].Role == turnagent.RoleAssistant {
-			msgs[i].CacheBreakpoint = true
-			msgs[i].CacheTTL = "5m" // Latest context uses default TTL
-			break
-		}
-	}
+	// bp2: REMOVED (BUG 14 fix)
+	// AutoCacheControl will automatically handle the last message breakpoint.
 
 	return msgs
 }

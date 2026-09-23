@@ -106,6 +106,12 @@ func ParseLogFile(logFile string) ([]*LLMRequest, []*LLMRequest, error) {
 			continue
 		}
 
+		// Quick string check to skip lines that don't contain our target events
+		// This is much faster than JSON parsing for large log files
+		if !strings.Contains(line, "llm.http.") {
+			continue
+		}
+
 		var entry map[string]interface{}
 		if err := json.Unmarshal([]byte(line), &entry); err != nil {
 			continue
@@ -315,7 +321,10 @@ func extractCacheStats(responseBody string) *CacheStats {
 }
 
 // parseMessageDeltaUsage extracts cache stats from message_delta event usage.
-func parseMessageDeltaUsage(usage map[string]interface{}) (outputTokens, cacheCreationTokens, cacheReadTokens, cachedTokens int) {
+func parseMessageDeltaUsage(usage map[string]interface{}) (inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, cachedTokens int) {
+	if v, ok := usage["input_tokens"].(float64); ok {
+		inputTokens = int(v)
+	}
 	if v, ok := usage["output_tokens"].(float64); ok {
 		outputTokens = int(v)
 	}
@@ -364,17 +373,28 @@ func extractCacheStatsFromSSE(responseBody string) *CacheStats {
 
 		switch eventType {
 		case "message_start":
+			// message_start.usage.input_tokens is a preliminary estimate,
+			// we'll use the final value from message_delta instead
 			if message, ok := data["message"].(map[string]interface{}); ok {
 				if usage, ok := message["usage"].(map[string]interface{}); ok {
 					if v, ok := usage["input_tokens"].(float64); ok {
-						inputTokens = int(v)
+						inputTokens = int(v) // Keep as fallback
 					}
 				}
 			}
 
 		case "message_delta":
 			if usage, ok := data["usage"].(map[string]interface{}); ok {
-				outputTokens, cacheCreationTokens, cacheReadTokens, cachedTokens = parseMessageDeltaUsage(usage)
+				// message_delta contains the final, accurate usage data
+				deltaInput, deltaOutput, deltaCacheCreation, deltaCacheRead, deltaCached := parseMessageDeltaUsage(usage)
+				// Use message_delta values as they are the final authoritative values
+				if deltaInput > 0 {
+					inputTokens = deltaInput
+				}
+				outputTokens = deltaOutput
+				cacheCreationTokens = deltaCacheCreation
+				cacheReadTokens = deltaCacheRead
+				cachedTokens = deltaCached
 			}
 		}
 	}

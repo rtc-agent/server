@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -200,7 +201,21 @@ func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc
 
 	toolOutput := ""
 	if resultJSON != nil {
-		toolOutput = *resultJSON
+		// BUG 12 fix: For askUser tool, format the result text before persisting to DB.
+		// This ensures consistency between ReAct resume path (which calls FormatAskUserResult)
+		// and DB load path (which reads toolcall_output from DB).
+		// Previously, DB stored raw JSON while ReAct resume returned formatted text,
+		// causing tool_result content inconsistency and cache invalidation.
+		if rtc.ToolName == "askUser" {
+			tempRtc := &model.Rtc{
+				ToolName: rtc.ToolName,
+				Result:   model.JSONBString(*resultJSON),
+				Status:   string(targetStatus),
+			}
+			toolOutput = agent.FormatAskUserResult(tempRtc)
+		} else {
+			toolOutput = *resultJSON
+		}
 	} else if reqError != nil {
 		toolOutput = *reqError
 	}

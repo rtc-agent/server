@@ -124,10 +124,15 @@ func (s *Server) handleReportPage(c *gin.Context) {
 
 // Summary represents the summary statistics.
 type Summary struct {
-	TotalRequests int
-	AvgHitRate    float64
-	AvgHitRateStr string
-	SessionCount  int
+	TotalRequests         int
+	AvgHitRate            float64
+	AvgHitRateStr         string
+	SessionCount          int
+	TotalInputTokens      int
+	TotalCacheReadTokens  int
+	TotalCacheWriteTokens int
+	OverallHitRate        float64
+	OverallHitRateStr     string
 }
 
 func calculateSummary(requests []*LLMRequest) *Summary {
@@ -136,25 +141,37 @@ func calculateSummary(requests []*LLMRequest) *Summary {
 		return &Summary{}
 	}
 
-	var totalHitRate float64
 	sessions := make(map[string]bool)
+	var totalInputTokens, totalCacheReadTokens, totalCacheWriteTokens int
 
 	for _, req := range requests {
 		if req.CacheStats != nil {
-			totalHitRate += req.CacheStats.HitRate()
+			totalInputTokens += req.CacheStats.InputTokens
+			totalCacheReadTokens += req.CacheStats.CacheReadTokens
+			totalCacheWriteTokens += req.CacheStats.CacheCreationTokens
 		}
 		if req.SessionID != "" {
 			sessions[req.SessionID] = true
 		}
 	}
 
-	avgHitRate := totalHitRate / float64(total)
+	// Calculate overall hit rate based on total tokens
+	var overallHitRate float64
+	totalTokens := totalInputTokens + totalCacheReadTokens + totalCacheWriteTokens
+	if totalTokens > 0 {
+		overallHitRate = float64(totalCacheReadTokens) / float64(totalTokens)
+	}
 
 	return &Summary{
-		TotalRequests: total,
-		AvgHitRate:    avgHitRate,
-		AvgHitRateStr: formatPercent(avgHitRate),
-		SessionCount:  len(sessions),
+		TotalRequests:         total,
+		AvgHitRate:            overallHitRate, // Keep for backward compatibility
+		AvgHitRateStr:         formatPercent(overallHitRate),
+		SessionCount:          len(sessions),
+		TotalInputTokens:      totalInputTokens,
+		TotalCacheReadTokens:  totalCacheReadTokens,
+		TotalCacheWriteTokens: totalCacheWriteTokens,
+		OverallHitRate:        overallHitRate,
+		OverallHitRateStr:     formatPercent(overallHitRate),
 	}
 }
 
@@ -823,18 +840,15 @@ func generateMarkdownReport(sessionID string, requests []*LLMRequest) string {
 	fmt.Fprintf(&sb, "**Generated**: %s  \n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(&sb, "**Total Requests**: %d  \n", len(requests))
 
-	// Calculate average hit rate
-	var totalHitRate float64
-	count := 0
-	for _, req := range requests {
-		if req.CacheStats != nil {
-			totalHitRate += req.CacheStats.HitRate()
-			count++
-		}
-	}
-	if count > 0 {
-		avgHitRate := totalHitRate / float64(count)
-		fmt.Fprintf(&sb, "**Average Hit Rate**: %s  \n", formatPercent(avgHitRate))
+	// Calculate overall hit rate based on total tokens
+	summary := calculateSummary(requests)
+	if summary.TotalInputTokens > 0 || summary.TotalCacheReadTokens > 0 || summary.TotalCacheWriteTokens > 0 {
+		fmt.Fprintf(&sb, "**Overall Cache Hit Rate**: %s  \n", summary.OverallHitRateStr)
+		sb.WriteString("\n**Token Usage:**\n")
+		fmt.Fprintf(&sb, "- Total Input: %d  \n", summary.TotalInputTokens)
+		fmt.Fprintf(&sb, "- Cache Write: %d  \n", summary.TotalCacheWriteTokens)
+		fmt.Fprintf(&sb, "- Cache Read: %d  \n", summary.TotalCacheReadTokens)
+		fmt.Fprintf(&sb, "- Total: %d  \n", summary.TotalInputTokens+summary.TotalCacheWriteTokens+summary.TotalCacheReadTokens)
 	}
 	sb.WriteString("\n---\n\n")
 
