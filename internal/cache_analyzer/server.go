@@ -3,18 +3,22 @@ package cache_analyzer
 import (
 	"bufio"
 	"bytes"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+//go:embed templates/*.html
+var templateFS embed.FS
 
 // Server represents the cache analyzer HTTP server.
 type Server struct {
@@ -36,7 +40,6 @@ func (s *Server) Run() error {
 	r := gin.Default()
 
 	// Load templates with custom functions
-	templatesDir := filepath.Join("internal", "cache_analyzer", "templates")
 	funcMap := template.FuncMap{
 		"formatTime":          formatTime,
 		"hitRateClass":        hitRateClass,
@@ -49,7 +52,16 @@ func (s *Server) Run() error {
 		"formatIndexList":     formatIndexList,
 	}
 	r.SetFuncMap(funcMap)
-	r.LoadHTMLGlob(templatesDir + "/*.html")
+
+	// Load templates from embedded filesystem
+	templates, err := fs.Sub(templateFS, "templates")
+	if err != nil {
+		return err
+	}
+	r.LoadHTMLGlob("templates/*.html")
+	// Parse templates from embedded FS
+	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(templates, "*.html"))
+	r.SetHTMLTemplate(tmpl)
 
 	// Routes
 	r.GET("/", s.handleConfigPage)
