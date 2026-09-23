@@ -69,7 +69,7 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 
 	// 1. Parse arguments.
 	var args getSubAgentMessageArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "getSubAgentMessage", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "getSubAgentMessage", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 

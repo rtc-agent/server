@@ -21,11 +21,13 @@ import (
 // searchMemoryTool searches memories (both Session Memory and User Memory).
 // Currently only Session Memory search is implemented; User Memory will be in the next phase.
 type searchMemoryTool struct {
+	session *model.Session
 	helpers *helpers
+	turnID  uuid.UUID
 }
 
-func (h *helpers) createSearchMemoryTool() tool.InvokableTool {
-	return &searchMemoryTool{helpers: h}
+func (h *helpers) createSearchMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
+	return &searchMemoryTool{session: session, helpers: h, turnID: turnID}
 }
 
 func (t *searchMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -61,7 +63,8 @@ func (t *searchMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	ctx, span := t.helpers.tracer.Start(ctx, "tool.searchMemory",
 		trace.WithAttributes(
-			attribute.String("turn_id", ""),
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.String("turn_id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -72,13 +75,28 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		MemoryType string `json:"memory_type"`
 		Limit      int    `json:"limit"`
 	}
-	if ok, msg := parseToolArgs(ctx, t.helpers, "searchMemory", argumentsInJSON, &args); !ok {
-		return msg, nil
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "searchMemory", argumentsInJSON, &args); !ok {
+		return errMsg, nil
 	}
 
 	if args.Query == "" {
 		span.SetStatus(codes.Error, "query_required")
-		return "", fmt.Errorf("query is required")
+		errMsg := "Error: query is required"
+		// 持久化验证错误到 DB
+		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+			Helpers:         t.helpers,
+			SessionID:       t.session.ID,
+			OwnerRefID:      t.session.OwnerRefID,
+			TurnID:          t.turnID,
+			ToolName:        "searchMemory",
+			ArgumentsInJSON: argumentsInJSON,
+			ResultJSON:      errMsg,
+		}); publishErr != nil {
+			t.helpers.logger.Warn(ctx, "searchMemory.persist_validation_error_failed", map[string]any{
+				"error": publishErr.Error(),
+			})
+		}
+		return errMsg, nil
 	}
 	span.SetAttributes(
 		attribute.String("query", args.Query),
@@ -127,30 +145,50 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		}
 	}
 
+	var resultJSON string
 	if len(results) == 0 {
 		span.SetAttributes(attribute.Int("result_count", 0))
-		return formatNoSearchResults(), nil
+		resultJSON = formatNoSearchResults()
+	} else {
+		// Format output
+		items := make([]searchResultItem, len(results))
+		for i, result := range results {
+			createdAt := ""
+			if !result.CreatedAt.IsZero() {
+				createdAt = result.CreatedAt.Format("2006-01-02 15:04")
+			}
+			items[i] = searchResultItem{
+				Index:      i + 1,
+				MemoryType: result.MemoryType,
+				Category:   result.Category,
+				Title:      result.Title,
+				Content:    stringutil.TruncateByRune(result.Content, 300),
+				CreatedAt:  createdAt,
+			}
+		}
+
+		span.SetAttributes(attribute.Int("result_count", len(results)))
+		resultJSON = formatSearchResultsList(len(results), items)
 	}
 
-	// Format output
-	items := make([]searchResultItem, len(results))
-	for i, result := range results {
-		createdAt := ""
-		if !result.CreatedAt.IsZero() {
-			createdAt = result.CreatedAt.Format("2006-01-02 15:04")
-		}
-		items[i] = searchResultItem{
-			Index:      i + 1,
-			MemoryType: result.MemoryType,
-			Category:   result.Category,
-			Title:      result.Title,
-			Content:    stringutil.TruncateByRune(result.Content, 300),
-			CreatedAt:  createdAt,
-		}
+	// 持久化结果到 DB
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "searchMemory",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
+		t.helpers.logger.Warn(ctx, "searchMemory.publish_failed", map[string]any{
+			"error": err.Error(),
+		})
 	}
 
-	span.SetAttributes(attribute.Int("result_count", len(results)))
-	return formatSearchResultsList(len(results), items), nil
+	return resultJSON, nil
 }
 
 // searchResult is the unified search result format.
@@ -170,18 +208,13 @@ func (t *searchMemoryTool) searchSessionMemories(
 	category string,
 	limit int,
 ) ([]searchResult, error) {
-	sessionID := getSessionIDFromContext(ctx)
-	if sessionID == uuid.Nil {
-		return nil, nil // No session, no results
-	}
-
 	// Query memories (with optional category filter)
 	var memories []*model.SessionMemory
 	var err error
 	if category != "" {
-		memories, err = t.helpers.deps.SessionMemoryRepo.ListByCategory(ctx, sessionID, category, limit*2)
+		memories, err = t.helpers.deps.SessionMemoryRepo.ListByCategory(ctx, t.session.ID, category, limit*2)
 	} else {
-		memories, err = t.helpers.deps.SessionMemoryRepo.ListBySession(ctx, sessionID, limit*2)
+		memories, err = t.helpers.deps.SessionMemoryRepo.ListBySession(ctx, t.session.ID, limit*2)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list session memories: %w", err)

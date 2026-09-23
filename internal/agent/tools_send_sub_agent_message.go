@@ -72,7 +72,7 @@ func (t *sendMessageToSubAgentTool) InvokableRun(ctx context.Context, argumentsI
 	defer span.End()
 
 	var args sendMessageToSubAgentArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "sendMessageToSubAgent", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "sendMessageToSubAgent", argumentsInJSON, &args); !ok {
 		span.SetStatus(codes.Error, "parse_args_failed")
 		return errMsg, nil
 	}

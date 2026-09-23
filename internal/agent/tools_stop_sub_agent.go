@@ -76,7 +76,7 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 
 	// 1. Parse arguments.
 	var args stopSubAgentArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "stopSubAgent", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "stopSubAgent", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 

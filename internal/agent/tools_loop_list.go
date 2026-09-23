@@ -73,7 +73,7 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	defer span.End()
 
 	var args listLoopsArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "listLoops", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "listLoops", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 

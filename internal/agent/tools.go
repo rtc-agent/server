@@ -488,3 +488,60 @@ func parseToolArgs(ctx context.Context, h *helpers, toolName string, argumentsIn
 	}
 	return true, ""
 }
+
+// parseToolArgsWithPersist safely parses JSON tool arguments and persists
+// parse errors to the database as toolcall_output messages.
+//
+// This is critical for cache consistency: when parseToolArgs fails, the error
+// message must be persisted to DB so that checkpoint resume (HistoryModifier)
+// produces the same message structure as the original execution.
+//
+// Without this, the error message exists only in eino's in-memory state during
+// the current turn, but disappears when the turn is resumed from checkpoint
+// (because DB doesn't have the error record), causing cache invalidation.
+func parseToolArgsWithPersist(
+	ctx context.Context,
+	h *helpers,
+	sessionID uuid.UUID,
+	ownerRefID string,
+	turnID uuid.UUID,
+	toolName string,
+	argumentsInJSON string,
+	args any,
+) (ok bool, errorMsg string) {
+	if err := json.Unmarshal([]byte(argumentsInJSON), args); err != nil {
+		// Truncate arguments for logging to avoid flooding logs with large payloads.
+		argPreview := argumentsInJSON
+		const maxPreviewLen = 200
+		if len(argPreview) > maxPreviewLen {
+			argPreview = argPreview[:maxPreviewLen] + "...(truncated)"
+		}
+		h.logger.Warn(ctx, "tool.parse_arguments_failed", map[string]any{
+			"tool_name":   toolName,
+			"error":       err.Error(),
+			"raw_length":  len(argumentsInJSON),
+			"raw_preview": argPreview,
+		})
+		errMsg := formatParseError(err.Error(), argPreview)
+
+		// 持久化错误消息到 DB，确保 checkpoint resume 时消息结构一致
+		// 这对 LLM 缓存命中至关重要
+		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+			Helpers:         h,
+			SessionID:       sessionID,
+			OwnerRefID:      ownerRefID,
+			TurnID:          turnID,
+			ToolName:        toolName,
+			ArgumentsInJSON: argumentsInJSON,
+			ResultJSON:      errMsg,
+		}); publishErr != nil {
+			h.logger.Warn(ctx, "tool.persist_parse_error_failed", map[string]any{
+				"tool_name": toolName,
+				"error":     publishErr.Error(),
+			})
+		}
+
+		return false, errMsg
+	}
+	return true, ""
+}

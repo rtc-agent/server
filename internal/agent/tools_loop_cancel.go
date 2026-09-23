@@ -53,7 +53,7 @@ func (t *cancelLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args cancelLoopArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "cancelLoop", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "cancelLoop", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Reason == "" {
@@ -92,7 +92,7 @@ func (t *completeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args completeLoopArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "completeLoop", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "completeLoop", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Reason == "" {

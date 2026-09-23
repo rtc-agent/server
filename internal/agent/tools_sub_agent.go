@@ -125,7 +125,7 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 
 	// === First-call path ===
 	var args subAgentArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "subAgent", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "subAgent", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if validationErr := validateSubAgentArgs(args); validationErr != "" {

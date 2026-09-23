@@ -64,7 +64,7 @@ func (t *createLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args createLoopArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "createLoop", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "createLoop", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Prompt == "" {

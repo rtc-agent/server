@@ -64,7 +64,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	defer span.End()
 
 	var args createGoalArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "createGoal", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "createGoal", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Condition == "" {
@@ -189,7 +189,7 @@ func (t *completeGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *completeGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args completeGoalArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "completeGoal", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "completeGoal", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Reason == "" {
@@ -228,7 +228,7 @@ func (t *cancelGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args cancelGoalArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "cancelGoal", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "cancelGoal", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Reason == "" {
