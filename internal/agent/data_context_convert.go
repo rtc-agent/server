@@ -106,7 +106,7 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 			ToolCalls: []turnagent.ToolCall{{
 				ID:        toolCall.Id,
 				Name:      toolCall.ToolName,
-				Arguments: toolCall.Input,
+				Arguments: normalizeToolArguments(toolCall.Input),
 			}},
 			CreatedAt: msg.CreatedAt,
 		}}, nil

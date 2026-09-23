@@ -1,6 +1,7 @@
 package turnagent
 
 import (
+	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/schema"
@@ -194,7 +195,7 @@ func toEinoMessage(m *Message) *schema.Message {
 			ID: tc.ID,
 			Function: schema.FunctionCall{
 				Name:      tc.Name,
-				Arguments: tc.Arguments,
+				Arguments: normalizeToolArguments(tc.Arguments),
 			},
 		})
 	}
@@ -309,10 +310,29 @@ func fromEinoMessage(m *schema.Message) *Message {
 		msg.ToolCalls = append(msg.ToolCalls, ToolCall{
 			ID:        tc.ID,
 			Name:      tc.Function.Name,
-			Arguments: tc.Function.Arguments,
+			Arguments: normalizeToolArguments(tc.Function.Arguments),
 		})
 	}
 	return msg
+}
+
+// normalizeToolArguments normalizes empty or null JSON tool arguments to "{}".
+// This ensures consistency between LLM responses, DB storage, and API requests,
+// preventing both cache invalidation and 400 errors from the API.
+//
+// When the LLM calls a tool with no arguments, different code paths may produce:
+//   - Empty string ""
+//   - Literal "null"
+//   - Empty object "{}"
+//
+// The Anthropic API requires tool_use input to be an object (not null),
+// so we normalize to "{}" at all conversion boundaries.
+func normalizeToolArguments(arguments string) string {
+	trimmed := strings.TrimSpace(arguments)
+	if trimmed == "" || trimmed == "null" {
+		return "{}"
+	}
+	return arguments
 }
 
 // extractTokenUsage converts eino's schema.TokenUsage to the pkg's TokenUsage.
