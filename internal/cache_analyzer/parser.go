@@ -58,13 +58,21 @@ type ContentPart struct {
 	IsError    bool                   `json:"is_error,omitempty"` // for tool_result
 }
 
+// SystemBlock represents a single block in the system prompt.
+type SystemBlock struct {
+	Text         string `json:"text"`
+	CacheControl string `json:"cache_control,omitempty"`
+	ContentHash  string `json:"content_hash"`
+}
+
 // LLMRequest represents a single LLM request with its response.
 type LLMRequest struct {
-	Timestamp    time.Time   `json:"timestamp"`
-	SessionID    string      `json:"session_id"`
-	Messages     []*Message  `json:"messages"`
-	CacheStats   *CacheStats `json:"cache_stats,omitempty"`
-	RequestIndex int         `json:"request_index"`
+	Timestamp    time.Time      `json:"timestamp"`
+	SessionID    string         `json:"session_id"`
+	Messages     []*Message     `json:"messages"`
+	System       []*SystemBlock `json:"system"`
+	CacheStats   *CacheStats    `json:"cache_stats,omitempty"`
+	RequestIndex int            `json:"request_index"`
 }
 
 // MessageCount returns the number of messages.
@@ -162,10 +170,39 @@ func parseRequest(entry map[string]interface{}, timestamp time.Time, sessionID s
 		})
 	}
 
+	// Parse system field
+	systemRaw, _ := requestBody["system"].([]interface{})
+	var system []*SystemBlock
+	for _, sysRaw := range systemRaw {
+		sysMap, ok := sysRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		text, _ := sysMap["text"].(string)
+		cacheControl := ""
+		if cc, exists := sysMap["cache_control"]; exists {
+			if ccMap, ok := cc.(map[string]interface{}); ok {
+				ccType, _ := ccMap["type"].(string)
+				ccTTL, _ := ccMap["ttl"].(string)
+				if ccTTL != "" {
+					cacheControl = ccType + ":" + ccTTL
+				} else {
+					cacheControl = ccType
+				}
+			}
+		}
+		system = append(system, &SystemBlock{
+			Text:         text,
+			CacheControl: cacheControl,
+			ContentHash:  computeHash(text),
+		})
+	}
+
 	return &LLMRequest{
 		Timestamp: timestamp,
 		SessionID: sessionID,
 		Messages:  messages,
+		System:    system,
 	}, nil
 }
 
@@ -418,6 +455,15 @@ func MergeAndFilterRequests(logFiles []string, sessionID string) ([]*LLMRequest,
 	}
 
 	return allRequests, nil
+}
+
+// computeHash computes MD5 hash of a string.
+func computeHash(text string) string {
+	if text == "" {
+		return "00000000"
+	}
+	hash := md5.Sum([]byte(text))
+	return hex.EncodeToString(hash[:8])[:8]
 }
 
 // computeHashFromParts computes hash from complete content parts.

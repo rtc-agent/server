@@ -310,26 +310,51 @@
                     <div class="request-hitrate {{if $req.CacheStats}}{{hitRateClass $req.CacheStats.HitRate}}{{else}}hitrate-low{{end}}">
                         {{if $req.CacheStats}}{{$req.CacheStats.HitRatePercent}}{{else}}N/A{{end}}
                     </div>
-                    <div class="request-messages">{{$req.MessageCount}} msgs</div>
+                    <div class="request-messages">
+                        {{$req.MessageCount}} msgs
+                        {{if $req.System}}
+                            / {{len $req.System}} sys
+                        {{end}}
+                    </div>
                     <div class="request-changes">
                         {{if gt $i 0}}
                             {{$diff := index $.Diffs $i}}
-                            <span class="change-summary">{{formatChangeSummary $diff.AddedCount $diff.RemovedCount $diff.ModifiedCount}}</span>
-                            {{if or (gt $diff.AddedCount 0) (gt $diff.RemovedCount 0) (gt $diff.ModifiedCount 0)}}
+                            <span class="change-summary">
+                                {{formatChangeSummary $diff.AddedCount $diff.RemovedCount $diff.ModifiedCount}}
+                                {{if or (gt $diff.SystemAddedCount 0) (gt $diff.SystemRemovedCount 0) (gt $diff.SystemModifiedCount 0)}}
+                                    | System: {{formatChangeSummary $diff.SystemAddedCount $diff.SystemRemovedCount $diff.SystemModifiedCount}}
+                                {{end}}
+                            </span>
+                            {{if or (gt $diff.AddedCount 0) (gt $diff.RemovedCount 0) (gt $diff.ModifiedCount 0) (gt $diff.SystemAddedCount 0) (gt $diff.SystemRemovedCount 0) (gt $diff.SystemModifiedCount 0)}}
                                 <div class="change-details">
                                     {{if gt $diff.AddedCount 0}}
                                         <span class="change-added" title="Added: {{formatRoleList $diff.AddedRoles}} at {{formatIndexList $diff.AddedIndices}}">
-                                            +{{$diff.AddedCount}} ({{formatIndexList $diff.AddedIndices}})
+                                            +{{$diff.AddedCount}} msg ({{formatIndexList $diff.AddedIndices}})
                                         </span>
                                     {{end}}
                                     {{if gt $diff.RemovedCount 0}}
                                         <span class="change-removed" title="Removed: {{formatRoleList $diff.RemovedRoles}} at {{formatIndexList $diff.RemovedIndices}}">
-                                            -{{$diff.RemovedCount}} ({{formatIndexList $diff.RemovedIndices}})
+                                            -{{$diff.RemovedCount}} msg ({{formatIndexList $diff.RemovedIndices}})
                                         </span>
                                     {{end}}
                                     {{if gt $diff.ModifiedCount 0}}
                                         <span class="change-modified" title="Modified: {{formatRoleList $diff.ModifiedRoles}} at {{formatIndexList $diff.ModifiedIndices}}">
-                                            ~{{$diff.ModifiedCount}} ({{formatIndexList $diff.ModifiedIndices}})
+                                            ~{{$diff.ModifiedCount}} msg ({{formatIndexList $diff.ModifiedIndices}})
+                                        </span>
+                                    {{end}}
+                                    {{if gt $diff.SystemAddedCount 0}}
+                                        <span class="change-added" title="System blocks added">
+                                            +{{$diff.SystemAddedCount}} sys
+                                        </span>
+                                    {{end}}
+                                    {{if gt $diff.SystemRemovedCount 0}}
+                                        <span class="change-removed" title="System blocks removed">
+                                            -{{$diff.SystemRemovedCount}} sys
+                                        </span>
+                                    {{end}}
+                                    {{if gt $diff.SystemModifiedCount 0}}
+                                        <span class="change-modified" title="System blocks modified">
+                                            ~{{$diff.SystemModifiedCount}} sys
                                         </span>
                                     {{end}}
                                 </div>
@@ -344,11 +369,35 @@
                             <a href="#" class="export-diff-btn" onclick="exportDiff(event, {{$.SessionID}}, {{sub $i 1}}, {{$i}})">📥 导出此对比</a>
                         </div>
                         {{$diff := index $.Diffs $i}}
-                        {{if $diff.MessageDiffs}}
+                        {{if or $diff.MessageDiffs $diff.SystemDiffs}}
                             <div class="diff-container">
                                 <div class="diff-column">
                                     <div class="diff-title">请求 {{sub $i 1}} ({{formatTime $diff.PrevRequest.Timestamp}})</div>
                                     <div class="diff-content">
+                                        {{/* System Diffs */}}
+                                        {{range $diff.SystemDiffs}}
+                                            {{if or (eq .Status "removed") (eq .Status "modified")}}
+                                                <div class="message-item {{if eq .Status "removed"}}message-removed{{else}}message-modified{{end}}">
+                                                    <div class="message-header">
+                                                        <div class="message-role">
+                                                            SYSTEM
+                                                            {{if eq .Status "modified"}}(modified){{end}}
+                                                        </div>
+                                                        <div>
+                                                            {{if .PrevBlock.CacheControl}}<span class="cache-badge">📌 {{.PrevBlock.CacheControl}}</span>{{end}}
+                                                            <span class="message-hash">hash: {{.PrevBlock.ContentHash}}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="message-body">
+                                                        {{range .Diffs}}
+                                                            {{if eq .Type "equal"}}<div class="diff-line equal">{{.Text}}</div>{{end}}
+                                                            {{if eq .Type "delete"}}<div class="diff-line delete">{{.Text}}</div>{{end}}
+                                                        {{end}}
+                                                    </div>
+                                                </div>
+                                            {{end}}
+                                        {{end}}
+                                        {{/* Message Diffs */}}
                                         {{range $diff.MessageDiffs}}
                                             {{if or (eq .Status "removed") (eq .Status "modified")}}
                                                 <div class="message-item {{if eq .Status "removed"}}message-removed{{else}}message-modified{{end}}">
@@ -376,6 +425,40 @@
                                 <div class="diff-column">
                                     <div class="diff-title">请求 {{$i}} ({{formatTime $diff.CurrRequest.Timestamp}})</div>
                                     <div class="diff-content">
+                                        {{/* System Diffs */}}
+                                        {{range $diff.SystemDiffs}}
+                                            {{if or (eq .Status "added") (eq .Status "modified")}}
+                                                <div class="message-item {{if eq .Status "added"}}message-added{{else}}message-modified{{end}}">
+                                                    <div class="message-header">
+                                                        <div class="message-role">
+                                                            SYSTEM
+                                                            {{if eq .Status "modified"}}(modified){{end}}
+                                                        </div>
+                                                        <div>
+                                                            {{if .CurrBlock.CacheControl}}<span class="cache-badge">📌 {{.CurrBlock.CacheControl}}</span>{{end}}
+                                                            <span class="message-hash">hash: {{.CurrBlock.ContentHash}}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="message-body">
+                                                        {{range .Diffs}}
+                                                            {{if eq .Type "equal"}}<div class="diff-line equal">{{.Text}}</div>{{end}}
+                                                            {{if eq .Type "insert"}}<div class="diff-line insert">{{.Text}}</div>{{end}}
+                                                        {{end}}
+                                                    </div>
+                                                </div>
+                                            {{else if eq .Status "unchanged"}}
+                                                <div class="message-item message-unchanged">
+                                                    <div class="message-header">
+                                                        <div class="message-role">SYSTEM</div>
+                                                        <div>
+                                                            {{if .CurrBlock.CacheControl}}<span class="cache-badge">📌 {{.CurrBlock.CacheControl}}</span>{{end}}
+                                                            <span class="message-hash">hash: {{.CurrBlock.ContentHash}}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            {{end}}
+                                        {{end}}
+                                        {{/* Message Diffs */}}
                                         {{range $diff.MessageDiffs}}
                                             {{if or (eq .Status "added") (eq .Status "modified")}}
                                                 <div class="message-item {{if eq .Status "added"}}message-added{{else}}message-modified{{end}}">

@@ -179,6 +179,16 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// they use system role, and Claude API requires system messages at the start.
 	messages = h.prependAttachments(ctx, sid, messages)
 
+	// Inject system prompt and agent prompt as system messages.
+	// This runs AFTER prependAttachments so that normalizeMessagesForLLM's
+	// extractSystemMessages produces the correct order:
+	//   [SystemPrompt, AgentPrompt, TodoList, SessionMemory, UserMemory, ...conversation]
+	//
+	// Previously, systemPrompt + AgentPrompt were passed via eino's Instruction
+	// field, which was lost during GenResume's HistoryModifier, causing the
+	// system array to differ between GenInput and GenResume → cache invalidation.
+	messages = h.injectSystemAndAgentPrompt(ctx, sid, messages)
+
 	// Normalize messages for LLM: extract system messages to the front,
 	// repair tool call/result pairing, merge consecutive same-role messages,
 	// and validate structural compliance with the Anthropic Messages API.

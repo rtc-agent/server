@@ -164,6 +164,7 @@ type DiffData struct {
 	PrevRequest  *LLMRequest
 	CurrRequest  *LLMRequest
 	MessageDiffs []*MessageDiff
+	SystemDiffs  []*SystemDiff
 	// Statistics
 	AddedCount      int
 	RemovedCount    int
@@ -174,6 +175,18 @@ type DiffData struct {
 	AddedIndices    []int
 	RemovedIndices  []int
 	ModifiedIndices []int
+	// System statistics
+	SystemAddedCount    int
+	SystemRemovedCount  int
+	SystemModifiedCount int
+}
+
+// SystemDiff represents the diff for a single system block.
+type SystemDiff struct {
+	PrevBlock *SystemBlock
+	CurrBlock *SystemBlock
+	Status    string // "added", "removed", "unchanged", "modified"
+	Diffs     []DiffChunk
 }
 
 // MessageDiff represents the diff for a single message.
@@ -203,8 +216,9 @@ func generateDiffs(requests []*LLMRequest) []*DiffData {
 			prev := requests[i-1]
 			diffData.PrevRequest = prev
 			diffData.MessageDiffs = generateMessageDiffs(prev, curr)
+			diffData.SystemDiffs = generateSystemDiffs(prev, curr)
 
-			// Calculate statistics
+			// Calculate message statistics
 			for j, msgDiff := range diffData.MessageDiffs {
 				switch msgDiff.Status {
 				case "added":
@@ -225,6 +239,18 @@ func generateDiffs(requests []*LLMRequest) []*DiffData {
 					if msgDiff.CurrMessage != nil {
 						diffData.ModifiedRoles = append(diffData.ModifiedRoles, msgDiff.CurrMessage.Role)
 					}
+				}
+			}
+
+			// Calculate system statistics
+			for _, sysDiff := range diffData.SystemDiffs {
+				switch sysDiff.Status {
+				case "added":
+					diffData.SystemAddedCount++
+				case "removed":
+					diffData.SystemRemovedCount++
+				case "modified":
+					diffData.SystemModifiedCount++
 				}
 			}
 		}
@@ -312,6 +338,65 @@ func generateMessageDiffs(prev, curr *LLMRequest) []*MessageDiff {
 	}
 
 	return messageDiffs
+}
+
+func generateSystemDiffs(prev, curr *LLMRequest) []*SystemDiff {
+	var systemDiffs []*SystemDiff
+
+	// Compare system blocks by position
+	maxLen := len(prev.System)
+	if len(curr.System) > maxLen {
+		maxLen = len(curr.System)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var prevBlock, currBlock *SystemBlock
+		if i < len(prev.System) {
+			prevBlock = prev.System[i]
+		}
+		if i < len(curr.System) {
+			currBlock = curr.System[i]
+		}
+
+		if prevBlock == nil && currBlock != nil {
+			// System block added
+			systemDiffs = append(systemDiffs, &SystemDiff{
+				PrevBlock: nil,
+				CurrBlock: currBlock,
+				Status:    "added",
+				Diffs:     []DiffChunk{{Type: "insert", Text: currBlock.Text}},
+			})
+		} else if prevBlock != nil && currBlock == nil {
+			// System block removed
+			systemDiffs = append(systemDiffs, &SystemDiff{
+				PrevBlock: prevBlock,
+				CurrBlock: nil,
+				Status:    "removed",
+				Diffs:     []DiffChunk{{Type: "delete", Text: prevBlock.Text}},
+			})
+		} else if prevBlock != nil && currBlock != nil {
+			if prevBlock.ContentHash == currBlock.ContentHash {
+				// System block unchanged
+				systemDiffs = append(systemDiffs, &SystemDiff{
+					PrevBlock: prevBlock,
+					CurrBlock: currBlock,
+					Status:    "unchanged",
+					Diffs:     nil,
+				})
+			} else {
+				// System block modified - generate line-by-line diff
+				diffs := generateLineDiff(prevBlock.Text, currBlock.Text)
+				systemDiffs = append(systemDiffs, &SystemDiff{
+					PrevBlock: prevBlock,
+					CurrBlock: currBlock,
+					Status:    "modified",
+					Diffs:     diffs,
+				})
+			}
+		}
+	}
+
+	return systemDiffs
 }
 
 // generateLineDiff generates a line-by-line diff between two texts using LCS algorithm.
@@ -576,6 +661,74 @@ func (s *Server) handleExportMarkdown(c *gin.Context) {
 	c.Data(http.StatusOK, "text/markdown; charset=utf-8", []byte(markdown))
 }
 
+// writeSystemDiffs writes system diffs to the string builder in markdown format.
+func writeSystemDiffs(sb *strings.Builder, systemDiffs []*SystemDiff) {
+	if len(systemDiffs) == 0 {
+		return
+	}
+
+	sb.WriteString("### System Prompt Changes\n\n")
+
+	for j, sysDiff := range systemDiffs {
+		if sysDiff.Status == "unchanged" {
+			continue
+		}
+
+		statusText := ""
+		switch sysDiff.Status {
+		case "added":
+			statusText = "Added"
+		case "removed":
+			statusText = "Removed"
+		case "modified":
+			statusText = "Modified"
+		}
+
+		fmt.Fprintf(sb, "#### System Block %d - %s\n\n", j+1, statusText)
+
+		// Show full content first
+		if sysDiff.PrevBlock != nil {
+			sb.WriteString("**Previous content:**\n")
+			sb.WriteString("````\n")
+			sb.WriteString(sysDiff.PrevBlock.Text)
+			sb.WriteString("\n````\n\n")
+		}
+		if sysDiff.CurrBlock != nil {
+			sb.WriteString("**Current content:**\n")
+			sb.WriteString("````\n")
+			sb.WriteString(sysDiff.CurrBlock.Text)
+			sb.WriteString("\n````\n\n")
+		}
+
+		// Then show diff
+		sb.WriteString("**Diff:**\n")
+		sb.WriteString("````diff\n")
+
+		// Write diff lines
+		for _, chunk := range sysDiff.Diffs {
+			var prefix string
+			switch chunk.Type {
+			case "equal":
+				prefix = " "
+			case "insert":
+				prefix = "+"
+			case "delete":
+				prefix = "-"
+			}
+
+			// Split by lines and add prefix to each line
+			lines := strings.Split(chunk.Text, "\n")
+			for _, line := range lines {
+				if line != "" || chunk.Type != "equal" {
+					sb.WriteString(prefix + line + "\n")
+				}
+			}
+		}
+
+		sb.WriteString("````\n\n")
+	}
+}
+
 // writeMessageDiffs writes message diffs to the string builder in markdown format.
 func writeMessageDiffs(sb *strings.Builder, messageDiffs []*MessageDiff) {
 	if len(messageDiffs) == 0 {
@@ -716,8 +869,20 @@ func generateMarkdownReport(sessionID string, requests []*LLMRequest) string {
 			} else if currCount < prevCount {
 				fmt.Fprintf(&sb, " (-%d removed)", prevCount-currCount)
 			}
+			sb.WriteString("  \n")
+
+			// System changes
+			prevSysCount := len(diff.PrevRequest.System)
+			currSysCount := len(diff.CurrRequest.System)
+			fmt.Fprintf(&sb, "**System**: %d → %d", prevSysCount, currSysCount)
+			if diff.SystemAddedCount > 0 || diff.SystemRemovedCount > 0 || diff.SystemModifiedCount > 0 {
+				fmt.Fprintf(&sb, " (%s)", formatChangeSummary(diff.SystemAddedCount, diff.SystemRemovedCount, diff.SystemModifiedCount))
+			}
 			sb.WriteString("\n\n")
 		}
+
+		// System diffs
+		writeSystemDiffs(&sb, diff.SystemDiffs)
 
 		// Message diffs
 		writeMessageDiffs(&sb, diff.MessageDiffs)
@@ -767,13 +932,29 @@ func generateSingleDiffMarkdown(sessionID string, logFiles []string, requests []
 	} else if currCount < prevCount {
 		fmt.Fprintf(&sb, " (-%d removed)", prevCount-currCount)
 	}
-	sb.WriteString("\n\n")
+	sb.WriteString("  \n")
 
-	// Generate diff
+	// System changes
+	prevSysCount := len(prevReq.System)
+	currSysCount := len(currReq.System)
+	fmt.Fprintf(&sb, "**System**: %d → %d", prevSysCount, currSysCount)
+
+	// Generate diff to get system statistics
 	diffs := generateDiffs(requests)
 	if toIndex < len(diffs) {
 		diff := diffs[toIndex]
+		if diff.SystemAddedCount > 0 || diff.SystemRemovedCount > 0 || diff.SystemModifiedCount > 0 {
+			fmt.Fprintf(&sb, " (%s)", formatChangeSummary(diff.SystemAddedCount, diff.SystemRemovedCount, diff.SystemModifiedCount))
+		}
+		sb.WriteString("\n\n")
+
+		// System diffs
+		writeSystemDiffs(&sb, diff.SystemDiffs)
+
+		// Message diffs
 		writeMessageDiffs(&sb, diff.MessageDiffs)
+	} else {
+		sb.WriteString("\n\n")
 	}
 
 	// Add full request bodies at the end

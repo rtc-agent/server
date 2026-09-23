@@ -382,13 +382,22 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		}
 	}
 
-	instruction := systemPrompt + "\n" + session.AgentPrompt
+	// System prompt and AgentPrompt are now injected via loadMessages pipeline
+	// (injectSystemAndAgentPrompt) to ensure consistent system array structure
+	// between GenInput and GenResume paths.
+	//
+	// BUG 11 fix: Instruction is set to empty string "" instead of " " (space).
+	// Previously, eino added Instruction as system[0] in GenInput but not in GenResume,
+	// causing system array structure inconsistency and cache invalidation.
+	// Empty string prevents eino from adding any system message for Instruction.
+	instruction := ""
 	h.logger.Info(ctx, "createAgent.instruction_debug", map[string]any{
 		"session_id":           sessionID,
 		"instruction_length":   len(instruction),
+		"instruction_empty":    instruction == "",
 		"system_prompt_length": len(systemPrompt),
 		"agent_prompt_length":  len(session.AgentPrompt),
-		"instruction_preview":  instruction[:min(200, len(instruction))],
+		"note":                 "Instruction minimized to empty string (BUG 11 fix)",
 	})
 
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
