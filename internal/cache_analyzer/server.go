@@ -58,8 +58,6 @@ func (s *Server) Run() error {
 	if err != nil {
 		return err
 	}
-	r.LoadHTMLGlob("templates/*.html")
-	// Parse templates from embedded FS
 	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(templates, "*.html"))
 	r.SetHTMLTemplate(tmpl)
 
