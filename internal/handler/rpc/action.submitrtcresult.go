@@ -90,14 +90,14 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	}
 
 	var resultJSON *string
-	if req.Result != nil {
-		b, marshalErr := json.Marshal(req.Result)
-		if marshalErr != nil {
-			span.SetStatus(codes.Error, marshalErr.Error())
-			span.RecordError(marshalErr)
-			return nil, &APIError{Code: "rtc.invalid_result", Message: fmt.Sprintf("marshal result: %v", marshalErr)}
+	if len(req.Result) > 0 {
+		// req.Result 是 json.RawMessage，保留原始 JSON 字段顺序
+		// 验证是否是合法 JSON
+		if !json.Valid(req.Result) {
+			span.SetStatus(codes.Error, "invalid JSON in result")
+			return nil, &APIError{Code: "rtc.invalid_result", Message: "result is not valid JSON"}
 		}
-		s := string(b)
+		s := string(req.Result)
 		resultJSON = &s
 	}
 

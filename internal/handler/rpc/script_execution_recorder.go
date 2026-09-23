@@ -145,18 +145,14 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 	var resultSize int64
 	var logsList, warningsList, errorsList model.StringArray
 
-	if req.Result != nil {
-		// Calculate result size (still requires Marshal).
-		resultBytes, err := json.Marshal(req.Result)
-		if err != nil {
-			logger.Warn(ctx, "[scriptExecutionRecorder] marshal result failed",
-				zap.String("rtc", rtc.ID.String()),
-				zap.Error(err))
-		}
+	if len(req.Result) > 0 {
+		// req.Result 是 json.RawMessage（[]byte），直接使用
+		resultBytes := req.Result
 		resultSize = int64(len(resultBytes))
 
-		// Extract fields directly from the map to avoid a second JSON parse.
-		if resultData, ok := req.Result.(map[string]interface{}); ok {
+		// 解析 JSON 以提取字段
+		var resultData map[string]interface{}
+		if err := json.Unmarshal(resultBytes, &resultData); err == nil {
 			if v, ok := resultData["duration_ms"]; ok {
 				switch d := v.(type) {
 				case float64:

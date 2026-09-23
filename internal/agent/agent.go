@@ -247,8 +247,10 @@ func New(cfg Config) (*turnagent.Agent, error) {
 			return cache.Checkpoint("session:" + sessionID)
 		},
 
-		// Middleware — summarization middleware for context compression
-		AgentMiddlewares: []adk.ChatModelAgentMiddleware{h.summarizeMW},
+		// Middleware — merge assistant middleware (merges adjacent assistant messages)
+		// and summarization middleware (context compression)
+		// Order matters: merge first, then summarize
+		AgentMiddlewares: []adk.ChatModelAgentMiddleware{h.mergeAssistantMW, h.summarizeMW},
 
 		// eino Callbacks — the token usage handler records metrics and logs
 		// for every ChatModel call (including summarizeMessages).
@@ -332,6 +334,11 @@ type helpers struct {
 	// Stored on helpers so CreateAgent can close over it without capturing
 	// the entire helpers struct.
 	summarizeMW adk.ChatModelAgentMiddleware
+
+	// mergeAssistantMW is the merge assistant middleware, created once in New().
+	// Merges adjacent assistant messages before each ChatModel invocation to
+	// prevent cache invalidation in the ReAct loop.
+	mergeAssistantMW adk.ChatModelAgentMiddleware
 
 	// streamState tracks per-turn streaming message state.
 	// Key: turnID (string), Value: *turnStreamState.
@@ -437,6 +444,11 @@ func (h *helpers) initialize(cfg Config) error {
 		return fmt.Errorf("agent: build summarization middleware: %w", err)
 	}
 	h.summarizeMW = summarizeMW
+
+	// Merge assistant middleware
+	h.mergeAssistantMW = turnagent.NewMergeAssistantMiddleware(&turnagent.MergeAssistantMiddlewareConfig{
+		Log: h.logger,
+	})
 
 	// Token callback handler
 	h.tokenCallbackHandler = h.newTokenUsageCallbackHandler()

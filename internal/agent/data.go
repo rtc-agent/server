@@ -343,7 +343,12 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 	ctx = withSessionID(ctx, sid)
 
 	// Build handlers list, filtering out nil middleware
+	// Order matters: merge assistant first (merges adjacent assistant messages),
+	// then summarize (context compression)
 	var handlers []adk.ChatModelAgentMiddleware
+	if h.mergeAssistantMW != nil {
+		handlers = append(handlers, h.mergeAssistantMW)
+	}
 	if h.summarizeMW != nil {
 		handlers = append(handlers, h.summarizeMW)
 	}
@@ -377,10 +382,19 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		}
 	}
 
+	instruction := systemPrompt + "\n" + session.AgentPrompt
+	h.logger.Info(ctx, "createAgent.instruction_debug", map[string]any{
+		"session_id":           sessionID,
+		"instruction_length":   len(instruction),
+		"system_prompt_length": len(systemPrompt),
+		"agent_prompt_length":  len(session.AgentPrompt),
+		"instruction_preview":  instruction[:min(200, len(instruction))],
+	})
+
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:             fmt.Sprintf("session-%s", sessionID),
 		Description:      "RTC Agent session handler",
-		Instruction:      systemPrompt + "\n" + session.AgentPrompt,
+		Instruction:      instruction,
 		Model:            h.deps.ChatModel,
 		Handlers:         handlers,
 		ModelRetryConfig: retryConfig,

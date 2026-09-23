@@ -147,18 +147,18 @@ func TestMergeConsecutiveSameRole(t *testing.T) {
 			wantContents: []string{"hello\nworld"},
 		},
 		{
-			name: "three consecutive assistant messages merged",
+			name: "three consecutive assistant messages NOT merged (handled by middleware)",
 			input: []*turnagent.Message{
 				{Role: turnagent.RoleAssistant, Content: "a"},
 				{Role: turnagent.RoleAssistant, Content: "b"},
 				{Role: turnagent.RoleAssistant, Content: "c"},
 			},
-			wantLen:      1,
-			wantRoles:    []string{"assistant"},
-			wantContents: []string{"a\nb\nc"},
+			wantLen:      3, // Assistant messages are NOT merged by normalize anymore
+			wantRoles:    []string{"assistant", "assistant", "assistant"},
+			wantContents: []string{"a", "b", "c"},
 		},
 		{
-			name: "multiple groups merged",
+			name: "multiple groups merged (only user messages)",
 			input: []*turnagent.Message{
 				{Role: turnagent.RoleUser, Content: "u1"},
 				{Role: turnagent.RoleUser, Content: "u2"},
@@ -166,9 +166,9 @@ func TestMergeConsecutiveSameRole(t *testing.T) {
 				{Role: turnagent.RoleAssistant, Content: "a2"},
 				{Role: turnagent.RoleUser, Content: "u3"},
 			},
-			wantLen:      3,
-			wantRoles:    []string{"user", "assistant", "user"},
-			wantContents: []string{"u1\nu2", "a1\na2", "u3"},
+			wantLen:      4, // User merged (2->1), assistant NOT merged (stays 2), user (1)
+			wantRoles:    []string{"user", "assistant", "assistant", "user"},
+			wantContents: []string{"u1\nu2", "a1", "a2", "u3"},
 		},
 		{
 			name: "tool messages never merged",
@@ -201,14 +201,40 @@ func TestMergeConsecutiveSameRole(t *testing.T) {
 			wantContents: []string{"hello"},
 		},
 		{
-			name: "reasoning content also merged",
+			name: "reasoning content also merged (user only)",
 			input: []*turnagent.Message{
-				{Role: turnagent.RoleAssistant, Content: "text", ReasoningContent: "think1"},
-				{Role: turnagent.RoleAssistant, Content: "", ReasoningContent: "think2"},
+				{Role: turnagent.RoleUser, Content: "text", ReasoningContent: "think1"},
+				{Role: turnagent.RoleUser, Content: "", ReasoningContent: "think2"},
 			},
 			wantLen:      1,
-			wantRoles:    []string{"assistant"},
+			wantRoles:    []string{"user"},
 			wantContents: []string{"text"},
+		},
+		{
+			name: "assistant text + assistant tool_use NOT merged (handled by middleware)",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleAssistant, Content: "我来创建任务"},
+				{Role: turnagent.RoleAssistant, Content: "", ToolCalls: []turnagent.ToolCall{
+					{ID: "call_1", Name: "createTask", Arguments: `{"title":"test"}`},
+				}},
+			},
+			wantLen:      2, // Assistant messages are NOT merged by normalize anymore
+			wantRoles:    []string{"assistant", "assistant"},
+			wantContents: []string{"我来创建任务", ""},
+		},
+		{
+			name: "multiple tool_use messages NOT merged (handled by middleware)",
+			input: []*turnagent.Message{
+				{Role: turnagent.RoleAssistant, Content: "", ToolCalls: []turnagent.ToolCall{
+					{ID: "call_1", Name: "read", Arguments: `{"path":"a.txt"}`},
+				}},
+				{Role: turnagent.RoleAssistant, Content: "", ToolCalls: []turnagent.ToolCall{
+					{ID: "call_2", Name: "read", Arguments: `{"path":"b.txt"}`},
+				}},
+			},
+			wantLen:      2, // Assistant messages are NOT merged by normalize anymore
+			wantRoles:    []string{"assistant", "assistant"},
+			wantContents: []string{"", ""},
 		},
 	}
 

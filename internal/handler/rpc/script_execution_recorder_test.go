@@ -74,14 +74,16 @@ func testRtc(t *testing.T, paramsJSON string) *model.Rtc {
 }
 
 func testResultReq() *protocol.SubmitRtcResultRequest {
+	resultMap := map[string]any{
+		"duration_ms": float64(42),
+		"logs":        []any{"hello", "world"},
+		"warnings":    []any{"warn1"},
+		"errors":      []any{},
+	}
+	resultJSON, _ := json.Marshal(resultMap)
 	return &protocol.SubmitRtcResultRequest{
 		Success: true,
-		Result: map[string]any{
-			"duration_ms": float64(42),
-			"logs":        []any{"hello", "world"},
-			"warnings":    []any{"warn1"},
-			"errors":      []any{},
-		},
+		Result:  json.RawMessage(resultJSON),
 	}
 }
 

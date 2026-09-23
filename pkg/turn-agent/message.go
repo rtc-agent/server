@@ -250,6 +250,16 @@ func toEinoMessage(m *Message) *schema.Message {
 		em.Extra = newExtra
 	}
 
+	// 传递排序元数据到 Extra，供 MergeAssistantMiddleware 使用
+	// 这对确保合并后的消息表示与内存中的表示一致至关重要
+	// 注意：使用 RFC3339 字符串格式，避免 time.Time 序列化问题
+	if !m.CreatedAt.IsZero() {
+		if em.Extra == nil {
+			em.Extra = make(map[string]any)
+		}
+		em.Extra["_rtc_created_at"] = m.CreatedAt.Format(time.RFC3339Nano)
+	}
+
 	return em
 }
 

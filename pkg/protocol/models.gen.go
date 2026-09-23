@@ -4,6 +4,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -1008,8 +1009,8 @@ type SubmitRtcResultRequest struct {
 	// Error 错误信息（失败时）
 	Error *string `json:"error,omitempty"`
 
-	// Result 执行结果（成功时）
-	Result interface{} `json:"result,omitempty"`
+	// Result 执行结果（成功时）。保留原始 JSON 字段顺序，确保 LLM 缓存命中。
+	Result json.RawMessage `json:"result,omitempty"`
 
 	// RtcId protocol 内 UUID 类型，JSON 线上为字符串
 	RtcId UUID `json:"rtc_id"`

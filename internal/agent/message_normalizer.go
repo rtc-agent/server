@@ -138,14 +138,13 @@ func extractSystemMessages(messages []*turnagent.Message) []*turnagent.Message {
 // Consecutive same-role merging
 // -----------------------------------------------------------------------------
 
-// mergeConsecutiveSameRole merges adjacent messages with the same role
-// (user or assistant) into a single message. Content fields are joined
-// with "\n". Tool and system messages are never merged — each carries
-// identity that must be preserved (ToolCallID for pairing, independent
-// prompt boundaries for system).
+// mergeConsecutiveSameRole merges adjacent user messages into a single message.
+// Content fields are joined with "\n". Tool, system, and assistant messages are
+// never merged — assistant messages are merged by MergeAssistantMiddleware at
+// the schema.Message layer.
 //
 // The merged message retains the first message's metadata: CreatedAt,
-// TokenUsage, ToolCalls, Extra, etc.
+// TokenUsage, Extra, etc.
 //
 // NOTE: The first message of each merged group is shallow-copied before
 // mutation to avoid modifying the caller's original message objects.
@@ -165,8 +164,10 @@ func mergeConsecutiveSameRole(messages []*turnagent.Message) []*turnagent.Messag
 
 		if len(result) > 0 {
 			prev := result[len(result)-1]
-			if curr.Role == prev.Role &&
-				(curr.Role == turnagent.RoleUser || curr.Role == turnagent.RoleAssistant) {
+			// Only merge user messages, not assistant messages.
+			// Assistant messages are merged by MergeAssistantMiddleware at schema.Message layer
+			// to use AssistantGenMultiContent (not "\n" concatenation) for better cache hit rate.
+			if curr.Role == prev.Role && curr.Role == turnagent.RoleUser {
 				// Copy-on-first-merge: the first time we merge INTO prev,
 				// replace it with a shallow copy to avoid mutating the caller's
 				// original message object.
@@ -178,13 +179,6 @@ func mergeConsecutiveSameRole(messages []*turnagent.Message) []*turnagent.Messag
 				}
 				prev.Content = joinContent(prev.Content, curr.Content)
 				prev.ReasoningContent = joinContent(prev.ReasoningContent, curr.ReasoningContent)
-				// Merge ToolCalls for assistant messages.
-				// DB stores each toolcall_input as a separate message, but the LLM
-				// expects all tool calls from one turn to be in a single assistant message.
-				// Without this merge, tool_results become orphaned (no matching tool_use).
-				if curr.Role == turnagent.RoleAssistant && len(curr.ToolCalls) > 0 {
-					prev.ToolCalls = append(prev.ToolCalls, curr.ToolCalls...)
-				}
 				continue
 			}
 		}

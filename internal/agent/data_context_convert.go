@@ -94,7 +94,9 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 		}}, nil
 
 	case protocol.ContentTypeToolCallInput:
-		toolCall, err := primitives.ParseContentDataToolCall(contentData.Data)
+		// 使用原始 JSON 解析，保留 tool input 的 JSON key 顺序
+		// 这对 LLM 缓存命中至关重要
+		toolCall, err := primitives.ParseContentDataToolCallRaw(msg.Content)
 		if err != nil {
 			return nil, fmt.Errorf("parse tool call input: %w", err)
 		}
@@ -110,7 +112,9 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 		}}, nil
 
 	case protocol.ContentTypeToolCallOutput:
-		toolCall, err := primitives.ParseContentDataToolCall(contentData.Data)
+		// 使用原始 JSON 解析，保留 tool output 的 JSON key 顺序
+		// 这对 LLM 缓存命中至关重要
+		toolCall, err := primitives.ParseContentDataToolCallRaw(msg.Content)
 		if err != nil {
 			return nil, fmt.Errorf("parse tool call output: %w", err)
 		}

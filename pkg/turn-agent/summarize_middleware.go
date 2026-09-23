@@ -214,22 +214,10 @@ func NewSummarizationMiddleware(cfg *SummarizationConfig) (adk.ChatModelAgentMid
 // specifies the level as a string ("debug"/"info"/"warn"/"error") rather
 // than selecting a Logger method explicitly. Unknown levels fall back to
 // Logger.Info.
+//
+// Delegates to shared middlewareLog utility in middleware_utils.go.
 func (m *summarizationMiddleware) log(ctx context.Context, level, msg string, attrs map[string]any) {
-	if m.cfg.Log == nil {
-		return
-	}
-	switch level {
-	case "debug":
-		m.cfg.Log.Debug(ctx, msg, attrs)
-	case "info":
-		m.cfg.Log.Info(ctx, msg, attrs)
-	case "warn":
-		m.cfg.Log.Warn(ctx, msg, attrs)
-	case "error":
-		m.cfg.Log.Error(ctx, msg, attrs)
-	default:
-		m.cfg.Log.Info(ctx, msg, attrs)
-	}
+	middlewareLog(m.cfg.Log, ctx, level, msg, attrs)
 }
 
 // BeforeModelRewriteState is called before each model invocation. It checks

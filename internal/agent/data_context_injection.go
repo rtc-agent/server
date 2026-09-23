@@ -82,6 +82,27 @@ func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID,
 	newPromptMsgs := h.persistCommandPromptsIfNeeded(ctx, sessionID, contributions)
 	dbMsgs = append(dbMsgs, newPromptMsgs...)
 
+	// Convert newly persisted prompt messages and add them to the current
+	// turn's messages. Without this, the prompt would only be visible to the
+	// LLM on subsequent turns (via convertDBMessage loading from DB), causing
+	// the first request to miss the workflow instructions entirely.
+	//
+	// At this point, the last message in `messages` is the user message that
+	// triggered the command, so appending here places the prompt right after
+	// the user message — matching the position it would have when loaded from
+	// DB on subsequent turns (via global_offset ordering).
+	for _, newMsg := range newPromptMsgs {
+		converted, convErr := convertDBMessage(newMsg)
+		if convErr != nil {
+			h.logger.Warn(ctx, "injectCommandPrompts.convert_new_prompt_failed", map[string]any{
+				"session_id": sessionID.String(),
+				"error":      convErr.Error(),
+			})
+			continue
+		}
+		messages = append(messages, converted...)
+	}
+
 	// Separate system and user contributions.
 	// For PersistablePrompt commands, skip TriggerPrompt from dynamic injection
 	// (it's persisted to DB and included by convertDBMessage).

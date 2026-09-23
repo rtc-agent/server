@@ -38,17 +38,6 @@ type createLoopArgs struct {
 	MaxTurns        int    `json:"max_turns"`
 }
 
-// createLoopResult is the JSON persisted in toolcall_output (for event stream).
-// The LLM receives a friendly text message via formatLoopCreated().
-type createLoopResult struct {
-	ID              string           `json:"id"`
-	Prompt          string           `json:"prompt"`
-	Status          model.LoopStatus `json:"status"`
-	IntervalSeconds int              `json:"interval_seconds"`
-	MaxTurns        int              `json:"max_turns"`
-	CompletedTurns  int              `json:"completed_turns"`
-}
-
 func (t *createLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
 		Name: "createLoop",
@@ -149,19 +138,9 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 
 	// Note: asynq_task_id will be set by OnTurnComplete after the first turn completes
 
-	// 7. Build result + publish two messages (toolcall_input + toolcall_output).
-	result := createLoopResult{
-		ID:              loop.ID.String(),
-		Prompt:          loop.Prompt,
-		Status:          loop.Status,
-		IntervalSeconds: loop.IntervalSeconds,
-		MaxTurns:        loop.MaxTurns,
-		CompletedTurns:  loop.CompletedTurns,
-	}
-	resultJSON, err := mustMarshalJSON(result)
-	if err != nil {
-		return "", fmt.Errorf("createLoop: marshal result: %w", err)
-	}
+	// 7. Build formatted message for LLM context (also persisted for cache consistency).
+	// The event stream receives this formatted text, not raw JSON.
+	formattedResult := formatLoopCreated(loop.ID.String(), loop.Prompt, loop.IntervalSeconds, loop.MaxTurns)
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,
@@ -170,7 +149,7 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		TurnID:          t.turnID,
 		ToolName:        "createLoop",
 		ArgumentsInJSON: argumentsInJSON,
-		ResultJSON:      resultJSON,
+		ResultJSON:      formattedResult,
 	}); err != nil {
 		return "", fmt.Errorf("createLoop: publish messages: %w", err)
 	}
@@ -181,5 +160,5 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		"prompt":     loop.Prompt,
 	})
 
-	return formatLoopCreated(loop.ID.String(), loop.Prompt, loop.IntervalSeconds, loop.MaxTurns), nil
+	return formattedResult, nil
 }
