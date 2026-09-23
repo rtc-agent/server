@@ -692,7 +692,7 @@ type OAuth2TokenExchangeResponse struct {
 	// AccessToken JWT access token，有效期由 expires_in 指定
 	AccessToken string `json:"access_token"`
 
-	// ExpiresIn access token 过期时间（秒），通常为 900（15 分钟）
+	// ExpiresIn access token 过期时间（秒），通常为 3600（1 小时）
 	ExpiresIn int64 `json:"expires_in"`
 
 	// RefreshToken refresh token，用于在 access_token 过期后换取新 token
@@ -704,7 +704,7 @@ type OAuth2TokenExchangeResponse struct {
 
 // OAuth2TokenRefreshRequest OAuth2 令牌刷新请求，使用 refresh_token 换取新的 access_token
 type OAuth2TokenRefreshRequest struct {
-	// RefreshToken refresh token，使用一次后即失效（rotation）
+	// RefreshToken refresh token，有效期内可多次使用
 	RefreshToken string `json:"refresh_token"`
 }
 
