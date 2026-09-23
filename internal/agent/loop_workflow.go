@@ -59,25 +59,15 @@ func (l *LoopWorkflow) TriggerPrompt(ctx command.Context, args string) (*command
 	}, nil
 }
 
-// SustainPrompt returns the loop management system prompt when there is an
-// active loop for the session. Returns nil when no loop is active or the
-// loop has reached a terminal state.
+// SustainPrompt returns nil because the loop worker's notification message
+// already provides all necessary context (progress, management instructions).
+// Returning nil avoids redundant injection and prevents polluting the system
+// array with dynamic content that would invalidate the cache prefix.
 //
-// This provides supplementary context about the loop state (progress, etc.)
-// as a system message. The primary trigger is the notification message created
-// by the loop worker (following the async sub-agent pattern).
+// This aligns with the design principle: trigger messages (notifications)
+// should carry all context needed for the turn, making SustainPrompt redundant.
 func (l *LoopWorkflow) SustainPrompt(ctx command.Context, args string) (*command.PromptContribution, error) {
-	if l.helpers.deps.LoopRepo == nil {
-		return nil, nil
-	}
-	loop, err := l.helpers.deps.LoopRepo.FindActive(ctx, ctx.SessionID)
-	if err != nil || loop == nil {
-		return nil, nil
-	}
-	return &command.PromptContribution{
-		Role:    "system",
-		Content: buildLoopManagementPrompt(loop),
-	}, nil
+	return nil, nil
 }
 
 // Tools returns the loop tool set for the current turn. The tools need the

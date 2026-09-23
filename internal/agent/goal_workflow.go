@@ -63,18 +63,14 @@ func (g *GoalWorkflow) TriggerPrompt(ctx command.Context, args string) (*command
 // IMPORTANT: Role is "user" (not "system") so the prompt is appended to the
 // end of the message array. This ensures the LLM sees the goal task as the
 // most recent instruction.
+// SustainPrompt returns nil because the turn trigger (rtc-queue re-queue or
+// notification) already provides all necessary context about the goal state.
+// Returning nil avoids redundant injection and simplifies the message pipeline.
+//
+// This aligns with the design principle: trigger messages should carry all
+// context needed for the turn, making SustainPrompt redundant.
 func (g *GoalWorkflow) SustainPrompt(ctx command.Context, args string) (*command.PromptContribution, error) {
-	if g.helpers.deps.GoalRepo == nil {
-		return nil, nil
-	}
-	goal, err := g.helpers.deps.GoalRepo.FindActive(ctx, ctx.SessionID)
-	if err != nil || goal == nil {
-		return nil, nil
-	}
-	return &command.PromptContribution{
-		Role:    "user",
-		Content: buildGoalManagementPrompt(goal),
-	}, nil
+	return nil, nil
 }
 
 // Tools returns the goal tool set for the current turn. The tools need the

@@ -87,11 +87,6 @@ func (t *subAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 				Desc:     "The task instruction for the sub agent. Be specific and include all necessary context. The sub agent starts with a blank context, so include relevant details. Example: 'Verify if goal X is completed by checking the TodoList and recent messages'",
 				Required: true,
 			},
-			"mode": {
-				Type:     schema.String,
-				Desc:     "Execution mode: \"async\" (default, parent continues immediately, result delivered as notification later) or \"sync\" (parent waits for result). Default is \"async\".",
-				Required: false,
-			},
 		}),
 	}, nil
 }
@@ -132,13 +127,8 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		return validationErr, nil
 	}
 
-	mode := args.Mode
-	if mode == "" {
-		mode = model.SubAgentModeAsync
-	}
-	if mode != model.SubAgentModeSync && mode != model.SubAgentModeAsync {
-		return fmt.Sprintf("Error: mode must be %q or %q, got %q", model.SubAgentModeSync, model.SubAgentModeAsync, mode), nil
-	}
+	// All sub-agents are async mode. Sync logic is retained in code but has no entry point.
+	mode := model.SubAgentModeAsync
 
 	callID := compose.GetToolCallID(ctx)
 	if callID == "" {
@@ -186,39 +176,42 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 		return "", fmt.Errorf("subAgent: failed to start sub-agent (cleaned up orphan session): %w", err)
 	}
 
-	if mode == model.SubAgentModeAsync {
-		result, err := t.handleAsyncSubAgent(ctx, subSessionID, args.Title, parentMessageID, turnUUID, argumentsInJSON)
-		if err != nil {
-			// The sub-session is already running (work item published above).
-			// Do NOT close it — the sub-agent will complete and deliver its
-			// result via notifyParentAfterAsyncSubAgent. The toolcall_input in
-			// the parent session will remain unpaired with a toolcall_output,
-			// but the async notification will still be delivered. Log the error
-			// for observability.
-			t.helpers.logger.Warn(ctx, "subAgent.async.publish_output_failed", map[string]any{
-				"sub_session_id":    subSessionID.String(),
-				"parent_message_id": parentMessageID.String(),
-				"error":             err.Error(),
-			})
-			// Return a degraded result so the LLM can continue.
-			return formatSubAgentAsyncResult(subSessionID.String(), args.Title), nil
-		}
-		return result, nil
+	// Async mode: return immediately, result delivered as notification later.
+	result, err := t.handleAsyncSubAgent(ctx, subSessionID, args.Title, parentMessageID, turnUUID, argumentsInJSON)
+	if err != nil {
+		// The sub-session is already running (work item published above).
+		// Do NOT close it — the sub-agent will complete and deliver its
+		// result via notifyParentAfterAsyncSubAgent. The toolcall_input in
+		// the parent session will remain unpaired with a toolcall_output,
+		// but the async notification will still be delivered. Log the error
+		// for observability.
+		t.helpers.logger.Warn(ctx, "subAgent.async.publish_output_failed", map[string]any{
+			"sub_session_id":    subSessionID.String(),
+			"parent_message_id": parentMessageID.String(),
+			"error":             err.Error(),
+		})
+		// Return a degraded result so the LLM can continue.
+		return formatSubAgentAsyncResult(subSessionID.String(), args.Title), nil
 	}
+	return result, nil
 
+	// NOTE: Sync mode logic is commented out but retained for future re-enablement.
+	// All sub-agents are now async-only. The sync mode entry point (mode parameter)
+	// has been removed from the tool schema.
+	//
 	// Sync mode: build interrupt state and pause the turn.
-	state = subAgentInterruptState{
-		SubSessionID:    subSessionID.String(),
-		ToolCallID:      callID,
-		ParentMessageID: parentMessageID.String(),
-	}
-	info := subAgentInterruptInfo{
-		Type:            "subAgent",
-		SubSessionID:    subSessionID.String(),
-		ParentMessageID: parentMessageID.String(),
-		Instruction:     args.Instruction,
-	}
-	return "", tool.StatefulInterrupt(ctx, info, state)
+	// state = subAgentInterruptState{
+	// 	SubSessionID:    subSessionID.String(),
+	// 	ToolCallID:      callID,
+	// 	ParentMessageID: parentMessageID.String(),
+	// }
+	// info := subAgentInterruptInfo{
+	// 	Type:            "subAgent",
+	// 	SubSessionID:    subSessionID.String(),
+	// 	ParentMessageID: parentMessageID.String(),
+	// 	Instruction:     args.Instruction,
+	// }
+	// return "", tool.StatefulInterrupt(ctx, info, state)
 }
 
 // resumeSubAgent handles the resume path after a sub-agent interrupt.

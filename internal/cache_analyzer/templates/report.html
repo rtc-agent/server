@@ -338,63 +338,81 @@
                         {{end}}
                     </div>
                     <div class="request-changes">
-                        {{if gt $i 0}}
-                            {{$diff := index $.Diffs $i}}
-                            <span class="change-summary">
+                        {{$diff := index $.Diffs $i}}
+                        <span class="change-summary">
+                            {{if eq $i 0}}
+                                初始内容
+                            {{else}}
                                 {{formatChangeSummary $diff.AddedCount $diff.RemovedCount $diff.ModifiedCount}}
-                                {{if or (gt $diff.SystemAddedCount 0) (gt $diff.SystemRemovedCount 0) (gt $diff.SystemModifiedCount 0)}}
-                                    | System: {{formatChangeSummary $diff.SystemAddedCount $diff.SystemRemovedCount $diff.SystemModifiedCount}}
-                                {{end}}
-                            </span>
-                            {{if or (gt $diff.AddedCount 0) (gt $diff.RemovedCount 0) (gt $diff.ModifiedCount 0) (gt $diff.SystemAddedCount 0) (gt $diff.SystemRemovedCount 0) (gt $diff.SystemModifiedCount 0)}}
-                                <div class="change-details">
-                                    {{if gt $diff.AddedCount 0}}
-                                        <span class="change-added" title="Added: {{formatRoleList $diff.AddedRoles}} at {{formatIndexList $diff.AddedIndices}}">
-                                            +{{$diff.AddedCount}} msg ({{formatIndexList $diff.AddedIndices}})
-                                        </span>
-                                    {{end}}
-                                    {{if gt $diff.RemovedCount 0}}
-                                        <span class="change-removed" title="Removed: {{formatRoleList $diff.RemovedRoles}} at {{formatIndexList $diff.RemovedIndices}}">
-                                            -{{$diff.RemovedCount}} msg ({{formatIndexList $diff.RemovedIndices}})
-                                        </span>
-                                    {{end}}
-                                    {{if gt $diff.ModifiedCount 0}}
-                                        <span class="change-modified" title="Modified: {{formatRoleList $diff.ModifiedRoles}} at {{formatIndexList $diff.ModifiedIndices}}">
-                                            ~{{$diff.ModifiedCount}} msg ({{formatIndexList $diff.ModifiedIndices}})
-                                        </span>
-                                    {{end}}
-                                    {{if gt $diff.SystemAddedCount 0}}
-                                        <span class="change-added" title="System blocks added">
-                                            +{{$diff.SystemAddedCount}} sys
-                                        </span>
-                                    {{end}}
-                                    {{if gt $diff.SystemRemovedCount 0}}
-                                        <span class="change-removed" title="System blocks removed">
-                                            -{{$diff.SystemRemovedCount}} sys
-                                        </span>
-                                    {{end}}
-                                    {{if gt $diff.SystemModifiedCount 0}}
-                                        <span class="change-modified" title="System blocks modified">
-                                            ~{{$diff.SystemModifiedCount}} sys
-                                        </span>
-                                    {{end}}
-                                </div>
                             {{end}}
+                            {{if or (gt $diff.SystemAddedCount 0) (gt $diff.SystemRemovedCount 0) (gt $diff.SystemModifiedCount 0)}}
+                                | System: {{formatChangeSummary $diff.SystemAddedCount $diff.SystemRemovedCount $diff.SystemModifiedCount}}
+                            {{end}}
+                        </span>
+                        {{if or (gt $diff.AddedCount 0) (gt $diff.RemovedCount 0) (gt $diff.ModifiedCount 0) (gt $diff.SystemAddedCount 0) (gt $diff.SystemRemovedCount 0) (gt $diff.SystemModifiedCount 0)}}
+                            <div class="change-details">
+                                {{if gt $diff.AddedCount 0}}
+                                    <span class="change-added" title="Added: {{formatRoleList $diff.AddedRoles}} at {{formatIndexList $diff.AddedIndices}}">
+                                        +{{$diff.AddedCount}} msg ({{formatIndexList $diff.AddedIndices}})
+                                    </span>
+                                {{end}}
+                                {{if gt $diff.RemovedCount 0}}
+                                    <span class="change-removed" title="Removed: {{formatRoleList $diff.RemovedRoles}} at {{formatIndexList $diff.RemovedIndices}}">
+                                        -{{$diff.RemovedCount}} msg ({{formatIndexList $diff.RemovedIndices}})
+                                    </span>
+                                {{end}}
+                                {{if gt $diff.ModifiedCount 0}}
+                                    <span class="change-modified" title="Modified: {{formatRoleList $diff.ModifiedRoles}} at {{formatIndexList $diff.ModifiedIndices}}">
+                                        ~{{$diff.ModifiedCount}} msg ({{formatIndexList $diff.ModifiedIndices}})
+                                    </span>
+                                {{end}}
+                                {{if gt $diff.SystemAddedCount 0}}
+                                    <span class="change-added" title="System blocks added">
+                                        +{{$diff.SystemAddedCount}} sys
+                                    </span>
+                                {{end}}
+                                {{if gt $diff.SystemRemovedCount 0}}
+                                    <span class="change-removed" title="System blocks removed">
+                                        -{{$diff.SystemRemovedCount}} sys
+                                    </span>
+                                {{end}}
+                                {{if gt $diff.SystemModifiedCount 0}}
+                                    <span class="change-modified" title="System blocks modified">
+                                        ~{{$diff.SystemModifiedCount}} sys
+                                    </span>
+                                {{end}}
+                            </div>
                         {{end}}
                     </div>
                 </div>
                 <div class="diff-view" id="diff-{{$i}}">
-                    {{if gt $i 0}}
-                        <div class="diff-toolbar">
-                            <span class="diff-toolbar-title">Request {{sub $i 1}} vs Request {{$i}}</span>
+                    <div class="diff-toolbar">
+                        <span class="diff-toolbar-title">
+                            {{if eq $i 0}}
+                                空 vs Request {{$i}}
+                            {{else}}
+                                Request {{sub $i 1}} vs Request {{$i}}
+                            {{end}}
+                        </span>
+                        {{if gt $i 0}}
                             <a href="#" class="export-diff-btn" onclick="exportDiff(event, {{$.SessionID}}, {{sub $i 1}}, {{$i}})">📥 导出此对比</a>
-                        </div>
-                        {{$diff := index $.Diffs $i}}
-                        {{if or $diff.MessageDiffs $diff.SystemDiffs}}
-                            <div class="diff-container">
-                                <div class="diff-column">
-                                    <div class="diff-title">请求 {{sub $i 1}} ({{formatTime $diff.PrevRequest.Timestamp}})</div>
-                                    <div class="diff-content">
+                        {{end}}
+                    </div>
+                    {{$diff := index $.Diffs $i}}
+                    {{if or $diff.MessageDiffs $diff.SystemDiffs}}
+                        <div class="diff-container">
+                            <div class="diff-column">
+                                <div class="diff-title">
+                                    {{if eq $i 0}}
+                                        空
+                                    {{else}}
+                                        请求 {{sub $i 1}} ({{formatTime $diff.PrevRequest.Timestamp}})
+                                    {{end}}
+                                </div>
+                                <div class="diff-content">
+                                    {{if eq $i 0}}
+                                        <div style="padding: 20px; text-align: center; color: #57606a;">空请求（所有内容为新增）</div>
+                                    {{else}}
                                         {{/* System Diffs */}}
                                         {{range $diff.SystemDiffs}}
                                             {{if or (eq .Status "removed") (eq .Status "modified")}}
@@ -441,8 +459,9 @@
                                                 </div>
                                             {{end}}
                                         {{end}}
-                                    </div>
+                                    {{end}}
                                 </div>
+                            </div>
                                 <div class="diff-column">
                                     <div class="diff-title">请求 {{$i}} ({{formatTime $diff.CurrRequest.Timestamp}})</div>
                                     <div class="diff-content">
@@ -518,9 +537,6 @@
                         {{else}}
                             <div style="padding: 20px; text-align: center; color: #57606a;">无差异</div>
                         {{end}}
-                    {{else}}
-                        <div style="padding: 20px; text-align: center; color: #57606a;">第一个请求（无对比）</div>
-                    {{end}}
                 </div>
             </div>
             {{end}}

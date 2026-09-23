@@ -152,27 +152,18 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// Prompt messages (e.g., goal prompts) are persisted to DB and included
 	// in the conversation history by convertDBMessage at their natural position.
 	//
-	// BUG 13 fix: Skip command prompt injection entirely.
-	// Command prompts (e.g., loop management prompt) are already persisted to DB
-	// as prompt attachments and loaded via convertDBMessage. Dynamic re-injection
-	// via injectCommandPrompts causes:
-	// 1. Duplicate injection (DB has TriggerPrompt, yet SustainPrompt is injected)
-	// 2. Content instability (SustainPrompt contains "Progress: Turn N/M" which
-	//    changes every loop iteration, invalidating the cache prefix)
-	//
-	// Previously, command detection was only skipped on GenResume to avoid
-	// duplicate persistence. Now it's skipped on all paths since all command
-	// prompts are persisted to DB and loaded naturally.
-	//
-	// if loadSource != turnagent.LoadSourceGenResume {
-	// 	messages, dbMsgs = h.injectCommandPrompts(ctx, sid, messages, dbMsgs)
-	// }
+	// IMPORTANT: Skip command detection on checkpoint resume (genResume) to avoid
+	// re-detecting commands and persisting duplicate prompt messages. The command
+	// was already detected and persisted on the original genInput call.
 	loadSource := turnagent.LoadSourceFromContext(ctx)
-	h.logger.Debug(ctx, "loadMessages.skip_command_prompts", map[string]any{
-		"session_id":  sid.String(),
-		"load_source": string(loadSource),
-		"reason":      "BUG 13 fix: command prompts are persisted to DB",
-	})
+	if loadSource != turnagent.LoadSourceGenResume {
+		messages, dbMsgs = h.injectCommandPrompts(ctx, sid, messages, dbMsgs)
+	} else {
+		h.logger.Debug(ctx, "loadMessages.skip_command_detection", map[string]any{
+			"session_id":  sid.String(),
+			"load_source": string(loadSource),
+		})
+	}
 
 	// Inject scenario prompts from the last user message's scenarios field.
 	// Pass the already-loaded dbMsgs to avoid a redundant DB query.

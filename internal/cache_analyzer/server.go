@@ -223,52 +223,63 @@ type DiffChunk struct {
 func generateDiffs(requests []*LLMRequest) []*DiffData {
 	diffs := make([]*DiffData, 0, len(requests))
 
+	// Create a virtual empty request for the first request to compare against
+	emptyRequest := &LLMRequest{
+		Messages: []*Message{},
+		System:   []*SystemBlock{},
+	}
+
 	for i, curr := range requests {
 		diffData := &DiffData{
 			RequestIndex: i,
 			CurrRequest:  curr,
 		}
 
-		if i > 0 {
-			prev := requests[i-1]
-			diffData.PrevRequest = prev
-			diffData.MessageDiffs = generateMessageDiffs(prev, curr)
-			diffData.SystemDiffs = generateSystemDiffs(prev, curr)
+		var prev *LLMRequest
+		if i == 0 {
+			// First request compares against empty
+			prev = emptyRequest
+		} else {
+			prev = requests[i-1]
+		}
 
-			// Calculate message statistics
-			for j, msgDiff := range diffData.MessageDiffs {
-				switch msgDiff.Status {
-				case "added":
-					diffData.AddedCount++
-					diffData.AddedIndices = append(diffData.AddedIndices, j)
-					if msgDiff.CurrMessage != nil {
-						diffData.AddedRoles = append(diffData.AddedRoles, msgDiff.CurrMessage.Role)
-					}
-				case "removed":
-					diffData.RemovedCount++
-					diffData.RemovedIndices = append(diffData.RemovedIndices, j)
-					if msgDiff.PrevMessage != nil {
-						diffData.RemovedRoles = append(diffData.RemovedRoles, msgDiff.PrevMessage.Role)
-					}
-				case "modified":
-					diffData.ModifiedCount++
-					diffData.ModifiedIndices = append(diffData.ModifiedIndices, j)
-					if msgDiff.CurrMessage != nil {
-						diffData.ModifiedRoles = append(diffData.ModifiedRoles, msgDiff.CurrMessage.Role)
-					}
+		diffData.PrevRequest = prev
+		diffData.MessageDiffs = generateMessageDiffs(prev, curr)
+		diffData.SystemDiffs = generateSystemDiffs(prev, curr)
+
+		// Calculate message statistics
+		for j, msgDiff := range diffData.MessageDiffs {
+			switch msgDiff.Status {
+			case "added":
+				diffData.AddedCount++
+				diffData.AddedIndices = append(diffData.AddedIndices, j)
+				if msgDiff.CurrMessage != nil {
+					diffData.AddedRoles = append(diffData.AddedRoles, msgDiff.CurrMessage.Role)
+				}
+			case "removed":
+				diffData.RemovedCount++
+				diffData.RemovedIndices = append(diffData.RemovedIndices, j)
+				if msgDiff.PrevMessage != nil {
+					diffData.RemovedRoles = append(diffData.RemovedRoles, msgDiff.PrevMessage.Role)
+				}
+			case "modified":
+				diffData.ModifiedCount++
+				diffData.ModifiedIndices = append(diffData.ModifiedIndices, j)
+				if msgDiff.CurrMessage != nil {
+					diffData.ModifiedRoles = append(diffData.ModifiedRoles, msgDiff.CurrMessage.Role)
 				}
 			}
+		}
 
-			// Calculate system statistics
-			for _, sysDiff := range diffData.SystemDiffs {
-				switch sysDiff.Status {
-				case "added":
-					diffData.SystemAddedCount++
-				case "removed":
-					diffData.SystemRemovedCount++
-				case "modified":
-					diffData.SystemModifiedCount++
-				}
+		// Calculate system statistics
+		for _, sysDiff := range diffData.SystemDiffs {
+			switch sysDiff.Status {
+			case "added":
+				diffData.SystemAddedCount++
+			case "removed":
+				diffData.SystemRemovedCount++
+			case "modified":
+				diffData.SystemModifiedCount++
 			}
 		}
 
