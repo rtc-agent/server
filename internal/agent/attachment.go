@@ -4,10 +4,13 @@
 // context on every turn (or conditionally). They provide the LLM with persistent
 // state and context that goes beyond the conversation history.
 //
-// The Attachment system manages three types of attachments:
-//   - TodoList: Current tasks and progress tracking
+// The Attachment system manages two types of attachments:
 //   - SessionMemory: Key information extracted from the current conversation
 //   - UserMemory: Long-term memories about the user and their preferences
+//
+// Note: TodoList is no longer an attachment. It is persisted as tool_result
+// messages via publishToolMessages (see tools_todo.go), and loaded naturally
+// as part of the conversation history by loadMessages.
 //
 // Each attachment is responsible for building its own content. The AttachmentManager
 // coordinates the build process, manages token budgets, and records observability metrics.
@@ -27,7 +30,7 @@ import (
 // Implementations must be safe for concurrent use by multiple goroutines.
 type Attachment interface {
 	// Name returns the attachment's name (used for logging and metrics).
-	// Must be one of: "TodoList", "SessionMemory", "UserMemory".
+	// Must be one of: "SessionMemory", "UserMemory".
 	Name() string
 
 	// Build generates the attachment content. Returns empty string if the

@@ -1,8 +1,12 @@
 // attachment_prompts.go — Context attachment templates.
 //
 // Attachments are content blocks injected into the LLM context at the start of
-// each turn (e.g. todo list, session memories, user memories). These templates
+// each turn (e.g. session memories, user memories). These templates
 // format that content as Markdown or XML for consumption by the model.
+//
+// Note: formatTodoList is still defined here and used by todoWriteTool to
+// produce the tool_result content, even though TodoList is no longer an
+// attachment (it is persisted as tool_result messages via publishToolMessages).
 //
 // Naming convention:
 //   - Variables: <name>Tmpl (e.g. todoListTmpl, sessionMemoryInjectionTmpl)
@@ -42,6 +46,9 @@ var userMemoryPreambleZh string
 //
 // Tasks are grouped into In Progress (bold), Pending (plain), and Completed
 // (strikethrough). Empty groups are omitted from the output.
+//
+// Used by todoWriteTool to produce the tool_result content.
+// Previously also used by TodoListAttachment (removed).
 func formatTodoList(todos []model.TodoItem) string {
 	var inProgress, pending, completed []model.TodoItem
 	for _, t := range todos {

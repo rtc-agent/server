@@ -17,11 +17,12 @@ import (
 // external mutation is not a concern.
 // Uses map[string]struct{} — the idiomatic Go set type (zero memory per value).
 var CompactableTools = map[string]struct{}{
-	"read":   {},
-	"write":  {},
-	"grep":   {},
-	"find":   {},
-	"script": {},
+	"read":      {},
+	"write":     {},
+	"grep":      {},
+	"find":      {},
+	"script":    {},
+	"todoWrite": {}, // Allow microcompact to clean up old todo list results
 }
 
 // MCClearedMessage is the placeholder text that replaces the content of a

@@ -171,9 +171,13 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// this function detects them and skips injection to avoid duplicates.
 	messages = h.injectScenarioPrompts(messages, dbMsgs)
 
-	// Build and inject all attachments (TodoList, SessionMemory, UserMemory).
+	// Build and inject all attachments (SessionMemory, UserMemory).
 	// Attachments are dynamic content that provides the LLM with persistent
 	// context beyond the conversation history.
+	//
+	// Note: TodoList is NO LONGER an attachment. It is persisted as tool_result
+	// messages via publishToolMessages (see tools_todo.go), and loaded naturally
+	// as part of the conversation history by loadMessages.
 	//
 	// Attachments are prepended to the message array (not appended) because
 	// they use system role, and Claude API requires system messages at the start.
@@ -182,7 +186,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// Inject system prompt and agent prompt as system messages.
 	// This runs AFTER prependAttachments so that normalizeMessagesForLLM's
 	// extractSystemMessages produces the correct order:
-	//   [SystemPrompt, AgentPrompt, TodoList, SessionMemory, UserMemory, ...conversation]
+	//   [SystemPrompt, AgentPrompt, SessionMemory, UserMemory, ...conversation]
 	//
 	// Previously, systemPrompt + AgentPrompt were passed via eino's Instruction
 	// field, which was lost during GenResume's HistoryModifier, causing the
@@ -305,7 +309,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	return messages, nil
 }
 
-// prependAttachments builds system-role attachments (TodoList, SessionMemory,
+// prependAttachments builds system-role attachments (SessionMemory,
 // UserMemory) and prepends them to the message array. If no attachments are
 // available or the attachment manager is nil, the original messages are
 // returned unchanged.
@@ -322,7 +326,7 @@ func (h *helpers) prependAttachments(ctx context.Context, sid uuid.UUID, message
 	} else if sessionErr != nil {
 		// Log at Warn level so operators can detect session lookup failures
 		// that silently cause attachments to be skipped. Without attachments,
-		// the LLM operates without persistent context (TodoList, SessionMemory,
+		// the LLM operates without persistent context (SessionMemory,
 		// UserMemory), degrading response quality.
 		h.logger.Warn(ctx, "prependAttachments.load_session_failed", map[string]any{
 			"session_id": sid.String(),

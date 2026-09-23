@@ -25,7 +25,7 @@ import (
 //
 // Final message order after all injection steps:
 //
-//	[system] Attachments (TodoList, SessionMemory, UserMemory)
+//	[system] Attachments (SessionMemory, UserMemory)
 //	[system] Scenarios (injectScenarioPrompts)
 //	[system] Command prompts (injectCommandPrompts)
 //	[user/assistant] Conversation history (includes prompt messages at natural position)
@@ -158,7 +158,7 @@ func wrapWithTag(name, content string) string {
 //
 // Injection order (final):
 //
-//	[system] Attachments (TodoList, SessionMemory, UserMemory)
+//	[system] Attachments (SessionMemory, UserMemory)
 //	[system] Scenarios (this function — fallback when not persisted)
 //	[system] Command prompts (/goal, /persona, etc.)
 //	[user/assistant] Conversation history (includes persisted prompt messages)

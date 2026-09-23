@@ -2,11 +2,11 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
+	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
@@ -20,6 +20,7 @@ import (
 type todoWriteTool struct {
 	helper  *helpers
 	session *model.Session
+	turnID  uuid.UUID // Turn ID for publishToolMessages
 }
 
 func (t *todoWriteTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -66,14 +67,14 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	)
 	defer span.End()
 
-	// Parse arguments.
+	// 1. Parse arguments using parseToolArgsWithPersist so parse errors are
+	//    also persisted as tool_result (consistent with other tools).
 	var args struct {
 		Todos []model.TodoItem `json:"todos,omitempty"`
 	}
-	if err := json.Unmarshal([]byte(argumentsInJSON), &args); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "parse_failed")
-		return "", fmt.Errorf("parse todos: %w", err)
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helper, t.session.ID,
+		t.session.OwnerRefID, t.turnID, "todoWrite", argumentsInJSON, &args); !ok {
+		return errMsg, nil
 	}
 
 	if len(args.Todos) == 0 {
@@ -81,7 +82,7 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	}
 	span.SetAttributes(attribute.Int("todo_count", len(args.Todos)))
 
-	// Validate todos.
+	// 2. Validate todos.
 	for i, todo := range args.Todos {
 		if todo.Content == "" {
 			span.SetStatus(codes.Error, "missing_content")
@@ -97,7 +98,7 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		}
 	}
 
-	// Update session's todo_list.
+	// 3. Update session's todo_list.
 	todoList := model.JSONB[model.TodoItem](args.Todos)
 	err := t.helper.deps.SessionRepo.UpdateFieldsActive(ctx, t.session.ID, map[string]any{
 		"todo_list": todoList,
@@ -113,7 +114,7 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	// todo_list data and flash back to the old state.
 	t.session.TodoList = todoList
 
-	// Publish update event to notify the frontend.
+	// 4. Publish update event to notify the frontend.
 	_, err = t.helper.deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		return primitives.BuildSessionUpdatedUpdates(t.session), nil
 	})
@@ -126,6 +127,28 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		})
 	}
 
-	// Return result to LLM (not included in transcript).
-	return formatTodoNotification(), nil
+	// 5. Render complete TodoList as tool_result.
+	fullList := formatTodoList(args.Todos)
+
+	// 6. Persist toolcall_input + toolcall_output to DB (best-effort).
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helper,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "todoWrite",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      fullList,
+	}); err != nil {
+		span.RecordError(err)
+		t.helper.logger.Warn(ctx, "todoWriteTool.publish_messages_failed", map[string]any{
+			"session_id": t.session.ID.String(),
+			"error":      err.Error(),
+		})
+		// Do not return error: todo was updated successfully, message
+		// persistence failure is non-fatal.
+	}
+
+	// 7. Return full TodoList to LLM.
+	return fullList, nil
 }

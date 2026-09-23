@@ -16,4 +16,4 @@ You have a todo list to track your current tasks and progress.
 - in_progress: Currently working on (should have at least one at all times)
 - completed: Finished
 
-The todo list is injected into every turn to help you stay focused and track progress.
+After each todoWrite call, the tool result contains the complete current todo list. Review it to stay focused and track progress.

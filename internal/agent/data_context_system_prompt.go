@@ -22,7 +22,7 @@ import (
 //
 //	[system] SystemPrompt (identity + workflow + rules)
 //	[system] AgentPrompt (AGENT.md content, if session has one)
-//	[system] Attachments (TodoList, SessionMemory, UserMemory)
+//	[system] Attachments (SessionMemory, UserMemory)
 //	[system] Command prompts
 //	[system] Scenarios
 //	[user/assistant/tool] Conversation history

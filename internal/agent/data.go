@@ -142,7 +142,7 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 			turnID:       tid,
 			formatResult: FormatAskUserResult,
 		}},
-		&todoWriteTool{helper: h, session: session},
+		&todoWriteTool{helper: h, session: session, turnID: tid},
 		// subAgentTool enables LLM to create sub agent sessions for task decomposition.
 		&subAgentTool{
 			session: session,

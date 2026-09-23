@@ -426,7 +426,6 @@ func (h *helpers) initialize(cfg Config) error {
 	// Attachment manager
 	h.attachmentManager = NewAttachmentManager(
 		[]Attachment{
-			NewTodoListAttachment(h),
 			NewSessionMemoryAttachment(h),
 			NewUserMemoryAttachment(h),
 		},
