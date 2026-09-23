@@ -2,6 +2,7 @@
 package rpchandler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -97,7 +98,14 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 			span.SetStatus(codes.Error, "invalid JSON in result")
 			return nil, &APIError{Code: "rtc.invalid_result", Message: "result is not valid JSON"}
 		}
-		s := string(req.Result)
+		// 转换为紧凑格式（移除多余空格），但保留 JSON key 的原始顺序
+		// json.Compact 只移除空白字符，不改变 key 顺序
+		var buf bytes.Buffer
+		if err := json.Compact(&buf, req.Result); err != nil {
+			span.SetStatus(codes.Error, "failed to compact result JSON")
+			return nil, &APIError{Code: "rtc.invalid_result", Message: "failed to compact result JSON"}
+		}
+		s := buf.String()
 		resultJSON = &s
 	}
 
