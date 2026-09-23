@@ -135,6 +135,12 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// to prevent empty-content messages from reaching the LLM adapter.
 	messages = mergeAssistantMessages(messages)
 
+	// Group assistant messages by LLM response within each TurnID group.
+	// This fixes the structural mismatch between DB-loaded messages
+	// (interleaved assistant-tool pattern) and in-memory messages
+	// (single assistant with multiple tool_calls per response).
+	messages = groupAssistantByResponse(ctx, h.logger, messages)
+
 	// Apply context management: tool result budget and microcompact
 	messages = applyToolResultBudget(messages, h.toolResultBudgetConfig())
 	messages = microcompactMessages(messages, h.microcompactConfig())

@@ -50,6 +50,22 @@ const (
 	// Used by setCacheBreakpoints to identify the summary boundary position.
 	// Value: bool (true marks the boundary).
 	ExtraKeySummaryBoundary = "_rtc_summary_boundary"
+
+	// ExtraKeyAbsorbedThinking marks an assistant message that had thinking
+	// content merged into it by mergeAssistantMessages.
+	//
+	// This marker serves as a response boundary signal for
+	// groupAssistantByResponse: when a message has this marker, it means a
+	// new LLM response started (thinking was produced and then merged into
+	// this message). The grouping function uses this to detect that the
+	// message belongs to a NEW response, not a continuation of the previous
+	// one.
+	//
+	// The marker is cleaned up by mergeSegment after grouping is complete,
+	// so it does not propagate to downstream pipelines or the LLM adapter.
+	//
+	// Value: bool (true).
+	ExtraKeyAbsorbedThinking = "_rtc_absorbed_thinking"
 )
 
 // Message is the pkg-level message type, independent of eino's schema.Message.

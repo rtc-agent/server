@@ -54,9 +54,24 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 		}
 	}
 
+	// Extract TurnID for downstream response-level grouping.
+	// TurnID is used by groupAssistantByResponse to group messages from the
+	// same turn, then detect LLM response boundaries within each group.
+	var turnID string
+	if msg.TurnID != nil {
+		turnID = msg.TurnID.String()
+	}
+
 	switch contentData.Type {
 	case protocol.ContentTypeSummary:
-		return convertSummaryContent(contentData.Data, msg.CreatedAt)
+		msgs, err := convertSummaryContent(contentData.Data, msg.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range msgs {
+			m.TurnID = turnID
+		}
+		return msgs, nil
 
 	case protocol.ContentTypeUserMessage:
 		umc, err := primitives.ParseUserMessageContent(contentData.Data)
@@ -68,6 +83,7 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 			Content:    umc.Text,
 			TokenUsage: tokenUsage,
 			CreatedAt:  msg.CreatedAt,
+			TurnID:     turnID,
 		}}, nil
 
 	case protocol.ContentTypeText, protocol.ContentTypeMarkdown:
@@ -83,6 +99,7 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 			Content:    text,
 			TokenUsage: tokenUsage,
 			CreatedAt:  msg.CreatedAt,
+			TurnID:     turnID,
 		}}, nil
 
 	case protocol.ContentTypeThinking:
@@ -91,6 +108,7 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 			Role:             msg.Role,
 			ReasoningContent: tk,
 			CreatedAt:        msg.CreatedAt,
+			TurnID:           turnID,
 		}}, nil
 
 	case protocol.ContentTypeToolCallInput:
@@ -109,6 +127,7 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 				Arguments: normalizeToolArguments(toolCall.Input),
 			}},
 			CreatedAt: msg.CreatedAt,
+			TurnID:    turnID,
 		}}, nil
 
 	case protocol.ContentTypeToolCallOutput:
@@ -125,6 +144,7 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 			ToolName:   toolCall.ToolName,
 			ToolCallID: toolCall.Id,
 			CreatedAt:  msg.CreatedAt,
+			TurnID:     turnID,
 		}}, nil
 
 	case protocol.ContentTypePrompt:
@@ -143,6 +163,7 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 			Role:      role,
 			Content:   formatPromptAsXML(pc),
 			CreatedAt: msg.CreatedAt,
+			TurnID:    turnID,
 		}}, nil
 
 	default:
@@ -327,6 +348,15 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 				// Shallow-copy to avoid mutating the caller's original message.
 				copied := *messages[next]
 				copied.ReasoningContent = thinkingContent
+				// Mark this message as having absorbed thinking content.
+				// This provides a structural signal for downstream
+				// groupAssistantByResponse to detect response boundaries:
+				// a message with this marker started a new LLM response
+				// (thinking is always produced first in a response).
+				if copied.Extra == nil {
+					copied.Extra = make(map[string]any)
+				}
+				copied.Extra[turnagent.ExtraKeyAbsorbedThinking] = true
 				// Drop the thinking-only message; advance past it.
 				i = next
 				msg = &copied

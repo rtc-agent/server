@@ -732,3 +732,74 @@ func TestNormalizeToolCallOrdering_NonAssistantMessages(t *testing.T) {
 	assert.Equal(t, "hello", result[0].Content)
 	assert.Equal(t, "result", result[1].Content)
 }
+
+// =============================================================================
+// deduplicateToolResults Tests
+// =============================================================================
+
+func TestDeduplicateToolResults_EmptyAndSingle(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, deduplicateToolResults(nil))
+	assert.Empty(t, deduplicateToolResults([]*schema.Message{}))
+
+	// Single tool message — no dedup needed
+	single := []*schema.Message{{Role: schema.Tool, ToolCallID: "tc1", Content: "r1"}}
+	result := deduplicateToolResults(single)
+	require.Len(t, result, 1)
+	assert.Equal(t, "tc1", result[0].ToolCallID)
+}
+
+func TestDeduplicateToolResults_NoDuplicates(t *testing.T) {
+	t.Parallel()
+	messages := []*schema.Message{
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{ID: "tc1"}, {ID: "tc2"}}},
+		{Role: schema.Tool, ToolCallID: "tc1", Content: "r1"},
+		{Role: schema.Tool, ToolCallID: "tc2", Content: "r2"},
+	}
+	result := deduplicateToolResults(messages)
+	require.Len(t, result, 3)
+	assert.Equal(t, "r1", result[1].Content)
+	assert.Equal(t, "r2", result[2].Content)
+}
+
+func TestDeduplicateToolResults_RemovesDuplicate(t *testing.T) {
+	t.Parallel()
+	// BUG 17 scenario: 1 tool_use, 2 identical tool_results
+	messages := []*schema.Message{
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{ID: "tc1"}}},
+		{Role: schema.Tool, ToolCallID: "tc1", Content: "first"},
+		{Role: schema.Tool, ToolCallID: "tc1", Content: "duplicate"},
+	}
+	result := deduplicateToolResults(messages)
+	require.Len(t, result, 2, "duplicate tool result should be removed")
+	assert.Equal(t, "tc1", result[1].ToolCallID)
+	assert.Equal(t, "first", result[1].Content, "first occurrence kept")
+}
+
+func TestDeduplicateToolResults_PreservesNonToolMessages(t *testing.T) {
+	t.Parallel()
+	messages := []*schema.Message{
+		{Role: schema.User, Content: "hello"},
+		{Role: schema.Assistant, Content: "hi"},
+		{Role: schema.Tool, ToolCallID: "tc1", Content: "r1"},
+		{Role: schema.Tool, ToolCallID: "tc1", Content: "r1-dup"},
+		{Role: schema.User, Content: "next"},
+	}
+	result := deduplicateToolResults(messages)
+	require.Len(t, result, 4)
+	assert.Equal(t, schema.User, result[0].Role)
+	assert.Equal(t, schema.Assistant, result[1].Role)
+	assert.Equal(t, "r1", result[2].Content)
+	assert.Equal(t, "next", result[3].Content)
+}
+
+func TestDeduplicateToolResults_ToolWithEmptyID(t *testing.T) {
+	t.Parallel()
+	// Tool messages with empty ToolCallID should not be deduplicated
+	messages := []*schema.Message{
+		{Role: schema.Tool, ToolCallID: "", Content: "r1"},
+		{Role: schema.Tool, ToolCallID: "", Content: "r2"},
+	}
+	result := deduplicateToolResults(messages)
+	require.Len(t, result, 2, "empty ToolCallID should not trigger dedup")
+}

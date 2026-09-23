@@ -44,14 +44,6 @@ var errorWrapperTmpl string
 //go:embed prompts/outputs/parse-error.md.tmpl
 var parseErrorTmpl string
 
-// --- Todo notification ---
-
-// Deprecated: todoNotificationTmpl is no longer used after TodoList was
-// persisted as tool_result via publishToolMessages. Safe to remove.
-//
-//go:embed prompts/outputs/todo-notification.md
-var todoNotificationTmpl string
-
 // --- Ask user result templates ---
 
 //go:embed prompts/outputs/ask-user-result.md.tmpl
@@ -179,15 +171,6 @@ func formatParseError(errMsg, preview string) string {
 		"Error":   errMsg,
 		"Preview": preview,
 	})
-}
-
-// --- Todo ---
-
-// Deprecated: formatTodoNotification is no longer used after TodoList was
-// persisted as tool_result via publishToolMessages. Use formatTodoList instead.
-// Retained to avoid breaking potential external references; safe to remove.
-func formatTodoNotification() string {
-	return renderStatic(todoNotificationTmpl)
 }
 
 // --- Ask user ---

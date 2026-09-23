@@ -191,6 +191,19 @@ func TestMergeAssistantMessages(t *testing.T) {
 					}
 				}
 			}
+
+			// Verify AbsorbedThinking marker is set for merged thinking cases.
+			if tt.name == "thinking followed by text - merged" || tt.name == "thinking followed by tool call - merged" {
+				for _, msg := range result {
+					if msg.Role == turnagent.RoleAssistant && msg.ReasoningContent != "" {
+						if msg.Extra == nil {
+							t.Errorf("message.Extra is nil, want non-nil with AbsorbedThinking marker")
+						} else if msg.Extra[turnagent.ExtraKeyAbsorbedThinking] != true {
+							t.Errorf("message.Extra[%q] = %v, want true", turnagent.ExtraKeyAbsorbedThinking, msg.Extra[turnagent.ExtraKeyAbsorbedThinking])
+						}
+					}
+				}
+			}
 		})
 	}
 }

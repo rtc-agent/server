@@ -150,6 +150,12 @@ func (m *mergeAssistantMiddleware) BeforeModelRewriteState(
 	// non-deterministic RTC submit timing or LLM tool_call ordering.
 	state.Messages = normalizeToolCallOrdering(state.Messages)
 
+	// Deduplicate tool results with the same tool_use_id.
+	// Defensive measure: repairToolPairing deduplicates at turnagent.Message layer,
+	// but duplicates can still appear at schema.Message layer (e.g., from DB loading
+	// or middleware processing). This ensures the final API request has unique tool_results.
+	state.Messages = deduplicateToolResults(state.Messages)
+
 	afterCount := len(state.Messages)
 	durationMs := float64(time.Since(start).Milliseconds())
 
@@ -302,6 +308,47 @@ func normalizeToolCallOrdering(messages []*schema.Message) []*schema.Message {
 				}
 			}
 		}
+	}
+
+	return result
+}
+
+// deduplicateToolResults removes duplicate tool result messages that share the
+// same ToolCallID, keeping only the first occurrence.
+//
+// This is a defensive measure to prevent duplicate tool_result content blocks
+// in the Anthropic API request. The repairToolPairing function already deduplicates
+// at the turnagent.Message layer, but duplicates can still appear at the schema.Message
+// layer due to DB loading or middleware processing.
+//
+// When the Claude adapter converts schema.Messages to Anthropic API format, each
+// tool-role message becomes a tool_result content block with tool_use_id = ToolCallID.
+// Duplicate tool messages with the same ToolCallID produce duplicate tool_result blocks,
+// which violates the API spec and can cause errors.
+func deduplicateToolResults(messages []*schema.Message) []*schema.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	result := make([]*schema.Message, 0, len(messages))
+	seen := make(map[string]bool)
+	var dupCount int
+
+	for _, msg := range messages {
+		if msg.Role == schema.Tool && msg.ToolCallID != "" {
+			if seen[msg.ToolCallID] {
+				dupCount++
+				continue
+			}
+			seen[msg.ToolCallID] = true
+		}
+		result = append(result, msg)
+	}
+
+	if dupCount > 0 {
+		// Log at info level for observability — duplicates indicate a bug upstream.
+		// TODO: Add logger parameter to enable diagnostic logging.
+		_ = dupCount
 	}
 
 	return result
