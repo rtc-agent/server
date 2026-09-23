@@ -28,6 +28,7 @@ package turnagent
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/cloudwego/eino-ext/components/model/claude"
@@ -143,6 +144,12 @@ func (m *mergeAssistantMiddleware) BeforeModelRewriteState(
 	// Merge adjacent assistant messages
 	state.Messages = mergeAdjacentAssistantMessages(state.Messages)
 
+	// Normalize tool call ordering for cache consistency.
+	// Ensures deterministic (tool_name, arguments) ordering of tool_calls
+	// and matching tool_results, preventing cache invalidation from
+	// non-deterministic RTC submit timing or LLM tool_call ordering.
+	state.Messages = normalizeToolCallOrdering(state.Messages)
+
 	afterCount := len(state.Messages)
 	durationMs := float64(time.Since(start).Milliseconds())
 
@@ -187,6 +194,113 @@ func mergeAdjacentAssistantMessages(messages []*schema.Message) []*schema.Messag
 		} else {
 			// Copy message (avoid modifying original)
 			result = append(result, copySchemaMessage(msg))
+		}
+	}
+
+	return result
+}
+
+// =============================================================================
+// Tool Call Ordering Normalization
+// =============================================================================
+
+// normalizeToolCallOrdering ensures deterministic ordering of tool calls
+// and their corresponding tool results within assistant message groups.
+//
+// Problem:
+//   - Parallel tool calls may produce tool_results in non-deterministic order
+//     (RTC tools: client submits results in arbitrary order → global_offset varies)
+//   - LLM may also vary tool_call ordering across requests
+//   - Different ordering between requests → Anthropic prompt cache invalidation
+//
+// Solution:
+//   - For each assistant message with multiple tool_calls, sort by (name, arguments)
+//   - Reorder the immediately following tool result messages to match
+//   - This ensures the message sequence is deterministic regardless of execution order
+//
+// This function runs in MergeAssistantMiddleware.BeforeModelRewriteState,
+// which executes before EVERY ChatModel call — covering both the DB load path
+// (GenInput) and the ReAct loop path (ToolNode execution → next ChatModel call).
+func normalizeToolCallOrdering(messages []*schema.Message) []*schema.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	result := make([]*schema.Message, 0, len(messages))
+	i := 0
+
+	for i < len(messages) {
+		msg := messages[i]
+		result = append(result, msg)
+		i++
+
+		// Only process assistant messages with multiple tool calls
+		if msg.Role != schema.Assistant || len(msg.ToolCalls) <= 1 {
+			continue
+		}
+
+		// Copy and sort tool_calls by (name, arguments) for determinism
+		sortedCalls := make([]schema.ToolCall, len(msg.ToolCalls))
+		copy(sortedCalls, msg.ToolCalls)
+		sort.SliceStable(sortedCalls, func(a, b int) bool {
+			if sortedCalls[a].Function.Name != sortedCalls[b].Function.Name {
+				return sortedCalls[a].Function.Name < sortedCalls[b].Function.Name
+			}
+			return sortedCalls[a].Function.Arguments < sortedCalls[b].Function.Arguments
+		})
+
+		// Check if order actually changed
+		orderChanged := false
+		for j := range sortedCalls {
+			if sortedCalls[j].ID != msg.ToolCalls[j].ID {
+				orderChanged = true
+				break
+			}
+		}
+
+		if !orderChanged {
+			// Already sorted — pass through tool results as-is
+			for i < len(messages) && messages[i].Role == schema.Tool {
+				result = append(result, messages[i])
+				i++
+			}
+			continue
+		}
+
+		// Update assistant message with sorted tool calls (shallow copy)
+		sorted := *msg
+		sorted.ToolCalls = sortedCalls
+		result[len(result)-1] = &sorted
+
+		// Build expected tool_call_id order from sorted calls
+		expectedOrder := make([]string, len(sortedCalls))
+		for j, tc := range sortedCalls {
+			expectedOrder[j] = tc.ID
+		}
+
+		// Collect subsequent tool result messages
+		toolResultStart := len(result)
+		for i < len(messages) && messages[i].Role == schema.Tool {
+			result = append(result, messages[i])
+			i++
+		}
+		toolResultEnd := len(result)
+
+		// Reorder tool results to match sorted tool calls.
+		// Only reorder when count matches exactly; otherwise leave as-is
+		// (repairToolPairing will handle mismatched counts).
+		if toolResultEnd-toolResultStart == len(expectedOrder) {
+			resultByID := make(map[string]*schema.Message, toolResultEnd-toolResultStart)
+			for j := toolResultStart; j < toolResultEnd; j++ {
+				if result[j].ToolCallID != "" {
+					resultByID[result[j].ToolCallID] = result[j]
+				}
+			}
+			for j, callID := range expectedOrder {
+				if m, ok := resultByID[callID]; ok {
+					result[toolResultStart+j] = m
+				}
+			}
 		}
 	}
 

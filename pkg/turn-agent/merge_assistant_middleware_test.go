@@ -523,3 +523,212 @@ func TestMergeAdjacentAssistantMessages_UserToolAssistant(t *testing.T) {
 	// No merging should occur (different roles)
 	require.Len(t, result, 3)
 }
+
+// =============================================================================
+// normalizeToolCallOrdering Tests
+// =============================================================================
+
+func TestNormalizeToolCallOrdering_EmptyMessages(t *testing.T) {
+	t.Parallel()
+	result := normalizeToolCallOrdering(nil)
+	assert.Nil(t, result)
+
+	result = normalizeToolCallOrdering([]*schema.Message{})
+	assert.Empty(t, result)
+}
+
+func TestNormalizeToolCallOrdering_SingleToolCall(t *testing.T) {
+	t.Parallel()
+	// Single tool_call — no reordering should occur
+	messages := []*schema.Message{
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{
+			{ID: "tc1", Function: schema.FunctionCall{Name: "read", Arguments: `{"path":"/a"}`}},
+		}},
+		{Role: schema.Tool, Content: "result1", ToolCallID: "tc1"},
+	}
+	result := normalizeToolCallOrdering(messages)
+	require.Len(t, result, 2)
+	assert.Equal(t, "tc1", result[0].ToolCalls[0].ID)
+	assert.Equal(t, "tc1", result[1].ToolCallID)
+}
+
+func TestNormalizeToolCallOrdering_AlreadySorted(t *testing.T) {
+	t.Parallel()
+	// tool_calls already in alphabetical order — no mutation
+	messages := []*schema.Message{
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{
+			{ID: "tc1", Function: schema.FunctionCall{Name: "listLoops", Arguments: "{}"}},
+			{ID: "tc2", Function: schema.FunctionCall{Name: "read", Arguments: `{"path":"/a"}`}},
+		}},
+		{Role: schema.Tool, Content: "result_loops", ToolCallID: "tc1"},
+		{Role: schema.Tool, Content: "result_read", ToolCallID: "tc2"},
+	}
+	result := normalizeToolCallOrdering(messages)
+	require.Len(t, result, 3)
+
+	// tool_calls order preserved
+	assert.Equal(t, "tc1", result[0].ToolCalls[0].ID)
+	assert.Equal(t, "tc2", result[0].ToolCalls[1].ID)
+	// tool_results order preserved
+	assert.Equal(t, "tc1", result[1].ToolCallID)
+	assert.Equal(t, "tc2", result[2].ToolCallID)
+}
+
+func TestNormalizeToolCallOrdering_SortsByName(t *testing.T) {
+	t.Parallel()
+	// tool_calls: [read, listLoops] → sorted: [listLoops, read]
+	// tool_results: [read_result, listLoops_result] → reordered: [listLoops_result, read_result]
+	messages := []*schema.Message{
+		{Role: schema.Assistant, Content: "Let me check.", ToolCalls: []schema.ToolCall{
+			{ID: "tc_read", Function: schema.FunctionCall{Name: "read", Arguments: `{"path":"/a"}`}},
+			{ID: "tc_loops", Function: schema.FunctionCall{Name: "listLoops", Arguments: "{}"}},
+		}},
+		{Role: schema.Tool, Content: "read_result", ToolCallID: "tc_read"},
+		{Role: schema.Tool, Content: "loops_result", ToolCallID: "tc_loops"},
+	}
+	result := normalizeToolCallOrdering(messages)
+	require.Len(t, result, 3)
+
+	// assistant tool_calls sorted: listLoops < read
+	assert.Equal(t, "tc_loops", result[0].ToolCalls[0].ID)
+	assert.Equal(t, "tc_read", result[0].ToolCalls[1].ID)
+	// tool_results reordered to match
+	assert.Equal(t, "tc_loops", result[1].ToolCallID)
+	assert.Equal(t, "loops_result", result[1].Content)
+	assert.Equal(t, "tc_read", result[2].ToolCallID)
+	assert.Equal(t, "read_result", result[2].Content)
+}
+
+func TestNormalizeToolCallOrdering_SameToolDifferentArgs(t *testing.T) {
+	t.Parallel()
+	// Same tool called twice with different args — sorted by arguments
+	messages := []*schema.Message{
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{
+			{ID: "tc_b", Function: schema.FunctionCall{Name: "read", Arguments: `{"path":"/b"}`}},
+			{ID: "tc_a", Function: schema.FunctionCall{Name: "read", Arguments: `{"path":"/a"}`}},
+		}},
+		{Role: schema.Tool, Content: "result_b", ToolCallID: "tc_b"},
+		{Role: schema.Tool, Content: "result_a", ToolCallID: "tc_a"},
+	}
+	result := normalizeToolCallOrdering(messages)
+	require.Len(t, result, 3)
+
+	// Sorted by arguments: {"path":"/a"} < {"path":"/b"}
+	assert.Equal(t, "tc_a", result[0].ToolCalls[0].ID)
+	assert.Equal(t, "tc_b", result[0].ToolCalls[1].ID)
+	assert.Equal(t, "tc_a", result[1].ToolCallID)
+	assert.Equal(t, "result_a", result[1].Content)
+	assert.Equal(t, "tc_b", result[2].ToolCallID)
+	assert.Equal(t, "result_b", result[2].Content)
+}
+
+func TestNormalizeToolCallOrdering_MismatchedCount(t *testing.T) {
+	t.Parallel()
+	// 2 tool_calls but 3 tool_results — count mismatch, skip reordering
+	messages := []*schema.Message{
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{
+			{ID: "tc2", Function: schema.FunctionCall{Name: "read", Arguments: "{}"}},
+			{ID: "tc1", Function: schema.FunctionCall{Name: "listLoops", Arguments: "{}"}},
+		}},
+		{Role: schema.Tool, Content: "r1", ToolCallID: "tc1"},
+		{Role: schema.Tool, Content: "r2", ToolCallID: "tc2"},
+		{Role: schema.Tool, Content: "r_orphan", ToolCallID: "tc_orphan"},
+	}
+	result := normalizeToolCallOrdering(messages)
+	require.Len(t, result, 4)
+
+	// tool_calls should still be sorted (the assistant msg is always updated)
+	assert.Equal(t, "tc1", result[0].ToolCalls[0].ID)
+	assert.Equal(t, "tc2", result[0].ToolCalls[1].ID)
+	// tool_results unchanged (count mismatch → skip reordering)
+	assert.Equal(t, "tc1", result[1].ToolCallID)
+	assert.Equal(t, "tc2", result[2].ToolCallID)
+	assert.Equal(t, "tc_orphan", result[3].ToolCallID)
+}
+
+func TestNormalizeToolCallOrdering_NoToolResults(t *testing.T) {
+	t.Parallel()
+	// assistant with tool_calls but no following tool results
+	messages := []*schema.Message{
+		{Role: schema.User, Content: "go"},
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{
+			{ID: "tc2", Function: schema.FunctionCall{Name: "read", Arguments: "{}"}},
+			{ID: "tc1", Function: schema.FunctionCall{Name: "listLoops", Arguments: "{}"}},
+		}},
+	}
+	result := normalizeToolCallOrdering(messages)
+	require.Len(t, result, 2)
+	// tool_calls sorted
+	assert.Equal(t, "tc1", result[1].ToolCalls[0].ID)
+	assert.Equal(t, "tc2", result[1].ToolCalls[1].ID)
+}
+
+func TestNormalizeToolCallOrdering_MultipleGroups(t *testing.T) {
+	t.Parallel()
+	// Two assistant messages with tool_calls, each followed by tool_results
+	messages := []*schema.Message{
+		{Role: schema.User, Content: "start"},
+		// Group 1
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{
+			{ID: "tc_b", Function: schema.FunctionCall{Name: "read", Arguments: "{}"}},
+			{ID: "tc_a", Function: schema.FunctionCall{Name: "grep", Arguments: "{}"}},
+		}},
+		{Role: schema.Tool, Content: "r_b", ToolCallID: "tc_b"},
+		{Role: schema.Tool, Content: "r_a", ToolCallID: "tc_a"},
+		// Group 2
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{
+			{ID: "tc_d", Function: schema.FunctionCall{Name: "write", Arguments: "{}"}},
+			{ID: "tc_c", Function: schema.FunctionCall{Name: "find", Arguments: "{}"}},
+		}},
+		{Role: schema.Tool, Content: "r_d", ToolCallID: "tc_d"},
+		{Role: schema.Tool, Content: "r_c", ToolCallID: "tc_c"},
+	}
+	result := normalizeToolCallOrdering(messages)
+	require.Len(t, result, 7)
+
+	// Group 1: grep < read
+	assert.Equal(t, "tc_a", result[1].ToolCalls[0].ID) // grep
+	assert.Equal(t, "tc_b", result[1].ToolCalls[1].ID) // read
+	assert.Equal(t, "tc_a", result[2].ToolCallID)
+	assert.Equal(t, "tc_b", result[3].ToolCallID)
+
+	// Group 2: find < write
+	assert.Equal(t, "tc_c", result[4].ToolCalls[0].ID) // find
+	assert.Equal(t, "tc_d", result[4].ToolCalls[1].ID) // write
+	assert.Equal(t, "tc_c", result[5].ToolCallID)
+	assert.Equal(t, "tc_d", result[6].ToolCallID)
+}
+
+func TestNormalizeToolCallOrdering_DoesNotMutateOriginal(t *testing.T) {
+	t.Parallel()
+	// Verify original messages are not mutated
+	original := []*schema.Message{
+		{Role: schema.Assistant, ToolCalls: []schema.ToolCall{
+			{ID: "tc_b", Function: schema.FunctionCall{Name: "read", Arguments: "{}"}},
+			{ID: "tc_a", Function: schema.FunctionCall{Name: "grep", Arguments: "{}"}},
+		}},
+		{Role: schema.Tool, Content: "r_b", ToolCallID: "tc_b"},
+		{Role: schema.Tool, Content: "r_a", ToolCallID: "tc_a"},
+	}
+	_ = normalizeToolCallOrdering(original)
+
+	// Original assistant message's ToolCalls order unchanged
+	assert.Equal(t, "tc_b", original[0].ToolCalls[0].ID)
+	assert.Equal(t, "tc_a", original[0].ToolCalls[1].ID)
+	// Original tool results unchanged
+	assert.Equal(t, "tc_b", original[1].ToolCallID)
+	assert.Equal(t, "tc_a", original[2].ToolCallID)
+}
+
+func TestNormalizeToolCallOrdering_NonAssistantMessages(t *testing.T) {
+	t.Parallel()
+	// No assistant messages — should pass through unchanged
+	messages := []*schema.Message{
+		{Role: schema.User, Content: "hello"},
+		{Role: schema.Tool, Content: "result", ToolCallID: "tc1"},
+	}
+	result := normalizeToolCallOrdering(messages)
+	require.Len(t, result, 2)
+	assert.Equal(t, "hello", result[0].Content)
+	assert.Equal(t, "result", result[1].Content)
+}
