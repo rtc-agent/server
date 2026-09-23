@@ -264,7 +264,27 @@ func (r *rtcToolBase) handleRtcResume(ctx context.Context, state rtcInterruptSta
 		if r.formatResult != nil {
 			toolOutput = r.formatResult(dbRtc)
 		} else {
-			toolOutput = string(dbRtc.Result)
+			// 方案 C：从 output message (TEXT 列) 读取工具结果，而不是从 rtcs.result (JSONB 列)
+			// 这确保 resume 路径和 loadMessages 路径使用完全相同的数据源，避免 PostgreSQL JSONB 规范化差异
+			if dbRtc.OutputMessageID != nil {
+				outputMsg, err := r.helpers.deps.MessageRepo.GetByID(ctx, *dbRtc.OutputMessageID)
+				if err == nil && outputMsg != nil {
+					toolCall, parseErr := primitives.ParseContentDataToolCallRaw(outputMsg.Content)
+					if parseErr == nil && toolCall.Output != nil {
+						toolOutput = *toolCall.Output
+					} else {
+						// Fallback: 解析失败，使用 rtcs.result
+						toolOutput = string(dbRtc.Result)
+					}
+				} else {
+					// Fallback: output message 不存在，使用 rtcs.result
+					toolOutput = string(dbRtc.Result)
+				}
+			} else {
+				// Fallback: OutputMessageID 不存在（旧数据），使用 rtcs.result
+				toolOutput = string(dbRtc.Result)
+			}
+
 			if dbRtc.Status == string(protocol.RtcStatusFailed) && dbRtc.ErrorMessage != "" {
 				toolOutput = dbRtc.ErrorMessage
 			}
