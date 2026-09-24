@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -12,6 +13,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
+	"gorm.io/gorm"
 )
 
 var log = zap.NewNop()
@@ -183,8 +185,25 @@ func Warn(ctx context.Context, msg string, fields ...zap.Field) {
 }
 
 // Error logs an error-level message.
+// If any field contains gorm.ErrRecordNotFound, it is downgraded to Warn.
 func Error(ctx context.Context, msg string, fields ...zap.Field) {
+	if containsErrRecordNotFound(fields) {
+		log.Warn(msg, append(extractTraceFields(ctx), fields...)...)
+		return
+	}
 	log.Error(msg, append(extractTraceFields(ctx), fields...)...)
+}
+
+// containsErrRecordNotFound checks if any zap.Field contains gorm.ErrRecordNotFound.
+func containsErrRecordNotFound(fields []zap.Field) bool {
+	for _, f := range fields {
+		if f.Interface != nil {
+			if err, ok := f.Interface.(error); ok && errors.Is(err, gorm.ErrRecordNotFound) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Fatal logs a fatal-level message and exits.

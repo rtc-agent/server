@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
@@ -223,9 +224,23 @@ func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.D
 			zap.String("device_id", ci.DeviceID),
 		)
 
-		setupSubscribeHandler(client, broker)
-		setupHistoryHandler(client)
-		setupRPCHandler(client, userID, ci.DeviceID, rpcTimeout)
+		// Create a long-lived span for this client connection.
+		// All RPC calls will be child spans of this connection span.
+		// Use client.Context() (which carries the HTTP/WebSocket upgrade request's trace)
+		// as parent, so the entire centrifuge trace tree is linked to the original request.
+		tracer := otel.Tracer("centrifuge")
+		clientCtx, clientSpan := tracer.Start(client.Context(), "Centrifuge Client",
+			trace.WithAttributes(
+				attribute.String("client.id", client.ID()),
+				attribute.String("user.id", userID.String()),
+				attribute.String("device.id", ci.DeviceID),
+			),
+		)
+
+		setupSubscribeHandler(client, broker, clientCtx)
+		setupHistoryHandler(client, clientCtx)
+		setupRPCHandler(client, userID, ci.DeviceID, rpcTimeout, clientCtx)
+		setupDisconnectHandler(client, userID, ci.DeviceID, clientSpan)
 
 		logger.Info(stdcontext.Background(), "[Centrifuge] client connected",
 			zap.String("client_id", client.ID()),
@@ -234,10 +249,52 @@ func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.D
 	}
 }
 
+// setupDisconnectHandler registers the disconnect callback: ends the client span
+// and records slow disconnects as errors so they appear in Jaeger.
+func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, clientSpan trace.Span) {
+	client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
+		reason := e.Reason
+		code := e.Code
+
+		if reason == "slow" {
+			clientSpan.RecordError(fmt.Errorf("client disconnected: slow (code %d)", code))
+			clientSpan.SetStatus(codes.Error, "slow disconnect")
+
+			logger.Error(stdcontext.Background(), "[Centrifuge] client disconnected: slow",
+				zap.String("client_id", client.ID()),
+				zap.String("user_id", userID.String()),
+				zap.String("device_id", deviceID),
+				zap.Uint32("code", code),
+			)
+		} else {
+			logger.Info(stdcontext.Background(), "[Centrifuge] client disconnected",
+				zap.String("client_id", client.ID()),
+				zap.String("user_id", userID.String()),
+				zap.String("reason", reason),
+				zap.Uint32("code", code),
+			)
+		}
+
+		// End the long-lived client span.
+		clientSpan.End()
+	})
+}
+
 // setupSubscribeHandler registers the channel subscription callback:
 // validates ownership, registers channel type, enables recovery.
-func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.DualBroker) {
+func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.DualBroker, clientCtx stdcontext.Context) {
 	client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+		// Create trace span for subscribe operation (as child of client span)
+		tracer := otel.Tracer("centrifuge")
+		ctx, span := tracer.Start(clientCtx, "Centrifuge Subscribe",
+			trace.WithAttributes(
+				attribute.String("channel", e.Channel),
+			),
+		)
+		defer span.End()
+
+		_ = ctx // ctx available for future use if needed
+
 		ch := e.Channel
 
 		// User channel validation: userID must match the connected user.
@@ -266,20 +323,36 @@ func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.Dua
 
 // setupHistoryHandler registers the History command handler: returns an
 // empty Result so centrifuge falls back to node.History().
-func setupHistoryHandler(client *centrifuge.Client) {
+func setupHistoryHandler(client *centrifuge.Client, clientCtx stdcontext.Context) {
 	client.OnHistory(func(e centrifuge.HistoryEvent, cb centrifuge.HistoryCallback) {
+		// Create trace span for history operation (as child of client span)
+		tracer := otel.Tracer("centrifuge")
+		ctx, span := tracer.Start(clientCtx, "Centrifuge History",
+			trace.WithAttributes(
+				attribute.String("channel", e.Channel),
+			),
+		)
+		defer span.End()
+
+		_ = ctx // ctx available for future use if needed
+
 		cb(centrifuge.HistoryReply{}, nil)
 	})
 }
 
 // setupRPCHandler registers the RPC handler callback: injects identity
 // context and dispatches to the global RPCHandler.
-func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, rpcTimeout time.Duration) {
+func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, rpcTimeout time.Duration, clientCtx stdcontext.Context) {
 	client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
-		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), rpcTimeout)
+		logger.Info(stdcontext.Background(), "[Centrifuge] RPC called",
+			zap.String("method", e.Method),
+			zap.String("client_id", client.ID()),
+		)
+
+		ctx, cancel := stdcontext.WithTimeout(clientCtx, rpcTimeout)
 		defer cancel()
 
-		// Create trace span for RPC request
+		// Create trace span for RPC request (as child of client span)
 		tracer := otel.Tracer("rpc")
 		ctx, span := tracer.Start(ctx, "RPC "+e.Method,
 			trace.WithAttributes(
