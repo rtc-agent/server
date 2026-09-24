@@ -105,6 +105,11 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Fatal(context.Background(), "Failed to connect database", zap.Error(err))
 	}
 
+	// Register GORM tracing plugin for OpenTelemetry spans on SQL operations.
+	if err := db.Use(logger.NewTracingPlugin()); err != nil {
+		logger.Fatal(context.Background(), "Failed to register GORM tracing plugin", zap.Error(err))
+	}
+
 	// Configure database connection pool.
 	sqlDB, err := db.DB()
 	if err != nil {
