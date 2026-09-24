@@ -8,10 +8,13 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ---------------------------------------------------------------------------
-// cancel_loop
+// cancelLoop
 // ---------------------------------------------------------------------------
 
 type cancelLoopTool struct {
@@ -24,8 +27,8 @@ type cancelLoopArgs struct {
 	Reason string `json:"reason"`
 }
 
-// loopResult is the JSON-serializable response for both cancel_loop and
-// complete_loop tools. Both produce structurally identical output.
+// loopResult is the JSON-serializable response for both cancelLoop and
+// completeLoop tools. Both produce structurally identical output.
 type loopResult struct {
 	ID             string           `json:"id"`
 	Prompt         string           `json:"prompt"`
@@ -36,7 +39,7 @@ type loopResult struct {
 
 func (t *cancelLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "cancel_loop",
+		Name: "cancelLoop",
 		Desc: cancelLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"reason": {
@@ -50,17 +53,17 @@ func (t *cancelLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args cancelLoopArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "cancel_loop", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "cancelLoop", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Reason == "" {
 		return "Error: reason is required and cannot be empty", nil
 	}
-	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "cancel_loop", "cancelLoop.completed", model.LoopStatusCancelled, args.Reason, "no active loop to cancel", argumentsInJSON)
+	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "cancelLoop", "cancelLoop.completed", model.LoopStatusCancelled, args.Reason, "no active loop to cancel", argumentsInJSON)
 }
 
 // ---------------------------------------------------------------------------
-// complete_loop (internal, called by LLM when objective is achieved)
+// completeLoop (internal, called by LLM when objective is achieved)
 // ---------------------------------------------------------------------------
 
 type completeLoopTool struct {
@@ -75,7 +78,7 @@ type completeLoopArgs struct {
 
 func (t *completeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "complete_loop",
+		Name: "completeLoop",
 		Desc: completeLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"reason": {
@@ -89,13 +92,13 @@ func (t *completeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var args completeLoopArgs
-	if ok, errMsg := parseToolArgs(ctx, t.helpers, "complete_loop", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "completeLoop", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 	if args.Reason == "" {
 		return "Error: reason is required and cannot be empty", nil
 	}
-	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "complete_loop", "completeLoop.completed", model.LoopStatusCompleted, args.Reason, "no active loop to complete", argumentsInJSON)
+	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "completeLoop", "completeLoop.completed", model.LoopStatusCompleted, args.Reason, "no active loop to complete", argumentsInJSON)
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +109,7 @@ func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON str
 // value, cancels any scheduled asynq task, publishes tool result messages,
 // and returns the JSON-serialized result.
 //
-// Both cancel_loop and complete_loop share identical control flow; only the
+// Both cancelLoop and completeLoop share identical control flow; only the
 // target status, log event name, and "not found" message differ.
 func finalizeLoopStatus(
 	ctx context.Context,
@@ -120,11 +123,24 @@ func finalizeLoopStatus(
 	notFoundMsg string,
 	argumentsInJSON string,
 ) (string, error) {
+	ctx, span := h.tracer.Start(ctx, "tool."+toolName,
+		trace.WithAttributes(
+			attribute.String("session_id", session.ID.String()),
+			attribute.String("turn_id", turnID.String()),
+			attribute.String("target_status", string(status)),
+			attribute.Int("reason_length", len(reason)),
+		),
+	)
+	defer span.End()
+
 	loop, err := h.deps.LoopRepo.FindActive(ctx, session.ID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "find_active_failed")
 		return "", fmt.Errorf("%s: find active loop: %w", toolName, err)
 	}
 	if loop == nil {
+		span.SetAttributes(attribute.Bool("not_found", true))
 		return fmt.Sprintf("Error: %s", notFoundMsg), nil
 	}
 
@@ -137,6 +153,8 @@ func finalizeLoopStatus(
 	cancelLoopAsynqTask(ctx, h.deps, h.logger, loop, updateFields)
 
 	if err := h.deps.LoopRepo.Update(ctx, loop.ID, updateFields); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "update_failed")
 		return "", fmt.Errorf("%s: update: %w", toolName, err)
 	}
 
@@ -149,6 +167,8 @@ func finalizeLoopStatus(
 	}
 	resultJSON, err := mustMarshalJSON(result)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal_failed")
 		return "", fmt.Errorf("%s: marshal result: %w", toolName, err)
 	}
 
@@ -161,9 +181,12 @@ func finalizeLoopStatus(
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
 		return "", fmt.Errorf("%s: publish messages: %w", toolName, err)
 	}
 
+	span.SetAttributes(attribute.String("loop_id", loop.ID.String()))
 	h.logger.Info(ctx, logEvent, map[string]any{
 		"session_id": session.ID.String(),
 		"loop_id":    loop.ID.String(),

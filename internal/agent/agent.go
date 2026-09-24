@@ -49,6 +49,7 @@ import (
 	"github.com/cloudwego/eino/callbacks"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // Config holds the dependencies needed to build a turnagent.Agent.
@@ -246,8 +247,10 @@ func New(cfg Config) (*turnagent.Agent, error) {
 			return cache.Checkpoint("session:" + sessionID)
 		},
 
-		// Middleware — summarization middleware for context compression
-		AgentMiddlewares: []adk.ChatModelAgentMiddleware{h.summarizeMW},
+		// Middleware — merge assistant middleware (merges adjacent assistant messages)
+		// and summarization middleware (context compression)
+		// Order matters: merge first, then summarize
+		AgentMiddlewares: []adk.ChatModelAgentMiddleware{h.mergeAssistantMW, h.summarizeMW},
 
 		// eino Callbacks — the token usage handler records metrics and logs
 		// for every ChatModel call (including summarizeMessages).
@@ -332,6 +335,11 @@ type helpers struct {
 	// the entire helpers struct.
 	summarizeMW adk.ChatModelAgentMiddleware
 
+	// mergeAssistantMW is the merge assistant middleware, created once in New().
+	// Merges adjacent assistant messages before each ChatModel invocation to
+	// prevent cache invalidation in the ReAct loop.
+	mergeAssistantMW adk.ChatModelAgentMiddleware
+
 	// streamState tracks per-turn streaming message state.
 	// Key: turnID (string), Value: *turnStreamState.
 	//
@@ -368,6 +376,11 @@ type helpers struct {
 // applyHelperDefaults fills in zero-value fields on helpers with sensible
 // defaults. Extracted from New() to reduce its length.
 func applyHelperDefaults(h *helpers) {
+	// Default tracer: noop tracer if not provided
+	if h.tracer == nil {
+		h.tracer = noop.NewTracerProvider().Tracer("rtc-agent")
+	}
+
 	if h.contextTokensLimit <= 0 {
 		h.contextTokensLimit = 25000
 	}
@@ -413,7 +426,6 @@ func (h *helpers) initialize(cfg Config) error {
 	// Attachment manager
 	h.attachmentManager = NewAttachmentManager(
 		[]Attachment{
-			NewTodoListAttachment(h),
 			NewSessionMemoryAttachment(h),
 			NewUserMemoryAttachment(h),
 		},
@@ -431,6 +443,11 @@ func (h *helpers) initialize(cfg Config) error {
 		return fmt.Errorf("agent: build summarization middleware: %w", err)
 	}
 	h.summarizeMW = summarizeMW
+
+	// Merge assistant middleware
+	h.mergeAssistantMW = turnagent.NewMergeAssistantMiddleware(&turnagent.MergeAssistantMiddlewareConfig{
+		Log: h.logger,
+	})
 
 	// Token callback handler
 	h.tokenCallbackHandler = h.newTokenUsageCallbackHandler()

@@ -1,6 +1,7 @@
 package turnagent
 
 import (
+	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/schema"
@@ -49,6 +50,22 @@ const (
 	// Used by setCacheBreakpoints to identify the summary boundary position.
 	// Value: bool (true marks the boundary).
 	ExtraKeySummaryBoundary = "_rtc_summary_boundary"
+
+	// ExtraKeyAbsorbedThinking marks an assistant message that had thinking
+	// content merged into it by mergeAssistantMessages.
+	//
+	// This marker serves as a response boundary signal for
+	// groupAssistantByResponse: when a message has this marker, it means a
+	// new LLM response started (thinking was produced and then merged into
+	// this message). The grouping function uses this to detect that the
+	// message belongs to a NEW response, not a continuation of the previous
+	// one.
+	//
+	// The marker is cleaned up by mergeSegment after grouping is complete,
+	// so it does not propagate to downstream pipelines or the LLM adapter.
+	//
+	// Value: bool (true).
+	ExtraKeyAbsorbedThinking = "_rtc_absorbed_thinking"
 )
 
 // Message is the pkg-level message type, independent of eino's schema.Message.
@@ -194,7 +211,7 @@ func toEinoMessage(m *Message) *schema.Message {
 			ID: tc.ID,
 			Function: schema.FunctionCall{
 				Name:      tc.Name,
-				Arguments: tc.Arguments,
+				Arguments: normalizeToolArguments(tc.Arguments),
 			},
 		})
 	}
@@ -250,6 +267,16 @@ func toEinoMessage(m *Message) *schema.Message {
 		em.Extra = newExtra
 	}
 
+	// 传递排序元数据到 Extra，供 MergeAssistantMiddleware 使用
+	// 这对确保合并后的消息表示与内存中的表示一致至关重要
+	// 注意：使用 RFC3339 字符串格式，避免 time.Time 序列化问题
+	if !m.CreatedAt.IsZero() {
+		if em.Extra == nil {
+			em.Extra = make(map[string]any)
+		}
+		em.Extra["_rtc_created_at"] = m.CreatedAt.Format(time.RFC3339Nano)
+	}
+
 	return em
 }
 
@@ -299,10 +326,29 @@ func fromEinoMessage(m *schema.Message) *Message {
 		msg.ToolCalls = append(msg.ToolCalls, ToolCall{
 			ID:        tc.ID,
 			Name:      tc.Function.Name,
-			Arguments: tc.Function.Arguments,
+			Arguments: normalizeToolArguments(tc.Function.Arguments),
 		})
 	}
 	return msg
+}
+
+// normalizeToolArguments normalizes empty or null JSON tool arguments to "{}".
+// This ensures consistency between LLM responses, DB storage, and API requests,
+// preventing both cache invalidation and 400 errors from the API.
+//
+// When the LLM calls a tool with no arguments, different code paths may produce:
+//   - Empty string ""
+//   - Literal "null"
+//   - Empty object "{}"
+//
+// The Anthropic API requires tool_use input to be an object (not null),
+// so we normalize to "{}" at all conversion boundaries.
+func normalizeToolArguments(arguments string) string {
+	trimmed := strings.TrimSpace(arguments)
+	if trimmed == "" || trimmed == "null" {
+		return "{}"
+	}
+	return arguments
 }
 
 // extractTokenUsage converts eino's schema.TokenUsage to the pkg's TokenUsage.

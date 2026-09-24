@@ -13,21 +13,26 @@ import (
 	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // searchMemoryTool searches memories (both Session Memory and User Memory).
 // Currently only Session Memory search is implemented; User Memory will be in the next phase.
 type searchMemoryTool struct {
+	session *model.Session
 	helpers *helpers
+	turnID  uuid.UUID
 }
 
-func (h *helpers) createSearchMemoryTool() tool.InvokableTool {
-	return &searchMemoryTool{helpers: h}
+func (h *helpers) createSearchMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
+	return &searchMemoryTool{session: session, helpers: h, turnID: turnID}
 }
 
 func (t *searchMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "search_memory",
+		Name: "searchMemory",
 		Desc: searchMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"query": {
@@ -56,19 +61,48 @@ func (t *searchMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.searchMemory",
+		trace.WithAttributes(
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.String("turn_id", t.turnID.String()),
+		),
+	)
+	defer span.End()
+
 	var args struct {
 		Query      string `json:"query"`
 		Category   string `json:"category"`
 		MemoryType string `json:"memory_type"`
 		Limit      int    `json:"limit"`
 	}
-	if ok, msg := parseToolArgs(ctx, t.helpers, "search_memory", argumentsInJSON, &args); !ok {
-		return msg, nil
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "searchMemory", argumentsInJSON, &args); !ok {
+		return errMsg, nil
 	}
 
 	if args.Query == "" {
-		return "", fmt.Errorf("query is required")
+		span.SetStatus(codes.Error, "query_required")
+		errMsg := "Error: query is required"
+		// 持久化验证错误到 DB
+		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+			Helpers:         t.helpers,
+			SessionID:       t.session.ID,
+			OwnerRefID:      t.session.OwnerRefID,
+			TurnID:          t.turnID,
+			ToolName:        "searchMemory",
+			ArgumentsInJSON: argumentsInJSON,
+			ResultJSON:      errMsg,
+		}); publishErr != nil {
+			t.helpers.logger.Warn(ctx, "searchMemory.persist_validation_error_failed", map[string]any{
+				"error": publishErr.Error(),
+			})
+		}
+		return errMsg, nil
 	}
+	span.SetAttributes(
+		attribute.String("query", args.Query),
+		attribute.String("category", args.Category),
+		attribute.String("memory_type", args.MemoryType),
+	)
 
 	// Set defaults
 	if args.MemoryType == "" {
@@ -77,6 +111,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if args.Limit <= 0 {
 		args.Limit = 5
 	}
+	span.SetAttributes(attribute.Int("limit", args.Limit))
 
 	var results []searchResult
 
@@ -84,7 +119,9 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if args.MemoryType == "all" || args.MemoryType == "session" {
 		sessionResults, err := t.searchSessionMemories(ctx, args.Query, args.Category, args.Limit)
 		if err != nil {
-			t.helpers.logger.Warn(ctx, "search_memory.session_error", map[string]any{
+			span.RecordError(err)
+			span.SetAttributes(attribute.String("session_search_error", err.Error()))
+			t.helpers.logger.Warn(ctx, "searchMemory.session_error", map[string]any{
 				"error": err.Error(),
 			})
 			// Continue with other searches even if session memory fails
@@ -97,7 +134,9 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if args.MemoryType == "all" || args.MemoryType == "user" {
 		userResults, err := t.searchUserMemories(ctx, args.Query, args.Category, args.Limit)
 		if err != nil {
-			t.helpers.logger.Warn(ctx, "search_memory.user_error", map[string]any{
+			span.RecordError(err)
+			span.SetAttributes(attribute.String("user_search_error", err.Error()))
+			t.helpers.logger.Warn(ctx, "searchMemory.user_error", map[string]any{
 				"error": err.Error(),
 			})
 			// Continue with other searches even if user memory fails
@@ -106,28 +145,50 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		}
 	}
 
+	var resultJSON string
 	if len(results) == 0 {
-		return formatNoSearchResults(), nil
+		span.SetAttributes(attribute.Int("result_count", 0))
+		resultJSON = formatNoSearchResults()
+	} else {
+		// Format output
+		items := make([]searchResultItem, len(results))
+		for i, result := range results {
+			createdAt := ""
+			if !result.CreatedAt.IsZero() {
+				createdAt = result.CreatedAt.Format("2006-01-02 15:04")
+			}
+			items[i] = searchResultItem{
+				Index:      i + 1,
+				MemoryType: result.MemoryType,
+				Category:   result.Category,
+				Title:      result.Title,
+				Content:    stringutil.TruncateByRune(result.Content, 300),
+				CreatedAt:  createdAt,
+			}
+		}
+
+		span.SetAttributes(attribute.Int("result_count", len(results)))
+		resultJSON = formatSearchResultsList(len(results), items)
 	}
 
-	// Format output
-	items := make([]searchResultItem, len(results))
-	for i, result := range results {
-		createdAt := ""
-		if !result.CreatedAt.IsZero() {
-			createdAt = result.CreatedAt.Format("2006-01-02 15:04")
-		}
-		items[i] = searchResultItem{
-			Index:      i + 1,
-			MemoryType: result.MemoryType,
-			Category:   result.Category,
-			Title:      result.Title,
-			Content:    stringutil.TruncateByRune(result.Content, 300),
-			CreatedAt:  createdAt,
-		}
+	// 持久化结果到 DB
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "searchMemory",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
+		t.helpers.logger.Warn(ctx, "searchMemory.publish_failed", map[string]any{
+			"error": err.Error(),
+		})
 	}
 
-	return formatSearchResultsList(len(results), items), nil
+	return resultJSON, nil
 }
 
 // searchResult is the unified search result format.
@@ -147,18 +208,13 @@ func (t *searchMemoryTool) searchSessionMemories(
 	category string,
 	limit int,
 ) ([]searchResult, error) {
-	sessionID := getSessionIDFromContext(ctx)
-	if sessionID == uuid.Nil {
-		return nil, nil // No session, no results
-	}
-
 	// Query memories (with optional category filter)
 	var memories []*model.SessionMemory
 	var err error
 	if category != "" {
-		memories, err = t.helpers.deps.SessionMemoryRepo.ListByCategory(ctx, sessionID, category, limit*2)
+		memories, err = t.helpers.deps.SessionMemoryRepo.ListByCategory(ctx, t.session.ID, category, limit*2)
 	} else {
-		memories, err = t.helpers.deps.SessionMemoryRepo.ListBySession(ctx, sessionID, limit*2)
+		memories, err = t.helpers.deps.SessionMemoryRepo.ListBySession(ctx, t.session.ID, limit*2)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list session memories: %w", err)
@@ -207,7 +263,7 @@ func (t *searchMemoryTool) searchUserMemories(
 	// Keyword search.
 	keywordResults, err := t.helpers.deps.UserMemoryRepo.SearchByKeyword(ctx, userID, query, limit*2)
 	if err != nil {
-		t.helpers.logger.Warn(ctx, "search_memory.user_keyword_error", map[string]any{
+		t.helpers.logger.Warn(ctx, "searchMemory.user_keyword_error", map[string]any{
 			"error": err.Error(),
 		})
 		return nil, nil
@@ -242,9 +298,11 @@ func (t *searchMemoryTool) searchUserMemories(
 		// Async update access count (non-blocking for search).
 		// Use logger.SafeGo to prevent a panic in the DB driver from
 		// crashing the entire server process.
+		// Use context.WithoutCancel(ctx) to preserve trace context in the background goroutine.
+		detachedCtx := context.WithoutCancel(ctx)
 		logger.SafeGo("memory-access-count", func() {
-			if err := t.helpers.deps.UserMemoryRepo.IncrementAccessCount(context.Background(), mem.ID); err != nil {
-				t.helpers.logger.Warn(context.Background(), "memory.access_count_update_failed", map[string]any{
+			if err := t.helpers.deps.UserMemoryRepo.IncrementAccessCount(detachedCtx, mem.ID); err != nil {
+				t.helpers.logger.Warn(detachedCtx, "memory.access_count_update_failed", map[string]any{
 					"memory_id": mem.ID.String(),
 					"error":     err.Error(),
 				})

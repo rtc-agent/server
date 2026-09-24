@@ -52,6 +52,15 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	if p.SessionID == "" {
 		return fmt.Errorf("turnagent: work payload missing session_id")
 	}
+
+	// 1.1. Restore trace context from payload (if available).
+	// This must happen BEFORE startSpanIfEnabled (line ~93) so that the "turn" span
+	// becomes a child of the restored span context, inheriting the same TraceID.
+	// For legacy payloads without trace_id, this is a no-op (empty strings are ignored).
+	if p.TraceID != "" && p.SpanID != "" {
+		ctx = WithTraceContext(ctx, p.TraceID, p.SpanID)
+	}
+
 	a.log(ctx, LogLevelInfo, "agent.process", map[string]any{
 		"session_id": p.SessionID,
 		"kind":       p.Kind,

@@ -32,6 +32,9 @@ func isSystemSession(session *model.Session) bool {
 // item. In that case the caller passes nil for turnID and the frontend will
 // learn about the turn when the worker actually creates it.
 //
+// messageIDs accepts one or more message IDs (e.g., prompt message + user message).
+// Each ID produces a "message created" update item.
+//
 // A nil session means we cannot route the update (no OwnerRefID). Returns
 // nil in that case — the caller should have already logged the pre-load
 // failure.
@@ -39,7 +42,7 @@ func BuildSendMessageUpdates(
 	session *model.Session,
 	sessionCreated bool,
 	turnID *uuid.UUID,
-	messageID uuid.UUID,
+	messageIDs []uuid.UUID,
 ) []updates.UpdatePublishItem {
 	if session == nil {
 		return nil
@@ -59,9 +62,11 @@ func BuildSendMessageUpdates(
 			Entity: protocol.EntityTurn, Action: protocol.ActionCreated, EntityId: turnID.String(),
 		})
 	}
-	items = append(items, protocol.UpdateItem{
-		Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: messageID.String(),
-	})
+	for _, msgID := range messageIDs {
+		items = append(items, protocol.UpdateItem{
+			Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: msgID.String(),
+		})
+	}
 	return []updates.UpdatePublishItem{{
 		Channel: channel.UserTopic(session.OwnerRefID),
 		Items:   items,

@@ -2,6 +2,7 @@
 package rpchandler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -17,21 +19,37 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
 // SubmitRtcResult submits an RTC execution result, marks the RTC as completed, and continues the LLM flow.
 func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcResultRequest) (*protocol.SubmitRtcResultResponse, error) {
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.submitRtcResult",
+		trace.WithAttributes(
+			attribute.String("rtc.id", req.RtcId),
+			attribute.Bool("rtc.success", req.Success),
+		),
+	)
+	defer span.End()
+
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
+		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
 	creator := usecase.UserCreator{UserID: userID}
 
 	rtcUUID, apiErr := parseUUID(req.RtcId, "rtc_id")
 	if apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
 		return nil, apiErr
 	}
+
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 
 	logger.Info(ctx, "[SubmitRtcResult]",
 		zap.String("user", userID.String()),
@@ -41,21 +59,27 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	rtc, err := h.deps.Deps.RtcRepo.GetByID(ctx, rtcUUID)
 	if err != nil {
 		if repo.IsNotFound(err) {
+			span.SetStatus(codes.Error, "rtc.not_found")
 			return nil, &APIError{Code: "rtc.not_found", Message: fmt.Sprintf("rtc %s not found", req.RtcId)}
 		}
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
 	}
 
 	// Idempotency check for terminal-state RTCs.
 	if idempotentResp, isIdempotent := h.checkIdempotentSubmit(ctx, rtc, req); isIdempotent {
+		span.SetAttributes(attribute.Bool("rtc.idempotent", true))
 		return idempotentResp, nil
 	}
 
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, rtc.SessionID, creator); err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return nil, h.ownershipError(ctx, err)
 	}
 
 	if req.ClientId != nil && *req.ClientId != rtc.ClientID {
+		span.SetStatus(codes.Error, "rtc.client_id_mismatch")
 		return nil, &APIError{
 			Code:    "rtc.client_id_mismatch",
 			Message: fmt.Sprintf("client_id mismatch: expected %s, got %s", rtc.ClientID, *req.ClientId),
@@ -68,12 +92,21 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	}
 
 	var resultJSON *string
-	if req.Result != nil {
-		b, marshalErr := json.Marshal(req.Result)
-		if marshalErr != nil {
-			return nil, &APIError{Code: "rtc.invalid_result", Message: fmt.Sprintf("marshal result: %v", marshalErr)}
+	if len(req.Result) > 0 {
+		// req.Result 是 json.RawMessage，保留原始 JSON 字段顺序
+		// 验证是否是合法 JSON
+		if !json.Valid(req.Result) {
+			span.SetStatus(codes.Error, "invalid JSON in result")
+			return nil, &APIError{Code: "rtc.invalid_result", Message: "result is not valid JSON"}
 		}
-		s := string(b)
+		// 转换为紧凑格式（移除多余空格），但保留 JSON key 的原始顺序
+		// json.Compact 只移除空白字符，不改变 key 顺序
+		var buf bytes.Buffer
+		if err := json.Compact(&buf, req.Result); err != nil {
+			span.SetStatus(codes.Error, "failed to compact result JSON")
+			return nil, &APIError{Code: "rtc.invalid_result", Message: "failed to compact result JSON"}
+		}
+		s := buf.String()
 		resultJSON = &s
 	}
 
@@ -91,6 +124,8 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[SubmitRtcResult] push failed after commit (data safe)", zap.Error(err))
 		} else {
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 			return nil, h.internalError(ctx, "rtc.error", "internal error", err)
 		}
 	}
@@ -166,7 +201,21 @@ func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc
 
 	toolOutput := ""
 	if resultJSON != nil {
-		toolOutput = *resultJSON
+		// BUG 12 fix: For askUser tool, format the result text before persisting to DB.
+		// This ensures consistency between ReAct resume path (which calls FormatAskUserResult)
+		// and DB load path (which reads toolcall_output from DB).
+		// Previously, DB stored raw JSON while ReAct resume returned formatted text,
+		// causing tool_result content inconsistency and cache invalidation.
+		if rtc.ToolName == "askUser" {
+			tempRtc := &model.Rtc{
+				ToolName: rtc.ToolName,
+				Result:   model.JSONBString(*resultJSON),
+				Status:   string(targetStatus),
+			}
+			toolOutput = agent.FormatAskUserResult(tempRtc)
+		} else {
+			toolOutput = *resultJSON
+		}
 	} else if reqError != nil {
 		toolOutput = *reqError
 	}
@@ -240,7 +289,18 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 	// Add timeout to prevent goroutine leak if downstream operations hang.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(callerCtx), 30*time.Second)
 	defer cancel()
+
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.resumeTurnAfterRtc",
+		trace.WithAttributes(
+			attribute.String("rtc.id", rtc.ID.String()),
+			attribute.String("session.id", rtc.SessionID.String()),
+			attribute.String("turn.id", rtc.TurnID.String()),
+		),
+	)
+	defer span.End()
+
 	if h.deps.Queue == nil {
+		span.SetStatus(codes.Error, "queue_unavailable")
 		logger.Warn(ctx, "[resumeTurnAfterRtc] Queue is nil, cannot resume",
 			zap.String("rtc", rtc.ID.String()))
 		return
@@ -262,12 +322,15 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 	// Pre-check: skip triggering a new turn if session is already closed.
 	session, err := h.deps.SessionRepo.GetByID(ctx, rtc.SessionID)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		logger.Error(ctx, "[resumeTurnAfterRtc] get session",
 			zap.String("session", rtc.SessionID.String()),
 			zap.Error(err))
 		return
 	}
 	if protocol.SessionStatus(session.Status) == protocol.SessionStatusClosed {
+		span.SetAttributes(attribute.String("skip.reason", "session_closed"))
 		logger.Info(ctx, "[resumeTurnAfterRtc] skip: session closed",
 			zap.String("session", rtc.SessionID.String()))
 		return
@@ -276,6 +339,8 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 	// Check if there's an active turn for this session.
 	activeTurns, err := h.deps.Deps.TurnRepo.FindActiveBySession(ctx, rtc.SessionID)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		logger.Error(ctx, "[resumeTurnAfterRtc] find active turns",
 			zap.String("session", rtc.SessionID.String()),
 			zap.Error(err))
@@ -283,10 +348,12 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 	}
 
 	if len(activeTurns) > 0 {
+		span.SetAttributes(attribute.Bool("resume.active_turn", true))
 		h.resumeActiveTurn(ctx, rtc, activeTurns, batchResumeItems)
 		return
 	}
 
 	// Orphan path: no active turn (worker crash or turn already terminal).
+	span.SetAttributes(attribute.Bool("resume.orphan_submit", true))
 	h.publishOrphanSubmit(ctx, rtc)
 }

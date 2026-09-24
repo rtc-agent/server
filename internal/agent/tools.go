@@ -19,6 +19,9 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -82,9 +85,9 @@ func (t *readTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 		Name: "read",
 		Desc: readDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
-			"path":   {Type: schema.String, Desc: "The file path to read", Required: true},
-			"offset": {Type: schema.Integer, Desc: "Byte offset to start reading from (default: 0)", Required: false},
-			"limit":  {Type: schema.Integer, Desc: "Maximum number of bytes to read (default: unlimited)", Required: false},
+			"path":   {Type: schema.String, Desc: "The absolute path to the file to read", Required: true},
+			"offset": {Type: schema.Integer, Desc: "The line number to start reading from (1-indexed). Only provide if the file is too large to read at once", Required: false},
+			"limit":  {Type: schema.Integer, Desc: "The number of lines to read. Only provide if the file is too large to read at once", Required: false},
 		}),
 	}, nil
 }
@@ -102,15 +105,35 @@ func (t *writeTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 		Name: "write",
 		Desc: writeDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
-			"path":    {Type: schema.String, Desc: "The file path to write to", Required: true},
-			"content": {Type: schema.String, Desc: "The content to write", Required: true},
-			"mode":    {Type: schema.String, Desc: "Write mode: 'overwrite' (default) or 'append'", Required: false},
+			"path":    {Type: schema.String, Desc: "The absolute path to the file to write", Required: true},
+			"content": {Type: schema.String, Desc: "The content to write to the file", Required: true},
 		}),
 	}, nil
 }
 
 func (t *writeTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	return t.base.InvokableRun(ctx, "write", argumentsInJSON, opts...)
+}
+
+// --- editTool ---
+
+type editTool struct{ base *rtcToolBase }
+
+func (t *editTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	return &schema.ToolInfo{
+		Name: "edit",
+		Desc: editDesc,
+		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+			"path":        {Type: schema.String, Desc: "The absolute path to the file to modify", Required: true},
+			"old_string":  {Type: schema.String, Desc: "The text to replace", Required: true},
+			"new_string":  {Type: schema.String, Desc: "The text to replace it with (must be different from old_string)", Required: true},
+			"replace_all": {Type: schema.Boolean, Desc: "Replace all occurrences of old_string (default: false)", Required: false},
+		}),
+	}, nil
+}
+
+func (t *editTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	return t.base.InvokableRun(ctx, "edit", argumentsInJSON, opts...)
 }
 
 // --- grepTool ---
@@ -201,17 +224,39 @@ func (t *scriptTool) InvokableRun(ctx context.Context, argumentsInJSON string, o
 //   - r.manager.deps -> r.helpers.deps (the integration struct is helpers, not Manager)
 //   - Logger calls use h.logger.Info instead of logger.Debug/Info directly.
 func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumentsInJSON string, _ ...tool.Option) (string, error) {
+	ctx, span := r.helpers.tracer.Start(ctx, "rtcTool."+toolName,
+		trace.WithAttributes(
+			attribute.String("session_id", r.session.ID.String()),
+			attribute.String("turn_id", r.turnID.String()),
+			attribute.String("tool_name", toolName),
+			attribute.Int("args_length", len(argumentsInJSON)),
+		),
+	)
+	defer span.End()
+
 	// === Resume path ===
 	wasInterrupted, hasState, state := tool.GetInterruptState[rtcInterruptState](ctx)
 	if wasInterrupted {
 		if !hasState {
+			span.RecordError(fmt.Errorf("state type mismatch"))
+			span.SetStatus(codes.Error, "state_type_mismatch")
 			return "", fmt.Errorf("rtc: state type mismatch on resume")
 		}
-		return r.handleRtcResume(ctx, state)
+		span.SetAttributes(attribute.Bool("resume", true))
+		result, err := r.handleRtcResume(ctx, state)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "resume_failed")
+		}
+		return result, err
 	}
 
 	// === First-call path ===
-	return r.handleRtcFirstCall(ctx, toolName, argumentsInJSON)
+	result, err := r.handleRtcFirstCall(ctx, toolName, argumentsInJSON)
+	// handleRtcFirstCall always returns an error (the interrupt), so record it unconditionally.
+	span.RecordError(err)
+	span.SetStatus(codes.Error, "first_call_interrupted")
+	return result, err
 }
 
 // handleRtcResume handles the resume path for RTC tools: checks if the RTC
@@ -239,7 +284,27 @@ func (r *rtcToolBase) handleRtcResume(ctx context.Context, state rtcInterruptSta
 		if r.formatResult != nil {
 			toolOutput = r.formatResult(dbRtc)
 		} else {
-			toolOutput = string(dbRtc.Result)
+			// 方案 C：从 output message (TEXT 列) 读取工具结果，而不是从 rtcs.result (JSONB 列)
+			// 这确保 resume 路径和 loadMessages 路径使用完全相同的数据源，避免 PostgreSQL JSONB 规范化差异
+			if dbRtc.OutputMessageID != nil {
+				outputMsg, err := r.helpers.deps.MessageRepo.GetByID(ctx, *dbRtc.OutputMessageID)
+				if err == nil && outputMsg != nil {
+					toolCall, parseErr := primitives.ParseContentDataToolCallRaw(outputMsg.Content)
+					if parseErr == nil && toolCall.Output != nil {
+						toolOutput = *toolCall.Output
+					} else {
+						// Fallback: 解析失败，使用 rtcs.result
+						toolOutput = string(dbRtc.Result)
+					}
+				} else {
+					// Fallback: output message 不存在，使用 rtcs.result
+					toolOutput = string(dbRtc.Result)
+				}
+			} else {
+				// Fallback: OutputMessageID 不存在（旧数据），使用 rtcs.result
+				toolOutput = string(dbRtc.Result)
+			}
+
 			if dbRtc.Status == string(protocol.RtcStatusFailed) && dbRtc.ErrorMessage != "" {
 				toolOutput = dbRtc.ErrorMessage
 			}
@@ -440,6 +505,63 @@ func parseToolArgs(ctx context.Context, h *helpers, toolName string, argumentsIn
 			"raw_preview": argPreview,
 		})
 		return false, formatParseError(err.Error(), argPreview)
+	}
+	return true, ""
+}
+
+// parseToolArgsWithPersist safely parses JSON tool arguments and persists
+// parse errors to the database as toolcall_output messages.
+//
+// This is critical for cache consistency: when parseToolArgs fails, the error
+// message must be persisted to DB so that checkpoint resume (HistoryModifier)
+// produces the same message structure as the original execution.
+//
+// Without this, the error message exists only in eino's in-memory state during
+// the current turn, but disappears when the turn is resumed from checkpoint
+// (because DB doesn't have the error record), causing cache invalidation.
+func parseToolArgsWithPersist(
+	ctx context.Context,
+	h *helpers,
+	sessionID uuid.UUID,
+	ownerRefID string,
+	turnID uuid.UUID,
+	toolName string,
+	argumentsInJSON string,
+	args any,
+) (ok bool, errorMsg string) {
+	if err := json.Unmarshal([]byte(argumentsInJSON), args); err != nil {
+		// Truncate arguments for logging to avoid flooding logs with large payloads.
+		argPreview := argumentsInJSON
+		const maxPreviewLen = 200
+		if len(argPreview) > maxPreviewLen {
+			argPreview = argPreview[:maxPreviewLen] + "...(truncated)"
+		}
+		h.logger.Warn(ctx, "tool.parse_arguments_failed", map[string]any{
+			"tool_name":   toolName,
+			"error":       err.Error(),
+			"raw_length":  len(argumentsInJSON),
+			"raw_preview": argPreview,
+		})
+		errMsg := formatParseError(err.Error(), argPreview)
+
+		// 持久化错误消息到 DB，确保 checkpoint resume 时消息结构一致
+		// 这对 LLM 缓存命中至关重要
+		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+			Helpers:         h,
+			SessionID:       sessionID,
+			OwnerRefID:      ownerRefID,
+			TurnID:          turnID,
+			ToolName:        toolName,
+			ArgumentsInJSON: argumentsInJSON,
+			ResultJSON:      errMsg,
+		}); publishErr != nil {
+			h.logger.Warn(ctx, "tool.persist_parse_error_failed", map[string]any{
+				"tool_name": toolName,
+				"error":     publishErr.Error(),
+			})
+		}
+
+		return false, errMsg
 	}
 	return true, ""
 }

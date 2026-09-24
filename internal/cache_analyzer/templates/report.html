@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - {{.SessionID}}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f6f8fa;
+            padding: 20px;
+            line-height: 1.5;
+        }
+        .container { max-width: 1600px; margin: 0 auto; }
+        h1 { color: #24292f; margin-bottom: 10px; font-size: 28px; }
+        .session-info { color: #57606a; margin-bottom: 20px; font-size: 14px; }
+        .back-link { display: inline-block; margin-bottom: 20px; color: #0969da; text-decoration: none; font-weight: 500; }
+        .back-link:hover { text-decoration: underline; }
+        .export-btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #1a7f37;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 14px;
+            transition: background 0.15s;
+        }
+        .export-btn:hover { background: #116329; }
+
+        .summary {
+            background: white;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border: 1px solid #d0d7de;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 15px;
+        }
+        .stat-card {
+            background: #f6f8fa;
+            padding: 16px;
+            border-radius: 6px;
+            border-left: 4px solid #1a7f37;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #57606a;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+        .stat-value {
+            font-size: 28px;
+            font-weight: 600;
+            color: #24292f;
+            margin-top: 4px;
+        }
+
+        .request-list {
+            background: white;
+            border-radius: 6px;
+            overflow: hidden;
+            border: 1px solid #d0d7de;
+        }
+        .request-item {
+            border-bottom: 1px solid #d0d7de;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .request-item:hover { background: #f6f8fa; }
+        .request-item:last-child { border-bottom: none; }
+
+        .request-header {
+            padding: 12px 16px;
+            display: grid;
+            grid-template-columns: 180px 120px 100px 1fr;
+            gap: 16px;
+            align-items: center;
+            font-size: 14px;
+        }
+        .request-time {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            color: #57606a;
+            font-weight: 500;
+        }
+        .request-hitrate {
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-align: center;
+            font-size: 13px;
+        }
+        .hitrate-high { background: #dafbe1; color: #1a7f37; }
+        .hitrate-medium { background: #fff8c5; color: #9a6700; }
+        .hitrate-low { background: #ffdcd7; color: #cf222e; }
+
+        .request-messages {
+            font-size: 13px;
+            color: #57606a;
+            font-weight: 500;
+        }
+        .request-changes {
+            font-size: 13px;
+            color: #57606a;
+        }
+        .change-summary {
+            font-weight: 500;
+            margin-bottom: 4px;
+            display: block;
+        }
+        .change-details {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            font-size: 11px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .change-added {
+            color: #1a7f37;
+            background: #dafbe1;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+        .change-removed {
+            color: #cf222e;
+            background: #ffdcd7;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+        .change-modified {
+            color: #9a6700;
+            background: #fff8c5;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        .diff-view {
+            display: none;
+            padding: 0;
+            background: #f6f8fa;
+            border-top: 1px solid #d0d7de;
+        }
+        .diff-view.active { display: block; }
+
+        .diff-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 16px;
+            background: #ffffff;
+            border-bottom: 1px solid #d0d7de;
+        }
+        .diff-toolbar-title {
+            font-weight: 600;
+            font-size: 14px;
+            color: #24292f;
+        }
+        .export-diff-btn {
+            display: inline-block;
+            padding: 6px 12px;
+            background: #1a7f37;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 12px;
+            transition: background 0.15s;
+        }
+        .export-diff-btn:hover { background: #116329; }
+
+        .diff-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0;
+            border-left: 1px solid #d0d7de;
+        }
+        .diff-column {
+            background: white;
+            border-right: 1px solid #d0d7de;
+        }
+        .diff-column:last-child { border-right: none; }
+
+        .diff-title {
+            background: #f6f8fa;
+            padding: 10px 16px;
+            font-weight: 600;
+            font-size: 13px;
+            border-bottom: 1px solid #d0d7de;
+            color: #24292f;
+        }
+        .diff-content {
+            padding: 0;
+            max-height: 600px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .message-item {
+            margin: 0;
+            border-bottom: 1px solid #d0d7de;
+        }
+        .message-item:last-child { border-bottom: none; }
+
+        .message-added { background: #dafbe1; }
+        .message-removed { background: #ffdcd7; }
+        .message-unchanged { background: #ffffff; }
+        .message-modified { background: #fff8c5; }
+
+        .message-header {
+            padding: 8px 16px;
+            background: rgba(0,0,0,0.02);
+            border-bottom: 1px solid #d0d7de;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .message-role {
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #57606a;
+            letter-spacing: 0.5px;
+        }
+        .message-hash {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: #57606a;
+        }
+        .cache-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            background: #ddf4ff;
+            color: #0969da;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .diff-line {
+            padding: 2px 16px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            border-left: 3px solid transparent;
+        }
+        .diff-line.equal {
+            background: #ffffff;
+            color: #24292f;
+        }
+        .diff-line.insert {
+            background: #ccffd8;
+            color: #116329;
+            border-left-color: #1a7f37;
+        }
+        .diff-line.delete {
+            background: #ffd7d5;
+            color: #82071e;
+            border-left-color: #cf222e;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← 返回配置</a>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h1 style="margin: 0;">🔍 缓存分析报告</h1>
+            <a href="#" class="export-btn" onclick="exportAll(event, {{.SessionID}})">📥 导出 Markdown</a>
+        </div>
+        <p class="session-info">
+            Session: <strong>{{.SessionID}}</strong><br>
+            日志文件: {{.LogFiles}}
+        </p>
+
+        <div class="summary">
+            <h2>汇总统计</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">总请求数</div>
+                    <div class="stat-value">{{.Summary.TotalRequests}}</div>
+                </div>
+                <div class="stat-card" style="border-left-color: #0969da;">
+                    <div class="stat-label">整体缓存命中率</div>
+                    <div class="stat-value {{hitRateClass .Summary.OverallHitRate}}">{{.Summary.OverallHitRateStr}}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">会话数</div>
+                    <div class="stat-value">{{.Summary.SessionCount}}</div>
+                </div>
+            </div>
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #d0d7de;">
+                <h3 style="font-size: 16px; margin-bottom: 12px; color: #24292f;">Token 使用详情</h3>
+                <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+                    <div class="stat-card" style="border-left-color: #57606a;">
+                        <div class="stat-label">总输入 Tokens</div>
+                        <div class="stat-value" style="font-size: 20px;">{{.Summary.TotalInputTokens}}</div>
+                    </div>
+                    <div class="stat-card" style="border-left-color: #9a6700;">
+                        <div class="stat-label">Cache Write</div>
+                        <div class="stat-value" style="font-size: 20px;">{{.Summary.TotalCacheWriteTokens}}</div>
+                    </div>
+                    <div class="stat-card" style="border-left-color: #1a7f37;">
+                        <div class="stat-label">Cache Read</div>
+                        <div class="stat-value" style="font-size: 20px;">{{.Summary.TotalCacheReadTokens}}</div>
+                    </div>
+                    <div class="stat-card" style="border-left-color: #0969da;">
+                        <div class="stat-label">总计</div>
+                        <div class="stat-value" style="font-size: 20px;">{{add (add .Summary.TotalInputTokens .Summary.TotalCacheWriteTokens) .Summary.TotalCacheReadTokens}}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="request-list">
+            {{range $i, $req := .Requests}}
+            <div class="request-item" onclick="toggleDiff({{$i}})">
+                <div class="request-header">
+                    <div class="request-time">{{formatTime $req.Timestamp}}</div>
+                    <div class="request-hitrate {{if $req.CacheStats}}{{hitRateClass $req.CacheStats.HitRate}}{{else}}hitrate-low{{end}}">
+                        {{if $req.CacheStats}}{{$req.CacheStats.HitRatePercent}}{{else}}N/A{{end}}
+                    </div>
+                    <div class="request-messages">
+                        {{$req.MessageCount}} msgs
+                        {{if $req.System}}
+                            / {{len $req.System}} sys
+                        {{end}}
+                    </div>
+                    <div class="request-changes">
+                        {{$diff := index $.Diffs $i}}
+                        <span class="change-summary">
+                            {{if eq $i 0}}
+                                初始内容
+                            {{else}}
+                                {{formatChangeSummary $diff.AddedCount $diff.RemovedCount $diff.ModifiedCount}}
+                            {{end}}
+                            {{if or (gt $diff.SystemAddedCount 0) (gt $diff.SystemRemovedCount 0) (gt $diff.SystemModifiedCount 0)}}
+                                | System: {{formatChangeSummary $diff.SystemAddedCount $diff.SystemRemovedCount $diff.SystemModifiedCount}}
+                            {{end}}
+                        </span>
+                        {{if or (gt $diff.AddedCount 0) (gt $diff.RemovedCount 0) (gt $diff.ModifiedCount 0) (gt $diff.SystemAddedCount 0) (gt $diff.SystemRemovedCount 0) (gt $diff.SystemModifiedCount 0)}}
+                            <div class="change-details">
+                                {{if gt $diff.AddedCount 0}}
+                                    <span class="change-added" title="Added: {{formatRoleList $diff.AddedRoles}} at {{formatIndexList $diff.AddedIndices}}">
+                                        +{{$diff.AddedCount}} msg ({{formatIndexList $diff.AddedIndices}})
+                                    </span>
+                                {{end}}
+                                {{if gt $diff.RemovedCount 0}}
+                                    <span class="change-removed" title="Removed: {{formatRoleList $diff.RemovedRoles}} at {{formatIndexList $diff.RemovedIndices}}">
+                                        -{{$diff.RemovedCount}} msg ({{formatIndexList $diff.RemovedIndices}})
+                                    </span>
+                                {{end}}
+                                {{if gt $diff.ModifiedCount 0}}
+                                    <span class="change-modified" title="Modified: {{formatRoleList $diff.ModifiedRoles}} at {{formatIndexList $diff.ModifiedIndices}}">
+                                        ~{{$diff.ModifiedCount}} msg ({{formatIndexList $diff.ModifiedIndices}})
+                                    </span>
+                                {{end}}
+                                {{if gt $diff.SystemAddedCount 0}}
+                                    <span class="change-added" title="System blocks added">
+                                        +{{$diff.SystemAddedCount}} sys
+                                    </span>
+                                {{end}}
+                                {{if gt $diff.SystemRemovedCount 0}}
+                                    <span class="change-removed" title="System blocks removed">
+                                        -{{$diff.SystemRemovedCount}} sys
+                                    </span>
+                                {{end}}
+                                {{if gt $diff.SystemModifiedCount 0}}
+                                    <span class="change-modified" title="System blocks modified">
+                                        ~{{$diff.SystemModifiedCount}} sys
+                                    </span>
+                                {{end}}
+                            </div>
+                        {{end}}
+                    </div>
+                </div>
+                <div class="diff-view" id="diff-{{$i}}">
+                    <div class="diff-toolbar">
+                        <span class="diff-toolbar-title">
+                            {{if eq $i 0}}
+                                空 vs Request {{$i}}
+                            {{else}}
+                                Request {{sub $i 1}} vs Request {{$i}}
+                            {{end}}
+                        </span>
+                        {{if gt $i 0}}
+                            <a href="#" class="export-diff-btn" onclick="exportDiff(event, {{$.SessionID}}, {{sub $i 1}}, {{$i}})">📥 导出此对比</a>
+                        {{end}}
+                    </div>
+                    {{$diff := index $.Diffs $i}}
+                    {{if or $diff.MessageDiffs $diff.SystemDiffs}}
+                        <div class="diff-container">
+                            <div class="diff-column">
+                                <div class="diff-title">
+                                    {{if eq $i 0}}
+                                        空
+                                    {{else}}
+                                        请求 {{sub $i 1}} ({{formatTime $diff.PrevRequest.Timestamp}})
+                                    {{end}}
+                                </div>
+                                <div class="diff-content">
+                                    {{if eq $i 0}}
+                                        <div style="padding: 20px; text-align: center; color: #57606a;">空请求（所有内容为新增）</div>
+                                    {{else}}
+                                        {{/* System Diffs */}}
+                                        {{range $diff.SystemDiffs}}
+                                            {{if or (eq .Status "removed") (eq .Status "modified")}}
+                                                <div class="message-item {{if eq .Status "removed"}}message-removed{{else}}message-modified{{end}}">
+                                                    <div class="message-header">
+                                                        <div class="message-role">
+                                                            SYSTEM
+                                                            {{if eq .Status "modified"}}(modified){{end}}
+                                                        </div>
+                                                        <div>
+                                                            {{if .PrevBlock.CacheControl}}<span class="cache-badge">📌 {{.PrevBlock.CacheControl}}</span>{{end}}
+                                                            <span class="message-hash">hash: {{.PrevBlock.ContentHash}}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="message-body">
+                                                        {{range .Diffs}}
+                                                            {{if eq .Type "equal"}}<div class="diff-line equal">{{.Text}}</div>{{end}}
+                                                            {{if eq .Type "delete"}}<div class="diff-line delete">{{.Text}}</div>{{end}}
+                                                        {{end}}
+                                                    </div>
+                                                </div>
+                                            {{end}}
+                                        {{end}}
+                                        {{/* Message Diffs */}}
+                                        {{range $diff.MessageDiffs}}
+                                            {{if or (eq .Status "removed") (eq .Status "modified")}}
+                                                <div class="message-item {{if eq .Status "removed"}}message-removed{{else}}message-modified{{end}}">
+                                                    <div class="message-header">
+                                                        <div class="message-role">
+                                                            {{.PrevMessage.Role}}
+                                                            {{if eq .Status "modified"}}(modified){{end}}
+                                                        </div>
+                                                        <div>
+                                                            {{if .PrevMessage.CacheControl}}<span class="cache-badge">📌 {{.PrevMessage.CacheControl}}</span>{{end}}
+                                                            <span class="message-hash">hash: {{.PrevMessage.ContentHash}}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="message-body">
+                                                        {{range .Diffs}}
+                                                            {{if eq .Type "equal"}}<div class="diff-line equal">{{.Text}}</div>{{end}}
+                                                            {{if eq .Type "delete"}}<div class="diff-line delete">{{.Text}}</div>{{end}}
+                                                        {{end}}
+                                                    </div>
+                                                </div>
+                                            {{end}}
+                                        {{end}}
+                                    {{end}}
+                                </div>
+                            </div>
+                                <div class="diff-column">
+                                    <div class="diff-title">请求 {{$i}} ({{formatTime $diff.CurrRequest.Timestamp}})</div>
+                                    <div class="diff-content">
+                                        {{/* System Diffs */}}
+                                        {{range $diff.SystemDiffs}}
+                                            {{if or (eq .Status "added") (eq .Status "modified")}}
+                                                <div class="message-item {{if eq .Status "added"}}message-added{{else}}message-modified{{end}}">
+                                                    <div class="message-header">
+                                                        <div class="message-role">
+                                                            SYSTEM
+                                                            {{if eq .Status "modified"}}(modified){{end}}
+                                                        </div>
+                                                        <div>
+                                                            {{if .CurrBlock.CacheControl}}<span class="cache-badge">📌 {{.CurrBlock.CacheControl}}</span>{{end}}
+                                                            <span class="message-hash">hash: {{.CurrBlock.ContentHash}}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="message-body">
+                                                        {{range .Diffs}}
+                                                            {{if eq .Type "equal"}}<div class="diff-line equal">{{.Text}}</div>{{end}}
+                                                            {{if eq .Type "insert"}}<div class="diff-line insert">{{.Text}}</div>{{end}}
+                                                        {{end}}
+                                                    </div>
+                                                </div>
+                                            {{else if eq .Status "unchanged"}}
+                                                <div class="message-item message-unchanged">
+                                                    <div class="message-header">
+                                                        <div class="message-role">SYSTEM</div>
+                                                        <div>
+                                                            {{if .CurrBlock.CacheControl}}<span class="cache-badge">📌 {{.CurrBlock.CacheControl}}</span>{{end}}
+                                                            <span class="message-hash">hash: {{.CurrBlock.ContentHash}}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            {{end}}
+                                        {{end}}
+                                        {{/* Message Diffs */}}
+                                        {{range $diff.MessageDiffs}}
+                                            {{if or (eq .Status "added") (eq .Status "modified")}}
+                                                <div class="message-item {{if eq .Status "added"}}message-added{{else}}message-modified{{end}}">
+                                                    <div class="message-header">
+                                                        <div class="message-role">
+                                                            {{.CurrMessage.Role}}
+                                                            {{if eq .Status "modified"}}(modified){{end}}
+                                                        </div>
+                                                        <div>
+                                                            {{if .CurrMessage.CacheControl}}<span class="cache-badge">📌 {{.CurrMessage.CacheControl}}</span>{{end}}
+                                                            <span class="message-hash">hash: {{.CurrMessage.ContentHash}}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div class="message-body">
+                                                        {{range .Diffs}}
+                                                            {{if eq .Type "equal"}}<div class="diff-line equal">{{.Text}}</div>{{end}}
+                                                            {{if eq .Type "insert"}}<div class="diff-line insert">{{.Text}}</div>{{end}}
+                                                        {{end}}
+                                                    </div>
+                                                </div>
+                                            {{else if eq .Status "unchanged"}}
+                                                <div class="message-item message-unchanged">
+                                                    <div class="message-header">
+                                                        <div class="message-role">{{.CurrMessage.Role}}</div>
+                                                        <div>
+                                                            {{if .CurrMessage.CacheControl}}<span class="cache-badge">📌 {{.CurrMessage.CacheControl}}</span>{{end}}
+                                                            <span class="message-hash">hash: {{.CurrMessage.ContentHash}}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            {{end}}
+                                        {{end}}
+                                    </div>
+                                </div>
+                            </div>
+                        {{else}}
+                            <div style="padding: 20px; text-align: center; color: #57606a;">无差异</div>
+                        {{end}}
+                </div>
+            </div>
+            {{end}}
+        </div>
+    </div>
+
+    <script>
+        function toggleDiff(index) {
+            const diffView = document.getElementById('diff-' + index);
+            diffView.classList.toggle('active');
+        }
+
+        function exportAll(event, sessionId) {
+            event.preventDefault();
+
+            // Get log paths from localStorage
+            const savedPaths = localStorage.getItem('logPaths');
+            if (!savedPaths) {
+                alert('未找到日志文件路径，请先在配置页面添加');
+                return;
+            }
+
+            const paths = JSON.parse(savedPaths);
+            if (paths.length === 0) {
+                alert('日志文件路径为空，请先在配置页面添加');
+                return;
+            }
+
+            // Build URL with log paths
+            const params = new URLSearchParams();
+            paths.forEach(path => params.append('log_paths[]', path));
+
+            const url = `/export/${sessionId}?${params.toString()}`;
+            window.location.href = url;
+        }
+
+        function exportDiff(event, sessionId, fromIndex, toIndex) {
+            event.preventDefault();
+
+            // Get log paths from localStorage
+            const savedPaths = localStorage.getItem('logPaths');
+            if (!savedPaths) {
+                alert('未找到日志文件路径，请先在配置页面添加');
+                return;
+            }
+
+            const paths = JSON.parse(savedPaths);
+            if (paths.length === 0) {
+                alert('日志文件路径为空，请先在配置页面添加');
+                return;
+            }
+
+            // Build URL with log paths
+            const params = new URLSearchParams();
+            params.append('from', fromIndex);
+            params.append('to', toIndex);
+            paths.forEach(path => params.append('log_paths[]', path));
+
+            const url = `/export/${sessionId}?${params.toString()}`;
+            window.location.href = url;
+        }
+    </script>
+</body>
+</html>

@@ -1893,7 +1893,7 @@ func TestTopicBroker_GapScenario(t *testing.T) {
 	}
 
 	// Verify: HistoryStore has 2 publications (offset 1 and 3), offset 2 is a gap
-	pubs, err := historyStore.Query(context.Background(), "ch-1", 0, 0)
+	pubs, err := historyStore.Query(context.Background(), "ch-1", 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -1969,7 +1969,7 @@ func TestTopicBroker_PushFailureAfterPersist(t *testing.T) {
 	}
 
 	// Verify: Data IS persisted in HistoryStore despite push failure
-	pubs, err := historyStore.Query(context.Background(), "ch-1", 0, 0)
+	pubs, err := historyStore.Query(context.Background(), "ch-1", 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -1982,7 +1982,7 @@ func TestTopicBroker_PushFailureAfterPersist(t *testing.T) {
 
 	// Verify: Client can still recover via HistoryStore (DB pull)
 	// even though real-time push failed
-	recoveredPubs, err := historyStore.Query(context.Background(), "ch-1", 0, 0)
+	recoveredPubs, err := historyStore.Query(context.Background(), "ch-1", 0, 0, 0)
 	if err != nil {
 		t.Fatalf("Recovery query: %v", err)
 	}
@@ -2106,7 +2106,7 @@ func TestTopicBroker_PublishEndToEnd(t *testing.T) {
 	}
 
 	// Verify: Query with Since filter works
-	pubs2, err := historyStore.Query(context.Background(), "ch-1", 1, 0)
+	pubs2, err := historyStore.Query(context.Background(), "ch-1", 1, 0, 0)
 	if err != nil {
 		t.Fatalf("Query since 1: %v", err)
 	}
@@ -2130,7 +2130,7 @@ func newTestHistoryStore() *testHistoryStore {
 	}
 }
 
-func (s *testHistoryStore) Query(_ context.Context, channel string, sinceOffset uint32, _ uint32) ([]*centrifuge.Publication, error) {
+func (s *testHistoryStore) Query(_ context.Context, channel string, sinceOffset uint32, _ uint32, _ int) ([]*centrifuge.Publication, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	pubs := s.data[channel]

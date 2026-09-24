@@ -30,6 +30,7 @@ import (
 	"go.uber.org/zap"
 
 	pkglogger "github.com/rtc-agent/server/pkg/logger"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // TokenUsage represents LLM API token usage extracted from a response.
@@ -130,6 +131,10 @@ func (t *observabilityTransport) RoundTrip(req *http.Request) (*http.Response, e
 				zap.String("host", req.URL.Host),
 				zap.Time("time", start),
 			}
+			// Add session ID from context if available
+			if sessionID := turnagent.SessionIDFromContext(req.Context()); sessionID != "" {
+				reqFields = append(reqFields, zap.String("session_id", sessionID))
+			}
 			reqFields = append(reqFields, zap.Any("request_headers", redactHeaders(req.Header)))
 			if len(reqBodyBytes) > 0 {
 				reqFields = append(reqFields, zap.String("request_body", compactJSON(reqBodyBytes)))
@@ -177,6 +182,10 @@ func (t *observabilityTransport) RoundTrip(req *http.Request) (*http.Response, e
 					zap.Any("response_headers", resp.Header),
 					zap.Bool("stream", true),
 				}
+				// Add session ID from context if available
+				if sessionID := turnagent.SessionIDFromContext(req.Context()); sessionID != "" {
+					respFields = append(respFields, zap.String("session_id", sessionID))
+				}
 				l.Debug("llm.http.response (streaming)", respFields...)
 			}
 		}
@@ -211,6 +220,10 @@ func (t *observabilityTransport) RoundTrip(req *http.Request) (*http.Response, e
 					zap.Int("status_code", resp.StatusCode),
 					zap.Duration("elapsed", elapsed),
 					zap.Any("response_headers", resp.Header),
+				}
+				// Add session ID from context if available
+				if sessionID := turnagent.SessionIDFromContext(req.Context()); sessionID != "" {
+					respFields = append(respFields, zap.String("session_id", sessionID))
 				}
 				if len(respBodyBytes) > 0 {
 					respFields = append(respFields, zap.String("response_body", compactJSON(respBodyBytes)))
@@ -301,14 +314,19 @@ func (orc *observabilityReadCloser) Read(p []byte) (int, error) {
 		if orc.payloadLog && orc.buf.Len() > 0 {
 			l := pkglogger.LLMPayload()
 			if l != nil {
-				l.Info("llm.http.response (stream complete)",
+				fields := []zap.Field{
 					zap.String("event", "llm.http.response"),
 					zap.String("url", orc.url),
 					zap.Bool("stream", true),
 					zap.Bool("stream_complete", true),
 					zap.String("response_body", compactJSON(orc.buf.Bytes())),
 					zap.Int("total_bytes", orc.buf.Len()),
-				)
+				}
+				// Add session ID from context if available
+				if sessionID := turnagent.SessionIDFromContext(orc.req.Context()); sessionID != "" {
+					fields = append(fields, zap.String("session_id", sessionID))
+				}
+				l.Info("llm.http.response (stream complete)", fields...)
 			}
 		}
 	}

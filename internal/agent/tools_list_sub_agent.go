@@ -10,12 +10,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // listSubAgentTool lists all running (active) sub agent sessions
 // that are descendants of the current session tree.
 //
-// Unlike sub_agent tool, this tool does NOT interrupt the turn.
+// Unlike subAgent tool, this tool does NOT interrupt the turn.
 // It creates two messages (toolcall_input + toolcall_output) and
 // publishes them in a single transaction, then returns the result
 // directly to the LLM.
@@ -27,7 +30,7 @@ type listSubAgentTool struct {
 
 func (t *listSubAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name:        "list_sub_agent",
+		Name:        "listSubAgent",
 		Desc:        listSubAgentDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{}),
 	}, nil
@@ -43,16 +46,27 @@ type listSubAgentItem struct {
 }
 
 func (t *listSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.listSubAgent",
+		trace.WithAttributes(
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.String("turn_id", t.turnID.String()),
+		),
+	)
+	defer span.End()
+
 	// 1. Determine root session ID.
 	rootSessionID := t.session.ID
 	if t.session.RootServerSessionID != uuid.Nil {
 		rootSessionID = t.session.RootServerSessionID
 	}
+	span.SetAttributes(attribute.String("root_session_id", rootSessionID.String()))
 
 	// 2. Query all active descendant sessions.
 	descendants, err := t.helpers.deps.SessionRepo.ListByRoot(ctx, rootSessionID, string(protocol.SessionStatusActive))
 	if err != nil {
-		return "", fmt.Errorf("list_sub_agent: list by root: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "list_by_root_failed")
+		return "", fmt.Errorf("listSubAgent: list by root: %w", err)
 	}
 
 	// 3. Build result JSON.
@@ -68,7 +82,9 @@ func (t *listSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	}
 	resultJSON, err := mustMarshalJSON(items)
 	if err != nil {
-		return "", fmt.Errorf("list_sub_agent: marshal result: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal_failed")
+		return "", fmt.Errorf("listSubAgent: marshal result: %w", err)
 	}
 
 	// 4. Publish toolcall_input + toolcall_output messages.
@@ -77,13 +93,16 @@ func (t *listSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		SessionID:       t.session.ID,
 		OwnerRefID:      t.session.OwnerRefID,
 		TurnID:          t.turnID,
-		ToolName:        "list_sub_agent",
+		ToolName:        "listSubAgent",
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
-		return "", fmt.Errorf("list_sub_agent: publish messages: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
+		return "", fmt.Errorf("listSubAgent: publish messages: %w", err)
 	}
 
+	span.SetAttributes(attribute.Int("count", len(items)))
 	t.helpers.logger.Info(ctx, "listSubAgent.completed", map[string]any{
 		"session_id":   t.session.ID.String(),
 		"root_session": rootSessionID.String(),

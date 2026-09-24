@@ -11,6 +11,8 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // sessionRenewalInterval is how often the session lock is renewed.
@@ -230,6 +232,8 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 	// Use context.Background() for cleanup so that a cancelled parent context
 	// does not prevent critical cleanup operations (ReleaseSession, requeue).
 	// Use mgr.Wait() (not mgr.loop.Wait()) so the sync.Once protection applies.
+	// Preserve trace context from the original ctx for logging correlation.
+	originalSpan := trace.SpanFromContext(ctx)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -243,7 +247,12 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 		mgr.Wait()
 		// Use a timeout context to prevent the goroutine from hanging
 		// indefinitely if Redis is unresponsive.
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Preserve trace context from the original span for logging.
+		cleanupBaseCtx := context.Background()
+		if originalSpan != nil && originalSpan.SpanContext().IsValid() {
+			cleanupBaseCtx = trace.ContextWithRemoteSpanContext(cleanupBaseCtx, originalSpan.SpanContext())
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(cleanupBaseCtx, 30*time.Second)
 		defer cleanupCancel()
 		mgr.Cleanup(cleanupCtx)
 	}()
@@ -314,10 +323,21 @@ func (mgr *SessionTurnManager) Cleanup(ctx context.Context) {
 func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 	defer close(mgr.done)
 
+	cleanupCtx, cleanupSpan := mgr.startSpanIfEnabled(ctx, "session_cleanup",
+		trace.WithAttributes(
+			attribute.String("session.id", mgr.sessionID),
+			attribute.String("turn.id", mgr.turnID),
+			attribute.Bool("lock.lost", mgr.lockLost.Load()),
+		),
+	)
+	defer cleanupSpan.End()
+
 	// Step 1: Complete all pending work in the tracker (unblock waiting Process calls).
+	cleanupSpan.AddEvent("complete_all_work")
 	mgr.tracker.CompleteAll()
 
 	// Step 2: Stop lock renewal.
+	cleanupSpan.AddEvent("stop_lock_renewal")
 	mgr.renewCancelMu.Lock()
 	if mgr.renewCancel != nil {
 		mgr.renewCancel()
@@ -340,19 +360,32 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 	// infinite loop where the same manager claims and requeues the same work
 	// while still holding the lock.
 	if mgr.lockLost.Load() {
-		mgr.log(ctx, LogLevelInfo, "session_manager.skip_release_lock_lost", map[string]any{
+		mgr.log(cleanupCtx, LogLevelInfo, "session_manager.skip_release_lock_lost", map[string]any{
 			"session_id": mgr.sessionID,
 			"message":    "lock was lost to another worker, skipping ReleaseSession to avoid deleting their lock",
 		})
+		cleanupSpan.SetAttributes(attribute.String("lock.release", "skipped"))
 	} else {
 		// Use a timeout context to prevent cleanup from blocking
 		// indefinitely if Redis is unresponsive.
+		// Pass worker_id and credential for atomic ownership check.
+		cleanupSpan.AddEvent("release_session")
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer releaseCancel()
-		if err := mgr.queue.ReleaseSession(releaseCtx, mgr.sessionID); err != nil {
-			mgr.log(ctx, LogLevelWarn, "session_manager.release_session_failed", map[string]any{
+		released, releaseErr := mgr.queue.ReleaseSession(releaseCtx, mgr.sessionID, mgr.workerID, mgr.getCredential())
+		if releaseErr != nil {
+			cleanupSpan.RecordError(releaseErr)
+			mgr.log(cleanupCtx, LogLevelWarn, "session_manager.release_session_failed", map[string]any{
 				"session_id": mgr.sessionID,
-				"error":      err.Error(),
+				"error":      releaseErr.Error(),
+			})
+		} else if !released {
+			// Lock was already lost to another worker between the lockLost check
+			// and the ReleaseSession call (TOCTOU window). This is expected in
+			// rare race conditions — the other worker's lock is preserved.
+			mgr.log(cleanupCtx, LogLevelInfo, "session_manager.release_session_skipped", map[string]any{
+				"session_id": mgr.sessionID,
+				"reason":     "lock ownership changed during cleanup",
 			})
 		}
 	}
@@ -371,6 +404,7 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 		// Use a detached context for notification: the caller's ctx may be
 		// cancelled (which is what triggered cleanup). Redis operations need
 		// a live context to succeed. Mirrors the ReleaseSession pattern above.
+		cleanupSpan.AddEvent("notify_pending_work")
 		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer notifyCancel() // defer ensures cancel runs even if notifyPendingWork panics
 		mgr.notifyPendingWork(notifyCtx)
@@ -381,7 +415,7 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 		mgr.registry.Remove(mgr.sessionID)
 	}
 
-	mgr.log(ctx, LogLevelInfo, "session_manager.cleanup_done", map[string]any{
+	mgr.log(cleanupCtx, LogLevelInfo, "session_manager.cleanup_done", map[string]any{
 		"session_id": mgr.sessionID,
 		"turn_id":    mgr.turnID,
 	})
@@ -391,31 +425,43 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 // publishes a session:new notification to wake up idle workers.
 // Called after ReleaseSession so that the notified workers can claim the lock.
 func (mgr *SessionTurnManager) notifyPendingWork(ctx context.Context) {
+	notifyCtx, notifySpan := mgr.startSpanIfEnabled(ctx, "notify_pending_work",
+		trace.WithAttributes(
+			attribute.String("session.id", mgr.sessionID),
+		),
+	)
+	defer notifySpan.End()
+
 	// Use the exported key accessor to avoid duplicating the Redis key format.
 	queueKey := rtcqueue.SessionQueueKey(mgr.sessionID)
-	count, err := mgr.queue.Client().ZCard(ctx, queueKey).Result()
+	count, err := mgr.queue.Client().ZCard(notifyCtx, queueKey).Result()
 	if err != nil {
 		// Log Redis failures so operators can detect connectivity issues.
 		// Without this, silent failures leave pending work unnotified with no trace.
-		mgr.log(ctx, LogLevelWarn, "session_manager.notify_pending_work_zcard_failed", map[string]any{
+		notifySpan.RecordError(err)
+		mgr.log(notifyCtx, LogLevelWarn, "session_manager.notify_pending_work_zcard_failed", map[string]any{
 			"session_id": mgr.sessionID,
 			"error":      err.Error(),
 		})
 		return
 	}
+	notifySpan.SetAttributes(attribute.Int("pending.count", int(count)))
 	if count == 0 {
+		notifySpan.SetAttributes(attribute.String("notify.status", "no_pending_work"))
 		return
 	}
 	// Use the exported channel constant to avoid duplicating the channel name.
-	if pubErr := mgr.queue.Client().Publish(ctx, rtcqueue.ChannelSessionNew, mgr.sessionID).Err(); pubErr != nil {
-		mgr.log(ctx, LogLevelWarn, "session_manager.notify_pending_work_publish_failed", map[string]any{
+	if pubErr := mgr.queue.Client().Publish(notifyCtx, rtcqueue.ChannelSessionNew, mgr.sessionID).Err(); pubErr != nil {
+		notifySpan.RecordError(pubErr)
+		mgr.log(notifyCtx, LogLevelWarn, "session_manager.notify_pending_work_publish_failed", map[string]any{
 			"session_id":    mgr.sessionID,
 			"pending_count": count,
 			"error":         pubErr.Error(),
 		})
 		return
 	}
-	mgr.log(ctx, LogLevelInfo, "session_manager.notified_pending_work", map[string]any{
+	notifySpan.SetAttributes(attribute.String("notify.status", "success"))
+	mgr.log(notifyCtx, LogLevelInfo, "session_manager.notified_pending_work", map[string]any{
 		"session_id":    mgr.sessionID,
 		"pending_count": count,
 	})

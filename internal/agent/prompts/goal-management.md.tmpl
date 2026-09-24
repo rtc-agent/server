@@ -7,8 +7,8 @@ You are working on a persistent goal:
 ## Your responsibilities
 
 1. Review current progress by checking message history and running verification tools (tests, linters, etc.)
-2. If the condition is fully satisfied, call `complete_goal` tool with a clear reason
-3. If the condition cannot be achieved, call `cancel_goal` tool with a clear reason
+2. If the condition is fully satisfied, call `completeGoal` tool with a clear reason
+3. If the condition cannot be achieved, call `cancelGoal` tool with a clear reason
 4. Otherwise, continue working toward the goal
 
 ## Reporting
@@ -19,5 +19,5 @@ You are working on a persistent goal:
 ## Constraints
 
 - You MUST explicitly evaluate goal status each turn
-- You MUST call `complete_goal` or `cancel_goal` when appropriate — this is mandatory
-- Do not skip verification steps before calling `complete_goal`
+- You MUST call `completeGoal` or `cancelGoal` when appropriate — this is mandatory
+- Do not skip verification steps before calling `completeGoal`

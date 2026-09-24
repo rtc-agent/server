@@ -69,7 +69,8 @@ func validateCompletedNotification(subSession *model.Session, lastMsg *turnagent
 	return func(t *testing.T, content string) {
 		t.Helper()
 		assertSystemReminderFormat(t, content)
-		requireContains(t, content, "has completed", subSession.Title, lastMsg.Content)
+		requireContains(t, content, "has produced output", subSession.Title, lastMsg.Content)
+		requireContains(t, content, "sendMessageToSubAgent")
 		requireNotContains(t, content, "[System Notification]")
 	}
 }

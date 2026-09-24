@@ -19,7 +19,7 @@ import (
 // last pub.Offset == latestOffset.
 // When data is cleaned/trimmed causing incomplete history, the client receives
 // gaps and only advances the local offset without business processing.
-func fillGapPublications(sinceOffset uint32, latestOffset uint32, pubs []*centrifuge.Publication) []*centrifuge.Publication {
+func fillGapPublications(ctx context.Context, sinceOffset uint32, latestOffset uint32, pubs []*centrifuge.Publication) []*centrifuge.Publication {
 	latest := uint64(latestOffset)
 	if latest == uint64(sinceOffset) && len(pubs) == 0 {
 		return pubs
@@ -29,7 +29,7 @@ func fillGapPublications(sinceOffset uint32, latestOffset uint32, pubs []*centri
 	for _, p := range pubs {
 		// Generate a gap for each missing offset in [cur, p.Offset-1]
 		for p.Offset > cur {
-			out = append(out, makeGapPublication(uint32(cur)))
+			out = append(out, makeGapPublication(ctx, uint32(cur)))
 			cur++
 		}
 		out = append(out, p)
@@ -39,7 +39,7 @@ func fillGapPublications(sinceOffset uint32, latestOffset uint32, pubs []*centri
 	}
 	// Tail gap: generate a gap for each missing offset in [cur, latest]
 	for cur <= latest {
-		out = append(out, makeGapPublication(uint32(cur)))
+		out = append(out, makeGapPublication(ctx, uint32(cur)))
 		cur++
 	}
 	return out
@@ -47,7 +47,7 @@ func fillGapPublications(sinceOffset uint32, latestOffset uint32, pubs []*centri
 
 // makeGapPublication constructs a gap placeholder publication with offset
 // set to the gap start point.
-func makeGapPublication(from uint32) *centrifuge.Publication {
+func makeGapPublication(ctx context.Context, from uint32) *centrifuge.Publication {
 	type gapPayload struct {
 		Type string                 `json:"type"`
 		Data protocol.UpdateDataGap `json:"data"`
@@ -59,7 +59,7 @@ func makeGapPublication(from uint32) *centrifuge.Publication {
 	if err != nil {
 		// gapPayload only contains string + empty struct, marshal should
 		// theoretically never fail; log for debugging if it does.
-		logger.Error(context.Background(), "makeGapPublication: failed to marshal gap payload", zap.Error(err))
+		logger.Error(ctx, "makeGapPublication: failed to marshal gap payload", zap.Error(err))
 		data = []byte(`{"type":"gap","data":{}}`)
 	}
 	return &centrifuge.Publication{

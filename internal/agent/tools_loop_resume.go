@@ -8,10 +8,13 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ---------------------------------------------------------------------------
-// resume_loop
+// resumeLoop
 // ---------------------------------------------------------------------------
 
 type resumeLoopTool struct {
@@ -30,18 +33,28 @@ type resumeLoopResult struct {
 
 func (t *resumeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name:        "resume_loop",
+		Name:        "resumeLoop",
 		Desc:        resumeLoopDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{}),
 	}, nil
 }
 
 func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.resumeLoop",
+		trace.WithAttributes(
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.String("turn_id", t.turnID.String()),
+		),
+	)
+	defer span.End()
+
 	// Find the paused loop (not active, not terminal).
 	var pausedLoop *model.Loop
 	loops, err := t.helpers.deps.LoopRepo.ListBySession(ctx, t.session.ID, nil, 10)
 	if err != nil {
-		return "", fmt.Errorf("resume_loop: list loops: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "list_failed")
+		return "", fmt.Errorf("resumeLoop: list loops: %w", err)
 	}
 	for _, l := range loops {
 		if l.Status == model.LoopStatusPaused {
@@ -50,30 +63,40 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		}
 	}
 	if pausedLoop == nil {
+		span.SetAttributes(attribute.Bool("not_found", true))
 		return "Error: no paused loop found to resume", nil
 	}
+	span.SetAttributes(attribute.String("loop_id", pausedLoop.ID.String()))
 
 	// Check for existing active loop (only one active loop per session).
 	existingActive, err := t.helpers.deps.LoopRepo.FindActive(ctx, t.session.ID)
 	if err != nil {
-		return "", fmt.Errorf("resume_loop: find active loop: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "find_active_failed")
+		return "", fmt.Errorf("resumeLoop: find active loop: %w", err)
 	}
 	if existingActive != nil {
+		span.SetAttributes(attribute.Bool("conflict_active_loop", true))
 		return fmt.Sprintf("Error: an active loop already exists (id=%s). Complete or cancel it before resuming another.",
 			existingActive.ID.String()), nil
 	}
 
 	// Check for active goal (mutual exclusion).
 	if conflictMsg, err := checkGoalLoopMutualExclusion(ctx, t.helpers.deps, t.session.ID, "loop"); err != nil {
-		return "", fmt.Errorf("resume_loop: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "mutual_exclusion_check_failed")
+		return "", fmt.Errorf("resumeLoop: %w", err)
 	} else if conflictMsg != "" {
+		span.SetAttributes(attribute.Bool("conflict_active_goal", true))
 		return conflictMsg, nil
 	}
 
 	if err := t.helpers.deps.LoopRepo.Update(ctx, pausedLoop.ID, map[string]any{
 		"status": model.LoopStatusActive,
 	}); err != nil {
-		return "", fmt.Errorf("resume_loop: update: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "update_failed")
+		return "", fmt.Errorf("resumeLoop: update: %w", err)
 	}
 
 	result := resumeLoopResult{
@@ -85,7 +108,9 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	}
 	resultJSON, err := mustMarshalJSON(result)
 	if err != nil {
-		return "", fmt.Errorf("resume_loop: marshal result: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal_failed")
+		return "", fmt.Errorf("resumeLoop: marshal result: %w", err)
 	}
 
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
@@ -93,11 +118,13 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		SessionID:       t.session.ID,
 		OwnerRefID:      t.session.OwnerRefID,
 		TurnID:          t.turnID,
-		ToolName:        "resume_loop",
+		ToolName:        "resumeLoop",
 		ArgumentsInJSON: argumentsInJSON,
 		ResultJSON:      resultJSON,
 	}); err != nil {
-		return "", fmt.Errorf("resume_loop: publish messages: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
+		return "", fmt.Errorf("resumeLoop: publish messages: %w", err)
 	}
 
 	t.helpers.logger.Info(ctx, "resumeLoop.completed", map[string]any{

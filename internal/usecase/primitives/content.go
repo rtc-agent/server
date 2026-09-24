@@ -1,6 +1,7 @@
 package primitives
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -198,6 +199,84 @@ func ParseContentDataToolCall(data any) (protocol.ToolCall, error) {
 	return tc, nil
 }
 
+// ParseContentDataToolCallRaw 从原始 ContentData JSON 字符串直接解析 ToolCall，
+// 保留 JSON key 的原始顺序。
+//
+// 与 ParseContentDataToolCall 的区别：
+//   - ParseContentDataToolCall 先解析为 ContentData{Data:interface{}}，
+//     再 marshal/unmarshal，丢失 JSON key 顺序
+//   - ParseContentDataToolCallRaw 直接从原始 JSON 提取 data 字段的原始字节，
+//     然后解析为 ToolCallData（使用 json.RawMessage 保留顺序）
+//
+// 这对 LLM 缓存命中至关重要：工具结果的 JSON key 顺序在不同请求间必须一致。
+func ParseContentDataToolCallRaw(contentDataJSON string) (protocol.ToolCall, error) {
+	// 第一步：提取 data 字段的原始 JSON 字节
+	var envelope struct {
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(contentDataJSON), &envelope); err != nil {
+		return protocol.ToolCall{}, fmt.Errorf("parse content data envelope: %w", err)
+	}
+
+	// 第二步：将 data 解析为 ToolCallData（使用 json.RawMessage 保留 key 顺序）
+	var tcd ToolCallData
+	if err := json.Unmarshal(envelope.Data, &tcd); err != nil {
+		return protocol.ToolCall{}, fmt.Errorf("parse tool call data: %w", err)
+	}
+
+	// 第三步：转换为 protocol.ToolCall
+	return toolCallDataToProtocol(tcd)
+}
+
+// toolCallDataToProtocol 将 ToolCallData（DB 格式）转换为 protocol.ToolCall（应用格式）
+// 保留 JSON key 的原始顺序，对 LLM 缓存命中至关重要。
+func toolCallDataToProtocol(tcd ToolCallData) (protocol.ToolCall, error) {
+	tc := protocol.ToolCall{
+		Id:       tcd.Id,
+		ToolName: tcd.ToolName,
+		Status:   tcd.Status,
+	}
+
+	// Input: json.RawMessage → string
+	if len(tcd.Input) > 0 {
+		// 检查是否是 JSON 字符串（旧格式）还是 JSON 对象（新格式）
+		trimmed := bytes.TrimSpace(tcd.Input)
+		if len(trimmed) > 0 && trimmed[0] == '"' {
+			// 旧格式：JSON 字符串 → unquote
+			var s string
+			if err := json.Unmarshal(trimmed, &s); err != nil {
+				return protocol.ToolCall{}, fmt.Errorf("unmarshal input string: %w", err)
+			}
+			tc.Input = s
+		} else {
+			// 新格式：JSON 对象 → 直接使用原始字节（保留 key 顺序）
+			tc.Input = string(tcd.Input)
+		}
+	}
+
+	// Output: json.RawMessage → *string（保留原始 key 顺序）
+	if len(tcd.Output) > 0 {
+		trimmed := bytes.TrimSpace(tcd.Output)
+		if len(trimmed) > 0 && string(trimmed) != "null" {
+			if trimmed[0] == '"' {
+				// 旧格式：JSON 字符串 → unquote
+				var s string
+				if err := json.Unmarshal(trimmed, &s); err != nil {
+					return protocol.ToolCall{}, fmt.Errorf("unmarshal output string: %w", err)
+				}
+				tc.Output = &s
+			} else {
+				// 新格式：JSON 对象 → 直接使用原始字节（保留 key 顺序）
+				s := string(tcd.Output)
+				tc.Output = &s
+			}
+		}
+	}
+
+	return tc, nil
+}
+
 // toolCallToStorage converts a protocol.ToolCall (string fields) to
 // ToolCallData (json.RawMessage fields) for DB storage.
 //
@@ -226,17 +305,14 @@ func toolCallToStorage(tc protocol.ToolCall) (ToolCallData, error) {
 		}
 	}
 
-	// Output: same transformation.
+	// Output: 保留原始 JSON 字段顺序（对 LLM 缓存命中至关重要）
 	if tc.Output != nil && *tc.Output != "" {
-		var outputObj any
-		if err := json.Unmarshal([]byte(*tc.Output), &outputObj); err != nil {
-			s.Output, _ = json.Marshal(*tc.Output)
+		if json.Valid([]byte(*tc.Output)) {
+			// 合法 JSON，直接使用原始字节，不重新序列化
+			s.Output = json.RawMessage(*tc.Output)
 		} else {
-			var err error
-			s.Output, err = json.Marshal(outputObj)
-			if err != nil {
-				return ToolCallData{}, fmt.Errorf("marshal output: %w", err)
-			}
+			// Fallback: 不是合法 JSON，作为字符串存储
+			s.Output, _ = json.Marshal(*tc.Output)
 		}
 	}
 
@@ -284,6 +360,49 @@ func UserMessageContentData(text string, scenarios []protocol.ScenarioRef) (prot
 		Type: protocol.ContentTypeUserMessage,
 		Data: content,
 	}, nil
+}
+
+// PromptContentData builds a ContentData of prompt type.
+// Used for persisting system-level instructions (e.g., scenarios, goals) as messages.
+func PromptContentData(name, title, prompt string) (protocol.ContentData, error) {
+	return PromptContentDataWithRole(name, title, prompt, "")
+}
+
+// PromptContentDataWithRole builds a ContentData of prompt type with role override.
+// Role controls how the prompt is injected into LLM context:
+// - "" or "system": injected as system message (default)
+// - "user": injected as user message (will be merged with consecutive user messages)
+func PromptContentDataWithRole(name, title, prompt, role string) (protocol.ContentData, error) {
+	content := protocol.PromptContent{
+		Name:   name,
+		Prompt: prompt,
+	}
+	if title != "" {
+		content.Title = &title
+	}
+	if role != "" && role != "system" {
+		r := protocol.PromptContentRole(role)
+		content.Role = &r
+	}
+	return protocol.ContentData{
+		Type: protocol.ContentTypePrompt,
+		Data: content,
+	}, nil
+}
+
+// ParsePromptContent parses a PromptContent from an arbitrary value.
+// The input arrives as map[string]interface{} after JSON deserialization and
+// requires a second conversion pass through JSON round-tripping.
+func ParsePromptContent(data any) (protocol.PromptContent, error) {
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return protocol.PromptContent{}, fmt.Errorf("marshal prompt content: %w", err)
+	}
+	var pc protocol.PromptContent
+	if err := json.Unmarshal(bytes, &pc); err != nil {
+		return protocol.PromptContent{}, fmt.Errorf("unmarshal prompt content: %w", err)
+	}
+	return pc, nil
 }
 
 // ContentDataString extracts ContentData.Data (any) as a string.

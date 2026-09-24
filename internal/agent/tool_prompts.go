@@ -23,6 +23,9 @@ var readDesc string
 //go:embed prompts/tools/write.md
 var writeDesc string
 
+//go:embed prompts/tools/edit.md
+var editDesc string
+
 //go:embed prompts/tools/grep.md
 var grepDesc string
 
@@ -32,68 +35,71 @@ var findDesc string
 //go:embed prompts/tools/script.md
 var scriptDesc string
 
-//go:embed prompts/tools/ask-user.md
+//go:embed prompts/tools/askUser.md
 var askUserDesc string
 
-//go:embed prompts/tools/todo-write.md
+//go:embed prompts/tools/todoWrite.md
 var todoWriteDesc string
 
-//go:embed prompts/tools/sub-agent.md
+//go:embed prompts/tools/subAgent.md
 var subAgentDesc string
 
-//go:embed prompts/tools/list-sub-agent.md
+//go:embed prompts/tools/listSubAgent.md
 var listSubAgentDesc string
 
-//go:embed prompts/tools/get-sub-agent-message.md
+//go:embed prompts/tools/getSubAgentMessage.md
 var getSubAgentMessageDesc string
 
-//go:embed prompts/tools/stop-sub-agent.md
+//go:embed prompts/tools/stopSubAgent.md
 var stopSubAgentDesc string
 
-//go:embed prompts/tools/create-goal.md
+//go:embed prompts/tools/createGoal.md
 var createGoalDesc string
 
-//go:embed prompts/tools/complete-goal.md
+//go:embed prompts/tools/completeGoal.md
 var completeGoalDesc string
 
-//go:embed prompts/tools/cancel-goal.md
+//go:embed prompts/tools/cancelGoal.md
 var cancelGoalDesc string
 
-//go:embed prompts/tools/create-loop.md
+//go:embed prompts/tools/createLoop.md
 var createLoopDesc string
 
-//go:embed prompts/tools/cancel-loop.md
+//go:embed prompts/tools/cancelLoop.md
 var cancelLoopDesc string
 
-//go:embed prompts/tools/complete-loop.md
+//go:embed prompts/tools/completeLoop.md
 var completeLoopDesc string
 
-//go:embed prompts/tools/list-loops.md
+//go:embed prompts/tools/listLoops.md
 var listLoopsDesc string
 
-//go:embed prompts/tools/pause-loop.md
+//go:embed prompts/tools/pauseLoop.md
 var pauseLoopDesc string
 
-//go:embed prompts/tools/resume-loop.md
+//go:embed prompts/tools/resumeLoop.md
 var resumeLoopDesc string
 
-//go:embed prompts/tools/save-session-memory.md
+//go:embed prompts/tools/saveSessionMemory.md
 var saveSessionMemoryDesc string
 
-//go:embed prompts/tools/list-session-memories.md
+//go:embed prompts/tools/listSessionMemories.md
 var listSessionMemoriesDesc string
 
-//go:embed prompts/tools/save-user-memory.md
+//go:embed prompts/tools/saveUserMemory.md
 var saveUserMemoryDesc string
 
-//go:embed prompts/tools/update-user-memory.md
+//go:embed prompts/tools/updateUserMemory.md
 var updateUserMemoryDesc string
 
-//go:embed prompts/tools/delete-user-memory.md
+//go:embed prompts/tools/deleteUserMemory.md
 var deleteUserMemoryDesc string
 
-//go:embed prompts/tools/list-user-memory.md
+//go:embed prompts/tools/listUserMemory.md
 var listUserMemoryDesc string
 
-//go:embed prompts/tools/search-memory.md
+//go:embed prompts/tools/searchMemory.md
 var searchMemoryDesc string
+
+//go:embed prompts/tools/sendMessageToSubAgent.md
+var sendMessageToSubAgentDesc string

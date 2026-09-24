@@ -116,8 +116,8 @@ func (h *helpers) finalizeSummaryStreamOnError(
 // summarization. It constructs a summary user message, preserves system
 // messages from the discarded portion, and appends retained messages.
 //
-// System messages carry dynamic attachments (AgentPrompt, TodoList,
-// SessionMemory, UserMemory) injected by loadMessages. They are meta-
+// System messages carry dynamic attachments (AgentPrompt, SessionMemory,
+// UserMemory) injected by loadMessages. They are meta-
 // instructions, not conversation content, so formatMessagesForCompact
 // skips them when building the summarization prompt. Without explicit
 // preservation, they would be lost after compression. This ensures the

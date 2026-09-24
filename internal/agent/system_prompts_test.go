@@ -16,14 +16,11 @@ func TestBuildDefaultSystemPrompt(t *testing.T) {
 
 	// Verify all key sections are present.
 	required := []string{
-		"capable AI assistant",
-		"MANDATORY FIRST STEP",
-		"AGENT.md",
-		"Workflow after reading AGENT.md",
 		"Doing tasks",
 		"Read before acting",
 		"Verify before claiming completion",
 		"Diagnose before switching",
+		"Don't over-engineer",
 		"Using your tools",
 		"Tool Preference",
 		"Parallel Tool Calls",
@@ -34,7 +31,7 @@ func TestBuildDefaultSystemPrompt(t *testing.T) {
 		"Session Memory",
 		"User Memory",
 		"Todo List",
-		"todo_write",
+		"todoWrite",
 	}
 	for _, substr := range required {
 		if !strings.Contains(prompt, substr) {
@@ -137,41 +134,29 @@ func TestSystemPromptBuilder_Chaining(t *testing.T) {
 	}
 }
 
-func TestDefaultSystemPrompt_MatchesOriginal(t *testing.T) {
-	// Verify the assembled prompt is equivalent to the original monolithic YAML prompt.
-	// This is the backward-compatibility guarantee.
+func TestDefaultSystemPrompt_NewStructure(t *testing.T) {
+	// Verify the system prompt structure after refactoring.
+	// Note: Agent identity/workflow is now in the agent prompt (agent_prompts.go),
+	// not in the system prompt.
 	prompt, err := BuildDefaultSystemPrompt()
 	if err != nil {
 		t.Fatalf("BuildDefaultSystemPrompt() error: %v", err)
 	}
 
-	// Key phrases from the prompt that must be preserved.
-	// These span all sections including the new doing-tasks and using-your-tools sections.
-	originalPhrases := []string{
-		"capable AI assistant",
-		"When you receive ANY message from the user, you MUST immediately call the read tool to read AGENT.md",
-		"functions/INDEX.md",
-		"scenarios/INDEX.md",
-		"scripts/ (optional)",
-		"NEVER pretend to execute a task",
-		"If a tool call fails due to parameter errors",
+	// Key phrases from the system prompt sections.
+	requiredPhrases := []string{
+		"Doing tasks",
 		"Read before acting",
 		"Verify before claiming completion",
-		"Diagnose before switching",
-		"Don't over-engineer",
 		"Tool Preference",
-		"Parallel Tool Calls",
-		"Detect the language used by the user",
-		"ALWAYS use tools to complete tasks",
-		"save_session_memory tool",
-		"save_user_memory tool",
-		"search_memory",
-		"todo_write to update the entire todo list",
-		"in_progress status at all times",
+		"CRITICAL RULES",
+		"Language:",
+		"Memory System:",
+		"Todo List",
 	}
-	for _, phrase := range originalPhrases {
+	for _, phrase := range requiredPhrases {
 		if !strings.Contains(prompt, phrase) {
-			t.Errorf("backward compatibility broken: missing original phrase %q", phrase)
+			t.Errorf("system prompt structure broken: missing phrase %q", phrase)
 		}
 	}
 }

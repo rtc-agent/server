@@ -42,24 +42,24 @@ func TestAggressiveMicrocompact_EmptyMessages(t *testing.T) {
 }
 
 func TestAggressiveMicrocompact_NoCompactableTools(t *testing.T) {
-	// ask_user is NOT in CompactableTools, so its result should not be cleared
+	// askUser is NOT in CompactableTools, so its result should not be cleared
 	messages := []*turnagent.Message{
 		{Role: turnagent.RoleUser, Content: "hello"},
 		{
 			Role:      turnagent.RoleAssistant,
 			Content:   "",
-			ToolCalls: []turnagent.ToolCall{{ID: "c1", Name: "ask_user"}},
+			ToolCalls: []turnagent.ToolCall{{ID: "c1", Name: "askUser"}},
 		},
-		{Role: turnagent.RoleTool, Content: "user answer", ToolName: "ask_user", ToolCallID: "c1"},
+		{Role: turnagent.RoleTool, Content: "user answer", ToolName: "askUser", ToolCallID: "c1"},
 	}
 
 	result := aggressiveMicrocompact(messages, 0)
 	if len(result) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(result))
 	}
-	// ask_user tool result should NOT be cleared
+	// askUser tool result should NOT be cleared
 	if result[2].Content != "user answer" {
-		t.Errorf("ask_user tool result should not be cleared, got %q", result[2].Content)
+		t.Errorf("askUser tool result should not be cleared, got %q", result[2].Content)
 	}
 }
 
@@ -159,8 +159,8 @@ func TestAggressiveMicrocompact_MixedCompactableAndNonCompactable(t *testing.T) 
 	messages := []*turnagent.Message{
 		{Role: turnagent.RoleAssistant, ToolCalls: []turnagent.ToolCall{{ID: "c1", Name: "read"}}},
 		{Role: turnagent.RoleTool, Content: "read result", ToolName: "read", ToolCallID: "c1"},
-		{Role: turnagent.RoleAssistant, ToolCalls: []turnagent.ToolCall{{ID: "c2", Name: "ask_user"}}},
-		{Role: turnagent.RoleTool, Content: "ask result", ToolName: "ask_user", ToolCallID: "c2"},
+		{Role: turnagent.RoleAssistant, ToolCalls: []turnagent.ToolCall{{ID: "c2", Name: "askUser"}}},
+		{Role: turnagent.RoleTool, Content: "ask result", ToolName: "askUser", ToolCallID: "c2"},
 		{Role: turnagent.RoleAssistant, ToolCalls: []turnagent.ToolCall{{ID: "c3", Name: "write"}}},
 		{Role: turnagent.RoleTool, Content: "write result", ToolName: "write", ToolCallID: "c3"},
 		{Role: turnagent.RoleAssistant, ToolCalls: []turnagent.ToolCall{{ID: "c4", Name: "script"}}},
@@ -169,12 +169,12 @@ func TestAggressiveMicrocompact_MixedCompactableAndNonCompactable(t *testing.T) 
 
 	result := aggressiveMicrocompact(messages, 0)
 
-	// read (c1), write (c3), script (c4) should be cleared; ask_user (c2) preserved
+	// read (c1), write (c3), script (c4) should be cleared; askUser (c2) preserved
 	if result[1].Content != MCClearedMessage {
 		t.Errorf("read result should be cleared, got %q", result[1].Content)
 	}
 	if result[3].Content != "ask result" {
-		t.Errorf("ask_user result should be preserved, got %q", result[3].Content)
+		t.Errorf("askUser result should be preserved, got %q", result[3].Content)
 	}
 	if result[5].Content != MCClearedMessage {
 		t.Errorf("write result should be cleared, got %q", result[5].Content)

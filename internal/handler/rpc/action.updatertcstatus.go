@@ -13,21 +13,37 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
 // UpdateRtcStatus updates RTC execution status (executing/failed/timeout/rejected).
 func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcStatusRequest) (*protocol.UpdateRtcStatusResponse, error) {
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.updateRtcStatus",
+		trace.WithAttributes(
+			attribute.String("rtc.id", req.RtcId),
+			attribute.String("rtc.status", string(req.Status)),
+		),
+	)
+	defer span.End()
+
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
+		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
 	creator := usecase.UserCreator{UserID: userID}
 
 	rtcUUID, apiErr := parseUUID(req.RtcId, "rtc_id")
 	if apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
 		return nil, apiErr
 	}
+
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 
 	logger.Info(ctx, "[UpdateRtcStatus]",
 		zap.String("user", userID.String()),
@@ -40,6 +56,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
 		// valid
 	default:
+		span.SetStatus(codes.Error, "rtc.invalid_status")
 		return nil, &APIError{
 			Code:    "rtc.invalid_status",
 			Message: fmt.Sprintf("invalid target status: %s", req.Status),
@@ -50,8 +67,11 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 	rtc, err := h.deps.Deps.RtcRepo.GetByID(ctx, rtcUUID)
 	if err != nil {
 		if repo.IsNotFound(err) {
+			span.SetStatus(codes.Error, "rtc.not_found")
 			return nil, &APIError{Code: "rtc.not_found", Message: fmt.Sprintf("rtc %s not found", req.RtcId)}
 		}
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		return nil, h.internalError(ctx, "rtc.error", "internal error", err)
 	}
 
@@ -64,6 +84,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 				Result: protocol.UpdateRtcStatusResult{Success: true},
 			}, nil
 		}
+		span.SetStatus(codes.Error, "rtc.invalid_state")
 		return nil, &APIError{
 			Code:    "rtc.invalid_state",
 			Message: fmt.Sprintf("rtc %s is %s, cannot update to %s", req.RtcId, rtc.Status, req.Status),
@@ -72,8 +93,11 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 
 	// Ownership check: verify user permissions via RTC's sessionID.
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, rtc.SessionID, creator); err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return nil, h.ownershipError(ctx, err)
 	}
+
+	span.SetAttributes(attribute.String("session.id", rtc.SessionID.String()))
 
 	// Load session BEFORE the transaction for event publishing.
 	// Event publishing is best-effort — the OwnerRefID (used for routing)
@@ -101,6 +125,8 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[UpdateRtcStatus] push failed after commit (data safe)", zap.Error(err))
 		} else {
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 			return nil, h.internalError(ctx, "rtc.error", "internal error", err)
 		}
 	}

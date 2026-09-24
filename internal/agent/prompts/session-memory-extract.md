@@ -48,7 +48,7 @@ Focus on these categories:
 
 ## How to Submit
 
-You MUST call the `save_session_memories` tool to submit extracted memories. Do NOT output JSON as text — the tool is the only valid way to submit memories.
+You MUST call the `saveSessionMemories` tool to submit extracted memories. Do NOT output JSON as text — the tool is the only valid way to submit memories.
 
 For each category that has NEW information, pass an array of memory items as arguments to the tool. Each item has:
 - `title`: Short title (5-10 words)

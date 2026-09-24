@@ -11,27 +11,43 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
 // UpdateSession updates a session (currently only supports title).
 func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSessionRequest) (*protocol.UpdateSessionResponse, error) {
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.updateSession",
+		trace.WithAttributes(
+			attribute.String("session.id", req.SessionId),
+		),
+	)
+	defer span.End()
+
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
+		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
 	creator := usecase.UserCreator{UserID: userID}
 
 	sessionUUID, apiErr := parseUUID(req.SessionId, "session_id")
 	if apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
 		return nil, apiErr
 	}
+
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 
 	logger.Info(ctx, "[UpdateSession]",
 		zap.String("user", userID.String()),
 		zap.String("session", req.SessionId))
 
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, sessionUUID, creator); err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return nil, h.ownershipError(ctx, err)
 	}
 
@@ -74,6 +90,8 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[UpdateSession] push failed after commit (data safe)", zap.Error(err))
 		} else {
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 			return nil, h.internalError(ctx, "update.error", "internal error", err)
 		}
 	}

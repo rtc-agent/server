@@ -263,13 +263,13 @@ func (h *helpers) publishSessionUpdateWithWarnings(ctx context.Context, session 
 		if totalRelevant > 0 {
 			hitRate := float64(totalCached) / float64(totalRelevant)
 			if hitRate < h.cacheHitRateWarnThreshold {
-				logger.Warn(ctx, "cache hit rate below threshold",
-					zap.String("session_id", sessionID.String()),
-					zap.Float64("cache_hit_rate", hitRate),
-					zap.Float64("threshold", h.cacheHitRateWarnThreshold),
-					zap.Int64("cached_read_tokens", totalCached),
-					zap.Int64("input_tokens", totalInput),
-				)
+				h.logger.Warn(ctx, "cache hit rate below threshold", map[string]any{
+					"session_id":         sessionID.String(),
+					"cache_hit_rate":     hitRate,
+					"threshold":          h.cacheHitRateWarnThreshold,
+					"cached_read_tokens": totalCached,
+					"input_tokens":       totalInput,
+				})
 			}
 		}
 	}
@@ -372,7 +372,8 @@ func mergeTokenUsageMax(dst *model.TokenUsage, src *model.TokenUsage) {
 func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.StreamReader[*model.CallbackOutput]) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Error(context.Background(), "token_callback.stream_drain_panic",
+			// Use the original ctx (not context.Background()) to preserve trace context in panic logs.
+			logger.Error(ctx, "token_callback.stream_drain_panic",
 				zap.Any("recover", r),
 				zap.String("stack", string(debug.Stack())),
 			)

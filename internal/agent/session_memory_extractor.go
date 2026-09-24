@@ -191,7 +191,7 @@ func (e *SessionMemoryExtractor) ExtractIfNeeded(
 
 // extractMemories calls the LLM to extract memories.
 //
-// Uses tool calling instead of parsing free text: the LLM must call the save_session_memories tool,
+// Uses tool calling instead of parsing free text: the LLM must call the saveSessionMemories tool,
 // with parameters constrained by JSON schema, completely avoiding the reliability issues of parsing
 // JSON from LLM output.
 // Uses Stream (not Generate) because the model requires streaming for long operations.
@@ -251,13 +251,13 @@ func (e *SessionMemoryExtractor) extractMemories(
 
 	// Parse tool call arguments directly (JSON schema constrained, 100% reliable).
 	tc := resp.ToolCalls[0]
-	if tc.Function.Name != "save_session_memories" {
+	if tc.Function.Name != "saveSessionMemories" {
 		// LLM called an unexpected tool (hallucination from conversation history).
 		// Log a warning and return nil (non-fatal: extraction failed, will retry later).
 		e.log(ctx, "extractor.unexpected_tool_call", map[string]any{
 			"session_id":    sessionID.String(),
 			"tool_name":     tc.Function.Name,
-			"expected_tool": "save_session_memories",
+			"expected_tool": "saveSessionMemories",
 		})
 		return nil, nil
 	}
@@ -328,7 +328,7 @@ func (t *saveSessionMemoriesTool) Info(ctx context.Context) (*schema.ToolInfo, e
 	}
 
 	return &schema.ToolInfo{
-		Name: "save_session_memories",
+		Name: "saveSessionMemories",
 		Desc: "Save extracted session memories. Call this tool with the memories you extracted from the conversation. Only include categories that have NEW information.",
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"decision":  {Type: schema.Array, Desc: "技术决策: technology choices, design decisions, architecture", Required: false, ElemInfo: memoryItemSchema},

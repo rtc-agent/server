@@ -8,6 +8,8 @@ package cmd
 
 import (
 	"context"
+	"time"
+
 	"github.com/centrifugal/centrifuge"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/google/uuid"
@@ -16,8 +18,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/agent/command"
-	"github.com/rtc-agent/server/internal/handler/http"
-	"github.com/rtc-agent/server/internal/handler/rpc"
+	httphandler "github.com/rtc-agent/server/internal/handler/http"
+	rpchandler "github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/loop"
@@ -28,13 +30,13 @@ import (
 	"github.com/rtc-agent/server/internal/taskscheduler"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
-	"github.com/rtc-agent/server/pkg/centrifuge-plus"
+	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/logger"
-	"github.com/rtc-agent/server/pkg/rtc-queue"
-	"github.com/rtc-agent/server/pkg/turn-agent"
+	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
-	"time"
 )
 
 // Injectors from wire.go:
@@ -128,7 +130,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	worker := provideQueueWorker(queue, agent, cfg)
 	streamStore := provideStreamStore(universalClient, cfg)
 	asynqServer := provideAsynqServer(cfg)
-	serveMux := provideAsynqMux(queue, loopRepo)
+	serveMux := provideAsynqMux(queue, loopRepo, dependencies)
 	cancelFunc := provideRecoveryCancel(cfg, loopRepo, taskScheduler)
 	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, memoriesHandler, worker, queue, streamStore, asynqServer, serveMux, cancelFunc, prometheusMetrics)
 	return serverServer, nil
@@ -329,6 +331,7 @@ func provideAgent(
 		CheckpointTTL:                   cfg.Worker.CheckpointTTL,
 		StreamChunkTTL:                  cfg.Worker.StreamChunkTTL,
 		Logger:                          agent.NewLogger(),
+		Tracer:                          otel.GetTracerProvider().Tracer("turnagent"),
 		Metrics:                         metrics,
 		ModelPricing:                    convertModelPricing(cfg.LLM.Pricing),
 		EnableStrategicCacheBreakpoints: cfg.Worker.EnableStrategicCacheBreakpoints,
@@ -379,12 +382,12 @@ func provideQueueWorker(
 // workerLogger adapts the application logger to rtcqueue.WorkerLogger interface.
 type workerLogger struct{}
 
-func (l *workerLogger) Info(msg string, keysAndValues ...any) {
-	logger.Info(context.Background(), "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+func (l *workerLogger) Info(ctx context.Context, msg string, keysAndValues ...any) {
+	logger.Info(ctx, "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
 }
 
-func (l *workerLogger) Error(msg string, keysAndValues ...any) {
-	logger.Error(context.Background(), "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+func (l *workerLogger) Error(ctx context.Context, msg string, keysAndValues ...any) {
+	logger.Error(ctx, "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
 }
 
 // toZapFields converts key-value pairs to []zap.Field.
@@ -529,8 +532,10 @@ func provideAsynqServer(cfg *config.Config) *asynq.Server {
 }
 
 // provideAsynqMux creates the asynq ServeMux with loop task handlers registered.
-func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo) *asynq.ServeMux {
-	worker := loop.NewWorker(queue, loopRepo)
+func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, deps *usecase.Dependencies) *asynq.ServeMux {
+	// Create the notification creator callback for loop worker
+	notificationCreator := agent.CreateLoopNotification(deps)
+	worker := loop.NewWorker(queue, loopRepo, notificationCreator)
 	mux := asynq.NewServeMux()
 	worker.RegisterHandlers(mux)
 	return mux

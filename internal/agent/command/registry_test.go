@@ -347,3 +347,167 @@ func TestTemplate_Simple(t *testing.T) {
 		t.Errorf("sustain = %+v", c2)
 	}
 }
+
+func TestEnsureActivated_Idempotent(t *testing.T) {
+	r := NewCommandRegistry()
+	cmd := &fakeCmd{name: "loop", prefix: "/loop", scope: ScopeSession, sustainContent: "loop-active"}
+	r.Register(cmd)
+	ctx := newCtx("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+	// First call: activates.
+	r.EnsureActivated("loop", ctx.SessionID, "")
+	active := r.Active(ctx.SessionID)
+	if len(active) != 1 || active[0] != "loop" {
+		t.Fatalf("after first EnsureActivated, active = %v", active)
+	}
+
+	// Second call: no-op (idempotent).
+	r.EnsureActivated("loop", ctx.SessionID, "")
+	active = r.Active(ctx.SessionID)
+	if len(active) != 1 {
+		t.Fatalf("after second EnsureActivated, active = %v (want 1)", active)
+	}
+
+	// CollectTools should return tools from the activated command.
+	// (fakeCmd doesn't implement ToolProvider, so 0 tools — just verify no panic.)
+	tools := r.CollectTools(ctx)
+	_ = tools
+
+	// DetectAndInject should call SustainPrompt (not TriggerPrompt) for
+	// EnsureActivated entries, since triggeredThisTurn defaults to false.
+	c, err := r.DetectAndInject(ctx, "unrelated message")
+	if err != nil {
+		t.Fatalf("DetectAndInject: %v", err)
+	}
+	if len(c) != 1 || c[0].Contribution.Content != "loop-active|" {
+		t.Fatalf("expected sustain contribution, got %+v", c)
+	}
+	if cmd.triggerCalls != 0 {
+		t.Errorf("triggerCalls = %d; want 0 (EnsureActivated should not trigger)", cmd.triggerCalls)
+	}
+	if cmd.sustainCalls != 1 {
+		t.Errorf("sustainCalls = %d; want 1", cmd.sustainCalls)
+	}
+}
+
+func TestEnsureActivated_UnknownCommand_NoOp(t *testing.T) {
+	r := NewCommandRegistry()
+	ctx := newCtx("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
+	// Activating a command that hasn't been registered should silently no-op.
+	r.EnsureActivated("nonexistent", ctx.SessionID, "")
+	if got := r.Active(ctx.SessionID); len(got) != 0 {
+		t.Fatalf("expected no active commands, got %v", got)
+	}
+}
+
+func TestEnsureActivated_NoDoubleEntry(t *testing.T) {
+	r := NewCommandRegistry()
+	cmd := &fakeCmd{name: "goal", prefix: "/goal", scope: ScopeSession, sustainContent: "goal-active"}
+	r.Register(cmd)
+	ctx := newCtx("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+	// Trigger normally via DetectAndInject.
+	if _, err := r.DetectAndInject(ctx, "/goal do something"); err != nil {
+		t.Fatalf("DetectAndInject: %v", err)
+	}
+	if got := r.Active(ctx.SessionID); len(got) != 1 {
+		t.Fatalf("after DetectAndInject, active = %v", got)
+	}
+
+	// EnsureActivated should not add a second entry.
+	r.EnsureActivated("goal", ctx.SessionID, "")
+	if got := r.Active(ctx.SessionID); len(got) != 1 {
+		t.Fatalf("after EnsureActivated, active = %v (want 1)", got)
+	}
+}
+
+// --- OnTurnComplete distributed system tests ---
+
+// TestOnTurnComplete_CallsAllRegisteredHooks verifies that OnTurnComplete
+// iterates all registered commands (not just activated ones) and calls their
+// OnTurnComplete hooks. This fixes the distributed system bug where activation
+// state was not shared across servers.
+func TestOnTurnComplete_CallsAllRegisteredHooks(t *testing.T) {
+	r := NewCommandRegistry()
+
+	// Register two commands that implement TurnHook
+	hook1 := &hookCmd{fakeCmd: fakeCmd{name: "loop", prefix: "/loop", scope: ScopeSession}}
+	hook2 := &hookCmd{fakeCmd: fakeCmd{name: "goal", prefix: "/goal", scope: ScopeSession}}
+	r.Register(hook1)
+	r.Register(hook2)
+
+	ctx := newCtx("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+	// Do NOT activate any commands (simulating a different server that didn't
+	// receive the /loop or /goal command)
+
+	// OnTurnComplete should still call hooks for all registered commands
+	errs := r.OnTurnComplete(ctx)
+	if len(errs) != 0 {
+		t.Errorf("unexpected errors: %v", errs)
+	}
+
+	// Both hooks should have been called
+	if hook1.turnCalls != 1 {
+		t.Errorf("hook1.turnCalls = %d; want 1", hook1.turnCalls)
+	}
+	if hook2.turnCalls != 1 {
+		t.Errorf("hook2.turnCalls = %d; want 1", hook2.turnCalls)
+	}
+}
+
+// TestOnTurnComplete_Idempotent verifies that OnTurnComplete can be called
+// multiple times safely (idempotent behavior).
+func TestOnTurnComplete_Idempotent(t *testing.T) {
+	r := NewCommandRegistry()
+	hook := &hookCmd{fakeCmd: fakeCmd{name: "loop", prefix: "/loop", scope: ScopeSession}}
+	r.Register(hook)
+
+	ctx := newCtx("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+	// Call OnTurnComplete multiple times (simulating repeated calls from
+	// recovery mechanisms or concurrent turn completions)
+	for i := 0; i < 3; i++ {
+		errs := r.OnTurnComplete(ctx)
+		if len(errs) != 0 {
+			t.Errorf("iteration %d: unexpected errors: %v", i, errs)
+		}
+	}
+
+	// Hook should have been called 3 times
+	if hook.turnCalls != 3 {
+		t.Errorf("hook.turnCalls = %d; want 3", hook.turnCalls)
+	}
+}
+
+// TestOnTurnComplete_HookErrorIsolation verifies that errors from one hook
+// don't prevent other hooks from being called.
+func TestOnTurnComplete_HookErrorIsolation(t *testing.T) {
+	r := NewCommandRegistry()
+
+	hook1 := &hookCmd{
+		fakeCmd: fakeCmd{name: "loop", prefix: "/loop", scope: ScopeSession},
+		hookErr: errors.New("hook1 failed"),
+	}
+	hook2 := &hookCmd{fakeCmd: fakeCmd{name: "goal", prefix: "/goal", scope: ScopeSession}}
+	r.Register(hook1)
+	r.Register(hook2)
+
+	ctx := newCtx("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+	errs := r.OnTurnComplete(ctx)
+
+	// Should have 1 error (from hook1)
+	if len(errs) != 1 {
+		t.Errorf("len(errs) = %d; want 1", len(errs))
+	}
+
+	// Both hooks should have been called (error isolation)
+	if hook1.turnCalls != 1 {
+		t.Errorf("hook1.turnCalls = %d; want 1", hook1.turnCalls)
+	}
+	if hook2.turnCalls != 1 {
+		t.Errorf("hook2.turnCalls = %d; want 1", hook2.turnCalls)
+	}
+}

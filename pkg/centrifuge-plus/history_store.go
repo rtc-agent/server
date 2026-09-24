@@ -12,7 +12,8 @@ type HistoryStore interface {
 	// Query retrieves publications from the given channel since the specified offset.
 	// latestOffset is the current stream's latest offset, used by fillGapPublications to fill the tail gap,
 	// ensuring the recovery result satisfies centrifuge's continuity check (last pub.Offset == latestOffset).
-	Query(ctx context.Context, channel string, sinceOffset uint32, latestOffset uint32) ([]*centrifuge.Publication, error)
+	// limit specifies the maximum number of publications to return (0 means no limit).
+	Query(ctx context.Context, channel string, sinceOffset uint32, latestOffset uint32, limit int) ([]*centrifuge.Publication, error)
 }
 
 // HistoryStoreRemover is an optional interface that HistoryStore implementations

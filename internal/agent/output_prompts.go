@@ -44,11 +44,6 @@ var errorWrapperTmpl string
 //go:embed prompts/outputs/parse-error.md.tmpl
 var parseErrorTmpl string
 
-// --- Todo notification ---
-
-//go:embed prompts/outputs/todo-notification.md
-var todoNotificationTmpl string
-
 // --- Ask user result templates ---
 
 //go:embed prompts/outputs/ask-user-result.md.tmpl
@@ -109,6 +104,11 @@ var noSearchResultsTmpl string
 
 //go:embed prompts/outputs/search-results-list.md.tmpl
 var searchResultsListTmpl string
+
+// --- Loop output templates ---
+
+//go:embed prompts/outputs/loop-created.md.tmpl
+var loopCreatedTmpl string
 
 // =============================================================================
 // Rendering helpers
@@ -171,12 +171,6 @@ func formatParseError(errMsg, preview string) string {
 		"Error":   errMsg,
 		"Preview": preview,
 	})
-}
-
-// --- Todo ---
-
-func formatTodoNotification() string {
-	return renderStatic(todoNotificationTmpl)
 }
 
 // --- Ask user ---
@@ -309,5 +303,16 @@ func formatSearchResultsList(count int, memories []searchResultItem) string {
 	return templateutil.MustRender("search-results-list", searchResultsListTmpl, map[string]any{
 		"Count":    count,
 		"Memories": memories,
+	})
+}
+
+// --- Loop ---
+
+func formatLoopCreated(id, prompt string, intervalSeconds, maxTurns int) string {
+	return templateutil.MustRender("loop-created", loopCreatedTmpl, map[string]any{
+		"ID":              id,
+		"Prompt":          prompt,
+		"IntervalSeconds": intervalSeconds,
+		"MaxTurns":        maxTurns,
 	})
 }

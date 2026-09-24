@@ -9,20 +9,25 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // saveSessionMemoryTool saves a session memory.
 type saveSessionMemoryTool struct {
+	session *model.Session
 	helpers *helpers
+	turnID  uuid.UUID
 }
 
-func (h *helpers) createSaveSessionMemoryTool() tool.InvokableTool {
-	return &saveSessionMemoryTool{helpers: h}
+func (h *helpers) createSaveSessionMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
+	return &saveSessionMemoryTool{session: session, helpers: h, turnID: turnID}
 }
 
 func (t *saveSessionMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "save_session_memory",
+		Name: "saveSessionMemory",
 		Desc: saveSessionMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
@@ -51,30 +56,64 @@ func (t *saveSessionMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, err
 }
 
 func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.saveSessionMemory",
+		trace.WithAttributes(
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.String("turn_id", t.turnID.String()),
+		),
+	)
+	defer span.End()
+
 	var args struct {
 		Category string         `json:"category"`
 		Title    string         `json:"title"`
 		Content  string         `json:"content"`
 		Metadata map[string]any `json:"metadata,omitempty"`
 	}
-	if ok, msg := parseToolArgs(ctx, t.helpers, "save_session_memory", argumentsInJSON, &args); !ok {
-		return msg, nil
-	}
-
-	// Extract session ID from context
-	sessionID := getSessionIDFromContext(ctx)
-	if sessionID == uuid.Nil {
-		return "", fmt.Errorf("no session ID in context")
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "saveSessionMemory", argumentsInJSON, &args); !ok {
+		return errMsg, nil
 	}
 
 	// Validate required fields
 	if args.Category == "" || args.Title == "" || args.Content == "" {
-		return "", fmt.Errorf("category, title, and content are required")
+		span.SetStatus(codes.Error, "missing_required_fields")
+		errMsg := "Error: category, title, and content are required"
+		// 持久化验证错误到 DB，确保 checkpoint resume 时消息结构一致
+		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+			Helpers:         t.helpers,
+			SessionID:       t.session.ID,
+			OwnerRefID:      t.session.OwnerRefID,
+			TurnID:          t.turnID,
+			ToolName:        "saveSessionMemory",
+			ArgumentsInJSON: argumentsInJSON,
+			ResultJSON:      errMsg,
+		}); publishErr != nil {
+			t.helpers.logger.Warn(ctx, "saveSessionMemory.persist_validation_error_failed", map[string]any{
+				"error": publishErr.Error(),
+			})
+		}
+		return errMsg, nil
 	}
 
 	// Validate category
 	if !model.IsValidCategory(args.Category) {
-		return "", fmt.Errorf("invalid category: %s (must be one of: decision, context, progress, issue, learnings)", args.Category)
+		span.SetStatus(codes.Error, "invalid_category")
+		errMsg := fmt.Sprintf("Error: invalid category: %s (must be one of: decision, context, progress, issue, learnings)", args.Category)
+		// 持久化验证错误到 DB
+		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+			Helpers:         t.helpers,
+			SessionID:       t.session.ID,
+			OwnerRefID:      t.session.OwnerRefID,
+			TurnID:          t.turnID,
+			ToolName:        "saveSessionMemory",
+			ArgumentsInJSON: argumentsInJSON,
+			ResultJSON:      errMsg,
+		}); publishErr != nil {
+			t.helpers.logger.Warn(ctx, "saveSessionMemory.persist_validation_error_failed", map[string]any{
+				"error": publishErr.Error(),
+			})
+		}
+		return errMsg, nil
 	}
 
 	// Estimate token count
@@ -82,7 +121,7 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 
 	// Create memory
 	memory := &model.SessionMemory{
-		SessionID:  sessionID,
+		SessionID:  t.session.ID,
 		Category:   args.Category,
 		Title:      args.Title,
 		Content:    args.Content,
@@ -92,31 +131,74 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 
 	// Save to database
 	if err := t.helpers.deps.SessionMemoryRepo.Create(ctx, memory); err != nil {
-		return "", fmt.Errorf("save memory: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "create_failed")
+		errMsg := fmt.Sprintf("Error: save memory: %v", err)
+		// 持久化错误到 DB
+		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+			Helpers:         t.helpers,
+			SessionID:       t.session.ID,
+			OwnerRefID:      t.session.OwnerRefID,
+			TurnID:          t.turnID,
+			ToolName:        "saveSessionMemory",
+			ArgumentsInJSON: argumentsInJSON,
+			ResultJSON:      errMsg,
+		}); publishErr != nil {
+			t.helpers.logger.Warn(ctx, "saveSessionMemory.persist_error_failed", map[string]any{
+				"error": publishErr.Error(),
+			})
+		}
+		return errMsg, nil
 	}
 
-	t.helpers.logger.Info(ctx, "save_session_memory.success", map[string]any{
-		"session_id":  sessionID.String(),
+	span.SetAttributes(
+		attribute.String("memory_id", memory.ID.String()),
+		attribute.Int("token_count", tokenCount),
+	)
+	t.helpers.logger.Info(ctx, "saveSessionMemory.success", map[string]any{
+		"session_id":  t.session.ID.String(),
 		"memory_id":   memory.ID.String(),
 		"category":    args.Category,
 		"token_count": tokenCount,
 	})
 
-	return formatSessionMemorySaved(memory.ID.String(), args.Category, args.Title), nil
+	resultJSON := formatSessionMemorySaved(memory.ID.String(), args.Category, args.Title)
+
+	// 持久化成功消息到 DB
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "saveSessionMemory",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
+		t.helpers.logger.Warn(ctx, "saveSessionMemory.publish_failed", map[string]any{
+			"error": err.Error(),
+		})
+		// 不返回错误，因为内存已保存成功
+	}
+
+	return resultJSON, nil
 }
 
 // listSessionMemoriesTool lists session memories.
 type listSessionMemoriesTool struct {
+	session *model.Session
 	helpers *helpers
+	turnID  uuid.UUID
 }
 
-func (h *helpers) createListSessionMemoriesTool() tool.InvokableTool {
-	return &listSessionMemoriesTool{helpers: h}
+func (h *helpers) createListSessionMemoriesTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
+	return &listSessionMemoriesTool{session: session, helpers: h, turnID: turnID}
 }
 
 func (t *listSessionMemoriesTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "list_session_memories",
+		Name: "listSessionMemories",
 		Desc: listSessionMemoriesDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
@@ -134,43 +216,102 @@ func (t *listSessionMemoriesTool) Info(ctx context.Context) (*schema.ToolInfo, e
 }
 
 func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.listSessionMemories",
+		trace.WithAttributes(
+			attribute.String("session_id", t.session.ID.String()),
+			attribute.String("turn_id", t.turnID.String()),
+		),
+	)
+	defer span.End()
+
 	var args struct {
 		Category string `json:"category"`
 		Limit    int    `json:"limit"`
 	}
-	if ok, msg := parseToolArgs(ctx, t.helpers, "list_session_memories", argumentsInJSON, &args); !ok {
-		return msg, nil
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "listSessionMemories", argumentsInJSON, &args); !ok {
+		return errMsg, nil
 	}
 
-	// Extract session ID from context
-	sessionID := getSessionIDFromContext(ctx)
-	if sessionID == uuid.Nil {
-		return "", fmt.Errorf("no session ID in context")
-	}
+	span.SetAttributes(attribute.String("session_id", t.session.ID.String()))
 
 	// Set default limit
 	if args.Limit <= 0 {
 		args.Limit = 20
+	}
+	span.SetAttributes(
+		attribute.String("category", args.Category),
+		attribute.Int("limit", args.Limit),
+	)
+
+	// Validate category if provided
+	if args.Category != "" && !model.IsValidCategory(args.Category) {
+		span.SetStatus(codes.Error, "invalid_category")
+		errMsg := fmt.Sprintf("Error: invalid category %q. Valid categories: %v",
+			args.Category, model.ValidSessionMemoryCategories)
+		// 持久化验证错误到 DB
+		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+			Helpers:         t.helpers,
+			SessionID:       t.session.ID,
+			OwnerRefID:      t.session.OwnerRefID,
+			TurnID:          t.turnID,
+			ToolName:        "listSessionMemories",
+			ArgumentsInJSON: argumentsInJSON,
+			ResultJSON:      errMsg,
+		}); publishErr != nil {
+			t.helpers.logger.Warn(ctx, "listSessionMemories.persist_validation_error_failed", map[string]any{
+				"error": publishErr.Error(),
+			})
+		}
+		return errMsg, nil
 	}
 
 	// Query memories
 	var memories []*model.SessionMemory
 	var err error
 	if args.Category != "" {
-		if !model.IsValidCategory(args.Category) {
-			return fmt.Sprintf("Error: invalid category %q. Valid categories: %v",
-				args.Category, model.ValidSessionMemoryCategories), nil
-		}
-		memories, err = t.helpers.deps.SessionMemoryRepo.ListByCategory(ctx, sessionID, args.Category, args.Limit)
+		memories, err = t.helpers.deps.SessionMemoryRepo.ListByCategory(ctx, t.session.ID, args.Category, args.Limit)
 	} else {
-		memories, err = t.helpers.deps.SessionMemoryRepo.ListBySession(ctx, sessionID, args.Limit)
+		memories, err = t.helpers.deps.SessionMemoryRepo.ListBySession(ctx, t.session.ID, args.Limit)
 	}
 	if err != nil {
-		return "", fmt.Errorf("list memories: %w", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "list_failed")
+		errMsg := fmt.Sprintf("Error: list memories: %v", err)
+		// 持久化错误到 DB
+		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+			Helpers:         t.helpers,
+			SessionID:       t.session.ID,
+			OwnerRefID:      t.session.OwnerRefID,
+			TurnID:          t.turnID,
+			ToolName:        "listSessionMemories",
+			ArgumentsInJSON: argumentsInJSON,
+			ResultJSON:      errMsg,
+		}); publishErr != nil {
+			t.helpers.logger.Warn(ctx, "listSessionMemories.persist_error_failed", map[string]any{
+				"error": publishErr.Error(),
+			})
+		}
+		return errMsg, nil
 	}
 
 	if len(memories) == 0 {
-		return formatNoSessionMemories(), nil
+		span.SetAttributes(attribute.Int("count", 0))
+		resultJSON := formatNoSessionMemories()
+		// 持久化空结果到 DB
+		if err := publishToolMessages(ctx, publishToolMessagesInput{
+			Helpers:         t.helpers,
+			SessionID:       t.session.ID,
+			OwnerRefID:      t.session.OwnerRefID,
+			TurnID:          t.turnID,
+			ToolName:        "listSessionMemories",
+			ArgumentsInJSON: argumentsInJSON,
+			ResultJSON:      resultJSON,
+		}); err != nil {
+			t.helpers.logger.Warn(ctx, "listSessionMemories.publish_failed", map[string]any{
+				"error": err.Error(),
+			})
+		}
+		return resultJSON, nil
 	}
 
 	// Format output
@@ -189,5 +330,25 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 		}
 	}
 
-	return formatSessionMemoriesList(len(memories), items), nil
+	span.SetAttributes(attribute.Int("count", len(memories)))
+	resultJSON := formatSessionMemoriesList(len(memories), items)
+
+	// 持久化成功消息到 DB
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         t.helpers,
+		SessionID:       t.session.ID,
+		OwnerRefID:      t.session.OwnerRefID,
+		TurnID:          t.turnID,
+		ToolName:        "listSessionMemories",
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "publish_failed")
+		t.helpers.logger.Warn(ctx, "listSessionMemories.publish_failed", map[string]any{
+			"error": err.Error(),
+		})
+	}
+
+	return resultJSON, nil
 }

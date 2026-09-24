@@ -15,13 +15,14 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/agent/command"
-	"github.com/rtc-agent/server/internal/handler/http"
-	"github.com/rtc-agent/server/internal/handler/rpc"
+	httphandler "github.com/rtc-agent/server/internal/handler/http"
+	rpchandler "github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/loop"
@@ -256,6 +257,7 @@ func provideAgent(
 		CheckpointTTL:                   cfg.Worker.CheckpointTTL,
 		StreamChunkTTL:                  cfg.Worker.StreamChunkTTL,
 		Logger:                          agent.NewLogger(),
+		Tracer:                          otel.GetTracerProvider().Tracer("turnagent"),
 		Metrics:                         metrics,
 		ModelPricing:                    convertModelPricing(cfg.LLM.Pricing),
 		EnableStrategicCacheBreakpoints: cfg.Worker.EnableStrategicCacheBreakpoints,
@@ -307,12 +309,12 @@ func provideQueueWorker(
 // workerLogger adapts the application logger to rtcqueue.WorkerLogger interface.
 type workerLogger struct{}
 
-func (l *workerLogger) Info(msg string, keysAndValues ...any) {
-	logger.Info(context.Background(), "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+func (l *workerLogger) Info(ctx context.Context, msg string, keysAndValues ...any) {
+	logger.Info(ctx, "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
 }
 
-func (l *workerLogger) Error(msg string, keysAndValues ...any) {
-	logger.Error(context.Background(), "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+func (l *workerLogger) Error(ctx context.Context, msg string, keysAndValues ...any) {
+	logger.Error(ctx, "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
 }
 
 // toZapFields converts key-value pairs to []zap.Field.
@@ -464,8 +466,10 @@ func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
 }
 
 // provideAsynqMux creates the asynq ServeMux with loop task handlers registered.
-func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo) *hibikenasynq.ServeMux {
-	worker := loop.NewWorker(queue, loopRepo)
+func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, deps *usecase.Dependencies) *hibikenasynq.ServeMux {
+	// Create the notification creator callback for loop worker
+	notificationCreator := agent.CreateLoopNotification(deps)
+	worker := loop.NewWorker(queue, loopRepo, notificationCreator)
 	mux := hibikenasynq.NewServeMux()
 	worker.RegisterHandlers(mux)
 	return mux

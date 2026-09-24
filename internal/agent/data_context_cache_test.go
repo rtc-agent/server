@@ -24,7 +24,7 @@ func TestSetCacheBreakpoints(t *testing.T) {
 				{Role: "user", Content: "hello"},
 				{Role: "assistant", Content: "hi"},
 			},
-			wantBPs: 2,
+			wantBPs: 1, // BUG 14 fix: only bp1 (summary), bp2 removed
 			checkFn: func(t *testing.T, msgs []*turnagent.Message) {
 				// bp1: summary boundary (index 4)
 				if !msgs[4].CacheBreakpoint {
@@ -33,12 +33,9 @@ func TestSetCacheBreakpoints(t *testing.T) {
 				if msgs[4].CacheTTL != "1h" {
 					t.Errorf("expected TTL 1h on summary, got %s", msgs[4].CacheTTL)
 				}
-				// bp2: last conversation message (index 6)
-				if !msgs[6].CacheBreakpoint {
-					t.Error("expected bp on last conversation message")
-				}
-				if msgs[6].CacheTTL != "5m" {
-					t.Errorf("expected TTL 5m on last msg, got %s", msgs[6].CacheTTL)
+				// bp2: REMOVED (BUG 14 fix) - last conversation message should NOT have breakpoint
+				if msgs[6].CacheBreakpoint {
+					t.Error("bp2 removed: last conversation message should NOT have breakpoint")
 				}
 			},
 		},
@@ -48,10 +45,13 @@ func TestSetCacheBreakpoints(t *testing.T) {
 				{Role: "system", Content: "system prompt"},
 				{Role: "user", Content: "hello"},
 			},
-			wantBPs: 1,
+			wantBPs: 0, // BUG 14 fix: no summary means no breakpoints
 			checkFn: func(t *testing.T, msgs []*turnagent.Message) {
-				if !msgs[1].CacheBreakpoint {
-					t.Error("expected bp on last message")
+				// No summary boundary, so no breakpoints
+				for i, m := range msgs {
+					if m.CacheBreakpoint {
+						t.Errorf("no breakpoints expected, but message %d has one", i)
+					}
 				}
 			},
 		},
@@ -60,7 +60,7 @@ func TestSetCacheBreakpoints(t *testing.T) {
 			msgs: []*turnagent.Message{
 				{Role: "user", Content: "hello"},
 			},
-			wantBPs: 1,
+			wantBPs: 0, // BUG 14 fix: no summary means no breakpoints
 		},
 		{
 			name:    "empty messages",

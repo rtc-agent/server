@@ -4,6 +4,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -11,6 +12,7 @@ import (
 const (
 	ContentTypeError          ContentType = "error"
 	ContentTypeMarkdown       ContentType = "markdown"
+	ContentTypePrompt         ContentType = "prompt"
 	ContentTypeSummary        ContentType = "summary"
 	ContentTypeText           ContentType = "text"
 	ContentTypeThinking       ContentType = "thinking"
@@ -25,6 +27,8 @@ func (e ContentType) Valid() bool {
 	case ContentTypeError:
 		return true
 	case ContentTypeMarkdown:
+		return true
+	case ContentTypePrompt:
 		return true
 	case ContentTypeSummary:
 		return true
@@ -121,6 +125,24 @@ func (e MessageStreamingStatus) Valid() bool {
 	case MessageStreamingPending:
 		return true
 	case MessageStreamingStreaming:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PromptContentRole.
+const (
+	System PromptContentRole = "system"
+	User   PromptContentRole = "user"
+)
+
+// Valid indicates whether the value is a known member of the PromptContentRole enum.
+func (e PromptContentRole) Valid() bool {
+	switch e {
+	case System:
+		return true
+	case User:
 		return true
 	default:
 		return false
@@ -410,6 +432,7 @@ type CompactSessionResult struct {
 // - `toolcall_output`: Data 为 ToolCall 对象
 // - `user_message`: Data 为 UserMessageContent 对象
 // - `error`: Data 为 ErrorContent 对象
+// - `prompt`: Data 为 PromptContent 对象
 type ContentData struct {
 	// Data 具体内容（结构由 type 决定），类型取决于 type 字段
 	Data interface{} `json:"data"`
@@ -465,6 +488,7 @@ type ForkSessionRequest struct {
 	// - `toolcall_output`: Data 为 ToolCall 对象
 	// - `user_message`: Data 为 UserMessageContent 对象
 	// - `error`: Data 为 ErrorContent 对象
+	// - `prompt`: Data 为 PromptContent 对象
 	ContentData ContentData `json:"content_data"`
 
 	// Limit Fork 多少条消息？默认200；最多1000条；
@@ -668,7 +692,7 @@ type OAuth2TokenExchangeResponse struct {
 	// AccessToken JWT access token，有效期由 expires_in 指定
 	AccessToken string `json:"access_token"`
 
-	// ExpiresIn access token 过期时间（秒），通常为 900（15 分钟）
+	// ExpiresIn access token 过期时间（秒），通常为 3600（1 小时）
 	ExpiresIn int64 `json:"expires_in"`
 
 	// RefreshToken refresh token，用于在 access_token 过期后换取新 token
@@ -680,7 +704,7 @@ type OAuth2TokenExchangeResponse struct {
 
 // OAuth2TokenRefreshRequest OAuth2 令牌刷新请求，使用 refresh_token 换取新的 access_token
 type OAuth2TokenRefreshRequest struct {
-	// RefreshToken refresh token，使用一次后即失效（rotation）
+	// RefreshToken refresh token，有效期内可多次使用
 	RefreshToken string `json:"refresh_token"`
 }
 
@@ -709,6 +733,24 @@ type OpenSessionResponse struct {
 type OpenSessionResult struct {
 	Success bool `json:"success"`
 }
+
+// PromptContent 系统提示词内容（用于持久化系统级指令）
+type PromptContent struct {
+	// Name 提示词名称/命令名（如 "goal", "loop", "scenarios"）
+	Name string `json:"name"`
+
+	// Prompt 提示词完整内容
+	Prompt string `json:"prompt"`
+
+	// Role 覆盖 message role，控制 LLM 上下文注入角色。缺省为 "system"，可设为 "user"（连续 user messages 会被合并）
+	Role *PromptContentRole `json:"role,omitempty"`
+
+	// Title 提示词标题（可为空，用于前端显示）
+	Title *string `json:"title,omitempty"`
+}
+
+// PromptContentRole 覆盖 message role，控制 LLM 上下文注入角色。缺省为 "system"，可设为 "user"（连续 user messages 会被合并）
+type PromptContentRole string
 
 // RpcMethod RPC 方法名，前后端统一从 protocol 导入，禁止硬编码字符串
 type RpcMethod string
@@ -825,6 +867,7 @@ type SendMessageRequest struct {
 	// - `toolcall_output`: Data 为 ToolCall 对象
 	// - `user_message`: Data 为 UserMessageContent 对象
 	// - `error`: Data 为 ErrorContent 对象
+	// - `prompt`: Data 为 PromptContent 对象
 	ContentData ContentData `json:"content_data"`
 
 	// ServerSessionId protocol 内 UUID 类型，JSON 线上为字符串
@@ -966,8 +1009,8 @@ type SubmitRtcResultRequest struct {
 	// Error 错误信息（失败时）
 	Error *string `json:"error,omitempty"`
 
-	// Result 执行结果（成功时）
-	Result interface{} `json:"result,omitempty"`
+	// Result 执行结果（成功时）。保留原始 JSON 字段顺序，确保 LLM 缓存命中。
+	Result json.RawMessage `json:"result,omitempty"`
 
 	// RtcId protocol 内 UUID 类型，JSON 线上为字符串
 	RtcId UUID `json:"rtc_id"`

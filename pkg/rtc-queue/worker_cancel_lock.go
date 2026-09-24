@@ -27,7 +27,7 @@ func (w *Worker) setupCancelListener(
 ) {
 	// Safety-net 1: check if work was already cancelled before subscribing.
 	if work.Status == StatusCancelled {
-		w.log("worker.cancelled_before_subscribe", map[string]any{
+		w.log(workCtx, "worker.cancelled_before_subscribe", map[string]any{
 			"work_id":    claim.WorkID,
 			"session_id": work.SessionID,
 			"message":    "work was cancelled before cancel subscription was set up; triggering cancel now",
@@ -57,25 +57,25 @@ func (w *Worker) setupCancelListener(
 		defer func() { _ = cancelSub.Close() }()
 		defer func() {
 			if r := recover(); r != nil {
-				w.logError("cancel listener panic",
+				w.logError(workCtx, "cancel listener panic",
 					"session", claim.SessionID, "recover", r, "stack", string(debug.Stack()))
 			}
 		}()
 		for msg := range cancelSub.Channel() {
 			var cm CancelMessage
 			if err := json.Unmarshal([]byte(msg.Payload), &cm); err != nil {
-				w.log("worker.cancel_msg_unmarshal_failed", map[string]any{
+				w.log(workCtx, "worker.cancel_msg_unmarshal_failed", map[string]any{
 					"session_id": claim.SessionID,
 					"work_id":    claim.WorkID,
 					"error":      err.Error(),
 				})
 				continue
 			}
-			w.log("worker.cancel_msg_received", map[string]any{
-				"session_id":   claim.SessionID,
-				"work_id":      claim.WorkID,
-				"msg_work_id":  cm.WorkID,
-				"msg_reason":   cm.Reason,
+			w.log(workCtx, "worker.cancel_msg_received", map[string]any{
+				"session_id":    claim.SessionID,
+				"work_id":       claim.WorkID,
+				"msg_work_id":   cm.WorkID,
+				"msg_reason":    cm.Reason,
 				"work_id_match": cm.WorkID == claim.WorkID,
 			})
 			if cm.WorkID == claim.WorkID {
@@ -85,7 +85,7 @@ func (w *Worker) setupCancelListener(
 				}
 				adminCancelled.Store(true)
 				workCancel()
-				w.log("worker.cancel_msg_delivered", map[string]any{
+				w.log(workCtx, "worker.cancel_msg_delivered", map[string]any{
 					"session_id": claim.SessionID,
 					"work_id":    claim.WorkID,
 					"reason":     cm.Reason,
@@ -96,11 +96,11 @@ func (w *Worker) setupCancelListener(
 		// Channel closed without delivering a matching cancel message.
 		// This means the Pub/Sub subscription ended (workCtx cancelled or
 		// connection lost) before a cancel for this work arrived.
-		w.log("worker.cancel_sub_channel_closed", map[string]any{
-			"session_id":        claim.SessionID,
-			"work_id":           claim.WorkID,
-			"admin_cancelled":   adminCancelled.Load(),
-			"message":           "cancel subscription channel closed; Pub/Sub subscription may have been lost",
+		w.log(workCtx, "worker.cancel_sub_channel_closed", map[string]any{
+			"session_id":      claim.SessionID,
+			"work_id":         claim.WorkID,
+			"admin_cancelled": adminCancelled.Load(),
+			"message":         "cancel subscription channel closed; Pub/Sub subscription may have been lost",
 		})
 	}()
 
@@ -109,7 +109,7 @@ func (w *Worker) setupCancelListener(
 	if !adminCancelled.Load() {
 		recheck, recheckErr := w.q.LoadWork(workCtx, claim.WorkID)
 		if recheckErr == nil && recheck != nil && recheck.Status == StatusCancelled {
-			w.log("worker.cancelled_after_subscribe", map[string]any{
+			w.log(workCtx, "worker.cancelled_after_subscribe", map[string]any{
 				"work_id":    claim.WorkID,
 				"session_id": claim.SessionID,
 				"message":    "work was cancelled between LoadWork and SubscribeCancel; Pub/Sub message was lost; triggering cancel now",
@@ -152,7 +152,7 @@ func (w *Worker) startLockRenewal(
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				w.logError("lock renewal panic",
+				w.logError(workCtx, "lock renewal panic",
 					"session", claim.SessionID, "recover", r, "stack", string(debug.Stack()))
 			}
 		}()
@@ -174,13 +174,13 @@ func (w *Worker) startLockRenewal(
 				}
 				if err != nil {
 					failures := consecutiveRenewFailures.Add(1)
-					w.log("worker.renewal_transient_error", map[string]any{
+					w.log(workCtx, "worker.renewal_transient_error", map[string]any{
 						"session_id":           claim.SessionID,
 						"consecutive_failures": failures,
 						"error":                err.Error(),
 					})
 					if failures >= DefaultMaxConsecutiveRenewFailures {
-						w.logError("worker.renewal_giving_up",
+						w.logError(workCtx, "worker.renewal_giving_up",
 							"session", claim.SessionID,
 							"consecutive_failures", failures,
 						)
@@ -192,7 +192,7 @@ func (w *Worker) startLockRenewal(
 				}
 				consecutiveRenewFailures.Store(0)
 				if !ok {
-					w.log("worker.lock_lost", map[string]any{
+					w.log(workCtx, "worker.lock_lost", map[string]any{
 						"session_id": claim.SessionID,
 						"work_id":    claim.WorkID,
 					})

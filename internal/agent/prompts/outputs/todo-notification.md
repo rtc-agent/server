@@ -1,1 +1,0 @@
-<notification>Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable.</notification>

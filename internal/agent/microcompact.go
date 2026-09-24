@@ -17,11 +17,12 @@ import (
 // external mutation is not a concern.
 // Uses map[string]struct{} — the idiomatic Go set type (zero memory per value).
 var CompactableTools = map[string]struct{}{
-	"read":   {},
-	"write":  {},
-	"grep":   {},
-	"find":   {},
-	"script": {},
+	"read":      {},
+	"write":     {},
+	"grep":      {},
+	"find":      {},
+	"script":    {},
+	"todoWrite": {}, // Allow microcompact to clean up old todo list results
 }
 
 // MCClearedMessage is the placeholder text that replaces the content of a
@@ -101,7 +102,7 @@ func microcompactMessages(messages []*turnagent.Message, cfg MicrocompactConfig)
 	}
 
 	// Build a set of all compactable IDs for O(1) membership check.
-	// Non-compactable tool results (e.g., ask_user) must NOT be cleared.
+	// Non-compactable tool results (e.g., askUser) must NOT be cleared.
 	keepSet := make(map[string]struct{}, keepRecent)
 	for _, id := range compactableIDs[len(compactableIDs)-keepRecent:] {
 		keepSet[id] = struct{}{}

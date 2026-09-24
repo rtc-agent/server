@@ -8,6 +8,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // WorkerConfig configures a Worker that manages the full lifecycle of
@@ -64,8 +69,8 @@ type WorkerConfig struct {
 // WorkerLogger is the logging interface used by Worker.
 // Compatible with most structured loggers via adapter.
 type WorkerLogger interface {
-	Info(msg string, keysAndValues ...any)
-	Error(msg string, keysAndValues ...any)
+	Info(ctx context.Context, msg string, keysAndValues ...any)
+	Error(ctx context.Context, msg string, keysAndValues ...any)
 }
 
 // Worker manages the lifecycle of processing work items from a Queue.
@@ -84,6 +89,11 @@ type Worker struct {
 	sem           chan struct{} // concurrency semaphore
 }
 
+// workerTracer returns the tracer for worker operations.
+func workerTracer() trace.Tracer {
+	return otel.GetTracerProvider().Tracer("rtc-queue.worker")
+}
+
 // NewWorker constructs a Worker. Call Run to start processing.
 func NewWorker(q *Queue, cfg WorkerConfig) *Worker {
 	if cfg.Concurrency <= 0 {
@@ -97,7 +107,7 @@ func NewWorker(q *Queue, cfg WorkerConfig) *Worker {
 	}
 	if cfg.OnError == nil {
 		cfg.OnError = func(err error) {
-			cfg.Logger.Error("worker error", "error", err)
+			cfg.Logger.Error(context.Background(), "worker error", "error", err)
 		}
 	}
 	return &Worker{
@@ -110,7 +120,7 @@ func NewWorker(q *Queue, cfg WorkerConfig) *Worker {
 
 // log logs a message for debugging worker lifecycle.
 // Keys are sorted for deterministic output order (Go map iteration is random).
-func (w *Worker) log(event string, fields map[string]any) {
+func (w *Worker) log(ctx context.Context, event string, fields map[string]any) {
 	keys := make([]string, 0, len(fields))
 	for k := range fields {
 		keys = append(keys, k)
@@ -120,21 +130,30 @@ func (w *Worker) log(event string, fields map[string]any) {
 	for _, k := range keys {
 		kv = append(kv, k, fields[k])
 	}
-	w.cfg.Logger.Info(event, kv...)
+	w.cfg.Logger.Info(ctx, event, kv...)
 }
 
 // logError logs an error message using the configured logger.
-func (w *Worker) logError(msg string, keysAndValues ...any) {
-	w.cfg.Logger.Error(msg, keysAndValues...)
+func (w *Worker) logError(ctx context.Context, msg string, keysAndValues ...any) {
+	w.cfg.Logger.Error(ctx, msg, keysAndValues...)
 }
 
 // Run starts the worker loop. It blocks until ctx is cancelled or an
 // unrecoverable error occurs. Run subscribes to session:new and
 // dispatches work to OnWork callbacks. Call Stop for graceful shutdown.
 func (w *Worker) Run(ctx context.Context) error {
+	ctx, span := workerTracer().Start(ctx, "Worker.Run",
+		trace.WithAttributes(
+			attribute.String("worker.id", w.cfg.WorkerID),
+			attribute.Int("worker.concurrency", w.cfg.Concurrency),
+		),
+	)
+	defer span.End()
+
 	w.mu.Lock()
 	if w.running {
 		w.mu.Unlock()
+		span.SetStatus(codes.Error, "worker already running")
 		return fmt.Errorf("rtcqueue: worker already running")
 	}
 	w.running = true
@@ -153,13 +172,15 @@ func (w *Worker) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			span.SetAttributes(attribute.String("worker.exit_reason", "context_cancelled"))
 			return ctx.Err()
 		case msg, ok := <-ch:
 			if !ok {
+				span.SetAttributes(attribute.String("worker.exit_reason", "channel_closed"))
 				return nil
 			}
 			sessionID := msg.Payload
-			w.log("worker.received_notification", map[string]any{
+			w.log(ctx, "worker.received_notification", map[string]any{
 				"session_id": sessionID,
 			})
 			w.wg.Add(1)
@@ -167,7 +188,7 @@ func (w *Worker) Run(ctx context.Context) error {
 				defer w.wg.Done()
 				defer func() {
 					if r := recover(); r != nil {
-						w.logError("goroutine panic",
+						w.logError(ctx, "goroutine panic",
 							"session", sessionID, "recover", r, "stack", string(debug.Stack()))
 					}
 				}()
@@ -189,25 +210,38 @@ func (w *Worker) Run(ctx context.Context) error {
 // (whichever comes first). After Stop returns, the worker cannot be
 // restarted.
 func (w *Worker) Stop(ctx context.Context) error {
+	ctx, span := workerTracer().Start(ctx, "Worker.Stop",
+		trace.WithAttributes(
+			attribute.String("worker.id", w.cfg.WorkerID),
+		),
+	)
+	defer span.End()
+
 	w.mu.Lock()
 	if !w.running {
 		w.mu.Unlock()
+		span.SetAttributes(attribute.Bool("worker.was_running", false))
 		return nil
 	}
 	// cancel all active sessions
+	sessionCount := len(w.sessions)
 	for _, cancel := range w.sessions {
 		if cancel != nil { // guard against nil during processSession startup race
 			cancel()
 		}
 	}
 	w.mu.Unlock()
+	span.SetAttributes(
+		attribute.Bool("worker.was_running", true),
+		attribute.Int("worker.sessions_cancelled", sessionCount),
+	)
 
 	// wait for all goroutines to finish, with timeout
 	done := make(chan struct{})
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				w.logError("stop wait panic",
+				w.logError(ctx, "stop wait panic",
 					"recover", r, "stack", string(debug.Stack()))
 			}
 		}()
@@ -216,8 +250,11 @@ func (w *Worker) Stop(ctx context.Context) error {
 	}()
 	select {
 	case <-done:
+		span.SetAttributes(attribute.Bool("worker.stopped_gracefully", true))
 		return nil
 	case <-ctx.Done():
+		span.SetAttributes(attribute.Bool("worker.stopped_gracefully", false))
+		span.SetStatus(codes.Error, "stop timed out")
 		return ctx.Err()
 	}
 }
@@ -231,6 +268,15 @@ func (w *Worker) Stop(ctx context.Context) error {
 // completing a work item and continues to claim more work from the
 // same session until the queue is empty.
 func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
+	ctx, span := workerTracer().Start(globalCtx, "Worker.processSession",
+		trace.WithAttributes(
+			attribute.String("session.id", sessionID),
+			attribute.String("worker.id", w.cfg.WorkerID),
+			attribute.Bool("worker.hold_lock", w.cfg.HoldLock),
+		),
+	)
+	defer span.End()
+
 	// Prevent concurrent processSession for the same session.
 	// If another goroutine is already processing this session, skip.
 	// This prevents a race where two goroutines both call ClaimWithCredential
@@ -242,7 +288,8 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 	w.mu.Unlock()
 	if active {
 		w.sessionClaims.Unlock()
-		w.log("worker.session_already_active", map[string]any{
+		span.SetAttributes(attribute.Bool("worker.skipped", true))
+		w.log(ctx, "worker.session_already_active", map[string]any{
 			"session_id": sessionID,
 			"message":    "skipping concurrent processSession",
 		})
@@ -259,7 +306,7 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 
 	// create a session-scoped context so we can cancel this session
 	// independently (e.g. on Stop)
-	ctx, cancel := context.WithCancel(globalCtx)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// Update the sessions map with the actual cancel function
@@ -276,11 +323,12 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 
 	select {
 	case <-ctx.Done():
+		span.SetAttributes(attribute.String("worker.exit_reason", "context_cancelled"))
 		return
 	default:
 	}
 
-	w.log("worker.claiming", map[string]any{
+	w.log(ctx, "worker.claiming", map[string]any{
 		"session_id": sessionID,
 		"worker_id":  w.cfg.WorkerID,
 	})
@@ -296,9 +344,17 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 
 // processSessionNormal handles the normal mode: claim one work, process it, release lock.
 func (w *Worker) processSessionNormal(ctx context.Context, sessionID string) {
+	ctx, span := workerTracer().Start(ctx, "Worker.processSessionNormal",
+		trace.WithAttributes(
+			attribute.String("session.id", sessionID),
+		),
+	)
+	defer span.End()
+
 	claim, err := w.q.Claim(ctx, sessionID, w.cfg.WorkerID)
 	if err != nil {
-		w.log("worker.claim_failed", map[string]any{
+		span.SetStatus(codes.Error, err.Error())
+		w.log(ctx, "worker.claim_failed", map[string]any{
 			"session_id": sessionID,
 			"error":      err.Error(),
 		})
@@ -307,13 +363,18 @@ func (w *Worker) processSessionNormal(ctx context.Context, sessionID string) {
 	}
 	if claim == nil {
 		// queue empty or lost the race
-		w.log("worker.claim_empty", map[string]any{
+		span.SetAttributes(attribute.Bool("queue.claimed", false))
+		w.log(ctx, "worker.claim_empty", map[string]any{
 			"session_id": sessionID,
 		})
 		return
 	}
 
-	w.log("worker.claimed", map[string]any{
+	span.SetAttributes(
+		attribute.Bool("queue.claimed", true),
+		attribute.String("work.id", claim.WorkID),
+	)
+	w.log(ctx, "worker.claimed", map[string]any{
 		"session_id": sessionID,
 		"work_id":    claim.WorkID,
 	})
@@ -327,10 +388,18 @@ func (w *Worker) processSessionNormal(ctx context.Context, sessionID string) {
 // processSessionHoldLock handles the hold lock mode: claim work with credential,
 // process it, complete without releasing lock, continue until queue is empty.
 func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
+	ctx, span := workerTracer().Start(ctx, "Worker.processSessionHoldLock",
+		trace.WithAttributes(
+			attribute.String("session.id", sessionID),
+		),
+	)
+	defer span.End()
+
 	// First claim: pass empty credential, get credential from result
 	claim, err := w.q.ClaimWithCredential(ctx, sessionID, w.cfg.WorkerID, "")
 	if err != nil {
-		w.log("worker.claim_failed", map[string]any{
+		span.SetStatus(codes.Error, err.Error())
+		w.log(ctx, "worker.claim_failed", map[string]any{
 			"session_id": sessionID,
 			"error":      err.Error(),
 		})
@@ -339,58 +408,82 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 	}
 	if claim == nil {
 		// queue empty or lost the race
-		w.log("worker.claim_empty", map[string]any{
+		span.SetAttributes(attribute.Bool("queue.claimed", false))
+		w.log(ctx, "worker.claim_empty", map[string]any{
 			"session_id": sessionID,
 		})
 		return
 	}
 
-	w.log("worker.claimed", map[string]any{
+	span.SetAttributes(
+		attribute.Bool("queue.claimed", true),
+		attribute.String("work.id", claim.WorkID),
+	)
+	w.log(ctx, "worker.claimed", map[string]any{
 		"session_id": sessionID,
 		"work_id":    claim.WorkID,
 		"credential": claim.Credential,
 	})
 
 	credential := claim.Credential
+	workCount := 0
 
 	// Process work in a loop
 	for {
 		w.processWorkHoldLock(ctx, claim)
+		workCount++
 
 		// Try to claim next work with credential
 		nextClaim, err := w.q.ClaimWithCredential(ctx, sessionID, w.cfg.WorkerID, credential)
 		if err != nil {
-			w.log("worker.claim_next_failed", map[string]any{
+			span.SetStatus(codes.Error, err.Error())
+			w.log(ctx, "worker.claim_next_failed", map[string]any{
 				"session_id": sessionID,
 				"error":      err.Error(),
 			})
 			// Release lock on error. Use Background() with timeout because ctx
 			// may be cancelled (worker shutdown), which would prevent the lock
 			// from being released and leave the session locked until TTL expires.
+			// Only release if we still hold the lock (credential check).
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := w.q.ReleaseSession(releaseCtx, sessionID); err != nil {
-				w.logError("worker.release_session_failed",
-					"session", sessionID, "error", err.Error())
+			released, releaseErr := w.q.ReleaseSession(releaseCtx, sessionID, w.cfg.WorkerID, credential)
+			if releaseErr != nil {
+				w.logError(ctx, "worker.release_session_failed",
+					"session", sessionID, "error", releaseErr.Error())
+			} else if !released {
+				w.log(ctx, "worker.release_session_skipped", map[string]any{
+					"session_id": sessionID,
+					"reason":     "lock_already_lost",
+				})
 			}
 			releaseCancel()
+			span.SetAttributes(attribute.Int("worker.works_processed", workCount))
 			return
 		}
 		if nextClaim == nil {
 			// Queue is empty, release lock.
 			// Use Background() with timeout for the same reason as above.
+			// Only release if we still hold the lock (credential check).
 			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			w.log("worker.queue_empty_releasing_lock", map[string]any{
+			w.log(ctx, "worker.queue_empty_releasing_lock", map[string]any{
 				"session_id": sessionID,
 			})
-			if err := w.q.ReleaseSession(releaseCtx, sessionID); err != nil {
-				w.logError("worker.release_session_failed",
-					"session", sessionID, "error", err.Error())
+			released, releaseErr := w.q.ReleaseSession(releaseCtx, sessionID, w.cfg.WorkerID, credential)
+			if releaseErr != nil {
+				w.logError(ctx, "worker.release_session_failed",
+					"session", sessionID, "error", releaseErr.Error())
+			} else if !released {
+				w.log(ctx, "worker.release_session_skipped", map[string]any{
+					"session_id": sessionID,
+					"reason":     "lock_already_lost",
+				})
 			}
 			releaseCancel()
+			span.SetAttributes(attribute.Int("worker.works_processed", workCount))
 			return
 		}
 
-		w.log("worker.claimed_next", map[string]any{
+		w.log(ctx, "worker.claimed_next", map[string]any{
 			"session_id": sessionID,
 			"work_id":    nextClaim.WorkID,
 		})
@@ -413,7 +506,16 @@ func (w *Worker) processWorkHoldLock(ctx context.Context, claim *ClaimResult) {
 
 // processWorkInternal is the shared implementation for both normal and hold-lock modes.
 func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, holdLock bool, credential string) {
-	w.log("worker.processing_work", map[string]any{
+	ctx, span := workerTracer().Start(ctx, "Worker.processWorkInternal",
+		trace.WithAttributes(
+			attribute.String("work.id", claim.WorkID),
+			attribute.String("session.id", claim.SessionID),
+			attribute.Bool("worker.hold_lock", holdLock),
+		),
+	)
+	defer span.End()
+
+	w.log(ctx, "worker.processing_work", map[string]any{
 		"work_id":    claim.WorkID,
 		"session_id": claim.SessionID,
 		"hold_lock":  holdLock,
@@ -426,10 +528,12 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	defer loadCancel()
 	work, err := w.q.LoadWork(loadCtx, claim.WorkID)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		w.cfg.OnError(fmt.Errorf("load work %s: %w", claim.WorkID, err))
 		return
 	}
 	if work == nil {
+		span.SetStatus(codes.Error, "work vanished")
 		w.cfg.OnError(fmt.Errorf("work %s vanished", claim.WorkID))
 		return
 	}
@@ -438,7 +542,7 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	// (e.g. turn-agent) can use it without re-claiming the lock.
 	work.Credential = credential
 
-	w.log("worker.loaded_work", map[string]any{
+	w.log(ctx, "worker.loaded_work", map[string]any{
 		"work_id":    claim.WorkID,
 		"session_id": work.SessionID,
 	})
@@ -461,7 +565,7 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	defer close(lockLost.done)
 
 	// call the user's callback
-	w.log("worker.calling_onwork", map[string]any{
+	w.log(ctx, "worker.calling_onwork", map[string]any{
 		"work_id":    work.ID,
 		"session_id": work.SessionID,
 	})
@@ -472,8 +576,9 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	}
 	if err != nil {
 		onworkFields["error"] = err.Error()
+		span.SetStatus(codes.Error, err.Error())
 	}
-	w.log("worker.onwork_returned", onworkFields)
+	w.log(ctx, "worker.onwork_returned", onworkFields)
 
 	// Handle completion (extracted for complexity).
 	w.handleWorkCompletion(claim, err, holdLock, lockLost.lost, &adminCancelled)

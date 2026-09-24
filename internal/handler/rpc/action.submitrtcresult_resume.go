@@ -124,12 +124,17 @@ func (h *Handler) resumeActiveTurn(ctx context.Context, rtc *model.Rtc, activeTu
 		}
 	}
 
+	// Extract trace context for cross-process propagation.
+	traceID, spanID := turnagent.ExtractTraceFromCtx(ctx)
+
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:             turnagent.WorkKindResume,
 		SessionID:        rtc.SessionID.String(),
 		InterruptID:      interruptID,
 		InterruptResult:  interruptResult,
 		BatchResumeItems: batchResumeItems,
+		TraceID:          traceID,
+		SpanID:           spanID,
 	})
 	if marshalErr != nil {
 		logger.Error(ctx, "[resumeTurnAfterRtc] marshal resume payload", zap.Error(marshalErr))
@@ -219,9 +224,14 @@ func (h *Handler) publishOrphanSubmit(ctx context.Context, rtc *model.Rtc) {
 		return
 	}
 
+	// Extract trace context for cross-process propagation.
+	traceID, spanID := turnagent.ExtractTraceFromCtx(ctx)
+
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: rtc.SessionID.String(),
+		TraceID:   traceID,
+		SpanID:    spanID,
 	})
 	if marshalErr != nil {
 		logger.Error(ctx, "[resumeTurnAfterRtc] marshal submit payload", zap.Error(marshalErr))

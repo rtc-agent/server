@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/compose"
+	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -128,7 +129,8 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	tools := []tool.BaseTool{
 		&lsTool{base: base},
 		&readTool{base: base},
-		//&writeTool{base: base}, disabled
+		&writeTool{base: base},
+		&editTool{base: base},
 		&grepTool{base: base},
 		&findTool{base: base},
 		&scriptTool{base: base},
@@ -139,9 +141,9 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 			session:      session,
 			helpers:      h,
 			turnID:       tid,
-			formatResult: formatAskUserResult,
+			formatResult: FormatAskUserResult,
 		}},
-		&todoWriteTool{helper: h, session: session},
+		&todoWriteTool{helper: h, session: session, turnID: tid},
 		// subAgentTool enables LLM to create sub agent sessions for task decomposition.
 		&subAgentTool{
 			session: session,
@@ -166,42 +168,55 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 			helpers: h,
 			turnID:  tid,
 		},
+		// sendMessageToSubAgentTool sends a message to an async sub-agent session.
+		&sendMessageToSubAgentTool{
+			session: session,
+			helpers: h,
+			turnID:  tid,
+		},
 	}
 
 	// Add Session Memory tools
-	if saveMemoryTool := h.createSaveSessionMemoryTool(); saveMemoryTool != nil {
+	if saveMemoryTool := h.createSaveSessionMemoryTool(session, tid); saveMemoryTool != nil {
 		tools = append(tools, saveMemoryTool)
 	}
-	if listMemoriesTool := h.createListSessionMemoriesTool(); listMemoriesTool != nil {
+	if listMemoriesTool := h.createListSessionMemoriesTool(session, tid); listMemoriesTool != nil {
 		tools = append(tools, listMemoriesTool)
 	}
-	if searchMemoryTool := h.createSearchMemoryTool(); searchMemoryTool != nil {
+	if searchMemoryTool := h.createSearchMemoryTool(session, tid); searchMemoryTool != nil {
 		tools = append(tools, searchMemoryTool)
 	}
 
 	// Add User Memory tools
-	if saveUserMemoryTool := h.createSaveUserMemoryTool(); saveUserMemoryTool != nil {
+	if saveUserMemoryTool := h.createSaveUserMemoryTool(session, tid); saveUserMemoryTool != nil {
 		tools = append(tools, saveUserMemoryTool)
 	}
-	if updateUserMemoryTool := h.createUpdateUserMemoryTool(); updateUserMemoryTool != nil {
+	if updateUserMemoryTool := h.createUpdateUserMemoryTool(session, tid); updateUserMemoryTool != nil {
 		tools = append(tools, updateUserMemoryTool)
 	}
-	if deleteUserMemoryTool := h.createDeleteUserMemoryTool(); deleteUserMemoryTool != nil {
+	if deleteUserMemoryTool := h.createDeleteUserMemoryTool(session, tid); deleteUserMemoryTool != nil {
 		tools = append(tools, deleteUserMemoryTool)
 	}
-	if listUserMemoryTool := h.createListUserMemoryTool(); listUserMemoryTool != nil {
+	if listUserMemoryTool := h.createListUserMemoryTool(session, tid); listUserMemoryTool != nil {
 		tools = append(tools, listUserMemoryTool)
 	}
 
-	// Slash-command framework: collect tools from all active commands.
-	// In PR1 the registry has no commands registered, so this is a no-op.
+	// Slash-command framework: collect tools from ALL registered commands.
+	//
+	// Static registration: tools are always available to the LLM, regardless
+	// of command activation state. This eliminates the need to track activation
+	// state across interrupt/resume cycles, solving the "tools disappear on resume"
+	// problem.
+	//
+	// The LLM is guided to use these tools appropriately by TriggerPrompt
+	// injections (e.g., "only call createLoop after user confirms").
 	if h.deps.CommandRegistry != nil {
 		cmdCtx := command.Context{
 			Context:   ctx,
 			SessionID: sid,
 			TurnID:    tid,
 		}
-		tools = append(tools, h.deps.CommandRegistry.CollectTools(cmdCtx)...)
+		tools = append(tools, h.deps.CommandRegistry.CollectAllTools(cmdCtx)...)
 	}
 
 	// Wrap all tools with error handler: convert tool errors to string results
@@ -209,12 +224,21 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	// the entire turn with NodeRunError. Interrupt errors are preserved (not wrapped).
 	// Use <error> XML tags to clearly delimit the error, following Claude Code's
 	// convention — this helps the LLM distinguish errors from normal output.
+	//
+	// Additionally, log tool call failures server-side so we can diagnose
+	// issues without relying on LLM to surface them.
 	errorHandler := func(ctx context.Context, err error) string {
 		return formatErrorWrapper(err.Error())
 	}
 	wrappedTools := make([]tool.BaseTool, len(tools))
 	for i, t := range tools {
-		wrappedTools[i] = utils.WrapToolWithErrorHandler(t, errorHandler)
+		// Wrap layers (outer to inner): error handler → normalizer → logger → tool
+		// 1. Logger: records tool call failures server-side
+		logged := &toolCallLogger{inner: t, helpers: h, sessionID: sid, turnID: tid}
+		// 2. Normalizer: preprocesses empty/null/whitespace arguments to "{}"
+		normalized := &toolCallArgumentsNormalizer{inner: logged}
+		// 3. Error handler: converts errors to user-friendly strings
+		wrappedTools[i] = utils.WrapToolWithErrorHandler(normalized, errorHandler)
 	}
 
 	h.logger.Info(ctx, "createTools.done", map[string]any{
@@ -224,6 +248,58 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	})
 
 	return wrappedTools, nil
+}
+
+// toolCallLogger wraps a tool to log invocations and errors server-side.
+// This provides observability into tool failures that would otherwise only
+// be visible to the LLM (via the error handler wrapper). Delegates all
+// interface methods to the inner tool.
+//
+// Implements InvokableTool by delegating to the inner tool. If the inner
+// tool is not invokable (BaseTool-only), InvokableRun returns an error
+// instead of panicking — this protects against future tool types that
+// don't implement InvokableTool.
+type toolCallLogger struct {
+	inner     tool.BaseTool
+	helpers   *helpers
+	sessionID uuid.UUID
+	turnID    uuid.UUID
+}
+
+func (l *toolCallLogger) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	return l.inner.Info(ctx)
+}
+
+// toolName extracts the tool name via Info(). Returns "unknown" on error.
+func (l *toolCallLogger) toolName(ctx context.Context) string {
+	if info, _ := l.inner.Info(ctx); info != nil {
+		return info.Name
+	}
+	return "unknown"
+}
+
+func (l *toolCallLogger) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	// Safe type assertion: if inner is not InvokableTool, return an error
+	// instead of panicking. This protects against future tool types that
+	// only implement BaseTool (e.g., read-only schema providers).
+	invokable, ok := l.inner.(tool.InvokableTool)
+	if !ok {
+		name := l.toolName(ctx)
+		return formatErrorWrapper("tool " + name + " does not support invocation"), nil
+	}
+
+	toolName := l.toolName(ctx)
+
+	result, err := invokable.InvokableRun(ctx, argumentsInJSON, opts...)
+	if err != nil {
+		l.helpers.logger.Warn(ctx, "tool.call_failed", map[string]any{
+			"tool_name":  toolName,
+			"session_id": l.sessionID.String(),
+			"turn_id":    l.turnID.String(),
+			"error":      err.Error(),
+		})
+	}
+	return result, err
 }
 
 // createAgent builds the eino agent from the session's tools.
@@ -272,7 +348,12 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 	ctx = withSessionID(ctx, sid)
 
 	// Build handlers list, filtering out nil middleware
+	// Order matters: merge assistant first (merges adjacent assistant messages),
+	// then summarize (context compression)
 	var handlers []adk.ChatModelAgentMiddleware
+	if h.mergeAssistantMW != nil {
+		handlers = append(handlers, h.mergeAssistantMW)
+	}
 	if h.summarizeMW != nil {
 		handlers = append(handlers, h.summarizeMW)
 	}
@@ -306,10 +387,28 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		}
 	}
 
+	// System prompt and AgentPrompt are now injected via loadMessages pipeline
+	// (injectSystemAndAgentPrompt) to ensure consistent system array structure
+	// between GenInput and GenResume paths.
+	//
+	// BUG 11 fix: Instruction is set to empty string "" instead of " " (space).
+	// Previously, eino added Instruction as system[0] in GenInput but not in GenResume,
+	// causing system array structure inconsistency and cache invalidation.
+	// Empty string prevents eino from adding any system message for Instruction.
+	instruction := ""
+	h.logger.Info(ctx, "createAgent.instruction_debug", map[string]any{
+		"session_id":           sessionID,
+		"instruction_length":   len(instruction),
+		"instruction_empty":    instruction == "",
+		"system_prompt_length": len(systemPrompt),
+		"agent_prompt_length":  len(session.AgentPrompt),
+		"note":                 "Instruction minimized to empty string (BUG 11 fix)",
+	})
+
 	agent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:             fmt.Sprintf("session-%s", sessionID),
 		Description:      "RTC Agent session handler",
-		Instruction:      systemPrompt + "\n" + session.AgentPrompt,
+		Instruction:      instruction,
 		Model:            h.deps.ChatModel,
 		Handlers:         handlers,
 		ModelRetryConfig: retryConfig,

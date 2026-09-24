@@ -11,3 +11,4 @@ Usage notes:
 - The sub agent starts with a blank context. Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters
 - Explain what you're trying to accomplish and why. Describe what you've already learned or ruled out
 - Never delegate understanding. Don't write vague instructions like "handle this task" — include specific requirements, file paths, and relevant context
+- Related tools: `listSubAgent` to check status, `sendMessageToSubAgent` to send follow-up instructions, `stopSubAgent` to cancel.

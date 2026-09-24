@@ -8,6 +8,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/command"
+	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -24,10 +25,10 @@ import (
 //
 // Final message order after all injection steps:
 //
-//	[system] Attachments (TodoList, SessionMemory, UserMemory)
+//	[system] Attachments (SessionMemory, UserMemory)
 //	[system] Scenarios (injectScenarioPrompts)
 //	[system] Command prompts (injectCommandPrompts)
-//	[user/assistant] Conversation history
+//	[user/assistant] Conversation history (includes prompt messages at natural position)
 
 // injectCommandPrompts runs the slash-command framework's DetectAndInject,
 // converting the returned PromptContributions to turnagent Messages.
@@ -40,19 +41,30 @@ import (
 //
 // Message ordering: System messages are prepended to the message array
 // (Claude API requires system messages at the start). User messages are
-// appended to the end. This ensures valid message sequence for the LLM.
-func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID, messages []*turnagent.Message) []*turnagent.Message {
+// injected here on every turn so they remain in the LLM context.
+//
+// For PersistablePrompt commands, TriggerPrompt is persisted to DB and
+// included in the conversation history by convertDBMessage at its natural
+// position (based on global_offset). SustainPrompt is always dynamically
+// injected (not persisted).
+//
+// Returns updated (messages, dbMsgs).
+func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID, messages []*turnagent.Message, dbMsgs []*model.Message) ([]*turnagent.Message, []*model.Message) {
 	if h.deps.CommandRegistry == nil {
-		return messages
+		return messages, dbMsgs
 	}
 
-	// Extract last user message content.
+	// Extract last user message content, but ONLY if the last message overall
+	// is a user message. This prevents re-detecting commands from historical
+	// user messages when the conversation has moved on (e.g., after assistant
+	// responses or tool results).
+	//
+	// Command detection should only trigger on fresh user input, not on
+	// historical messages. If the last message is assistant/tool, the user
+	// hasn't sent a new command, so we skip detection entirely.
 	var lastUserContent string
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == turnagent.RoleUser {
-			lastUserContent = messages[i].Content
-			break
-		}
+	if len(messages) > 0 && messages[len(messages)-1].Role == turnagent.RoleUser {
+		lastUserContent = messages[len(messages)-1].Content
 	}
 
 	cmdCtx := command.Context{
@@ -61,13 +73,51 @@ func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID,
 	}
 	contributions, err := h.deps.CommandRegistry.DetectAndInject(cmdCtx, lastUserContent)
 	if err != nil || len(contributions) == 0 {
-		return messages
+		return messages, dbMsgs
+	}
+
+	// Persist TriggerPrompt for commands that implement PersistablePrompt.
+	// Newly created messages are appended to dbMsgs so they can be converted
+	// by convertDBMessage on this turn (not just subsequent turns).
+	newPromptMsgs := h.persistCommandPromptsIfNeeded(ctx, sessionID, contributions)
+	dbMsgs = append(dbMsgs, newPromptMsgs...)
+
+	// Convert newly persisted prompt messages and add them to the current
+	// turn's messages. Without this, the prompt would only be visible to the
+	// LLM on subsequent turns (via convertDBMessage loading from DB), causing
+	// the first request to miss the workflow instructions entirely.
+	//
+	// At this point, the last message in `messages` is the user message that
+	// triggered the command, so appending here places the prompt right after
+	// the user message — matching the position it would have when loaded from
+	// DB on subsequent turns (via global_offset ordering).
+	for _, newMsg := range newPromptMsgs {
+		converted, convErr := convertDBMessage(newMsg)
+		if convErr != nil {
+			h.logger.Warn(ctx, "injectCommandPrompts.convert_new_prompt_failed", map[string]any{
+				"session_id": sessionID.String(),
+				"error":      convErr.Error(),
+			})
+			continue
+		}
+		messages = append(messages, converted...)
 	}
 
 	// Separate system and user contributions.
-	// System messages must be at the start of the message array per Claude API.
+	// For PersistablePrompt commands, skip TriggerPrompt from dynamic injection
+	// (it's persisted to DB and included by convertDBMessage).
+	// SustainPrompt is always dynamically injected (not persisted).
 	var systemMsgs, userMsgs []*turnagent.Message
 	for _, nc := range contributions {
+		// Skip TriggerPrompt for PersistablePrompt commands only.
+		// SustainPrompt (IsNewlyTriggered=false) is always injected dynamically.
+		if cmd := h.deps.CommandRegistry.FindByName(nc.CommandName); cmd != nil {
+			if _, ok := cmd.(command.PersistablePrompt); ok {
+				if h.deps.CommandRegistry.IsNewlyTriggered(sessionID, nc.CommandName) {
+					continue
+				}
+			}
+		}
 		msg := &turnagent.Message{
 			Role:    nc.Contribution.Role,
 			Content: wrapWithTag(nc.CommandName, nc.Contribution.Content),
@@ -86,7 +136,7 @@ func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID,
 	if len(userMsgs) > 0 {
 		messages = append(messages, userMsgs...)
 	}
-	return messages
+	return messages, dbMsgs
 }
 
 func wrapWithTag(name, content string) string {
@@ -102,12 +152,16 @@ func wrapWithTag(name, content string) string {
 // a redundant DB query. The scenarios field is only available in the raw
 // model.Message (lost during convertDBMessage).
 //
+// Detection: if scenarios have already been persisted as prompt messages
+// (by Handler layer), convertDBMessage will include them.
+// This function detects that case and skips injection to avoid duplicates.
+//
 // Injection order (final):
 //
-//	[system] Attachments (TodoList, SessionMemory, UserMemory)
-//	[system] Scenarios (this function)
+//	[system] Attachments (SessionMemory, UserMemory)
+//	[system] Scenarios (this function — fallback when not persisted)
 //	[system] Command prompts (/goal, /persona, etc.)
-//	[user/assistant] Conversation history
+//	[user/assistant] Conversation history (includes persisted prompt messages)
 func (h *helpers) injectScenarioPrompts(
 	messages []*turnagent.Message,
 	dbMsgs []*model.Message,
@@ -121,6 +175,25 @@ func (h *helpers) injectScenarioPrompts(
 	// after convertDBMessage).
 	if len(dbMsgs) == 0 {
 		return messages
+	}
+
+	// Check if scenarios have already been persisted as prompt messages.
+	// If so, convertDBMessage will include them — skip to avoid duplicates.
+	for _, dbMsg := range dbMsgs {
+		contentData, err := primitives.ParseContentData(dbMsg.Content)
+		if err != nil {
+			continue
+		}
+		if contentData.Type == protocol.ContentTypePrompt {
+			pc, err := primitives.ParsePromptContent(contentData.Data)
+			if err != nil {
+				continue
+			}
+			// Found a persisted scenario prompt — skip injection.
+			if pc.Name == "scenarios" {
+				return messages
+			}
+		}
 	}
 
 	// Find the last user message.
@@ -187,8 +260,125 @@ func (h *helpers) injectScenarioPrompts(
 	// [system] Attachments
 	// [system] Scenarios (injected by this function)
 	// [system] Command prompts
-	// [conversation history]
+	// [conversation history] (includes persisted prompt messages)
 	messages = append([]*turnagent.Message{scenarioMsg}, messages...)
 
 	return messages
+}
+
+// formatPromptAsXML wraps prompt content in XML tags for LLM consumption.
+// Format: <prompt name="..." title="...">content</prompt>
+func formatPromptAsXML(pc protocol.PromptContent) string {
+	var sb strings.Builder
+	sb.WriteString("<prompt")
+	fmt.Fprintf(&sb, ` name="%s"`, escapeXMLAttr(pc.Name))
+	if pc.Title != nil && *pc.Title != "" {
+		fmt.Fprintf(&sb, ` title="%s"`, escapeXMLAttr(*pc.Title))
+	}
+	sb.WriteString(">\n")
+	sb.WriteString(escapeXMLContent(pc.Prompt))
+	sb.WriteString("\n</prompt>")
+	return sb.String()
+}
+
+// persistCommandPromptsIfNeeded persists TriggerPrompt contributions as prompt
+// messages in DB. Only persists when:
+// 1. The command was newly triggered this turn (not sustain)
+// 2. The command implements PersistablePrompt interface
+//
+// Dedup is not needed here because command detection only fires on fresh user
+// input (last message is user role), and genResume skips detection entirely.
+//
+// The persisted prompt message uses role="system" in DB (for frontend rendering)
+// but PromptContent.Role controls how it's injected into LLM context.
+//
+// Returns the newly created model.Message entries so the caller can append them
+// to the in-memory dbMsgs snapshot.
+func (h *helpers) persistCommandPromptsIfNeeded(
+	ctx context.Context,
+	sessionID uuid.UUID,
+	contributions []command.NamedContribution,
+) []*model.Message {
+	var newMessages []*model.Message
+	for _, nc := range contributions {
+		// Only persist newly triggered commands (not sustain).
+		if !h.deps.CommandRegistry.IsNewlyTriggered(sessionID, nc.CommandName) {
+			continue
+		}
+
+		// Check if the command supports persistence.
+		cmd := h.deps.CommandRegistry.FindByName(nc.CommandName)
+		if cmd == nil {
+			continue
+		}
+		persistable, ok := cmd.(command.PersistablePrompt)
+		if !ok {
+			continue
+		}
+		config := persistable.PromptPersistConfig()
+		if !config.Persist {
+			continue
+		}
+
+		// Determine role for the prompt message.
+		// This role is stored in PromptContent and controls how the prompt is
+		// injected into LLM context (as user or system message).
+		promptRole := nc.Contribution.Role
+		if promptRole == "" {
+			promptRole = "system"
+		}
+
+		// Build PromptContent with role field.
+		// The role field in PromptContent controls how the prompt is injected
+		// into LLM context (as user or system message), but the DB message
+		// itself always uses role="system" for consistent frontend rendering.
+		contentData, err := primitives.PromptContentDataWithRole(
+			config.Name, config.Title, nc.Contribution.Content, promptRole,
+		)
+		if err != nil {
+			h.logger.Warn(ctx, "persistCommandPrompts.build_content_failed", map[string]any{
+				"command": nc.CommandName,
+				"error":   err.Error(),
+			})
+			continue
+		}
+
+		// Get session to retrieve topic channel.
+		session, err := h.deps.SessionRepo.GetByID(ctx, sessionID)
+		if err != nil || session == nil {
+			h.logger.Warn(ctx, "persistCommandPrompts.get_session_failed", map[string]any{
+				"command": nc.CommandName,
+				"error":   err,
+			})
+			continue
+		}
+		topicCh := channel.UserTopic(session.OwnerRefID)
+
+		// DB message always uses role="system" for consistent frontend rendering.
+		// The PromptContent.Role field controls LLM context injection role.
+		newMsg, err := h.createAndPublishMessage(
+			ctx,
+			sessionID,
+			uuid.Nil,
+			protocol.MessageRoleSystem,
+			contentData,
+			protocol.MessageStreamingCompleted,
+			topicCh,
+		)
+		if err != nil {
+			h.logger.Warn(ctx, "persistCommandPrompts.failed", map[string]any{
+				"command": nc.CommandName,
+				"error":   err.Error(),
+			})
+		} else {
+			h.logger.Debug(ctx, "persistCommandPrompts.persisted", map[string]any{
+				"command": nc.CommandName,
+				"name":    config.Name,
+				"title":   config.Title,
+				"role":    promptRole,
+			})
+			newMessages = append(newMessages, newMsg)
+		}
+	}
+	return newMessages
 }

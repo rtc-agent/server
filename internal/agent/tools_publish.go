@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/cloudwego/eino/compose"
 	"github.com/google/uuid"
@@ -47,10 +48,14 @@ func publishToolMessages(ctx context.Context, in publishToolMessagesInput) error
 		return fmt.Errorf("%s: turn UUID is nil", in.ToolName)
 	}
 
+	// 规范化 ArgumentsInJSON：空字符串或 "null" 统一为 "{}"
+	// 这确保 DB 存储和 eino 内存中的表示一致，避免缓存失效
+	argumentsInJSON := normalizeToolArguments(in.ArgumentsInJSON)
+
 	inputToolCall := protocol.ToolCall{
 		Id:       callID,
 		ToolName: in.ToolName,
-		Input:    in.ArgumentsInJSON,
+		Input:    argumentsInJSON,
 	}
 	inputContent := protocol.ContentData{
 		Type: protocol.ContentTypeToolCallInput,
@@ -60,7 +65,7 @@ func publishToolMessages(ctx context.Context, in publishToolMessagesInput) error
 	outputToolCall := protocol.ToolCall{
 		Id:       callID,
 		ToolName: in.ToolName,
-		Input:    in.ArgumentsInJSON,
+		Input:    argumentsInJSON,
 		Output:   &resultJSON,
 		Status:   &completedStatus,
 	}
@@ -127,7 +132,7 @@ func publishToolMessages(ctx context.Context, in publishToolMessagesInput) error
 // ---------------------------------------------------------------------------
 
 // publishOutputOnlyInput holds parameters for creating a toolcall_output message
-// when the parent toolcall_input already exists (async sub_agent pattern).
+// when the parent toolcall_input already exists (async subAgent pattern).
 type publishOutputOnlyInput struct {
 	Helpers         *helpers
 	SessionID       uuid.UUID
@@ -141,7 +146,7 @@ type publishOutputOnlyInput struct {
 
 // publishOutputOnly creates only a toolcall_output message (parent is an
 // existing toolcall_input) and publishes EntityMessage.created event.
-// Used by the async branch of sub_agent tool.
+// Used by the async branch of subAgent tool.
 func publishOutputOnly(ctx context.Context, in publishOutputOnlyInput) error {
 	completedStatus := "completed"
 
@@ -150,10 +155,13 @@ func publishOutputOnly(ctx context.Context, in publishOutputOnlyInput) error {
 		return fmt.Errorf("%s: tool_call_id not set in context", in.ToolName)
 	}
 
+	// 规范化 ArgumentsInJSON：空字符串或 "null" 统一为 "{}"
+	argumentsInJSON := normalizeToolArguments(in.ArgumentsInJSON)
+
 	outputToolCall := protocol.ToolCall{
 		Id:       callID,
 		ToolName: in.ToolName,
-		Input:    in.ArgumentsInJSON,
+		Input:    argumentsInJSON,
 		Output:   &in.Output,
 		Status:   &completedStatus,
 	}
@@ -205,4 +213,26 @@ func mustMarshalJSON(v any) (string, error) {
 		return "", fmt.Errorf("marshal json: %w", err)
 	}
 	return string(b), nil
+}
+
+// ---------------------------------------------------------------------------
+// normalizeToolArguments — normalize empty/null arguments to "{}"
+// ---------------------------------------------------------------------------
+
+// normalizeToolArguments normalizes empty or null JSON arguments to "{}".
+// This ensures consistency between DB storage and eino's in-memory representation,
+// preventing cache invalidation caused by "{}" vs null differences.
+//
+// When the LLM calls a tool with no arguments, different code paths may produce:
+//   - Empty string ""
+//   - Literal "null"
+//   - Empty object "{}"
+//
+// Eino's in-memory representation normalizes to "{}", so we do the same here.
+func normalizeToolArguments(argumentsInJSON string) string {
+	trimmed := strings.TrimSpace(argumentsInJSON)
+	if trimmed == "" || trimmed == "null" {
+		return "{}"
+	}
+	return argumentsInJSON
 }

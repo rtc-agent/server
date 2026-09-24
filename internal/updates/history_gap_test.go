@@ -1,6 +1,7 @@
 package updates
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -15,7 +16,7 @@ func TestFillGapPublications_NoGaps(t *testing.T) {
 		{Offset: 4, Data: []byte(`"b"`)},
 		{Offset: 5, Data: []byte(`"c"`)},
 	}
-	result := fillGapPublications(2, 5, pubs)
+	result := fillGapPublications(context.Background(), 2, 5, pubs)
 	if len(result) != 3 {
 		t.Fatalf("expected 3 publications, got %d", len(result))
 	}
@@ -32,7 +33,7 @@ func TestFillGapPublications_LeadingGap(t *testing.T) {
 	pubs := []*centrifuge.Publication{
 		{Offset: 5, Data: []byte(`"a"`)},
 	}
-	result := fillGapPublications(2, 5, pubs)
+	result := fillGapPublications(context.Background(), 2, 5, pubs)
 	// Expected: gap(3), gap(4), pub(5)
 	if len(result) != 3 {
 		t.Fatalf("expected 3 publications, got %d", len(result))
@@ -62,7 +63,7 @@ func TestFillGapPublications_TrailingGap(t *testing.T) {
 	pubs := []*centrifuge.Publication{
 		{Offset: 3, Data: []byte(`"a"`)},
 	}
-	result := fillGapPublications(2, 5, pubs)
+	result := fillGapPublications(context.Background(), 2, 5, pubs)
 	// Expected: pub(3), gap(4), gap(5)
 	if len(result) != 3 {
 		t.Fatalf("expected 3 publications, got %d", len(result))
@@ -84,7 +85,7 @@ func TestFillGapPublications_MiddleGap(t *testing.T) {
 		{Offset: 3, Data: []byte(`"a"`)},
 		{Offset: 6, Data: []byte(`"b"`)},
 	}
-	result := fillGapPublications(2, 6, pubs)
+	result := fillGapPublications(context.Background(), 2, 6, pubs)
 	// Expected: pub(3), gap(4), gap(5), pub(6)
 	if len(result) != 4 {
 		t.Fatalf("expected 4 publications, got %d", len(result))
@@ -106,7 +107,7 @@ func TestFillGapPublications_MiddleGap(t *testing.T) {
 func TestFillGapPublications_EmptyWithGap(t *testing.T) {
 	// sinceOffset=2, no pubs, latestOffset=5
 	// All offsets 3,4,5 are gaps
-	result := fillGapPublications(2, 5, nil)
+	result := fillGapPublications(context.Background(), 2, 5, nil)
 	if len(result) != 3 {
 		t.Fatalf("expected 3 gap publications, got %d", len(result))
 	}
@@ -119,7 +120,7 @@ func TestFillGapPublications_EmptyWithGap(t *testing.T) {
 
 func TestFillGapPublications_EmptyNoGap(t *testing.T) {
 	// sinceOffset == latestOffset, no pubs
-	result := fillGapPublications(5, 5, nil)
+	result := fillGapPublications(context.Background(), 5, 5, nil)
 	if len(result) != 0 {
 		t.Fatalf("expected 0 publications, got %d", len(result))
 	}
@@ -130,7 +131,7 @@ func TestFillGapPublications_SinglePublication(t *testing.T) {
 	pubs := []*centrifuge.Publication{
 		{Offset: 1, Data: []byte(`"a"`)},
 	}
-	result := fillGapPublications(0, 1, pubs)
+	result := fillGapPublications(context.Background(), 0, 1, pubs)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 publication, got %d", len(result))
 	}
@@ -140,7 +141,7 @@ func TestFillGapPublications_SinglePublication(t *testing.T) {
 }
 
 func TestMakeGapPublication_Structure(t *testing.T) {
-	pub := makeGapPublication(42)
+	pub := makeGapPublication(context.Background(), 42)
 	if pub.Offset != 42 {
 		t.Errorf("Offset = %d, want 42", pub.Offset)
 	}

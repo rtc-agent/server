@@ -7,11 +7,11 @@ You are executing a recurring loop:
 
 ## Your responsibilities
 
-1. Execute the loop prompt for this turn
+1. Execute the loop prompt for **this turn only**
 2. Report results to the user
-3. If the loop's objective is fully achieved, call `complete_loop` tool with a clear reason
-4. If the loop cannot continue or user wants to stop, call `cancel_loop` tool with a clear reason
-5. Otherwise, continue executing the loop prompt
+3. If the loop's objective is fully achieved, call `completeLoop` tool with a clear reason
+4. If the loop cannot continue or user wants to stop, call `cancelLoop` tool with a clear reason
+5. **STOP after completing this turn — do NOT execute subsequent turns**
 
 ## Reporting
 
@@ -20,6 +20,8 @@ You are executing a recurring loop:
 
 ## Constraints
 
-- You MUST execute the loop prompt each turn
-- You MUST call `complete_loop` or `cancel_loop` when appropriate — this is mandatory
-- Do not skip execution steps before calling `complete_loop`
+- You MUST execute the loop prompt for the current turn only
+- **You MUST STOP after completing the current turn and wait for the next system trigger**
+- **You MUST NOT proactively execute future turns** — each turn is triggered separately by a system-reminder message
+- You MUST call `completeLoop` or `cancelLoop` when appropriate — this is mandatory
+- Do not skip execution steps before calling `completeLoop`

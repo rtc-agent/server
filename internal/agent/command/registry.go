@@ -51,6 +51,34 @@ func (r *CommandRegistry) Registered() []Command {
 	return out
 }
 
+// EnsureActivated ensures a command is activated for the given session.
+// This is used to restore activation state from DB (e.g., active loop/goal)
+// when a turn is resumed on a different server instance that has no
+// in-memory activation state. Idempotent: no-op if already activated.
+func (r *CommandRegistry) EnsureActivated(cmdName string, sessionID uuid.UUID, args string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entries := r.activated[sessionID]
+	for _, e := range entries {
+		if e.cmd.Name() == cmdName {
+			return // already activated
+		}
+	}
+
+	// Find the registered command by name.
+	for _, cmd := range r.registered {
+		if cmd.Name() == cmdName {
+			r.activated[sessionID] = append(entries, &activatedEntry{
+				cmd:         cmd,
+				args:        args,
+				activatedAt: time.Now(),
+			})
+			return
+		}
+	}
+}
+
 // DetectAndInject scans lastUserMsg against registered commands, updates
 // activation state, and returns prompt contributions for this turn.
 //
@@ -190,33 +218,78 @@ func (r *CommandRegistry) CollectTools(ctx Context) []tool.BaseTool {
 	return tools
 }
 
-// OnTurnComplete invokes TurnHook.OnTurnComplete for all active commands in
-// registration order, then deactivates one-shot commands. Errors from hooks
-// are collected and returned; they do not interrupt other hooks.
+// CollectAllTools returns tools from ALL registered commands,
+// regardless of activation state. Used for static tool registration.
+//
+// This ensures tools are always available to the LLM, eliminating
+// the need to track command activation state across interrupt/resume cycles.
+// The LLM is responsible for using these tools only when appropriate
+// (guided by TriggerPrompt injections).
+func (r *CommandRegistry) CollectAllTools(ctx Context) []tool.BaseTool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var tools []tool.BaseTool
+	for _, cmd := range r.registered {
+		tp, ok := cmd.(ToolProvider)
+		if !ok {
+			continue
+		}
+		cmdCtx := ctx
+		// Note: Args is empty for non-activated commands.
+		// This is acceptable because tool creation typically doesn't depend on args.
+		cmdCtx.Args = ""
+		tools = append(tools, tp.Tools(cmdCtx)...)
+	}
+	return tools
+}
+
+// OnTurnComplete invokes TurnHook.OnTurnComplete for all registered commands
+// that implement the TurnHook interface. Each command is responsible for
+// querying the database to check if it has active records for the session.
+//
+// This implementation fixes a distributed system bug where the previous
+// activation state (r.activated) was stored in memory and not shared across
+// servers. Now we iterate all registered commands and let each command query
+// the database directly using the session ID.
+//
+// One-shot commands are still cleaned up from the in-memory activated map
+// after each turn to maintain backward compatibility with DetectAndInject.
+//
+// Errors from hooks are collected and returned; they do not interrupt other hooks.
 func (r *CommandRegistry) OnTurnComplete(ctx Context) []error {
+	// Clean up one-shot commands from in-memory state
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	entries := r.activated[ctx.SessionID]
-	var errs []error
 	var surviving []*activatedEntry
 	for _, e := range entries {
-		if h, ok := e.cmd.(TurnHook); ok {
-			cmdCtx := ctx
-			cmdCtx.Args = e.args
-			if err := h.OnTurnComplete(cmdCtx); err != nil {
-				errs = append(errs, err)
-			}
-		}
 		if scopeOf(e.cmd) == ScopeSession {
 			e.triggeredThisTurn = false
 			surviving = append(surviving, e)
 		}
-		// OneShot commands are dropped here.
+		// OneShot commands are dropped here
 	}
 	if len(surviving) == 0 {
 		delete(r.activated, ctx.SessionID)
 	} else {
 		r.activated[ctx.SessionID] = surviving
+	}
+
+	// Copy registered commands to avoid holding lock during hook invocation
+	registered := make([]Command, len(r.registered))
+	copy(registered, r.registered)
+	r.mu.Unlock()
+
+	var errs []error
+	for _, cmd := range registered {
+		if hook, ok := cmd.(TurnHook); ok {
+			cmdCtx := ctx
+			// Args not used by LoopWorkflow/GoalWorkflow; they query DB directly
+			cmdCtx.Args = ""
+			if err := hook.OnTurnComplete(cmdCtx); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
 	return errs
 }
@@ -290,4 +363,30 @@ func scopeOf(cmd Command) Scope {
 		return s.Scope()
 	}
 	return ScopeOneShot
+}
+
+// FindByName returns the registered command with the given name, or nil if not found.
+func (r *CommandRegistry) FindByName(name string) Command {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, cmd := range r.registered {
+		if cmd.Name() == name {
+			return cmd
+		}
+	}
+	return nil
+}
+
+// IsNewlyTriggered reports whether the named command was freshly triggered
+// (not sustained) in the most recent DetectAndInject call for the session.
+func (r *CommandRegistry) IsNewlyTriggered(sessionID uuid.UUID, cmdName string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entries := r.activated[sessionID]
+	for _, e := range entries {
+		if e.cmd.Name() == cmdName {
+			return e.triggeredThisTurn
+		}
+	}
+	return false
 }

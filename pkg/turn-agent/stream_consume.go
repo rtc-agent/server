@@ -9,6 +9,8 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // StreamIdleTimeout is the maximum duration a stream can remain idle
@@ -27,7 +29,18 @@ const StreamIdleTimeout = 10 * time.Minute
 func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentName, role, toolName string, stream *schema.StreamReader[*schema.Message]) error {
 	defer stream.Close() // Single point of cleanup — prevents resource leaks if new exit paths are added.
 
-	mgr.log(ctx, LogLevelDebug, "stream.consume_start", map[string]any{
+	streamCtx, streamSpan := mgr.startSpanIfEnabled(ctx, "consume_stream",
+		trace.WithAttributes(
+			attribute.String("session.id", mgr.sessionID),
+			attribute.String("turn.id", turnID),
+			attribute.String("agent.name", agentName),
+			attribute.String("message.role", role),
+			attribute.String("tool.name", toolName),
+		),
+	)
+	defer streamSpan.End()
+
+	mgr.log(streamCtx, LogLevelDebug, "stream.consume_start", map[string]any{
 		"session_id": mgr.sessionID,
 		"turn_id":    turnID,
 		"agent_name": agentName,
@@ -42,18 +55,32 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 	// Accumulate streamed content for lastMessage tracking (Sub Agent support)
 	var streamedContent strings.Builder
 	var streamedReasoningContent strings.Builder
+	chunkCount := 0
 
 	for {
-		res, timedOut := RecvWithTimeout(ctx, stream.Recv, StreamIdleTimeout)
+		res, timedOut := RecvWithTimeout(streamCtx, stream.Recv, StreamIdleTimeout)
 
 		if timedOut {
-			mgr.log(ctx, LogLevelError, "stream.idle_timeout", map[string]any{
-				"session_id": mgr.sessionID,
-				"turn_id":    turnID,
-				"timeout":    StreamIdleTimeout.String(),
-				"agent_name": agentName,
-				"role":       role,
-				"tool_name":  toolName,
+			streamSpan.RecordError(&StreamIdleTimeoutError{
+				SessionID: mgr.sessionID,
+				TurnID:    turnID,
+				Timeout:   StreamIdleTimeout,
+				AgentName: agentName,
+				Role:      role,
+				ToolName:  toolName,
+			})
+			streamSpan.SetAttributes(
+				attribute.Int("stream.chunks", chunkCount),
+				attribute.String("stream.status", "idle_timeout"),
+			)
+			mgr.log(streamCtx, LogLevelError, "stream.idle_timeout", map[string]any{
+				"session_id":  mgr.sessionID,
+				"turn_id":     turnID,
+				"timeout":     StreamIdleTimeout.String(),
+				"agent_name":  agentName,
+				"role":        role,
+				"tool_name":   toolName,
+				"chunk_count": chunkCount,
 			})
 			return &StreamIdleTimeoutError{
 				SessionID: mgr.sessionID,
@@ -66,8 +93,18 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 		}
 
 		if res.Err != nil {
-			return mgr.handleStreamRecvError(ctx, res.Err, turnID, agentName, role, toolName, maxUsage,
+			err := mgr.handleStreamRecvError(streamCtx, res.Err, turnID, agentName, role, toolName, maxUsage,
 				&streamedContent, &streamedReasoningContent)
+			status := "success"
+			if err != nil {
+				streamSpan.RecordError(err)
+				status = "error"
+			}
+			streamSpan.SetAttributes(
+				attribute.Int("stream.chunks", chunkCount),
+				attribute.String("stream.status", status),
+			)
+			return err
 		}
 
 		// Defensive: skip nil messages (should not happen in normal operation,
@@ -75,6 +112,7 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 		if res.Msg == nil {
 			continue
 		}
+		chunkCount++
 
 		var finishReason string
 		var tokenUsage *TokenUsage
@@ -92,7 +130,7 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 		if res.Msg.ReasoningContent != "" {
 			streamedReasoningContent.WriteString(res.Msg.ReasoningContent)
 		}
-		if err := mgr.cfg.PublishEvent(ctx, mgr.sessionID, turnID, &Event{
+		if err := mgr.cfg.PublishEvent(streamCtx, mgr.sessionID, turnID, &Event{
 			Kind:             EventKindStreamChunk,
 			AgentName:        agentName,
 			Role:             role,
@@ -102,6 +140,11 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 			FinishReason:     finishReason,
 			TokenUsage:       tokenUsage,
 		}); err != nil {
+			streamSpan.RecordError(err)
+			streamSpan.SetAttributes(
+				attribute.Int("stream.chunks", chunkCount),
+				attribute.String("stream.status", "publish_error"),
+			)
 			return err
 		}
 	}

@@ -18,21 +18,63 @@ import (
 // existing turn. Returns ErrNoActiveTurn (unwrapped) when a resume target is
 // no longer active, so callers can distinguish transient from permanent errors.
 func (a *Agent) resolveTurnID(ctx context.Context, sessionID, workID string, kind WorkKind) (string, error) {
+	resolveCtx, resolveSpan := a.startSpanIfEnabled(ctx, "resolve_turn_id",
+		trace.WithAttributes(
+			attribute.String("session.id", sessionID),
+			attribute.String("work.id", workID),
+			attribute.String("work.kind", string(kind)),
+		),
+	)
+	defer resolveSpan.End()
+
+	var turnID string
+	var err error
+
 	switch kind {
 	case WorkKindSubmit:
-		turnID, err := a.cfg.CreateTurn(ctx, sessionID, workID)
+		resolveSpan.AddEvent("create_turn")
+		turnID, err = a.cfg.CreateTurn(resolveCtx, sessionID, workID)
 		if err != nil {
+			resolveSpan.RecordError(err)
+			resolveSpan.SetAttributes(attribute.String("turn.status", "error"))
+			a.log(resolveCtx, LogLevelError, "resolve_turn_id.create_failed", map[string]any{
+				"session_id": sessionID,
+				"work_id":    workID,
+				"error":      err.Error(),
+			})
 			return "", fmt.Errorf("CreateTurn: %w", err)
 		}
+		resolveSpan.SetAttributes(attribute.String("turn.id", turnID))
+		a.log(resolveCtx, LogLevelInfo, "resolve_turn_id.created", map[string]any{
+			"session_id": sessionID,
+			"turn_id":    turnID,
+			"work_id":    workID,
+		})
 		return turnID, nil
 	case WorkKindResume:
-		turnID, err := a.cfg.LookupTurn(ctx, sessionID, workID)
+		resolveSpan.AddEvent("lookup_turn")
+		turnID, err = a.cfg.LookupTurn(resolveCtx, sessionID, workID)
 		if err != nil {
+			resolveSpan.RecordError(err)
+			resolveSpan.SetAttributes(attribute.String("turn.status", "error"))
+			a.log(resolveCtx, LogLevelError, "resolve_turn_id.lookup_failed", map[string]any{
+				"session_id": sessionID,
+				"work_id":    workID,
+				"error":      err.Error(),
+			})
 			return "", fmt.Errorf("LookupTurn: %w", err)
 		}
+		resolveSpan.SetAttributes(attribute.String("turn.id", turnID))
+		a.log(resolveCtx, LogLevelInfo, "resolve_turn_id.resumed", map[string]any{
+			"session_id": sessionID,
+			"turn_id":    turnID,
+			"work_id":    workID,
+		})
 		return turnID, nil
 	default:
-		return "", fmt.Errorf("unknown work kind: %q", kind)
+		err := fmt.Errorf("unknown work kind: %q", kind)
+		resolveSpan.RecordError(err)
+		return "", err
 	}
 }
 

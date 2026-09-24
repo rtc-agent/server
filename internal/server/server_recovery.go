@@ -185,7 +185,10 @@ func (s *Server) cleanupGhostWorksAndLocks(ctx context.Context, sessionIDs map[s
 				zap.String("session_id", sessionID))
 			continue
 		}
-		if err := s.queue.ReleaseSession(ctx, sessionID); err != nil {
+		// Use ForceReleaseSession for recovery: no credential available
+		// since the original worker is dead. Safe here because we verified
+		// the worker is not alive.
+		if err := s.queue.ForceReleaseSession(ctx, sessionID); err != nil {
 			logger.Warn(ctx, "[Server] recoverStaleTurns: release session lock",
 				zap.String("session_id", sessionID),
 				zap.Error(err))

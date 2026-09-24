@@ -17,13 +17,13 @@ func TestMicrocompactMessages_NonCompactableMixedWithCompactable(t *testing.T) {
 	msgs := []*turnagent.Message{
 		{Role: turnagent.RoleAssistant, Content: "thinking", CreatedAt: old,
 			ToolCalls: []turnagent.ToolCall{
-				{ID: "tc1", Name: "read"},     // compactable
-				{ID: "tc2", Name: "grep"},     // compactable
-				{ID: "tc3", Name: "ask_user"}, // NOT compactable
+				{ID: "tc1", Name: "read"},    // compactable
+				{ID: "tc2", Name: "grep"},    // compactable
+				{ID: "tc3", Name: "askUser"}, // NOT compactable
 			}},
 		{Role: turnagent.RoleTool, Content: "read_result", ToolCallID: "tc1", ToolName: "read", CreatedAt: old},
 		{Role: turnagent.RoleTool, Content: "grep_result", ToolCallID: "tc2", ToolName: "grep", CreatedAt: old},
-		{Role: turnagent.RoleTool, Content: "ask_result", ToolCallID: "tc3", ToolName: "ask_user", CreatedAt: old},
+		{Role: turnagent.RoleTool, Content: "ask_result", ToolCallID: "tc3", ToolName: "askUser", CreatedAt: old},
 	}
 	cfg := MicrocompactConfig{GapThresholdMinutes: 60, KeepRecent: 1}
 	result := microcompactMessages(msgs, cfg)
@@ -36,9 +36,9 @@ func TestMicrocompactMessages_NonCompactableMixedWithCompactable(t *testing.T) {
 	if result[2].Content != "grep_result" {
 		t.Errorf("tc2 (grep) should be kept, got %q", result[2].Content)
 	}
-	// tc3 (ask_user) should NOT be cleared — not in CompactableTools.
+	// tc3 (askUser) should NOT be cleared — not in CompactableTools.
 	if result[3].Content != "ask_result" {
-		t.Errorf("tc3 (ask_user) should NOT be cleared, got %q", result[3].Content)
+		t.Errorf("tc3 (askUser) should NOT be cleared, got %q", result[3].Content)
 	}
 }
 

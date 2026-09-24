@@ -9,10 +9,10 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
-// newTestRtc builds a minimal *model.Rtc with the given status/result for testing formatAskUserResult.
+// newTestRtc builds a minimal *model.Rtc with the given status/result for testing FormatAskUserResult.
 func newTestRtc(status protocol.RtcStatus, resultJSON string, errMsg string) *model.Rtc {
 	return &model.Rtc{
-		ToolName:     "ask_user",
+		ToolName:     "askUser",
 		Status:       string(status),
 		Result:       model.JSONBString(resultJSON),
 		ErrorMessage: errMsg,
@@ -25,7 +25,7 @@ func TestFormatAskUserResult_Completed_SingleAnswer(t *testing.T) {
 	}
 	b, _ := json.Marshal(payload)
 
-	got := formatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, string(b), ""))
+	got := FormatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, string(b), ""))
 
 	want := `User has answered your questions: "Which auth?"="OAuth 2.0". You can now continue with the user's answers in mind.`
 	if got != want {
@@ -42,7 +42,7 @@ func TestFormatAskUserResult_Completed_MultiAnswer(t *testing.T) {
 	}
 	b, _ := json.Marshal(payload)
 
-	got := formatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, string(b), ""))
+	got := FormatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, string(b), ""))
 
 	if !strings.HasPrefix(got, "User has answered your questions: ") {
 		t.Errorf("missing header: %s", got)
@@ -70,7 +70,7 @@ func TestFormatAskUserResult_Completed_WithAnnotations(t *testing.T) {
 	}
 	b, _ := json.Marshal(payload)
 
-	got := formatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, string(b), ""))
+	got := FormatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, string(b), ""))
 
 	if !strings.Contains(got, `"Auth?"="OAuth"`) {
 		t.Errorf("missing answer: %s", got)
@@ -87,7 +87,7 @@ func TestFormatAskUserResult_Completed_WithAnnotations(t *testing.T) {
 }
 
 func TestFormatAskUserResult_Completed_EmptyResult(t *testing.T) {
-	got := formatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, "", ""))
+	got := FormatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, "", ""))
 	if !strings.Contains(got, "no answers received") {
 		t.Errorf("expected 'no answers received' for empty result, got: %s", got)
 	}
@@ -96,7 +96,7 @@ func TestFormatAskUserResult_Completed_EmptyResult(t *testing.T) {
 func TestFormatAskUserResult_Completed_EmptyAnswersDict(t *testing.T) {
 	payload := map[string]any{"answers": map[string]string{}}
 	b, _ := json.Marshal(payload)
-	got := formatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, string(b), ""))
+	got := FormatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, string(b), ""))
 	if !strings.Contains(got, "no answers received") {
 		t.Errorf("expected 'no answers received' for empty dict, got: %s", got)
 	}
@@ -104,7 +104,7 @@ func TestFormatAskUserResult_Completed_EmptyAnswersDict(t *testing.T) {
 
 func TestFormatAskUserResult_Completed_NonJSONFallback(t *testing.T) {
 	// Client submitted opaque text instead of JSON — should not crash.
-	got := formatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, "plain text answer", ""))
+	got := FormatAskUserResult(newTestRtc(protocol.RtcStatusCompleted, "plain text answer", ""))
 	if !strings.Contains(got, "plain text answer") {
 		t.Errorf("expected opaque text preserved, got: %s", got)
 	}
@@ -114,11 +114,11 @@ func TestFormatAskUserResult_Completed_NonJSONFallback(t *testing.T) {
 }
 
 func TestFormatAskUserResult_Failed(t *testing.T) {
-	got := formatAskUserResult(newTestRtc(protocol.RtcStatusFailed, "boom", "execution blew up"))
+	got := FormatAskUserResult(newTestRtc(protocol.RtcStatusFailed, "boom", "execution blew up"))
 	if !strings.Contains(got, "encountered an error") {
 		t.Errorf("expected error message, got: %s", got)
 	}
-	if !strings.Contains(got, "ask_user") {
+	if !strings.Contains(got, "askUser") {
 		t.Errorf("missing tool name: %s", got)
 	}
 	// ErrorMessage takes precedence over Result for failed status.
@@ -128,14 +128,14 @@ func TestFormatAskUserResult_Failed(t *testing.T) {
 }
 
 func TestFormatAskUserResult_Timeout(t *testing.T) {
-	got := formatAskUserResult(newTestRtc(protocol.RtcStatusTimeout, "", ""))
+	got := FormatAskUserResult(newTestRtc(protocol.RtcStatusTimeout, "", ""))
 	if !strings.Contains(got, "timed out") {
 		t.Errorf("expected timeout message, got: %s", got)
 	}
 }
 
 func TestFormatAskUserResult_Rejected(t *testing.T) {
-	got := formatAskUserResult(newTestRtc(protocol.RtcStatusRejected, "", ""))
+	got := FormatAskUserResult(newTestRtc(protocol.RtcStatusRejected, "", ""))
 	if !strings.Contains(got, "rejected") {
 		t.Errorf("expected rejected message, got: %s", got)
 	}
@@ -145,7 +145,7 @@ func TestFormatAskUserResult_Rejected(t *testing.T) {
 }
 
 func TestFormatAskUserResult_Pending(t *testing.T) {
-	got := formatAskUserResult(newTestRtc(protocol.RtcStatusPending, "", ""))
+	got := FormatAskUserResult(newTestRtc(protocol.RtcStatusPending, "", ""))
 	if !strings.Contains(got, "still pending") {
 		t.Errorf("expected pending message, got: %s", got)
 	}

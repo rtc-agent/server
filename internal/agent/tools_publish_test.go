@@ -171,3 +171,35 @@ func TestPublishOutputOnly_MissingToolCallID(t *testing.T) {
 	assert.Contains(t, err.Error(), "tool_call_id not set in context")
 	assert.Contains(t, err.Error(), "async_tool")
 }
+
+// ─── normalizeToolArguments Tests ───
+
+func TestNormalizeToolArguments_EmptyString(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "{}", normalizeToolArguments(""))
+}
+
+func TestNormalizeToolArguments_Whitespace(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "{}", normalizeToolArguments("   "))
+	assert.Equal(t, "{}", normalizeToolArguments("\t\n"))
+}
+
+func TestNormalizeToolArguments_Null(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "{}", normalizeToolArguments("null"))
+	assert.Equal(t, "{}", normalizeToolArguments("  null  "))
+}
+
+func TestNormalizeToolArguments_ValidJSON(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, `{}`, normalizeToolArguments(`{}`))
+	assert.Equal(t, `{"key":"value"}`, normalizeToolArguments(`{"key":"value"}`))
+	// Valid JSON with whitespace is preserved as-is (no need to trim)
+	assert.Equal(t, `  {"a":1}  `, normalizeToolArguments(`  {"a":1}  `))
+}
+
+func TestNormalizeToolArguments_Array(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, `[1,2,3]`, normalizeToolArguments(`[1,2,3]`))
+}

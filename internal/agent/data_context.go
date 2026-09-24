@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/stringutil"
@@ -48,23 +47,45 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// Summary truncation: find the most recent summary message and truncate
 	// history to start from it. Messages before the summary are already
 	// compressed into it and would not be sent to the agent.
-	tmpMsgs := make([]*model.Message, 0, len(dbMsgs))
+	//
+	// Exception: prompt-type messages are always preserved regardless of
+	// position, because they contain persistent system instructions that
+	// must survive compaction (design principle: "系统提示词应该一直存在于上下文中").
+	summaryIdx := -1
 	for i := len(dbMsgs) - 1; i >= 0; i-- {
-		msg := dbMsgs[i]
-		tmpMsgs = append(tmpMsgs, msg)
-		contentData, parseErr := primitives.ParseContentData(msg.Content)
+		contentData, parseErr := primitives.ParseContentData(dbMsgs[i].Content)
 		if parseErr == nil && contentData.Type == protocol.ContentTypeSummary {
+			summaryIdx = i
 			break
 		}
 	}
-	sort.Slice(tmpMsgs, func(i, j int) bool {
-		return tmpMsgs[i].GlobalOffset < tmpMsgs[j].GlobalOffset
-	})
-	dbMsgs = tmpMsgs
+
+	if summaryIdx > 0 {
+		// Collect prompt messages that are before the summary boundary.
+		// These would be lost by truncation but must be preserved.
+		var preservedPrompts []*model.Message
+		for i := 0; i < summaryIdx; i++ {
+			contentData, parseErr := primitives.ParseContentData(dbMsgs[i].Content)
+			if parseErr == nil && contentData.Type == protocol.ContentTypePrompt {
+				preservedPrompts = append(preservedPrompts, dbMsgs[i])
+			}
+		}
+		// Truncate to summary boundary, then prepend preserved prompt messages.
+		// preservedPrompts are in global_offset order (scanned left to right).
+		dbMsgs = append(preservedPrompts, dbMsgs[summaryIdx:]...)
+	} else if summaryIdx == 0 {
+		// Summary is the first message — keep all messages from summary onward.
+		// No messages before summary to preserve.
+		dbMsgs = dbMsgs[summaryIdx:]
+	}
+	// If summaryIdx < 0, no summary found — keep all messages as-is.
 
 	// Convert DB messages to turn-agent Messages.
 	// The conversion logic mirrors the old SchemaMessages method in context.go,
 	// but produces turnagent.Message instead of schema.Message.
+	//
+	// Prompt messages are included at their natural position (based on global_offset).
+	// Deduplication is handled by persistCommandPromptsIfNeeded when creating new prompts.
 	//
 	// convertDBMessage may return nil for unparseable or unrecognized content
 	// types; skip those to prevent nil entries from reaching the LLM adapter
@@ -83,7 +104,11 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 			})
 		}
 		if len(converted) == 0 {
-			droppedCount++
+			// Only count as dropped if there was a parse error.
+			// Empty conversions (e.g., unrecognized content types) are skipped.
+			if convErr != nil {
+				droppedCount++
+			}
 			continue
 		}
 		for _, cm := range converted {
@@ -110,6 +135,12 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// to prevent empty-content messages from reaching the LLM adapter.
 	messages = mergeAssistantMessages(messages)
 
+	// Group assistant messages by LLM response within each TurnID group.
+	// This fixes the structural mismatch between DB-loaded messages
+	// (interleaved assistant-tool pattern) and in-memory messages
+	// (single assistant with multiple tool_calls per response).
+	messages = groupAssistantByResponse(ctx, h.logger, messages)
+
 	// Apply context management: tool result budget and microcompact
 	messages = applyToolResultBudget(messages, h.toolResultBudgetConfig())
 	messages = microcompactMessages(messages, h.microcompactConfig())
@@ -123,19 +154,50 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// BEFORE attachments are prepended, so the final message order is:
 	//   [system] Attachments → [system] Scenarios → [system] Command prompts → [conversation]
 	// (Attachments win the front position because they are prepended last.)
-	messages = h.injectCommandPrompts(ctx, sid, messages)
+	//
+	// Prompt messages (e.g., goal prompts) are persisted to DB and included
+	// in the conversation history by convertDBMessage at their natural position.
+	//
+	// IMPORTANT: Skip command detection on checkpoint resume (genResume) to avoid
+	// re-detecting commands and persisting duplicate prompt messages. The command
+	// was already detected and persisted on the original genInput call.
+	loadSource := turnagent.LoadSourceFromContext(ctx)
+	if loadSource != turnagent.LoadSourceGenResume {
+		messages, dbMsgs = h.injectCommandPrompts(ctx, sid, messages, dbMsgs)
+	} else {
+		h.logger.Debug(ctx, "loadMessages.skip_command_detection", map[string]any{
+			"session_id":  sid.String(),
+			"load_source": string(loadSource),
+		})
+	}
 
 	// Inject scenario prompts from the last user message's scenarios field.
 	// Pass the already-loaded dbMsgs to avoid a redundant DB query.
+	// Note: if scenarios have been persisted as prompt messages (see Phase 2),
+	// this function detects them and skips injection to avoid duplicates.
 	messages = h.injectScenarioPrompts(messages, dbMsgs)
 
-	// Build and inject all attachments (TodoList, SessionMemory, UserMemory).
+	// Build and inject all attachments (SessionMemory, UserMemory).
 	// Attachments are dynamic content that provides the LLM with persistent
 	// context beyond the conversation history.
+	//
+	// Note: TodoList is NO LONGER an attachment. It is persisted as tool_result
+	// messages via publishToolMessages (see tools_todo.go), and loaded naturally
+	// as part of the conversation history by loadMessages.
 	//
 	// Attachments are prepended to the message array (not appended) because
 	// they use system role, and Claude API requires system messages at the start.
 	messages = h.prependAttachments(ctx, sid, messages)
+
+	// Inject system prompt and agent prompt as system messages.
+	// This runs AFTER prependAttachments so that normalizeMessagesForLLM's
+	// extractSystemMessages produces the correct order:
+	//   [SystemPrompt, AgentPrompt, SessionMemory, UserMemory, ...conversation]
+	//
+	// Previously, systemPrompt + AgentPrompt were passed via eino's Instruction
+	// field, which was lost during GenResume's HistoryModifier, causing the
+	// system array to differ between GenInput and GenResume → cache invalidation.
+	messages = h.injectSystemAndAgentPrompt(ctx, sid, messages)
 
 	// Normalize messages for LLM: extract system messages to the front,
 	// repair tool call/result pairing, merge consecutive same-role messages,
@@ -144,6 +206,64 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	messages, err = h.normalizeMessagesForLLM(ctx, sid, messages)
 	if err != nil {
 		return nil, fmt.Errorf("loadMessages: normalize: %w", err)
+	}
+
+	// Filter out tool results for pending tool calls (checkpoint resume only).
+	//
+	// On checkpoint resume (genResume), the eino framework's ToolNode will re-invoke
+	// the interrupted tool's InvokableRun, which returns the result and causes the
+	// ToolNode to create a tool result message. If we also load the toolcall_output
+	// from DB, we get duplicate tool_result messages with the same tool_call_id.
+	//
+	// Instead of skipping ALL toolcall_output (which loses non-RTC tool results),
+	// we skip only the tool results whose tool_call_id matches a pending tool call
+	// in the checkpoint. Pending IDs are extracted by the HistoryModifier from the
+	// checkpoint's State.Messages and passed via context.
+	//
+	// Filtering happens AFTER normalizeMessagesForLLM so that repairToolPairing
+	// correctly validates the full message set before we surgically remove pending
+	// results. The assistant messages with pending tool calls are preserved because
+	// repairToolPairing already ran and validated them.
+	pendingIDs := turnagent.PendingToolCallIDsFromContext(ctx)
+	if len(pendingIDs) > 0 {
+		filtered := make([]*turnagent.Message, 0, len(messages))
+		var skippedCount int
+		for _, msg := range messages {
+			if msg.Role == turnagent.RoleTool && msg.ToolCallID != "" && pendingIDs[msg.ToolCallID] {
+				skippedCount++
+				continue
+			}
+			filtered = append(filtered, msg)
+		}
+		if skippedCount > 0 {
+			// Verification: check if any pending tool results remain after filtering.
+			// This should be 0; if > 0, it indicates the eino framework behavior has
+			// changed or there's a bug in extractPendingToolCallIDs.
+			var residualCount int
+			for _, msg := range filtered {
+				if msg.Role == turnagent.RoleTool && msg.ToolCallID != "" && pendingIDs[msg.ToolCallID] {
+					residualCount++
+				}
+			}
+
+			h.logger.Info(ctx, "loadMessages.filtered_pending_tool_results", map[string]any{
+				"session_id":     sid.String(),
+				"skipped_count":  skippedCount,
+				"pending_ids":    len(pendingIDs),
+				"residual_count": residualCount,
+			})
+
+			if residualCount > 0 {
+				h.logger.Error(ctx, "loadMessages.pending_filter_verification_failed", map[string]any{
+					"session_id":     sid.String(),
+					"residual_count": residualCount,
+					"skipped_count":  skippedCount,
+					"pending_ids":    len(pendingIDs),
+					"message":        "Pending tool results still present after filtering - eino framework behavior may have changed or extractPendingToolCallIDs has a bug",
+				})
+			}
+		}
+		messages = filtered
 	}
 
 	// Set strategic cache breakpoints to protect stable content from invalidation
@@ -156,8 +276,20 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// Trigger background Session Memory extraction (async, non-blocking).
 	// The extractor checks whether extraction is needed based on token growth
 	// and tool call count.
-	if len(messages) > 0 {
+	//
+	// IMPORTANT: Skip extraction on checkpoint resume (genResume) to avoid
+	// redundant LLM calls. The extraction was already triggered on the original
+	// genInput call for this turn. Resume is just continuing the same turn,
+	// not a new conversation point that warrants re-extraction. Extracting on
+	// resume wastes tokens without adding value (the token growth threshold
+	// already accounts for the work done before interrupt).
+	if len(messages) > 0 && loadSource != turnagent.LoadSourceGenResume {
 		h.triggerSessionMemoryExtraction(ctx, sid, messages)
+	} else if len(messages) > 0 {
+		h.logger.Debug(ctx, "loadMessages.skip_session_memory_extraction", map[string]any{
+			"session_id":  sid.String(),
+			"load_source": string(loadSource),
+		})
 	}
 
 	// Debug logging: record all loaded message previews (Debug level to avoid production noise).
@@ -183,7 +315,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	return messages, nil
 }
 
-// prependAttachments builds system-role attachments (TodoList, SessionMemory,
+// prependAttachments builds system-role attachments (SessionMemory,
 // UserMemory) and prepends them to the message array. If no attachments are
 // available or the attachment manager is nil, the original messages are
 // returned unchanged.
@@ -200,7 +332,7 @@ func (h *helpers) prependAttachments(ctx context.Context, sid uuid.UUID, message
 	} else if sessionErr != nil {
 		// Log at Warn level so operators can detect session lookup failures
 		// that silently cause attachments to be skipped. Without attachments,
-		// the LLM operates without persistent context (TodoList, SessionMemory,
+		// the LLM operates without persistent context (SessionMemory,
 		// UserMemory), degrading response quality.
 		h.logger.Warn(ctx, "prependAttachments.load_session_failed", map[string]any{
 			"session_id": sid.String(),

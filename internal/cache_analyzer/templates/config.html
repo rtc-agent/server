@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 32px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+        .form-section {
+            margin-bottom: 30px;
+            padding: 25px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            border: 2px solid #e9ecef;
+        }
+        .form-section h2 {
+            color: #495057;
+            margin-bottom: 15px;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #495057;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+            font-family: inherit;
+        }
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        input[type="text"]::placeholder {
+            color: #adb5bd;
+        }
+        .log-paths-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .log-path-item {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .log-path-item input {
+            flex: 1;
+        }
+        .btn-remove {
+            padding: 10px 16px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        .btn-remove:hover {
+            background: #c82333;
+        }
+        .btn-add {
+            padding: 10px 20px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+        .btn-add:hover {
+            background: #218838;
+        }
+        .btn-submit {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+        .btn-submit:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+        }
+        .btn-submit:active {
+            transform: translateY(0);
+        }
+        .info-text {
+            font-size: 13px;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 LLM Cache Analyzer</h1>
+        <p class="subtitle">分析 LLM API 请求的缓存命中率</p>
+
+        <form action="/report" method="POST">
+            <div class="form-section">
+                <h2>📁 日志文件路径</h2>
+                <div class="log-paths-container" id="logPathsContainer">
+                    <div class="log-path-item">
+                        <input type="text" name="log_paths[]" placeholder="/path/to/llm-payload.log" required>
+                        <button type="button" class="btn-remove" onclick="removeLogPath(this)">删除</button>
+                    </div>
+                </div>
+                <button type="button" class="btn-add" onclick="addLogPath()">+ 添加日志文件</button>
+                <p class="info-text">可以添加多个日志文件，系统会自动聚合数据</p>
+            </div>
+
+            <div class="form-section">
+                <h2>🔑 Session ID</h2>
+                <div class="form-group">
+                    <label for="session_id">请输入要分析的 Session ID</label>
+                    <input type="text" id="session_id" name="session_id" placeholder="01a0cb60-8b90-72cf-b5ac-4f3cf16f544b" required>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-submit">生成分析报告</button>
+        </form>
+    </div>
+
+    <script>
+        // Load saved log paths from localStorage
+        window.addEventListener('DOMContentLoaded', function() {
+            const savedPaths = localStorage.getItem('logPaths');
+            if (savedPaths) {
+                const paths = JSON.parse(savedPaths);
+                const container = document.getElementById('logPathsContainer');
+                container.innerHTML = '';
+                paths.forEach(path => {
+                    addLogPathWithValue(path);
+                });
+            }
+        });
+
+        function addLogPath() {
+            const container = document.getElementById('logPathsContainer');
+            const div = document.createElement('div');
+            div.className = 'log-path-item';
+            div.innerHTML = `
+                <input type="text" name="log_paths[]" placeholder="/path/to/llm-payload.log" required>
+                <button type="button" class="btn-remove" onclick="removeLogPath(this)">删除</button>
+            `;
+            container.appendChild(div);
+        }
+
+        function addLogPathWithValue(value) {
+            const container = document.getElementById('logPathsContainer');
+            const div = document.createElement('div');
+            div.className = 'log-path-item';
+            div.innerHTML = `
+                <input type="text" name="log_paths[]" placeholder="/path/to/llm-payload.log" value="${value}" required>
+                <button type="button" class="btn-remove" onclick="removeLogPath(this)">删除</button>
+            `;
+            container.appendChild(div);
+        }
+
+        function removeLogPath(btn) {
+            const container = document.getElementById('logPathsContainer');
+            if (container.children.length > 1) {
+                btn.parentElement.remove();
+            } else {
+                alert('至少需要保留一个日志文件路径');
+            }
+        }
+
+        // Save log paths to localStorage before submit
+        document.querySelector('form').addEventListener('submit', function(e) {
+            const inputs = document.querySelectorAll('input[name="log_paths[]"]');
+            const paths = Array.from(inputs).map(input => input.value).filter(v => v.trim() !== '');
+            localStorage.setItem('logPaths', JSON.stringify(paths));
+        });
+    </script>
+</body>
+</html>

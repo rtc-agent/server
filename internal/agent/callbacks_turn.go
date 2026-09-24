@@ -185,30 +185,35 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 	// operations (GetByID, session UpdateStatus, Publish, insertErrorMessage,
 	// notifyParent, cascadeCancel) would share that shrinking budget. If
 	// UpdateStatus took 8s, only 2s would remain for all remaining work.
-	// Using the original ctx (which may be cancelled, but typically isn't at
-	// this point) gives each operation its own full deadline.
+	//
+	// FIX: The original ctx may already be cancelled (RPC client disconnect,
+	// worker shutdown, etc.). Using it for subsequent operations would cause
+	// "context canceled" errors. Create a new independent context for the
+	// cleanup phase with its own timeout.
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cleanupCancel()
 
-	turn, lookupErr := h.deps.TurnRepo.GetByID(ctx, tid)
+	turn, lookupErr := h.deps.TurnRepo.GetByID(cleanupCtx, tid)
 	if lookupErr != nil {
 		// Fallback: extract sessionID from context and perform cleanup.
 		// Delegates to shared helper (also used by cancelTurn) to eliminate
 		// the 35-line duplicate that previously lived here.
-		h.fallbackTurnLookupCleanup(ctx, turnID, tid, "fail", "failed", &errMsg, "failTurn")
+		h.fallbackTurnLookupCleanup(cleanupCtx, turnID, tid, "fail", "failed", &errMsg, "failTurn")
 		return nil
 	}
 
 	// Set session status to "idle" — turn ended due to an error.
-	if err := h.deps.SessionRepo.UpdateStatus(ctx, turn.SessionID, protocol.SessionStatusIdle); err != nil {
-		h.logger.Warn(ctx, "failTurn.update_session_status_failed", map[string]any{
+	if err := h.deps.SessionRepo.UpdateStatus(cleanupCtx, turn.SessionID, protocol.SessionStatusIdle); err != nil {
+		h.logger.Warn(cleanupCtx, "failTurn.update_session_status_failed", map[string]any{
 			"session_id": turn.SessionID.String(),
 			"error":      err.Error(),
 		})
 	}
 
 	// Batch publish: turn.updated + session.updated in one centrifuge call.
-	h.batchLifecyclePublish(ctx, tid, turn.SessionID, "fail")
+	h.batchLifecyclePublish(cleanupCtx, tid, turn.SessionID, "fail")
 
-	h.logger.Info(ctx, "failTurn.done", map[string]any{
+	h.logger.Info(cleanupCtx, "failTurn.done", map[string]any{
 		"turn_id": turnID,
 		"error":   errMsg,
 	})
@@ -220,11 +225,11 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 	//   - context carries the skip flag (caller already inserted a message)
 	if turnErr != nil &&
 		!errors.Is(turnErr, context.Canceled) &&
-		!turnagent.ShouldSkipErrorMessage(ctx) {
+		!turnagent.ShouldSkipErrorMessage(cleanupCtx) {
 		category, title, message, retryable := classifyError(turnErr)
-		if err := h.insertErrorMessage(ctx, turn.SessionID, &tid,
+		if err := h.insertErrorMessage(cleanupCtx, turn.SessionID, &tid,
 			category, title, message, retryable, turnErr.Error()); err != nil {
-			h.logger.Warn(ctx, "failTurn.insertErrorMessage_failed", map[string]any{
+			h.logger.Warn(cleanupCtx, "failTurn.insertErrorMessage_failed", map[string]any{
 				"turn_id":    turnID,
 				"session_id": turn.SessionID.String(),
 				"error":      err.Error(),
@@ -235,7 +240,7 @@ func (h *helpers) failTurn(ctx context.Context, turnID string, turnErr error) er
 
 	// Sub Agent support + cascade cancel: shared helper (also used by cancelTurn)
 	// eliminates duplication.
-	h.notifyParentAndCascadeCancel(ctx, turnID, turn.SessionID, "failed", &errMsg, "failTurn")
+	h.notifyParentAndCascadeCancel(cleanupCtx, turnID, turn.SessionID, "failed", &errMsg, "failTurn")
 
 	return nil
 }

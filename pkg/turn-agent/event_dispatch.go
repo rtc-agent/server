@@ -9,6 +9,8 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // eventIdleWarningTimeout is the duration after which an idle warning is
@@ -35,20 +37,52 @@ func (mgr *SessionTurnManager) prepareAgent(
 		turnID = TurnIDFromContext(ctx)
 	}
 
-	mgr.log(ctx, LogLevelDebug, "prepare_agent.start", map[string]any{
+	prepareCtx, prepareSpan := mgr.startSpanIfEnabled(ctx, "prepare_agent",
+		trace.WithAttributes(
+			attribute.String("session.id", mgr.sessionID),
+			attribute.String("turn.id", turnID),
+		),
+	)
+	defer prepareSpan.End()
+
+	mgr.log(prepareCtx, LogLevelDebug, "prepare_agent.start", map[string]any{
 		"session_id": mgr.sessionID,
 		"turn_id":    turnID,
 	})
 
-	tools, err := mgr.cfg.CreateTools(ctx, mgr.sessionID, turnID)
+	prepareSpan.AddEvent("create_tools")
+	tools, err := mgr.cfg.CreateTools(prepareCtx, mgr.sessionID, turnID)
 	if err != nil {
+		prepareSpan.RecordError(err)
+		prepareSpan.SetAttributes(attribute.String("prepare.status", "tools_failed"))
+		mgr.log(prepareCtx, LogLevelError, "prepare_agent.create_tools_failed", map[string]any{
+			"session_id": mgr.sessionID,
+			"turn_id":    turnID,
+			"error":      err.Error(),
+		})
 		return nil, fmt.Errorf("turnagent: CreateTools: %w", err)
 	}
+	prepareSpan.SetAttributes(attribute.Int("tools.count", len(tools)))
 
-	agent, err := mgr.cfg.CreateAgent(ctx, mgr.sessionID, turnID, tools)
+	prepareSpan.AddEvent("create_agent")
+	agent, err := mgr.cfg.CreateAgent(prepareCtx, mgr.sessionID, turnID, tools)
 	if err != nil {
+		prepareSpan.RecordError(err)
+		prepareSpan.SetAttributes(attribute.String("prepare.status", "agent_failed"))
+		mgr.log(prepareCtx, LogLevelError, "prepare_agent.create_agent_failed", map[string]any{
+			"session_id": mgr.sessionID,
+			"turn_id":    turnID,
+			"error":      err.Error(),
+		})
 		return nil, fmt.Errorf("turnagent: CreateAgent: %w", err)
 	}
+
+	prepareSpan.SetAttributes(attribute.String("prepare.status", "success"))
+	mgr.log(prepareCtx, LogLevelInfo, "prepare_agent.done", map[string]any{
+		"session_id": mgr.sessionID,
+		"turn_id":    turnID,
+		"tools":      len(tools),
+	})
 	return agent, nil
 }
 
@@ -60,7 +94,16 @@ func (mgr *SessionTurnManager) onAgentEvents(
 	events *adk.AsyncIterator[*adk.AgentEvent],
 ) error {
 	turnID := TurnIDFromContext(ctx)
-	mgr.log(ctx, LogLevelInfo, "on_agent_events.start", map[string]any{
+	eventsCtx, eventsSpan := mgr.startSpanIfEnabled(ctx, "on_agent_events",
+		trace.WithAttributes(
+			attribute.String("session.id", mgr.sessionID),
+			attribute.String("turn.id", turnID),
+			attribute.Int("consumed.count", len(tc.Consumed)),
+		),
+	)
+	defer eventsSpan.End()
+
+	mgr.log(eventsCtx, LogLevelInfo, "on_agent_events.start", map[string]any{
 		"session_id": mgr.sessionID,
 		"turn_id":    turnID,
 	})
@@ -72,6 +115,7 @@ func (mgr *SessionTurnManager) onAgentEvents(
 			return
 		}
 		completeWorkCalled = true
+		eventsSpan.AddEvent("complete_work")
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer bgCancel()
 		for _, item := range tc.Consumed {
@@ -79,11 +123,18 @@ func (mgr *SessionTurnManager) onAgentEvents(
 				continue
 			}
 			if err := mgr.queue.CompleteWork(bgCtx, item.WorkID); err != nil {
+				eventsSpan.RecordError(err)
 				mgr.log(bgCtx, LogLevelError, "on_agent_events.complete_work_failed", map[string]any{
 					"session_id": mgr.sessionID,
 					"turn_id":    turnID,
 					"work_id":    item.WorkID,
 					"error":      err.Error(),
+				})
+			} else {
+				mgr.log(bgCtx, LogLevelDebug, "on_agent_events.complete_work_success", map[string]any{
+					"session_id": mgr.sessionID,
+					"turn_id":    turnID,
+					"work_id":    item.WorkID,
 				})
 			}
 			mgr.tracker.Complete(item.WorkID)
@@ -131,40 +182,58 @@ func (mgr *SessionTurnManager) onAgentEvents(
 		}
 	}()
 
+	eventCount := 0
 	for {
 		ctxErr := ctx.Err()
-		mgr.log(ctx, LogLevelDebug, "on_agent_events.waiting_next", map[string]any{
+		mgr.log(eventsCtx, LogLevelDebug, "on_agent_events.waiting_next", map[string]any{
 			"session_id":  mgr.sessionID,
 			"turn_id":     turnID,
 			"context_err": ctxErr,
 		})
 		ev, ok := events.Next()
 		if !ok {
-			mgr.log(ctx, LogLevelInfo, "on_agent_events.done", map[string]any{
-				"session_id": mgr.sessionID,
-				"turn_id":    turnID,
+			eventsSpan.SetAttributes(
+				attribute.Int("events.processed", eventCount),
+				attribute.String("events.status", "completed"),
+			)
+			mgr.log(eventsCtx, LogLevelInfo, "on_agent_events.done", map[string]any{
+				"session_id":  mgr.sessionID,
+				"turn_id":     turnID,
+				"event_count": eventCount,
 			})
 			return nil
 		}
+		eventCount++
 		// Signal the idle watcher that we received an event.
 		select {
 		case activityReceived <- struct{}{}:
 		default:
 		}
-		if err := mgr.dispatchEvents(ctx, turnID, ev); err != nil {
+		if err := mgr.dispatchEvents(eventsCtx, turnID, ev); err != nil {
 			var interruptErr *adk.InterruptError
 			if errors.As(err, &interruptErr) {
-				mgr.log(ctx, LogLevelInfo, "on_agent_events.interrupted", map[string]any{
+				eventsSpan.SetAttributes(
+					attribute.Int("events.processed", eventCount),
+					attribute.String("events.status", "interrupted"),
+				)
+				mgr.log(eventsCtx, LogLevelInfo, "on_agent_events.interrupted", map[string]any{
 					"session_id":   mgr.sessionID,
 					"turn_id":      turnID,
 					"num_contexts": len(interruptErr.InterruptContexts),
+					"event_count":  eventCount,
 				})
 				return err
 			}
-			mgr.log(ctx, LogLevelError, "on_agent_events.dispatch_error", map[string]any{
-				"session_id": mgr.sessionID,
-				"turn_id":    turnID,
-				"error":      err.Error(),
+			eventsSpan.RecordError(err)
+			eventsSpan.SetAttributes(
+				attribute.Int("events.processed", eventCount),
+				attribute.String("events.status", "error"),
+			)
+			mgr.log(eventsCtx, LogLevelError, "on_agent_events.dispatch_error", map[string]any{
+				"session_id":  mgr.sessionID,
+				"turn_id":     turnID,
+				"error":       err.Error(),
+				"event_count": eventCount,
 			})
 			return fmt.Errorf("turnagent: PublishEvent: %w", err)
 		}

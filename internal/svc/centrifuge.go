@@ -9,6 +9,9 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/channel"
@@ -55,7 +58,7 @@ func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore 
 			RedisDB:       cfg.Redis.DB,
 			HistoryStore:  historyStore,
 			Logger:        &centrifugeLogger{ctx: stdcontext.Background()},
-			Tracing:       centrifugeplus.TracingConfig{Enabled: true},
+			Tracing:       centrifugeplus.TracingConfig{Enabled: true, Provider: otel.GetTracerProvider()},
 		},
 	})
 	if err != nil {
@@ -276,6 +279,17 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 		ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), rpcTimeout)
 		defer cancel()
 
+		// Create trace span for RPC request
+		tracer := otel.Tracer("rpc")
+		ctx, span := tracer.Start(ctx, "RPC "+e.Method,
+			trace.WithAttributes(
+				attribute.String("rpc.method", e.Method),
+				attribute.String("user.id", userID.String()),
+				attribute.String("device.id", deviceID),
+			),
+		)
+		defer span.End()
+
 		ctx = contextx.WithClientInfo(ctx, userID, deviceID)
 
 		rpcHandlerMu.RLock()
@@ -296,6 +310,7 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 			// return a generic message to prevent leaking internal details
 			// (database statements, connection info) to the client.
 			if apiErr, ok := extractAPIError(err); ok {
+				span.RecordError(err)
 				cb(centrifuge.RPCReply{}, &centrifuge.Error{
 					Code:    500,
 					Message: apiErr,
@@ -304,6 +319,7 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 				logger.Error(ctx, "RPC handler returned non-API error",
 					zap.String("method", e.Method),
 					zap.Error(err))
+				span.RecordError(err)
 				cb(centrifuge.RPCReply{}, &centrifuge.Error{
 					Code:    500,
 					Message: "internal error",

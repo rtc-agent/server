@@ -17,6 +17,10 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
@@ -39,6 +43,10 @@ func clampForkLimit(ptr *int) int {
 // buildForkMessages constructs the message list for a fork operation.
 // All messages are copied from the old session, except the last one which
 // is replaced with the new content.
+//
+// If newContent carries scenarios, old prompt messages with name="scenarios"
+// are filtered out and a fresh prompt message is prepended, preventing stale
+// scenario content from persisting in the forked session.
 func buildForkMessages(
 	oldMessages []*model.Message,
 	creator usecase.UserCreator,
@@ -47,18 +55,53 @@ func buildForkMessages(
 	oldMsgID uuid.UUID,
 	ctx context.Context,
 ) []primitives.MessageToCreate {
-	result := make([]primitives.MessageToCreate, len(oldMessages))
-	lastIdx := len(oldMessages) - 1
+	// Determine if new content needs a fresh prompt message.
+	needsNewPrompt := needsPromptMessage(newContent)
 
-	for i, oldMsg := range oldMessages {
+	// Filter out old prompt messages that would conflict with the new one.
+	// When forking with new scenarios, the old "scenarios" prompt is stale.
+	var filteredMessages []*model.Message
+	for _, oldMsg := range oldMessages {
+		if needsNewPrompt {
+			contentData, parseErr := primitives.ParseContentData(oldMsg.Content)
+			if parseErr == nil && contentData.Type == protocol.ContentTypePrompt {
+				pc, pcErr := primitives.ParsePromptContent(contentData.Data)
+				if pcErr == nil && pc.Name == "scenarios" {
+					// Skip old scenarios prompt — a fresh one will be prepended.
+					continue
+				}
+			}
+		}
+		filteredMessages = append(filteredMessages, oldMsg)
+	}
+
+	result := make([]primitives.MessageToCreate, 0, len(filteredMessages)+1)
+	lastIdx := len(filteredMessages) - 1
+
+	// Prepend new prompt message if needed (before all other messages).
+	if needsNewPrompt {
+		promptContent, buildErr := buildPromptContent(newContent)
+		if buildErr != nil {
+			logger.Warn(ctx, "[ForkSession] build prompt content failed", zap.Error(buildErr))
+		} else if promptContent.Type == protocol.ContentTypePrompt {
+			result = append(result, primitives.MessageToCreate{
+				Role:    protocol.MessageRoleSystem,
+				Creator: usecase.SystemCreator{},
+				Content: promptContent,
+				Status:  protocol.MessageStreamingCompleted,
+			})
+		}
+	}
+
+	for i, oldMsg := range filteredMessages {
 		if i == lastIdx {
-			result[i] = primitives.MessageToCreate{
+			result = append(result, primitives.MessageToCreate{
 				Role:     protocol.MessageRoleUser,
 				Creator:  creator,
 				Content:  newContent,
-				Status:   protocol.MessageStreamingPending,
+				Status:   protocol.MessageStreamingCompleted,
 				ClientID: newClientMsgID,
-			}
+			})
 		} else {
 			content, parseErr := primitives.ParseContentData(oldMsg.Content)
 			if parseErr != nil {
@@ -67,7 +110,7 @@ func buildForkMessages(
 					zap.Error(parseErr))
 			}
 			tokenUsage := oldMsg.TokenUsage()
-			result[i] = primitives.MessageToCreate{
+			result = append(result, primitives.MessageToCreate{
 				Role:       protocol.MessageRole(oldMsg.Role),
 				Creator:    creator,
 				Content:    content,
@@ -76,7 +119,7 @@ func buildForkMessages(
 				CreatedAt:  oldMsg.CreatedAt,
 				UpdatedAt:  oldMsg.UpdatedAt,
 				TokenUsage: &tokenUsage,
-			}
+			})
 		}
 	}
 	return result
@@ -91,8 +134,17 @@ func buildForkMessages(
 //   - Replace the last message with the new content_data
 //   - Trigger the AI flow (via rtc-queue Publish)
 func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequest) (*protocol.ForkSessionResponse, error) {
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.forkSession",
+		trace.WithAttributes(
+			attribute.String("old_session.id", req.OldServerSessionId),
+			attribute.String("old_message.id", req.OldServerMessageId),
+		),
+	)
+	defer span.End()
+
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
+		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
 	deviceID, _ := contextx.GetDeviceID(ctx)
@@ -100,14 +152,21 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 
 	oldSessionID, apiErr := parseUUID(req.OldServerSessionId, "old_server_session_id")
 	if apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
 		return nil, apiErr
 	}
 	oldMessageID, apiErr := parseUUID(req.OldServerMessageId, "old_server_message_id")
 	if apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
 		return nil, apiErr
 	}
 
 	limit := clampForkLimit(req.Limit)
+
+	span.SetAttributes(
+		attribute.String("user.id", userID.String()),
+		attribute.Int("limit", limit),
+	)
 
 	logger.Info(ctx, "[ForkSession] start",
 		zap.String("user", userID.String()),
@@ -117,22 +176,31 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 
 	oldSession, err := h.validateForkSource(ctx, oldSessionID, creator)
 	if err != nil {
+		if apiErr, ok := err.(*APIError); ok {
+			span.SetStatus(codes.Error, apiErr.Code)
+		}
 		return nil, err
 	}
 
 	oldMessage, err := h.deps.Deps.MessageRepo.GetByID(ctx, oldMessageID)
 	if err != nil {
 		if repo.IsNotFound(err) {
+			span.SetStatus(codes.Error, "message.not_found")
 			return nil, &APIError{Code: "message.not_found", Message: fmt.Sprintf("old message %s not found", req.OldServerMessageId)}
 		}
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		return nil, h.internalError(ctx, "message.error", "internal error", err)
 	}
 
 	oldMessages, err := h.deps.Deps.MessageRepo.ListBySessionBeforeOffset(ctx, oldSessionID, oldMessage.GlobalOffset, limit)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		return nil, h.internalError(ctx, "message.error", "internal error", err)
 	}
 	if len(oldMessages) == 0 {
+		span.SetStatus(codes.Error, "message.not_found")
 		return nil, &APIError{Code: "message.not_found", Message: "no messages found to fork"}
 	}
 
@@ -161,6 +229,8 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[ForkSession] push failed after commit (data safe)", zap.Error(err))
 		} else {
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 			return nil, h.internalError(ctx, "fork.error", "internal error", err)
 		}
 	}
@@ -169,6 +239,8 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	for i, msg := range createdMessages {
 		messageIDs[i] = msg.ID.String()
 	}
+
+	span.SetAttributes(attribute.String("session.id", newSession.ID.String()))
 
 	return &protocol.ForkSessionResponse{
 		Result: protocol.ForkSessionResult{
