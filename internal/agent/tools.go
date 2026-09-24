@@ -85,9 +85,9 @@ func (t *readTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 		Name: "read",
 		Desc: readDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
-			"path":   {Type: schema.String, Desc: "The file path to read", Required: true},
-			"offset": {Type: schema.Integer, Desc: "Byte offset to start reading from (default: 0)", Required: false},
-			"limit":  {Type: schema.Integer, Desc: "Maximum number of bytes to read (default: unlimited)", Required: false},
+			"path":   {Type: schema.String, Desc: "The absolute path to the file to read", Required: true},
+			"offset": {Type: schema.Integer, Desc: "The line number to start reading from (1-indexed). Only provide if the file is too large to read at once", Required: false},
+			"limit":  {Type: schema.Integer, Desc: "The number of lines to read. Only provide if the file is too large to read at once", Required: false},
 		}),
 	}, nil
 }
@@ -105,15 +105,35 @@ func (t *writeTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 		Name: "write",
 		Desc: writeDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
-			"path":    {Type: schema.String, Desc: "The file path to write to", Required: true},
-			"content": {Type: schema.String, Desc: "The content to write", Required: true},
-			"mode":    {Type: schema.String, Desc: "Write mode: 'overwrite' (default) or 'append'", Required: false},
+			"path":    {Type: schema.String, Desc: "The absolute path to the file to write", Required: true},
+			"content": {Type: schema.String, Desc: "The content to write to the file", Required: true},
 		}),
 	}, nil
 }
 
 func (t *writeTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	return t.base.InvokableRun(ctx, "write", argumentsInJSON, opts...)
+}
+
+// --- editTool ---
+
+type editTool struct{ base *rtcToolBase }
+
+func (t *editTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	return &schema.ToolInfo{
+		Name: "edit",
+		Desc: editDesc,
+		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
+			"path":        {Type: schema.String, Desc: "The absolute path to the file to modify", Required: true},
+			"old_string":  {Type: schema.String, Desc: "The text to replace", Required: true},
+			"new_string":  {Type: schema.String, Desc: "The text to replace it with (must be different from old_string)", Required: true},
+			"replace_all": {Type: schema.Boolean, Desc: "Replace all occurrences of old_string (default: false)", Required: false},
+		}),
+	}, nil
+}
+
+func (t *editTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	return t.base.InvokableRun(ctx, "edit", argumentsInJSON, opts...)
 }
 
 // --- grepTool ---

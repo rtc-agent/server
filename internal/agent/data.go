@@ -129,7 +129,8 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	tools := []tool.BaseTool{
 		&lsTool{base: base},
 		&readTool{base: base},
-		//&writeTool{base: base}, disabled
+		&writeTool{base: base},
+		&editTool{base: base},
 		&grepTool{base: base},
 		&findTool{base: base},
 		&scriptTool{base: base},

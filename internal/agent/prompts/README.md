@@ -6,10 +6,9 @@ Centralized prompt management for the RTC-Agent LLM system.
 
 ```
 prompts/
-├── system/              # System prompt sections (9 files)
-│   ├── identity.md
-│   ├── first-step.md
-│   ├── workflow.md
+├── agent/               # Agent prompt (identity + workflow + capabilities)
+│   └── default.md       # Default agent prompt (fallback when session.AgentPrompt is empty)
+├── system/              # System prompt sections (6 files)
 │   ├── doing-tasks.md
 │   ├── using-your-tools.md
 │   ├── critical-rules.md

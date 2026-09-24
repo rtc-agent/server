@@ -23,6 +23,9 @@ var readDesc string
 //go:embed prompts/tools/write.md
 var writeDesc string
 
+//go:embed prompts/tools/edit.md
+var editDesc string
+
 //go:embed prompts/tools/grep.md
 var grepDesc string
 

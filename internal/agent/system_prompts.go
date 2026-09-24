@@ -1,26 +1,25 @@
 // system_prompts.go — Composable system prompt sections.
 //
-// This implements a section-based system prompt architecture inspired by
-// Claude Code's systemPromptSection design. Each section is an independent
-// Markdown file that can be composed, overridden, or extended.
+// This implements a section-based system prompt architecture.
+// The system prompt contains universal behavioral rules that apply to all agents.
 //
 // The default system prompt is assembled from these sections in order:
-//  1. identity.md              — Agent identity, capabilities, and how you work
-//  2. first-step.md            — Mandatory first step (read AGENT.md)
-//  3. workflow.md              — Workflow after reading AGENT.md
-//  4. doing-tasks.md           — Task execution principles (verify, diagnose, don't over-engineer)
-//  5. using-your-tools.md     — Tool preference hierarchy and parallel call guidance
-//  6. critical-rules.md        — Critical tool usage rules
-//  7. language-and-principles.md — Language detection and principles
-//  8. memory-system.md         — Session and User memory system
-//  9. todo-system.md           — Todo list behavior
+//  1. doing-tasks.md           — Task execution principles
+//  2. using-your-tools.md     — Tool preference hierarchy
+//  3. critical-rules.md        — Critical tool usage rules
+//  4. language-and-principles.md — Language detection and principles
+//  5. memory-system.md         — Session and User memory system
+//  6. todo-system.md           — Todo list behavior
+//
+// Agent identity, workflow, and capabilities are defined in the Agent Prompt
+// (see agent_prompts.go), which is injected before the system prompt.
 //
 // Configuration override: If worker.system_prompt is set in config YAML,
 // it completely replaces the default embedded prompt. This preserves backward
 // compatibility and allows full customization without code changes.
 //
 // Naming convention:
-//   - Variables: systemPrompt<Section> (e.g. systemPromptIdentity)
+//   - Variables: systemPrompt<Section> (e.g. systemPromptDoingTasks)
 //   - Files: prompts/system/<section-name>.md (all static, template-ready)
 //   - Builder: SystemPromptBuilder (fluent API for composing sections)
 package agent
@@ -31,15 +30,6 @@ import (
 
 	"github.com/rtc-agent/server/internal/agent/templateutil"
 )
-
-//go:embed prompts/system/identity.md
-var systemPromptIdentity string
-
-//go:embed prompts/system/first-step.md
-var systemPromptFirstStep string
-
-//go:embed prompts/system/workflow.md
-var systemPromptWorkflow string
 
 //go:embed prompts/system/doing-tasks.md
 var systemPromptDoingTasks string
@@ -61,9 +51,6 @@ var systemPromptTodoSystem string
 
 // defaultSystemPromptSections defines the default order of system prompt sections.
 var defaultSystemPromptSections = []string{
-	systemPromptIdentity,
-	systemPromptFirstStep,
-	systemPromptWorkflow,
 	systemPromptDoingTasks,
 	systemPromptUsingYourTools,
 	systemPromptCriticalRules,

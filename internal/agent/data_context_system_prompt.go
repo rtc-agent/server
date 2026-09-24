@@ -7,8 +7,13 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
-// injectSystemAndAgentPrompt injects the system prompt and agent prompt as
+// injectSystemAndAgentPrompt injects the agent prompt and system prompt as
 // system-role messages at the beginning of the message array.
+//
+// The agent prompt (identity + workflow + capabilities) is injected first,
+// followed by the system prompt (universal behavioral rules).
+//
+// If the session doesn't have an agent prompt, the default agent prompt is used.
 //
 // This replaces the previous approach of passing these via eino's Instruction
 // field, which was inconsistently handled between GenInput and GenResume paths:
@@ -20,8 +25,8 @@ import (
 //
 // Final message order after full loadMessages pipeline:
 //
-//	[system] SystemPrompt (identity + workflow + rules)
-//	[system] AgentPrompt (AGENT.md content, if session has one)
+//	[system] AgentPrompt (identity + workflow + capabilities, default or custom)
+//	[system] SystemPrompt (behavioral rules)
 //	[system] Attachments (SessionMemory, UserMemory)
 //	[system] Command prompts
 //	[system] Scenarios
@@ -37,12 +42,38 @@ func (h *helpers) injectSystemAndAgentPrompt(
 
 	var systemMsgs []*turnagent.Message
 
-	// 1. System prompt (identity + workflow + rules)
+	// 1. Agent prompt (always present — default or custom)
+	// Agent prompt provides identity, workflow, and capabilities.
+	agentPrompt := ""
+	session, err := h.deps.SessionRepo.GetByID(ctx, sid)
+	if err != nil {
+		h.logger.Warn(ctx, "injectSystemAndAgentPrompt.get_session_failed", map[string]any{
+			"session_id": sid.String(),
+			"error":      err.Error(),
+		})
+	} else if session != nil {
+		agentPrompt = session.AgentPrompt
+	}
+
+	// Fallback to default agent prompt if session doesn't have one
+	if agentPrompt == "" {
+		agentPrompt = GetDefaultAgentPrompt()
+	}
+
+	if agentPrompt != "" {
+		systemMsgs = append(systemMsgs, &turnagent.Message{
+			Role:    turnagent.RoleSystem,
+			Content: agentPrompt,
+		})
+	}
+
+	// 2. System prompt (always present — behavioral rules)
+	// System prompt provides universal behavioral guidelines.
 	systemPrompt := h.deps.SystemPrompt
 	if systemPrompt == "" {
 		built, err := BuildDefaultSystemPrompt()
 		if err != nil {
-			h.logger.Warn(ctx, "injectSystemAndAgentPrompt.build_failed", map[string]any{
+			h.logger.Warn(ctx, "injectSystemAndAgentPrompt.build_system_prompt_failed", map[string]any{
 				"session_id": sid.String(),
 				"error":      err.Error(),
 			})
@@ -54,20 +85,6 @@ func (h *helpers) injectSystemAndAgentPrompt(
 		systemMsgs = append(systemMsgs, &turnagent.Message{
 			Role:    turnagent.RoleSystem,
 			Content: systemPrompt,
-		})
-	}
-
-	// 2. Agent prompt (AGENT.md content from session)
-	session, err := h.deps.SessionRepo.GetByID(ctx, sid)
-	if err != nil {
-		h.logger.Warn(ctx, "injectSystemAndAgentPrompt.get_session_failed", map[string]any{
-			"session_id": sid.String(),
-			"error":      err.Error(),
-		})
-	} else if session != nil && session.AgentPrompt != "" {
-		systemMsgs = append(systemMsgs, &turnagent.Message{
-			Role:    turnagent.RoleSystem,
-			Content: session.AgentPrompt,
 		})
 	}
 

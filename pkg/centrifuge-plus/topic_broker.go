@@ -153,7 +153,13 @@ func (b *TopicBroker) History(ch string, opts centrifuge.HistoryOptions) (pubs [
 		return nil, sp, nil
 	}
 
-	pubs, err = b.historyStore.Query(ctx, ch, sinceOffset, uint32(sp.Offset)) //nolint:gosec // range already checked
+	// Pass the limit from HistoryOptions to the query (0 means no limit).
+	limit := 0
+	if opts.Filter.Limit > 0 {
+		limit = opts.Filter.Limit
+	}
+
+	pubs, err = b.historyStore.Query(ctx, ch, sinceOffset, uint32(sp.Offset), limit) //nolint:gosec // range already checked
 	if err != nil {
 		b.logger.Warn("HistoryStore.Query failed for channel %s: %v", ch, err)
 		return nil, sp, err
