@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
+	"github.com/eino-contrib/jsonschema"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/internal/infra/cache"
@@ -19,6 +20,7 @@ import (
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	orderedmap "github.com/wk8/go-ordered-map/v2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -191,23 +193,38 @@ func (t *findTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 type scriptTool struct{ base *rtcToolBase }
 
 func (t *scriptTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	// Build properties using ordered map for deterministic key ordering
+	props := orderedmap.New[string, *jsonschema.Schema]()
+	props.Set("title", &jsonschema.Schema{
+		Type:        "string",
+		Description: "Brief description of the script execution purpose, max 20 chars, e.g. 'Analyze sales data trends'",
+	})
+	props.Set("action", &jsonschema.Schema{
+		Type:        "string",
+		Description: "The action to perform: 'save' persists the inline code to /scripts/{name}.ts (requires both 'code' and 'name'); 'run' executes a previously saved script by name (requires 'name'); 'eval' executes the inline code directly (requires 'code'). Defaults to 'eval' when omitted.",
+		Enum:        []any{"run", "save", "eval"},
+	})
+	props.Set("name", &jsonschema.Schema{
+		Type:        "string",
+		Description: "The script name. Required for 'save' and 'run'.",
+	})
+	props.Set("code", &jsonschema.Schema{
+		Type:        "string",
+		Description: "Inline JavaScript code to execute. Must not contain infinite loops (while, do...while, for(;;)); use for...of, for...in, or Array iteration methods instead.",
+	})
+	props.Set("params", &jsonschema.Schema{
+		Type:                 "object",
+		Description:          "Parameters to pass to the script. Access via top-level `params` variable in script code. Example: {\"startDate\": \"2024-01-01\", \"count\": 10}",
+		AdditionalProperties: &jsonschema.Schema{}, // allow any properties
+	})
+
 	return &schema.ToolInfo{
 		Name: "script",
 		Desc: scriptDesc,
-		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
-			"title": {
-				Type:     schema.String,
-				Desc:     "简短描述本次脚本执行的目的，不超过20个字，如 '分析销售数据趋势'",
-				Required: true,
-			},
-			"action": {
-				Type:     schema.String,
-				Enum:     []string{"run", "save", "eval"},
-				Desc:     "The action to perform: 'save' persists the inline code to /scripts/{name}.ts (requires both 'code' and 'name'); 'run' executes a previously saved script by name (requires 'name'); 'eval' executes the inline code directly (requires 'code'). Defaults to 'eval' when omitted.",
-				Required: false,
-			},
-			"name": {Type: schema.String, Desc: "The script name. Required for 'save' and 'run'.", Required: false},
-			"code": {Type: schema.String, Desc: "Inline JavaScript code to execute. Must not contain infinite loops (while, do...while, for(;;)); use for...of, for...in, or Array iteration methods instead.", Required: false},
+		ParamsOneOf: schema.NewParamsOneOfByJSONSchema(&jsonschema.Schema{
+			Type:       "object",
+			Properties: props,
+			Required:   []string{"title"},
 		}),
 	}, nil
 }
