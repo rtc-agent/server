@@ -99,7 +99,7 @@ func buildForkMessages(
 				Role:     protocol.MessageRoleUser,
 				Creator:  creator,
 				Content:  newContent,
-				Status:   protocol.MessageStreamingPending,
+				Status:   protocol.MessageStreamingCompleted,
 				ClientID: newClientMsgID,
 			})
 		} else {

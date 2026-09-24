@@ -202,7 +202,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		msg, err := primitives.CreateMessage(
 			txCtx, h.deps.Deps, session.ID, nil,
 			protocol.MessageRoleUser, creator,
-			req.ContentData, protocol.MessageStreamingPending,
+			req.ContentData, protocol.MessageStreamingCompleted,
 			req.ClientId,
 			nil,
 		)
