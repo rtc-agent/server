@@ -1,44 +1,79 @@
 # Script
 
-Execute JavaScript code in the browser environment. Provide either a file path or inline code (mutually exclusive).
+Execute JavaScript code to perform **computation or data processing**.
+
+## Core Purpose
+
+Script performs **active computation** — it processes inputs, applies logic, and produces computed outputs.
+
+### Script vs Content
+
+**Script**: Code whose value is in **what it does**.
+
+- Transforms data, computes results, makes decisions
+- Contains functions, loops, conditionals
+- Output is computed, not written
+
+**Content**: Text whose value is in **what it says**.
+
+- Documents, configuration, source code files
+- Output is read by humans or systems
+
+`script(save)` saves code that **computes** — not code that **composes text**.
+
+**Script is NOT for**: Creating documents, configuration files, README files, or any text whose primary purpose is to be read by humans or systems rather than executed.
+
+### Quick Decision Guide
+
+| Scenario | Script? | Reason |
+| -------- | ------- | ------ |
+| Count lines across 50 files | Yes | Aggregation across inputs |
+| Transform CSV to JSON | Yes | Data format transformation |
+| Calculate statistics | Yes | Numeric computation |
+| Validate form data | Yes | Data validation logic |
+| Write a README document | No | Output is prose for reading |
+| Create a config file | No | Output is configuration text |
+| Generate API documentation | No | Output is documentation for humans |
 
 ## When to Use
 
-- Data transformation or computation that can't be done with file tools alone
-- Browser automation tasks (e.g., testing web pages, scraping content)
-- When you need to process or analyze file contents programmatically
+Script is ideal when you need to:
 
-## When NOT to Use
-
-- Simple file reading/writing — use the read/write tools instead
-- Simple file searching — use grep/find instead
-- Tasks that can be accomplished with dedicated tools
+- Transform or analyze data with custom logic
+- Analyze or aggregate data across multiple files
+- Process and validate form data before submission
+- Implement data processing logic you'll reuse (e.g., calculations, transformations, validations)
 
 ## Usage Notes
 
-- The script runs in a browser environment with access to browser APIs
-- Provide either `file` (path to a .js file) or `code` (inline JavaScript) — not both
-- Output from console.log is captured and returned as the tool result
-- Errors thrown during execution are returned as error messages
+- Runs in sandboxed environment with restricted APIs
+- Provide either `file` (path) or `code` (inline) — not both
+- Output via console.log is captured as result
+- **Loop restrictions**: `while`, `do...while`, and `for(;;)` are not allowed. Use `for...of`, `for...in`, bounded `for` loops, or Array methods (forEach/map/filter/reduce) instead
+- **Sandbox restrictions**: No network access (fetch, XMLHttpRequest), no direct file system access, no eval() or dynamic import(). Execution timeout applies
+- **Available APIs**: Standard JavaScript built-ins (Array, Math, Date, JSON, Map, Set, RegExp, etc.), console.log for output, rtcAgent APIs for file operations
 
 ## Parameters
 
 Scripts can accept parameters via the `params` field. Access them in your code through the top-level `params` variable:
 
-### Example: Parameterized script
+### Example: Parameterized script with computation
 
 ```javascript
-// Save a reusable script with params
-const { startDate, endDate, format } = params;
-console.log(`Processing data from ${startDate} to ${endDate}`);
+const { scores, weights } = params;
+let total = 0;
+let weightSum = 0;
 
-// Use the parameters
-const result = {
-  range: `${startDate} → ${endDate}`,
-  outputFormat: format || 'json'
+for (const [i, score] of scores.entries()) {
+    const w = weights[i] || 1;
+    total += score * w;
+    weightSum += w;
+}
+
+return {
+    weightedAverage: total / weightSum,
+    count: scores.length
 };
-
-return result;
 ```
 
 ### Run with parameters
@@ -46,18 +81,17 @@ return result;
 ```json
 {
   "action": "run",
-  "name": "analyze-data",
+  "name": "calc-weighted-avg",
   "params": {
-    "startDate": "2024-01-01",
-    "endDate": "2024-12-31",
-    "format": "csv"
+    "scores": [85, 90, 78],
+    "weights": [0.3, 0.5, 0.2]
   }
 }
 ```
 
 ## Best Practices
 
-- **Save frequently reused scripts**: If you find yourself running the same or similar code multiple times, save it with `action: "save"` and a descriptive `name`. This makes it reusable via `action: "run"` and avoids rewriting code.
-- **Use descriptive names**: When saving scripts, use clear, kebab-case names (e.g., `analyze-sales-data`, `format-csv-output`) so they're easy to find and reuse later.
-- **Prefer eval for one-off tasks**: For single-use code, use `action: "eval"` (default) without saving to keep the workspace clean.
-- **Document parameters**: When saving scripts, include comments or description explaining what parameters the script expects.
+- **Include real computation**: Scripts should process data, not compose strings
+- **Save reusable logic**: Use `action: "save"` for computation you'll run multiple times
+- **Descriptive names**: Use kebab-case for script names (e.g., `analyze-sales`, `process-csv`)
+- **Prefer eval for one-offs**: Use `action: "eval"` for single-use code
