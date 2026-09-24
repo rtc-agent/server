@@ -215,7 +215,7 @@ type WorkerConfig struct {
 	CheckpointTTL time.Duration `mapstructure:"checkpoint_ttl"`
 
 	// StreamChunkTTL is the streaming message chunk TTL in Redis.
-	// Default 15m. Chunks are short-lived data, deleted after generation completes.
+	// Default 5m. Chunks are short-lived data, deleted after generation completes.
 	// Note: longer thinking/reasoning streams may require a longer TTL to avoid chunk loss.
 	StreamChunkTTL time.Duration `mapstructure:"stream_chunk_ttl"`
 
