@@ -1,11 +1,12 @@
 # Grep
 
-Search file contents using pattern matching in the virtual filesystem.
+A powerful search tool for the virtual filesystem
 
-## Usage Notes
+## Usage
 
-- Searches for a pattern (regex supported) across files in the workspace
-- Returns matching lines with file paths and line numbers
-- Use this instead of script-based grep approaches
-- For searching files by name/path, use the `find` tool instead
-- For reading a specific file, use the `read` tool instead
+- ALWAYS use Grep for search tasks. NEVER invoke `grep` or `rg` as a Bash command. The Grep tool has been optimized for correct permissions and access.
+- Supports full regex syntax (e.g., "log.*Error", "function\\s+\\w+")
+- Filter files with glob parameter (e.g., "*.js", "**/*.tsx") or type parameter (e.g., "js", "py", "rust")
+- Output modes: "content" shows matching lines, "files_with_matches" shows only file paths (default), "count" shows match counts
+- Pattern syntax: Uses regex - literal braces need escaping (use `interface\\{\\}` to find `interface{}` in Go code)
+- Multiline matching: By default patterns match within single lines only. For cross-line patterns like `struct \\{[\\s\\S]*?field`, use `multiline: true`

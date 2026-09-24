@@ -145,9 +145,20 @@ func (t *grepTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 		Name: "grep",
 		Desc: grepDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
-			"pattern":        {Type: schema.String, Desc: "Regex pattern to search for", Required: true},
-			"path":           {Type: schema.String, Desc: "File or directory path to search in (default: root '/')", Required: false},
-			"case_sensitive": {Type: schema.Boolean, Desc: "Whether the search is case-sensitive (default: false)", Required: false},
+			"pattern":     {Type: schema.String, Desc: "The regular expression pattern to search for in file contents", Required: true},
+			"path":        {Type: schema.String, Desc: "File or directory path to search in (defaults to root '/')", Required: false},
+			"glob":        {Type: schema.String, Desc: "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\")", Required: false},
+			"output_mode": {Type: schema.String, Desc: "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"files_with_matches\".", Required: false},
+			"-B":          {Type: schema.Integer, Desc: "Number of lines to show before each match. Requires output_mode: \"content\", ignored otherwise.", Required: false},
+			"-A":          {Type: schema.Integer, Desc: "Number of lines to show after each match. Requires output_mode: \"content\", ignored otherwise.", Required: false},
+			"-C":          {Type: schema.Integer, Desc: "Alias for context. Number of lines to show before and after each match.", Required: false},
+			"context":     {Type: schema.Integer, Desc: "Number of lines to show before and after each match. Requires output_mode: \"content\", ignored otherwise.", Required: false},
+			"-n":          {Type: schema.Boolean, Desc: "Show line numbers in output. Requires output_mode: \"content\", ignored otherwise. Defaults to true.", Required: false},
+			"-i":          {Type: schema.Boolean, Desc: "Case insensitive search", Required: false},
+			"type":        {Type: schema.String, Desc: "File type to search (e.g., \"js\", \"py\", \"rust\", \"go\"). More efficient than glob for standard file types.", Required: false},
+			"head_limit":  {Type: schema.Integer, Desc: "Limit output to first N lines/entries. Works across all output modes. Defaults to 250 when unspecified. Pass 0 for unlimited.", Required: false},
+			"offset":      {Type: schema.Integer, Desc: "Skip first N lines/entries before applying head_limit. Works across all output modes. Defaults to 0.", Required: false},
+			"multiline":   {Type: schema.Boolean, Desc: "Enable multiline mode where . matches newlines and patterns can span lines. Default: false.", Required: false},
 		}),
 	}, nil
 }
