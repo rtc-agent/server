@@ -231,9 +231,13 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	}
 	wrappedTools := make([]tool.BaseTool, len(tools))
 	for i, t := range tools {
-		// Wrap with logging first, then error handler.
+		// Wrap layers (outer to inner): error handler → normalizer → logger → tool
+		// 1. Logger: records tool call failures server-side
 		logged := &toolCallLogger{inner: t, helpers: h, sessionID: sid, turnID: tid}
-		wrappedTools[i] = utils.WrapToolWithErrorHandler(logged, errorHandler)
+		// 2. Normalizer: preprocesses empty/null/whitespace arguments to "{}"
+		normalized := &toolCallArgumentsNormalizer{inner: logged}
+		// 3. Error handler: converts errors to user-friendly strings
+		wrappedTools[i] = utils.WrapToolWithErrorHandler(normalized, errorHandler)
 	}
 
 	h.logger.Info(ctx, "createTools.done", map[string]any{
