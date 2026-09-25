@@ -3,6 +3,8 @@ package websearch
 import (
 	"context"
 	"testing"
+
+	"github.com/leichujun/rtc-agent/server/pkg/proxy"
 )
 
 func TestDuckDuckGoProvider(t *testing.T) {
@@ -59,9 +61,9 @@ func TestDuckDuckGoProvider_WithSOCKS5Proxy(t *testing.T) {
 	defer provider.Close()
 
 	// Create SOCKS5 proxy
-	proxyObj := &Proxy{
+	proxyObj := &proxy.Proxy{
 		URL:      "socks5://192.168.31.60:7897",
-		Type:     ProxyTypeSOCKS5,
+		Type:     proxy.ProxyTypeSOCKS5,
 		Region:   "global",
 		Priority: 10,
 	}

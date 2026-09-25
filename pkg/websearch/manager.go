@@ -9,20 +9,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/leichujun/rtc-agent/server/pkg/circuitbreaker"
+	"github.com/leichujun/rtc-agent/server/pkg/proxy"
 	"go.uber.org/zap"
 )
 
 // WebSearchConfig defines the configuration for WebSearchManager
 type WebSearchConfig struct {
-	BalancerType    string               `json:"balancer_type"` // round_robin, weighted
-	Providers       []ProviderConfig     `json:"providers"`
-	Proxies         []ProxyConfig        `json:"proxies"`
-	CircuitBreaker  CircuitBreakerConfig `json:"circuit_breaker"`
-	RateLimiter     RateLimiterConfig    `json:"rate_limiter"`
-	Retry           RetryConfig          `json:"retry"`
-	GlobalTimeout   time.Duration        `json:"global_timeout"`
-	ProxyHealthURL  string               `json:"proxy_health_url"`  // URL for proxy health checks
-	ProxyCheckInterval time.Duration     `json:"proxy_check_interval"` // Proxy health check interval
+	BalancerType    string                       `json:"balancer_type"` // round_robin, weighted
+	Providers       []ProviderConfig             `json:"providers"`
+	Proxies         []proxy.ProxyConfig          `json:"proxies"`
+	CircuitBreaker  circuitbreaker.CircuitBreakerConfig `json:"circuit_breaker"`
+	RateLimiter     RateLimiterConfig            `json:"rate_limiter"`
+	Retry           RetryConfig                  `json:"retry"`
+	GlobalTimeout   time.Duration                `json:"global_timeout"`
+	ProxyHealthURL  string                       `json:"proxy_health_url"`  // URL for proxy health checks
+	ProxyCheckInterval time.Duration             `json:"proxy_check_interval"` // Proxy health check interval
 }
 
 // ProviderConfig defines provider configuration
@@ -44,7 +46,7 @@ type RetryConfig struct {
 func DefaultWebSearchConfig() WebSearchConfig {
 	return WebSearchConfig{
 		BalancerType:   "round_robin",
-		CircuitBreaker: DefaultCircuitBreakerConfig(),
+		CircuitBreaker: circuitbreaker.DefaultCircuitBreakerConfig(),
 		RateLimiter:    DefaultRateLimiterConfig(),
 		Retry: RetryConfig{
 			MaxRetries:    3,
@@ -60,9 +62,9 @@ func DefaultWebSearchConfig() WebSearchConfig {
 type WebSearchManager struct {
 	providers    []WebSearchProvider
 	balancer     Balancer
-	breakers     map[string]*CircuitBreaker
+	breakers     map[string]*circuitbreaker.CircuitBreaker
 	rateLimiters map[string]*RateLimiter
-	proxyPool    *ProxyPool
+	proxyPool    *proxy.ProxyPool
 	config       WebSearchConfig
 	logger       *zap.Logger
 
@@ -103,17 +105,17 @@ func NewWebSearchManager(cfg WebSearchConfig, providers []WebSearchProvider, log
 	}
 
 	// Create circuit breakers and rate limiters per provider
-	breakers := make(map[string]*CircuitBreaker)
+	breakers := make(map[string]*circuitbreaker.CircuitBreaker)
 	rateLimiters := make(map[string]*RateLimiter)
 	for _, p := range providers {
-		breakers[p.Name()] = NewCircuitBreaker(cfg.CircuitBreaker, p.Name())
+		breakers[p.Name()] = circuitbreaker.NewCircuitBreaker(cfg.CircuitBreaker, p.Name())
 		rateLimiters[p.Name()] = NewRateLimiter(cfg.RateLimiter.Rate, cfg.RateLimiter.Burst)
 	}
 
 	// Create proxy pool if proxies configured
-	var proxyPool *ProxyPool
+	var proxyPool *proxy.ProxyPool
 	if len(cfg.Proxies) > 0 {
-		proxyPool = NewProxyPool(cfg.Proxies, cfg.ProxyHealthURL, cfg.ProxyCheckInterval, logger)
+		proxyPool = proxy.NewProxyPool(cfg.Proxies, cfg.ProxyHealthURL, cfg.ProxyCheckInterval, logger)
 	}
 
 	return &WebSearchManager{
@@ -180,8 +182,8 @@ func (m *WebSearchManager) Search(ctx context.Context, req *SearchRequest) (*Sea
 		}
 		triedProviderNames[provider.Name()] = struct{}{}
 
-		// Check circuit breaker
-		if !m.breakers[provider.Name()].Allow() {
+		// Check circuit breaker state first (fast path)
+		if m.breakers[provider.Name()].IsOpen() {
 			lastErr = fmt.Errorf("provider %s circuit open", provider.Name())
 			continue
 		}
@@ -195,18 +197,19 @@ func (m *WebSearchManager) Search(ctx context.Context, req *SearchRequest) (*Sea
 		// Select proxy and inject into context
 		providerCtx := ctx
 		if m.proxyPool != nil {
-			if proxy := m.proxyPool.NextHealthy(); proxy != nil {
-				providerCtx = WithProxy(ctx, proxy)
+			if px := m.proxyPool.NextHealthy(); px != nil {
+				providerCtx = WithProxy(ctx, px)
 			}
 		}
 
-		// Execute search
+		// Execute search with circuit breaker protection
 		start := time.Now()
-		resp, err := provider.Search(providerCtx, req)
+		result, err := m.breakers[provider.Name()].Execute(func() (any, error) {
+			return provider.Search(providerCtx, req)
+		})
 		duration := time.Since(start)
 
 		if err != nil {
-			m.breakers[provider.Name()].RecordFailure()
 			m.logger.Warn("search failed",
 				zap.String("provider", provider.Name()),
 				zap.Error(err),
@@ -228,7 +231,7 @@ func (m *WebSearchManager) Search(ctx context.Context, req *SearchRequest) (*Sea
 		}
 
 		// Success - set metadata
-		m.breakers[provider.Name()].RecordSuccess()
+		resp := result.(*SearchResponse)
 		resp.Provider = provider.Name()
 		resp.Duration = duration
 		m.logger.Info("search success",
@@ -249,13 +252,13 @@ type contextKey string
 const proxyContextKey contextKey = "websearch_proxy"
 
 // WithProxy injects proxy into context
-func WithProxy(ctx context.Context, p *Proxy) context.Context {
+func WithProxy(ctx context.Context, p *proxy.Proxy) context.Context {
 	return context.WithValue(ctx, proxyContextKey, p)
 }
 
 // ProxyFromContext retrieves proxy from context
-func ProxyFromContext(ctx context.Context) *Proxy {
-	p, _ := ctx.Value(proxyContextKey).(*Proxy)
+func ProxyFromContext(ctx context.Context) *proxy.Proxy {
+	p, _ := ctx.Value(proxyContextKey).(*proxy.Proxy)
 	return p
 }
 
@@ -369,7 +372,7 @@ func (m *WebSearchManager) HealthCheck(ctx context.Context) error {
 	// Check at least one provider is healthy and circuit closed
 	for _, p := range m.providers {
 		cb := m.breakers[p.Name()]
-		if cb != nil && CircuitState(cb.state.Load()) != StateOpen {
+		if cb != nil && !cb.IsOpen() {
 			if err := p.HealthCheck(ctx); err == nil {
 				return nil // At least one provider is healthy
 			}

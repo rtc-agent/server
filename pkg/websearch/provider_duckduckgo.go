@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"regexp"
 	"time"
+
+	"github.com/leichujun/rtc-agent/server/pkg/proxy"
 )
 
 // DuckDuckGo JSON API endpoint (same as eino-ext)
@@ -71,9 +73,9 @@ func (p *duckDuckGoProvider) Search(ctx context.Context, req *SearchRequest) (*S
 
 	// Get proxy from context if available
 	var client *http.Client
-	if proxy := ProxyFromContext(ctx); proxy != nil {
+	if px := ProxyFromContext(ctx); px != nil {
 		var err error
-		client, err = createHTTPClient(proxy)
+		client, err = proxy.CreateHTTPClient(px)
 		if err != nil {
 			return nil, fmt.Errorf("create proxy client: %w", err)
 		}

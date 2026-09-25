@@ -1,4 +1,4 @@
-package websearch
+package proxy
 
 import (
 	"context"
@@ -15,46 +15,12 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// ProxyType defines the type of proxy
-type ProxyType string
-
-const (
-	ProxyTypeSOCKS5 ProxyType = "socks5"
-	ProxyTypeHTTP   ProxyType = "http"
-	ProxyTypeHTTPS  ProxyType = "https"
-	ProxyTypeDirect ProxyType = "direct"
-)
-
-// ProxyConfig defines proxy configuration
-type ProxyConfig struct {
-	URL      string    `json:"url"`       // e.g., socks5://user:pass@host:port
-	Type     ProxyType `json:"type"`      // socks5, http, https, direct
-	Region   string    `json:"region"`    // e.g., us, cn, jp
-	Priority int       `json:"priority"`  // Priority (1-10, higher is better)
-}
-
-// Proxy represents a proxy server
-type Proxy struct {
-	URL      string
-	Type     ProxyType
-	Region   string
-	Priority int
-	Auth     *proxy.Auth // Parsed from URL for SOCKS5
-}
-
-// ProxyHealth tracks proxy health metrics
-type ProxyHealth struct {
-	SuccessRate atomic.Uint64 // 0-10000 (0-100.00%, two decimal precision)
-	AvgLatency  atomic.Int64  // nanoseconds
-	LastCheck   atomic.Int64  // unix timestamp
-}
-
 // ProxyPool manages multiple proxies with health checking and rotation
 type ProxyPool struct {
 	proxies        []Proxy
 	current        atomic.Uint64
 	healthyCurrent atomic.Uint64 // Separate counter for NextHealthy
-	healthMap      sync.Map // map[string]*ProxyHealth
+	healthMap      sync.Map      // map[string]*ProxyHealth
 	checkStop      chan struct{}
 	stopOnce       sync.Once
 	startOnce      sync.Once // guards Start() from being called multiple times
@@ -74,24 +40,7 @@ func NewProxyPool(configs []ProxyConfig, healthCheckURL string, checkInterval ti
 
 	proxies := make([]Proxy, 0, len(configs))
 	for _, cfg := range configs {
-		p := Proxy{
-			URL:      cfg.URL,
-			Type:     cfg.Type,
-			Region:   cfg.Region,
-			Priority: cfg.Priority,
-		}
-
-		// Parse authentication from URL for SOCKS5
-		if cfg.Type == ProxyTypeSOCKS5 && cfg.URL != "" {
-			if u, err := url.Parse(cfg.URL); err == nil && u.User != nil {
-				password, _ := u.User.Password()
-				p.Auth = &proxy.Auth{
-					User:     u.User.Username(),
-					Password: password,
-				}
-			}
-		}
-
+		p := NewProxyFromConfig(cfg)
 		proxies = append(proxies, p)
 	}
 
@@ -278,7 +227,7 @@ func (p *ProxyPool) checkAllProxies(ctx context.Context) {
 
 // pingProxy tests if a proxy is reachable
 func (p *ProxyPool) pingProxy(ctx context.Context, proxy *Proxy, timeout time.Duration) error {
-	client, err := createHTTPClient(proxy)
+	client, err := CreateHTTPClient(proxy)
 	if err != nil {
 		return fmt.Errorf("create client: %w", err)
 	}
@@ -334,8 +283,8 @@ func updateEMAInt64(val *atomic.Int64, newVal int64) {
 	}
 }
 
-// createHTTPClient creates an HTTP client configured to use the proxy
-func createHTTPClient(p *Proxy) (*http.Client, error) {
+// CreateHTTPClient creates an HTTP client configured to use the proxy
+func CreateHTTPClient(p *Proxy) (*http.Client, error) {
 	if p == nil || p.Type == ProxyTypeDirect {
 		return &http.Client{Timeout: 30 * time.Second}, nil
 	}

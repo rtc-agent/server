@@ -29,6 +29,8 @@ import (
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/centrifuge-plus"
+	"github.com/leichujun/rtc-agent/server/pkg/circuitbreaker"
+	"github.com/leichujun/rtc-agent/server/pkg/proxy"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/rtc-queue"
 	"github.com/rtc-agent/server/pkg/turn-agent"
@@ -483,7 +485,7 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 		GlobalTimeout:      cfg.WebSearch.GlobalTimeout,
 		ProxyHealthURL:     cfg.WebSearch.ProxyHealthURL,
 		ProxyCheckInterval: cfg.WebSearch.ProxyCheckInterval,
-		CircuitBreaker: websearch.CircuitBreakerConfig{
+		CircuitBreaker: circuitbreaker.CircuitBreakerConfig{
 			FailureThreshold:    cfg.WebSearch.CircuitBreaker.FailureThreshold,
 			OpenTimeout:         cfg.WebSearch.CircuitBreaker.OpenTimeout,
 			HalfOpenMaxRequests: cfg.WebSearch.CircuitBreaker.HalfOpenMaxRequests,
@@ -514,9 +516,9 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 	}
 
 	for _, p := range cfg.WebSearch.Proxies {
-		wsCfg.Proxies = append(wsCfg.Proxies, websearch.ProxyConfig{
+		wsCfg.Proxies = append(wsCfg.Proxies, proxy.ProxyConfig{
 			URL:      p.URL,
-			Type:     websearch.ProxyType(p.Type),
+			Type:     proxy.ProxyType(p.Type),
 			Region:   p.Region,
 			Priority: p.Priority,
 		})

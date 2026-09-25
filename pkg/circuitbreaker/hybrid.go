@@ -1,4 +1,4 @@
-package websearch
+package circuitbreaker
 
 import (
 	"context"
@@ -141,7 +141,7 @@ func (h *HybridCircuitBreaker) RecordFailure() {
 // the distributed breaker is authoritative. If you need the effective state,
 // use Allow() which consults the appropriate backend based on Redis health.
 func (h *HybridCircuitBreaker) IsOpen() bool {
-	return CircuitState(h.local.state.Load()) == StateOpen
+	return h.local.State() == StateOpen
 }
 
 // redisHealthLoop periodically checks Redis health
@@ -197,11 +197,11 @@ func (h *HybridCircuitBreaker) Shutdown() {
 	})
 }
 
-// resetClient safely replaces the underlying Redis client pointers.
+// ResetClient safely replaces the underlying Redis client pointers.
 // This acquires the client mutex so the background health check and any
 // in-flight Allow/Record calls see a consistent view. Useful for failover
 // scenarios where the Redis address changes (e.g., replica promotion).
-func (h *HybridCircuitBreaker) resetClient(addr string) {
+func (h *HybridCircuitBreaker) ResetClient(addr string) {
 	h.clientMu.Lock()
 	old := h.redisClient
 	h.redisClient = redis.NewClient(&redis.Options{Addr: addr})

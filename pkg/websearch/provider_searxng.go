@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/leichujun/rtc-agent/server/pkg/proxy"
 )
 
 // SearXNGConfig defines SearXNG provider configuration
@@ -84,9 +86,9 @@ func (p *searxngProvider) Search(ctx context.Context, req *SearchRequest) (*Sear
 
 	// Get proxy from context if available
 	var client *http.Client
-	if proxy := ProxyFromContext(ctx); proxy != nil {
+	if px := ProxyFromContext(ctx); px != nil {
 		var err error
-		client, err = createHTTPClient(proxy)
+		client, err = proxy.CreateHTTPClient(px)
 		if err != nil {
 			return nil, fmt.Errorf("create proxy client: %w", err)
 		}

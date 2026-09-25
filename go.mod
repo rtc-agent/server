@@ -18,6 +18,8 @@ require (
 	github.com/google/wire v0.7.0
 	github.com/hibiken/asynq v0.26.0
 	github.com/jackc/pgx/v5 v5.4.3
+	github.com/leichujun/rtc-agent/server/pkg/circuitbreaker v0.0.0-00010101000000-000000000000
+	github.com/leichujun/rtc-agent/server/pkg/proxy v0.0.0-00010101000000-000000000000
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
@@ -106,6 +108,7 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/ledongthuc/pdf v0.0.0-20260907135840-6c8c28e0e8a0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mailru/easyjson v0.9.2 // indirect
@@ -136,6 +139,7 @@ require (
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/slongfield/pyfmt v0.0.0-20220222012616-ea85ff4c361f // indirect
+	github.com/sony/gobreaker/v2 v2.4.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
@@ -194,3 +198,11 @@ replace github.com/rtc-agent/server/pkg/websearch => ./pkg/websearch
 replace github.com/rtc-agent/server/pkg/webfetch => ./pkg/webfetch
 
 replace github.com/leichujun/rtc-agent/server/pkg/webfetch => ./pkg/webfetch
+
+replace github.com/leichujun/rtc-agent/server/pkg/circuitbreaker => ./pkg/circuitbreaker
+
+replace github.com/rtc-agent/server/pkg/circuitbreaker => ./pkg/circuitbreaker
+
+replace github.com/leichujun/rtc-agent/server/pkg/proxy => ./pkg/proxy
+
+replace github.com/rtc-agent/server/pkg/proxy => ./pkg/proxy

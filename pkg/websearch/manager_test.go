@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/leichujun/rtc-agent/server/pkg/circuitbreaker"
 )
 
 // MockProvider implements WebSearchProvider for testing
@@ -101,7 +103,7 @@ func TestWeightedRoundRobinBalancer(t *testing.T) {
 }
 
 func TestCircuitBreaker(t *testing.T) {
-	cfg := CircuitBreakerConfig{
+	cfg := circuitbreaker.CircuitBreakerConfig{
 		FailureThreshold:    50,
 		OpenTimeout:         100 * time.Millisecond,
 		HalfOpenMaxRequests: 2,
@@ -109,7 +111,7 @@ func TestCircuitBreaker(t *testing.T) {
 		WindowDuration:      1 * time.Second,
 	}
 
-	cb := NewCircuitBreaker(cfg, "test-provider")
+	cb := circuitbreaker.NewCircuitBreaker(cfg, "test-provider")
 
 	// Initial state: closed, should allow
 	if !cb.Allow() {

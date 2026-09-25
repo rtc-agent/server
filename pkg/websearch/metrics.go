@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/leichujun/rtc-agent/server/pkg/circuitbreaker"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -161,7 +162,7 @@ func (m *Metrics) RecordProviderHealth(provider string, healthy bool) {
 }
 
 // RecordCircuitState records circuit breaker state
-func (m *Metrics) RecordCircuitState(provider string, state CircuitState) {
+func (m *Metrics) RecordCircuitState(provider string, state circuitbreaker.CircuitState) {
 	m.circuitState.WithLabelValues(provider).Set(float64(state))
 }
 

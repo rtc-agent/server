@@ -1,4 +1,4 @@
-package websearch
+package circuitbreaker
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 // Lua scripts for atomic circuit breaker operations
 
 // allowLua checks if a request is allowed and handles state transitions
-// KEYS[1]: websearch:cb:{provider}
+// KEYS[1]: circuitbreaker:{provider}
 // ARGV[1]: open_timeout (seconds)
 // ARGV[2]: current timestamp (unix seconds)
 // ARGV[3]: half_open_max_requests
@@ -54,7 +54,7 @@ return 0
 `
 
 // recordLua records an outcome and handles state transitions
-// KEYS[1]: websearch:cb:{provider}
+// KEYS[1]: circuitbreaker:{provider}
 // ARGV[1]: success ("1" or "0")
 // ARGV[2]: current timestamp
 // ARGV[3]: failure_threshold (0-100)
@@ -163,6 +163,7 @@ type DistributedCircuitBreaker struct {
 	providerName string
 	redisClient  *redis.Client
 	config       CircuitBreakerConfig
+	keyPrefix    string // Configurable key prefix for multi-tenant support
 }
 
 // NewDistributedCircuitBreaker creates a distributed circuit breaker
@@ -189,12 +190,27 @@ func NewDistributedCircuitBreaker(
 		providerName: providerName,
 		redisClient:  redisClient,
 		config:       config,
+		keyPrefix:    "circuitbreaker",
 	}
+}
+
+// NewDistributedCircuitBreakerWithPrefix creates a distributed circuit breaker with custom key prefix
+func NewDistributedCircuitBreakerWithPrefix(
+	providerName string,
+	redisClient *redis.Client,
+	config CircuitBreakerConfig,
+	keyPrefix string,
+) *DistributedCircuitBreaker {
+	dcb := NewDistributedCircuitBreaker(providerName, redisClient, config)
+	if keyPrefix != "" {
+		dcb.keyPrefix = keyPrefix
+	}
+	return dcb
 }
 
 // AllowWithErr checks if a request is allowed (returns error for Redis failures)
 func (d *DistributedCircuitBreaker) AllowWithErr(ctx context.Context) (bool, error) {
-	key := fmt.Sprintf("websearch:cb:%s", d.providerName)
+	key := fmt.Sprintf("%s:%s", d.keyPrefix, d.providerName)
 	result, err := allowScript.Run(
 		ctx, d.redisClient,
 		[]string{key},
@@ -210,7 +226,7 @@ func (d *DistributedCircuitBreaker) AllowWithErr(ctx context.Context) (bool, err
 
 // RecordOutcome records a success or failure outcome
 func (d *DistributedCircuitBreaker) RecordOutcome(ctx context.Context, success bool) error {
-	key := fmt.Sprintf("websearch:cb:%s", d.providerName)
+	key := fmt.Sprintf("%s:%s", d.keyPrefix, d.providerName)
 	successArg := "0"
 	if success {
 		successArg = "1"

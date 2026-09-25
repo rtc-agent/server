@@ -1,6 +1,10 @@
 package webfetch
 
-import "time"
+import (
+	"time"
+
+	"github.com/leichujun/rtc-agent/server/pkg/proxy"
+)
 
 // WebFetchConfig holds all configuration for the WebFetchManager.
 // Uses mapstructure tags for Viper deserialization.
@@ -35,6 +39,19 @@ type WebFetchConfig struct {
 	RespectRobotsTxt bool          `mapstructure:"respect_robots_txt"` // whether to respect robots.txt, default true
 	RobotsCacheTTL   time.Duration `mapstructure:"robots_cache_ttl"`   // robots.txt cache TTL, default 24h
 
+	// Circuit breaker (Phase 3).
+	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"` // per-domain circuit breaker config
+
+	// Proxy pool (Phase 3).
+	Proxies            []proxy.ProxyConfig `mapstructure:"proxies"`              // proxy list
+	ProxyHealthURL     string              `mapstructure:"proxy_health_url"`     // URL for proxy health checks
+	ProxyCheckInterval time.Duration       `mapstructure:"proxy_check_interval"` // proxy health check interval
+
+	// Distributed cache sync (Phase 3).
+	CacheSyncEnabled  bool   `mapstructure:"cache_sync_enabled"`  // whether to enable distributed cache sync
+	CacheSyncChannel  string `mapstructure:"cache_sync_channel"`  // Redis Pub/Sub channel for cache sync
+	CacheSyncSourceID string `mapstructure:"cache_sync_source_id"` // unique ID for this instance
+
 	// Security.
 	PreApprovedDomains []string `mapstructure:"pre_approved_domains"` // pre-approved domain list
 	BlockedDomains     []string `mapstructure:"blocked_domains"`      // blocked domain list
@@ -42,6 +59,28 @@ type WebFetchConfig struct {
 
 	// Other.
 	UserAgent string `mapstructure:"user_agent"` // User-Agent header, default "RTCAgent-WebFetch/1.0"
+}
+
+// CircuitBreakerConfig defines circuit breaker configuration for webfetch
+type CircuitBreakerConfig struct {
+	Enabled             bool          `mapstructure:"enabled"`              // whether to enable circuit breaker
+	FailureThreshold    int           `mapstructure:"failure_threshold"`    // 0-100, percentage of failures to trigger open
+	OpenTimeout         time.Duration `mapstructure:"open_timeout"`         // wait time before half-open
+	HalfOpenMaxRequests int           `mapstructure:"half_open_max_requests"` // probe requests in half-open
+	WindowSize          int           `mapstructure:"window_size"`          // sliding window size
+	WindowDuration      time.Duration `mapstructure:"window_duration"`      // window time dimension
+}
+
+// DefaultCircuitBreakerConfig returns sensible defaults for webfetch
+func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
+	return CircuitBreakerConfig{
+		Enabled:             false,
+		FailureThreshold:    50,
+		OpenTimeout:         30 * time.Second,
+		HalfOpenMaxRequests: 3,
+		WindowSize:          20,
+		WindowDuration:      1 * time.Minute,
+	}
 }
 
 // DefaultWebFetchConfig returns a WebFetchConfig with sensible defaults.
@@ -63,6 +102,7 @@ func DefaultWebFetchConfig() WebFetchConfig {
 		RateLimit:                  DefaultRateLimitConfig(),
 		RespectRobotsTxt:           true,
 		RobotsCacheTTL:             24 * time.Hour,
+		CircuitBreaker:             DefaultCircuitBreakerConfig(),
 		AllowedSchemes:             []string{"https", "http"},
 		UserAgent:                  "RTCAgent-WebFetch/1.0",
 		PreApprovedDomains:         defaultPreApprovedDomains(),
