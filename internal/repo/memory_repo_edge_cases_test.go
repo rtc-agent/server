@@ -96,10 +96,10 @@ func TestMemoryRepo_Search_EmptyQuery(t *testing.T) {
 	mem.Title = "Test Memory"
 	require.NoError(t, repo.Create(ctx, mem))
 
-	// Empty query should match everything (LIKE '%%' matches all)
+	// Empty query should return no results (word-level matching requires at least one word)
 	results, err := repo.Search(ctx, memory.ScopeSession, sessionID, "", 10)
 	require.NoError(t, err)
-	assert.Len(t, results, 1)
+	assert.Len(t, results, 0)
 }
 
 func TestMemoryRepo_Search_SpecialCharacters(t *testing.T) {

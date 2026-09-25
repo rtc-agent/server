@@ -158,23 +158,40 @@ func (r *memoryRepo) Search(ctx context.Context, scope memory.ScopeType, scopeID
 	if limit <= 0 {
 		limit = 20
 	}
-	likeQuery := "%" + escapeLikePattern(query) + "%"
+
+	// Split query into words for OR-based matching.
+	// "saveMemory tool test" matches memories containing ANY of these words.
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return []*memory.Memory{}, nil
+	}
 
 	var memories []*memory.Memory
 	db := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("scope = ? AND scope_id = ?", scope, scopeID)
 
+	// Build OR conditions: each word matches title OR content OR description.
 	// Choose case-insensitive pattern matching based on database dialect.
-	switch getDialectName(db) {
-	case "sqlite":
-		// SQLite LIKE is case-insensitive for ASCII by default.
-		// Use ESCAPE clause to support escaped wildcards.
-		db = db.Where("title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
-			likeQuery, likeQuery, likeQuery)
-	default:
-		// PostgreSQL uses ILIKE for case-insensitive matching.
-		db = db.Where("title ILIKE ? OR content ILIKE ? OR description ILIKE ?",
-			likeQuery, likeQuery, likeQuery)
+	isSQLite := getDialectName(db) == "sqlite"
+	for i, word := range words {
+		likeQuery := "%" + escapeLikePattern(word) + "%"
+		if isSQLite {
+			if i == 0 {
+				db = db.Where("title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
+					likeQuery, likeQuery, likeQuery)
+			} else {
+				db = db.Or("title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
+					likeQuery, likeQuery, likeQuery)
+			}
+		} else {
+			if i == 0 {
+				db = db.Where("title ILIKE ? OR content ILIKE ? OR description ILIKE ?",
+					likeQuery, likeQuery, likeQuery)
+			} else {
+				db = db.Or("title ILIKE ? OR content ILIKE ? OR description ILIKE ?",
+					likeQuery, likeQuery, likeQuery)
+			}
+		}
 	}
 
 	err := db.Order("updated_at DESC").Limit(limit).Find(&memories).Error
