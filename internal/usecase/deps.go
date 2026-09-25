@@ -15,6 +15,7 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
+	"github.com/rtc-agent/server/pkg/memory"
 	"github.com/rtc-agent/server/pkg/protocol"
 	"github.com/rtc-agent/server/pkg/webfetch"
 	"github.com/rtc-agent/server/pkg/websearch"
@@ -46,8 +47,7 @@ type Dependencies struct {
 	RtcRepo           repo.RtcRepo
 	GoalRepo          repo.GoalRepo
 	LoopRepo          repo.LoopRepo
-	SessionMemoryRepo repo.SessionMemoryRepo
-	UserMemoryRepo    repo.UserMemoryRepo
+	MemoryRepo        memory.Repository // unified Memory storage (OKF spec)
 	UpdatePublisher   Publisher
 
 	// ChatModel is the eino ChatModel for LLM interactions.

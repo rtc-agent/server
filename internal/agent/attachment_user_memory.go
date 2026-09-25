@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/pkg/memory"
 )
 
 // UserMemoryAttachment injects user memories into LLM context.
@@ -21,7 +22,7 @@ import (
 // - medium importance: injected if count per category < 10
 // - low importance: never injected
 //
-// Memories are grouped by category and formatted for easy consumption.
+// Memories are grouped by type (category) and formatted for easy consumption.
 type UserMemoryAttachment struct {
 	helpers *helpers
 }
@@ -39,22 +40,22 @@ func (a *UserMemoryAttachment) Name() string {
 // Build generates the user memory content for injection.
 //
 // Returns empty string if:
-// - UserMemoryRepo is nil (feature disabled)
+// - MemoryRepo is nil (feature disabled)
 // - No memories exist for the user
 // - Query fails
 //
-// The output is wrapped in <user_memory> tags and grouped by category:
+// The output is wrapped in <user_memory> tags and grouped by type:
 // - About the user (user)
 // - Work preferences and feedback (feedback)
 // - Project information (project)
 // - References (reference)
 func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, userID uuid.UUID) (string, error) {
-	if a.helpers.deps.UserMemoryRepo == nil {
+	if a.helpers.deps.MemoryRepo == nil {
 		return "", nil
 	}
 
 	// Get all user memories (limited, sorted by importance)
-	memories, err := a.helpers.deps.UserMemoryRepo.ListByUser(ctx, userID, 50)
+	memories, err := a.helpers.deps.MemoryRepo.ListByScope(ctx, memory.ScopeUser, userID, memory.ListOptions{Limit: 50})
 	if err != nil {
 		return "", fmt.Errorf("query user memories: %w", err)
 	}
@@ -67,11 +68,11 @@ func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, u
 	lang := a.detectUserLanguage(ctx, sessionID)
 
 	// Split by importance: critical/high first, then medium
-	var criticalHigh []*model.UserMemory
-	var medium []*model.UserMemory
+	var criticalHigh []*memory.Memory
+	var medium []*memory.Memory
 
 	for _, mem := range memories {
-		switch mem.Importance {
+		switch extractImportanceFromMetadata(mem.Metadata) {
 		case model.ImportanceCritical, model.ImportanceHigh:
 			criticalHigh = append(criticalHigh, mem)
 		case model.ImportanceMedium:
@@ -80,8 +81,8 @@ func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, u
 		}
 	}
 
-	// Group by category
-	categories := map[string][]*model.UserMemory{
+	// Group by type (category)
+	categories := map[string][]*memory.Memory{
 		model.UserMemoryCategoryUser:      {},
 		model.UserMemoryCategoryFeedback:  {},
 		model.UserMemoryCategoryProject:   {},
@@ -90,12 +91,12 @@ func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, u
 
 	// Add critical/high first
 	for _, mem := range criticalHigh {
-		categories[mem.Category] = append(categories[mem.Category], mem)
+		categories[mem.Type] = append(categories[mem.Type], mem)
 	}
 	// Then add medium (up to 10 per category)
 	for _, mem := range medium {
-		if len(categories[mem.Category]) < 10 {
-			categories[mem.Category] = append(categories[mem.Category], mem)
+		if len(categories[mem.Type]) < 10 {
+			categories[mem.Type] = append(categories[mem.Type], mem)
 		}
 	}
 

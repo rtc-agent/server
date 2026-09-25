@@ -2,13 +2,16 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/pkg/memory"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -78,7 +81,7 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 	if args.Category == "" || args.Title == "" || args.Content == "" {
 		span.SetStatus(codes.Error, "missing_required_fields")
 		errMsg := "Error: category, title, and content are required"
-		// 持久化验证错误到 DB，确保 checkpoint resume 时消息结构一致
+		// Persist validation error to DB to ensure message structure consistency on checkpoint resume.
 		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
 			Helpers:         t.helpers,
 			SessionID:       t.session.ID,
@@ -96,10 +99,10 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 	}
 
 	// Validate category
-	if !model.IsValidCategory(args.Category) {
+	if !memory.IsValidMemoryType(args.Category) {
 		span.SetStatus(codes.Error, "invalid_category")
 		errMsg := fmt.Sprintf("Error: invalid category: %s (must be one of: decision, context, progress, issue, learnings)", args.Category)
-		// 持久化验证错误到 DB
+		// Persist validation error to DB.
 		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
 			Helpers:         t.helpers,
 			SessionID:       t.session.ID,
@@ -120,21 +123,45 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 	tokenCount := estimateMemoryTokens(args.Content)
 
 	// Create memory
-	memory := &model.SessionMemory{
-		SessionID:  t.session.ID,
-		Category:   args.Category,
+	mem := &memory.Memory{
+		Scope:      memory.ScopeSession,
+		ScopeID:    t.session.ID,
+		Type:       args.Category,
 		Title:      args.Title,
 		Content:    args.Content,
-		Metadata:   model.JSONObject(args.Metadata),
-		TokenCount: &tokenCount,
+		Timestamp:  time.Now(),
+		TokenCount: tokenCount,
+	}
+	if len(args.Metadata) > 0 {
+		jsonBytes, err := json.Marshal(args.Metadata)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "marshal_metadata_failed")
+			errMsg := fmt.Sprintf("Error: marshal metadata: %v", err)
+			if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+				Helpers:         t.helpers,
+				SessionID:       t.session.ID,
+				OwnerRefID:      t.session.OwnerRefID,
+				TurnID:          t.turnID,
+				ToolName:        "saveSessionMemory",
+				ArgumentsInJSON: argumentsInJSON,
+				ResultJSON:      errMsg,
+			}); publishErr != nil {
+				t.helpers.logger.Warn(ctx, "saveSessionMemory.persist_metadata_error_failed", map[string]any{
+					"error": publishErr.Error(),
+				})
+			}
+			return errMsg, nil
+		}
+		mem.Metadata = memory.JSONBString(jsonBytes)
 	}
 
 	// Save to database
-	if err := t.helpers.deps.SessionMemoryRepo.Create(ctx, memory); err != nil {
+	if err := t.helpers.deps.MemoryRepo.Create(ctx, mem); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "create_failed")
 		errMsg := fmt.Sprintf("Error: save memory: %v", err)
-		// 持久化错误到 DB
+		// Persist error to DB.
 		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
 			Helpers:         t.helpers,
 			SessionID:       t.session.ID,
@@ -152,19 +179,19 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 	}
 
 	span.SetAttributes(
-		attribute.String("memory_id", memory.ID.String()),
+		attribute.String("memory_id", mem.ID.String()),
 		attribute.Int("token_count", tokenCount),
 	)
 	t.helpers.logger.Info(ctx, "saveSessionMemory.success", map[string]any{
 		"session_id":  t.session.ID.String(),
-		"memory_id":   memory.ID.String(),
+		"memory_id":   mem.ID.String(),
 		"category":    args.Category,
 		"token_count": tokenCount,
 	})
 
-	resultJSON := formatSessionMemorySaved(memory.ID.String(), args.Category, args.Title)
+	resultJSON := formatSessionMemorySaved(mem.ID.String(), args.Category, args.Title)
 
-	// 持久化成功消息到 DB
+	// Persist success message to DB.
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,
 		SessionID:       t.session.ID,
@@ -179,7 +206,7 @@ func (t *saveSessionMemoryTool) InvokableRun(ctx context.Context, argumentsInJSO
 		t.helpers.logger.Warn(ctx, "saveSessionMemory.publish_failed", map[string]any{
 			"error": err.Error(),
 		})
-		// 不返回错误，因为内存已保存成功
+		// Do not return error since the memory was already saved.
 	}
 
 	return resultJSON, nil
@@ -244,11 +271,11 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 	)
 
 	// Validate category if provided
-	if args.Category != "" && !model.IsValidCategory(args.Category) {
+	if args.Category != "" && !memory.IsValidMemoryType(args.Category) {
 		span.SetStatus(codes.Error, "invalid_category")
 		errMsg := fmt.Sprintf("Error: invalid category %q. Valid categories: %v",
-			args.Category, model.ValidSessionMemoryCategories)
-		// 持久化验证错误到 DB
+			args.Category, memory.ValidMemoryTypes)
+		// Persist validation error to DB.
 		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
 			Helpers:         t.helpers,
 			SessionID:       t.session.ID,
@@ -266,18 +293,18 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 	}
 
 	// Query memories
-	var memories []*model.SessionMemory
+	var memories []*memory.Memory
 	var err error
 	if args.Category != "" {
-		memories, err = t.helpers.deps.SessionMemoryRepo.ListByCategory(ctx, t.session.ID, args.Category, args.Limit)
+		memories, err = t.helpers.deps.MemoryRepo.ListByScope(ctx, memory.ScopeSession, t.session.ID, memory.ListOptions{Type: args.Category, Limit: args.Limit})
 	} else {
-		memories, err = t.helpers.deps.SessionMemoryRepo.ListBySession(ctx, t.session.ID, args.Limit)
+		memories, err = t.helpers.deps.MemoryRepo.ListByScope(ctx, memory.ScopeSession, t.session.ID, memory.ListOptions{Limit: args.Limit})
 	}
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "list_failed")
 		errMsg := fmt.Sprintf("Error: list memories: %v", err)
-		// 持久化错误到 DB
+		// Persist error to DB.
 		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
 			Helpers:         t.helpers,
 			SessionID:       t.session.ID,
@@ -297,7 +324,7 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 	if len(memories) == 0 {
 		span.SetAttributes(attribute.Int("count", 0))
 		resultJSON := formatNoSessionMemories()
-		// 持久化空结果到 DB
+		// Persist empty result to DB.
 		if err := publishToolMessages(ctx, publishToolMessagesInput{
 			Helpers:         t.helpers,
 			SessionID:       t.session.ID,
@@ -323,7 +350,7 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 		}
 		items[i] = sessionMemoryItem{
 			Index:     i + 1,
-			Category:  mem.Category,
+			Category:  mem.Type,
 			Title:     mem.Title,
 			Content:   stringutil.TruncateByRune(mem.Content, 200),
 			CreatedAt: createdAt,
@@ -333,7 +360,7 @@ func (t *listSessionMemoriesTool) InvokableRun(ctx context.Context, argumentsInJ
 	span.SetAttributes(attribute.Int("count", len(memories)))
 	resultJSON := formatSessionMemoriesList(len(memories), items)
 
-	// 持久化成功消息到 DB
+	// Persist success message to DB.
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,
 		SessionID:       t.session.ID,

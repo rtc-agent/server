@@ -10,6 +10,7 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
+	"github.com/rtc-agent/server/pkg/memory"
 	"github.com/rtc-agent/server/pkg/protocol"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -161,7 +162,7 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 				return nil, err
 			}
 			// Delete session memories (physical delete; they have served their purpose).
-			if err := t.helpers.deps.SessionMemoryRepo.DeleteBySession(txCtx, s.ID); err != nil {
+			if err := t.helpers.deps.MemoryRepo.DeleteByScope(txCtx, memory.ScopeSession, s.ID); err != nil {
 				t.helpers.logger.Warn(ctx, "stopSubAgent.delete_memories_failed", map[string]any{
 					"session_id": s.ID.String(),
 					"error":      err.Error(),

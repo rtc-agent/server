@@ -71,7 +71,3 @@ func IsValidCategory(category string) bool {
 	}
 	return false
 }
-
-// ToProtocolSessionMemory converts model.SessionMemory to protocol.SessionMemory.
-// Note: the protocol currently has no SessionMemory definition; this is reserved for future use.
-// If exposed to the client, a corresponding type must be added to the protocol.

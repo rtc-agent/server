@@ -37,8 +37,6 @@ type ServiceContext struct {
 	OAuth2UserRepo      repo.OAuth2UserRepo
 	DeviceRepo          repo.DeviceRepo
 	RefreshTokenRepo    repo.RefreshTokenRepo
-	SessionMemoryRepo   repo.SessionMemoryRepo
-	UserMemoryRepo      repo.UserMemoryRepo
 	ScriptExecutionRepo repo.ScriptExecutionRepo
 	MemoryRepo          memory.Repository // Phase 2: unified Memory storage
 	LoopRepo            repo.LoopRepo
@@ -61,8 +59,6 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
 	deviceRepo := repo.NewDeviceRepo(db)
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
-	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
-	userMemoryRepo := repo.NewUserMemoryRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	memoryRepo := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
@@ -95,7 +91,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	return NewServiceContextWithDeps(cfg, db, rdb,
 		sessionRepo, messageRepo, turnRepo, rtcRepo,
 		goalRepo, oauth2UserRepo, deviceRepo, refreshTokenRepo,
-		sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, memoryRepo, loopRepo,
+		scriptExecutionRepo, memoryRepo, loopRepo,
 		updatePublisher, node, dualBroker, jwtSigner)
 }
 
@@ -115,8 +111,6 @@ func NewServiceContextWithDeps(
 	oauth2UserRepo repo.OAuth2UserRepo,
 	deviceRepo repo.DeviceRepo,
 	refreshTokenRepo repo.RefreshTokenRepo,
-	sessionMemoryRepo repo.SessionMemoryRepo,
-	userMemoryRepo repo.UserMemoryRepo,
 	scriptExecutionRepo repo.ScriptExecutionRepo,
 	memoryRepo memory.Repository,
 	loopRepo repo.LoopRepo,
@@ -142,8 +136,6 @@ func NewServiceContextWithDeps(
 		OAuth2UserRepo:      oauth2UserRepo,
 		DeviceRepo:          deviceRepo,
 		RefreshTokenRepo:    refreshTokenRepo,
-		SessionMemoryRepo:   sessionMemoryRepo,
-		UserMemoryRepo:      userMemoryRepo,
 		ScriptExecutionRepo: scriptExecutionRepo,
 		MemoryRepo:          memoryRepo,
 		LoopRepo:            loopRepo,

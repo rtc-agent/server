@@ -55,8 +55,6 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	oAuth2UserRepo := repo.NewOAuth2UserRepo(db)
 	deviceRepo := repo.NewDeviceRepo(db)
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
-	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
-	userMemoryRepo := repo.NewUserMemoryRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	repository := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
@@ -73,7 +71,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, repository, loopRepo, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, scriptExecutionRepo, repository, loopRepo, updatePublisher, node, dualBroker, jwtSigner)
 	return serviceContext, nil
 }
 
@@ -88,8 +86,6 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	oAuth2UserRepo := repo.NewOAuth2UserRepo(db)
 	deviceRepo := repo.NewDeviceRepo(db)
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
-	sessionMemoryRepo := repo.NewSessionMemoryRepo(db)
-	userMemoryRepo := repo.NewUserMemoryRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	repository := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
@@ -106,7 +102,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, sessionMemoryRepo, userMemoryRepo, scriptExecutionRepo, repository, loopRepo, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, scriptExecutionRepo, repository, loopRepo, updatePublisher, node, dualBroker, jwtSigner)
 	prometheusMetrics := provideMetrics()
 	cmdChatModelResult, err := provideChatModel(cfg, prometheusMetrics)
 	if err != nil {
@@ -144,7 +140,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 // wire.go:
 
 // RepositorySet provides all repository implementations.
-var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewGoalRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo, repo.NewSessionMemoryRepo, repo.NewUserMemoryRepo, repo.NewScriptExecutionRepo, repo.NewMemoryRepo, repo.NewLoopRepo)
+var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewGoalRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo, repo.NewScriptExecutionRepo, repo.NewMemoryRepo, repo.NewLoopRepo)
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
 var ServiceSet = wire.NewSet(
@@ -301,8 +297,6 @@ func provideUsecaseDependencies(
 		RtcRepo:           svcCtx.RtcRepo,
 		GoalRepo:          svcCtx.GoalRepo,
 		LoopRepo:          svcCtx.LoopRepo,
-		SessionMemoryRepo: svcCtx.SessionMemoryRepo,
-		UserMemoryRepo:    svcCtx.UserMemoryRepo,
 		UpdatePublisher:   svcCtx.UpdatePublisher,
 		ChatModel:         chatModelResult2.model,
 		LLMConfig:         cfg.LLM,

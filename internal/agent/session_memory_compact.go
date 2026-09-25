@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/pkg/memory"
 )
 
 // compressContextWithSessionMemory attempts compression using session memories.
@@ -26,7 +26,7 @@ func (h *helpers) compressContextWithSessionMemory(
 	}
 
 	// Query session memories
-	memories, err := h.deps.SessionMemoryRepo.ListBySession(ctx, sessionID, 20)
+	memories, err := h.deps.MemoryRepo.ListByScope(ctx, memory.ScopeSession, sessionID, memory.ListOptions{Limit: 20})
 	if err != nil {
 		h.logger.Warn(ctx, "compressContextWithSessionMemory.query_error", map[string]any{
 			"session_id": sessionID.String(),
@@ -39,8 +39,8 @@ func (h *helpers) compressContextWithSessionMemory(
 		return nil // No memories, fall back to LLM
 	}
 
-	// Build summary from memories
-	summary := buildSummaryFromMemories(memories)
+	// Build summary from memories using the unified memory formatter
+	summary := memory.NewFormatter().FormatForSummary(memories)
 
 	h.logger.Info(ctx, "compressContextWithSessionMemory.success", map[string]any{
 		"session_id":   sessionID.String(),
@@ -48,18 +48,4 @@ func (h *helpers) compressContextWithSessionMemory(
 	})
 
 	return &summary
-}
-
-// buildSummaryFromMemories builds session memories into summary text.
-// Groups by category and formats as readable markdown. Template is defined in
-// prompts/attachments/session-memory-summary.md.tmpl.
-func buildSummaryFromMemories(memories []*model.SessionMemory) string {
-	return buildSummaryFromMemoriesTmpl(memories)
-}
-
-// formatSessionMemoriesForInjection formats session memories for injection into messages.
-// Used for pre-turn injection (different from compression summary). Template defined in
-// prompts/attachments/session-memory-injection.md.tmpl.
-func formatSessionMemoriesForInjection(memories []*model.SessionMemory) string {
-	return formatSessionMemoryInjection(memories)
 }

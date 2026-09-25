@@ -36,5 +36,10 @@ func AutoMigrate(db *gorm.DB) error {
 		return fmt.Errorf("create index idx_memory_links_from_relation: %w", err)
 	}
 
+	// Migrate user_memories.tags from text[] to jsonb (matches StringArray JSON serialization).
+	// to_jsonb() converts a PostgreSQL array into a JSON array — direct cast text[]->jsonb is not allowed.
+	// Silently ignored if the column is already jsonb or doesn't exist.
+	_ = db.Exec("ALTER TABLE user_memories ALTER COLUMN tags TYPE jsonb USING to_jsonb(tags)").Error
+
 	return nil
 }

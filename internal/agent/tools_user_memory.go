@@ -2,14 +2,17 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/pkg/memory"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -37,18 +40,33 @@ func (h *helpers) getUserIDFromContext(ctx context.Context) (uuid.UUID, error) {
 	return userID, nil
 }
 
+// userMemoryToolBase holds the shared fields and methods for all user memory tools.
+// Embedding this struct eliminates duplicated persistError/persistResult boilerplate.
+type userMemoryToolBase struct {
+	session  *model.Session
+	helpers  *helpers
+	turnID   uuid.UUID
+	toolName string
+}
+
+// persistError persists an error message to DB for cache consistency.
+func (b *userMemoryToolBase) persistError(ctx context.Context, argumentsInJSON, errMsg string) {
+	persistToolError(ctx, b.helpers, b.session, b.turnID, b.toolName, argumentsInJSON, errMsg)
+}
+
+// persistResult persists a success result to DB for cache consistency.
+func (b *userMemoryToolBase) persistResult(ctx context.Context, argumentsInJSON, resultJSON string) {
+	persistToolResult(ctx, b.helpers, b.session, b.turnID, b.toolName, argumentsInJSON, resultJSON)
+}
+
 // =============================================================================
 // saveUserMemory
 // =============================================================================
 
-type saveUserMemoryTool struct {
-	session *model.Session
-	helpers *helpers
-	turnID  uuid.UUID
-}
+type saveUserMemoryTool struct{ userMemoryToolBase }
 
 func (h *helpers) createSaveUserMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
-	return &saveUserMemoryTool{session: session, helpers: h, turnID: turnID}
+	return &saveUserMemoryTool{userMemoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "saveUserMemory"}}
 }
 
 func (t *saveUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -60,7 +78,7 @@ func (t *saveUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 				Type:     schema.String,
 				Desc:     "Category: user, feedback, project, or reference",
 				Required: true,
-				Enum:     model.ValidUserMemoryCategories,
+				Enum:     []string{"user", "feedback", "project", "reference"},
 			},
 			"importance": {
 				Type:     schema.String,
@@ -133,10 +151,10 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	)
 
 	// Validate category
-	if !model.IsValidUserMemoryCategory(args.Category) {
+	if !memory.IsValidMemoryType(args.Category) {
 		span.SetStatus(codes.Error, "invalid_category")
 		errMsg := fmt.Sprintf("Error: invalid category: %s (must be one of: %s)",
-			args.Category, strings.Join(model.ValidUserMemoryCategories, ", "))
+			args.Category, strings.Join([]string{"user", "feedback", "project", "reference"}, ", "))
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
@@ -154,7 +172,7 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	}
 
 	// Tool-layer validation: feedback and project must include Why/How structure
-	if args.Category == model.UserMemoryCategoryFeedback || args.Category == model.UserMemoryCategoryProject {
+	if args.Category == "feedback" || args.Category == "project" {
 		if err := validateStructuredContent(args.Content); err != nil {
 			span.SetStatus(codes.Error, "content_validation_failed")
 			errMsg := fmt.Sprintf("Error: content validation failed for %s category: %v", args.Category, err)
@@ -174,20 +192,38 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	}
 	span.SetAttributes(attribute.String("user_id", userID.String()))
 
-	// Create memory
-	memory := &model.UserMemory{
-		UserID:          userID,
-		Category:        args.Category,
-		Importance:      args.Importance,
-		Title:           args.Title,
-		Content:         args.Content,
-		Description:     args.Description,
-		Tags:            model.StringArray(args.Tags),
-		Metadata:        model.JSONObject(args.Metadata),
-		SourceSessionID: &t.session.ID,
+	// Build metadata with importance and source session (OKF sources format)
+	metadataMap := args.Metadata
+	if metadataMap == nil {
+		metadataMap = make(map[string]any)
+	}
+	metadataMap["importance"] = args.Importance
+	metadataMap["sources"] = []map[string]any{
+		{
+			"id":       fmt.Sprintf("session-%s", t.session.ID.String()[:8]),
+			"resource": fmt.Sprintf("rtc-agent://session/%s", t.session.ID.String()),
+		},
+	}
+	metadataJSON, _ := json.Marshal(metadataMap)
+
+	descStr := ""
+	if args.Description != nil {
+		descStr = *args.Description
 	}
 
-	if err := t.helpers.deps.UserMemoryRepo.Create(ctx, memory); err != nil {
+	mem := &memory.Memory{
+		Scope:       memory.ScopeUser,
+		ScopeID:     userID,
+		Type:        args.Category,
+		Title:       args.Title,
+		Content:     args.Content,
+		Description: descStr,
+		Tags:        memory.StringArray(args.Tags),
+		Timestamp:   time.Now(),
+		Metadata:    memory.JSONBString(metadataJSON),
+	}
+
+	if err := t.helpers.deps.MemoryRepo.Create(ctx, mem); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "create_failed")
 		errMsg := fmt.Sprintf("Error: save user memory: %v", err)
@@ -195,66 +231,28 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		return errMsg, nil
 	}
 
-	span.SetAttributes(attribute.String("memory_id", memory.ID.String()))
+	span.SetAttributes(attribute.String("memory_id", mem.ID.String()))
 	t.helpers.logger.Info(ctx, "saveUserMemory.success", map[string]any{
 		"user_id":    userID.String(),
-		"memory_id":  memory.ID.String(),
+		"memory_id":  mem.ID.String(),
 		"category":   args.Category,
 		"importance": args.Importance,
 	})
 
-	resultJSON := formatUserMemorySaved(memory.ID.String(), args.Category, args.Importance, args.Title)
+	resultJSON := formatUserMemorySaved(mem.ID.String(), args.Category, args.Importance, args.Title)
 	t.persistResult(ctx, argumentsInJSON, resultJSON)
 
 	return resultJSON, nil
-}
-
-// persistError persists an error message to DB for cache consistency.
-func (t *saveUserMemoryTool) persistError(ctx context.Context, argumentsInJSON, errMsg string) {
-	if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "saveUserMemory",
-		ArgumentsInJSON: argumentsInJSON,
-		ResultJSON:      errMsg,
-	}); publishErr != nil {
-		t.helpers.logger.Warn(ctx, "saveUserMemory.persist_error_failed", map[string]any{
-			"error": publishErr.Error(),
-		})
-	}
-}
-
-// persistResult persists a success result to DB for cache consistency.
-func (t *saveUserMemoryTool) persistResult(ctx context.Context, argumentsInJSON, resultJSON string) {
-	if err := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "saveUserMemory",
-		ArgumentsInJSON: argumentsInJSON,
-		ResultJSON:      resultJSON,
-	}); err != nil {
-		t.helpers.logger.Warn(ctx, "saveUserMemory.publish_failed", map[string]any{
-			"error": err.Error(),
-		})
-	}
 }
 
 // =============================================================================
 // updateUserMemory
 // =============================================================================
 
-type updateUserMemoryTool struct {
-	session *model.Session
-	helpers *helpers
-	turnID  uuid.UUID
-}
+type updateUserMemoryTool struct{ userMemoryToolBase }
 
 func (h *helpers) createUpdateUserMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
-	return &updateUserMemoryTool{session: session, helpers: h, turnID: turnID}
+	return &updateUserMemoryTool{userMemoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "updateUserMemory"}}
 }
 
 func (t *updateUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -351,7 +349,7 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 	}
 	span.SetAttributes(attribute.String("user_id", userID.String()))
 
-	existing, err := t.helpers.deps.UserMemoryRepo.GetByID(ctx, memoryID)
+	existing, err := t.helpers.deps.MemoryRepo.GetByID(ctx, memoryID)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "get_failed")
@@ -359,7 +357,7 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
-	if existing.UserID != userID {
+	if existing.ScopeID != userID {
 		span.SetStatus(codes.Error, "not_owner")
 		errMsg := fmt.Sprintf("Error: memory %s does not belong to current user", args.MemoryID)
 		t.persistError(ctx, argumentsInJSON, errMsg)
@@ -373,7 +371,14 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		return errMsg, nil
 	}
 
-	fields := buildMemoryUpdateFields(args)
+	fields, err := buildMemoryUpdateFields(args)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal_metadata_failed")
+		errMsg := fmt.Sprintf("Error: %v", err)
+		t.persistError(ctx, argumentsInJSON, errMsg)
+		return errMsg, nil
+	}
 	if len(fields) == 0 {
 		span.SetAttributes(attribute.Bool("no_fields", true))
 		resultJSON := "No fields to update."
@@ -382,7 +387,7 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 	}
 	span.SetAttributes(attribute.Int("field_count", len(fields)))
 
-	if err := t.helpers.deps.UserMemoryRepo.Update(ctx, memoryID, fields); err != nil {
+	if err := t.helpers.deps.MemoryRepo.Update(ctx, memoryID, fields); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "update_failed")
 		errMsg := fmt.Sprintf("Error: update memory: %v", err)
@@ -396,52 +401,14 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 	return resultJSON, nil
 }
 
-// persistError persists an error message to DB for cache consistency.
-func (t *updateUserMemoryTool) persistError(ctx context.Context, argumentsInJSON, errMsg string) {
-	if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "updateUserMemory",
-		ArgumentsInJSON: argumentsInJSON,
-		ResultJSON:      errMsg,
-	}); publishErr != nil {
-		t.helpers.logger.Warn(ctx, "updateUserMemory.persist_error_failed", map[string]any{
-			"error": publishErr.Error(),
-		})
-	}
-}
-
-// persistResult persists a success result to DB for cache consistency.
-func (t *updateUserMemoryTool) persistResult(ctx context.Context, argumentsInJSON, resultJSON string) {
-	if err := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "updateUserMemory",
-		ArgumentsInJSON: argumentsInJSON,
-		ResultJSON:      resultJSON,
-	}); err != nil {
-		t.helpers.logger.Warn(ctx, "updateUserMemory.publish_failed", map[string]any{
-			"error": err.Error(),
-		})
-	}
-}
-
 // =============================================================================
 // deleteUserMemory
 // =============================================================================
 
-type deleteUserMemoryTool struct {
-	session *model.Session
-	helpers *helpers
-	turnID  uuid.UUID
-}
+type deleteUserMemoryTool struct{ userMemoryToolBase }
 
 func (h *helpers) createDeleteUserMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
-	return &deleteUserMemoryTool{session: session, helpers: h, turnID: turnID}
+	return &deleteUserMemoryTool{userMemoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "deleteUserMemory"}}
 }
 
 func (t *deleteUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -501,7 +468,7 @@ func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 	}
 	span.SetAttributes(attribute.String("user_id", userID.String()))
 
-	existing, err := t.helpers.deps.UserMemoryRepo.GetByID(ctx, memoryID)
+	existing, err := t.helpers.deps.MemoryRepo.GetByID(ctx, memoryID)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "get_failed")
@@ -509,14 +476,14 @@ func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
-	if existing.UserID != userID {
+	if existing.ScopeID != userID {
 		span.SetStatus(codes.Error, "not_owner")
 		errMsg := fmt.Sprintf("Error: memory %s does not belong to current user", args.MemoryID)
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
 
-	if err := t.helpers.deps.UserMemoryRepo.Delete(ctx, memoryID); err != nil {
+	if err := t.helpers.deps.MemoryRepo.Delete(ctx, memoryID); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "delete_failed")
 		errMsg := fmt.Sprintf("Error: delete memory: %v", err)
@@ -530,52 +497,14 @@ func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 	return resultJSON, nil
 }
 
-// persistError persists an error message to DB for cache consistency.
-func (t *deleteUserMemoryTool) persistError(ctx context.Context, argumentsInJSON, errMsg string) {
-	if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "deleteUserMemory",
-		ArgumentsInJSON: argumentsInJSON,
-		ResultJSON:      errMsg,
-	}); publishErr != nil {
-		t.helpers.logger.Warn(ctx, "deleteUserMemory.persist_error_failed", map[string]any{
-			"error": publishErr.Error(),
-		})
-	}
-}
-
-// persistResult persists a success result to DB for cache consistency.
-func (t *deleteUserMemoryTool) persistResult(ctx context.Context, argumentsInJSON, resultJSON string) {
-	if err := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "deleteUserMemory",
-		ArgumentsInJSON: argumentsInJSON,
-		ResultJSON:      resultJSON,
-	}); err != nil {
-		t.helpers.logger.Warn(ctx, "deleteUserMemory.publish_failed", map[string]any{
-			"error": err.Error(),
-		})
-	}
-}
-
 // =============================================================================
 // listUserMemory
 // =============================================================================
 
-type listUserMemoryTool struct {
-	session *model.Session
-	helpers *helpers
-	turnID  uuid.UUID
-}
+type listUserMemoryTool struct{ userMemoryToolBase }
 
 func (h *helpers) createListUserMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
-	return &listUserMemoryTool{session: session, helpers: h, turnID: turnID}
+	return &listUserMemoryTool{userMemoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "listUserMemory"}}
 }
 
 func (t *listUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -587,7 +516,7 @@ func (t *listUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 				Type:     schema.String,
 				Desc:     "Optional: filter by category (user, feedback, project, reference)",
 				Required: false,
-				Enum:     model.ValidUserMemoryCategories,
+				Enum:     []string{"user", "feedback", "project", "reference"},
 			},
 			"limit": {
 				Type:     schema.Integer,
@@ -635,18 +564,18 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	span.SetAttributes(attribute.Int("limit", args.Limit))
 
 	// Validate category if provided
-	if args.Category != "" && !model.IsValidUserMemoryCategory(args.Category) {
+	if args.Category != "" && !memory.IsValidMemoryType(args.Category) {
 		span.SetStatus(codes.Error, "invalid_category")
 		errMsg := fmt.Sprintf("Error: invalid category: %s", args.Category)
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
 
-	var memories []*model.UserMemory
+	var memories []*memory.Memory
 	if args.Category != "" {
-		memories, err = t.helpers.deps.UserMemoryRepo.ListByCategory(ctx, userID, args.Category, args.Limit)
+		memories, err = t.helpers.deps.MemoryRepo.ListByScope(ctx, memory.ScopeUser, userID, memory.ListOptions{Type: args.Category, Limit: args.Limit})
 	} else {
-		memories, err = t.helpers.deps.UserMemoryRepo.ListByUser(ctx, userID, args.Limit)
+		memories, err = t.helpers.deps.MemoryRepo.ListByScope(ctx, memory.ScopeUser, userID, memory.ListOptions{Limit: args.Limit})
 	}
 	if err != nil {
 		span.RecordError(err)
@@ -664,14 +593,13 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		items := make([]userMemoryItem, len(memories))
 		for i, mem := range memories {
 			items[i] = userMemoryItem{
-				Index:       i + 1,
-				Category:    mem.Category,
-				Importance:  mem.Importance,
-				Title:       mem.Title,
-				Content:     stringutil.TruncateByRune(mem.Content, 200),
-				ID:          mem.ID.String(),
-				CreatedAt:   mem.CreatedAt.Format("2006-01-02"),
-				AccessCount: mem.AccessCount,
+				Index:      i + 1,
+				Category:   mem.Type,
+				Importance: extractImportanceFromMetadata(mem.Metadata),
+				Title:      mem.Title,
+				Content:    stringutil.TruncateByRune(mem.Content, 200),
+				ID:         mem.ID.String(),
+				CreatedAt:  mem.CreatedAt.Format("2006-01-02"),
 			}
 		}
 
@@ -682,40 +610,6 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	t.persistResult(ctx, argumentsInJSON, resultJSON)
 
 	return resultJSON, nil
-}
-
-// persistError persists an error message to DB for cache consistency.
-func (t *listUserMemoryTool) persistError(ctx context.Context, argumentsInJSON, errMsg string) {
-	if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "listUserMemory",
-		ArgumentsInJSON: argumentsInJSON,
-		ResultJSON:      errMsg,
-	}); publishErr != nil {
-		t.helpers.logger.Warn(ctx, "listUserMemory.persist_error_failed", map[string]any{
-			"error": publishErr.Error(),
-		})
-	}
-}
-
-// persistResult persists a success result to DB for cache consistency.
-func (t *listUserMemoryTool) persistResult(ctx context.Context, argumentsInJSON, resultJSON string) {
-	if err := publishToolMessages(ctx, publishToolMessagesInput{
-		Helpers:         t.helpers,
-		SessionID:       t.session.ID,
-		OwnerRefID:      t.session.OwnerRefID,
-		TurnID:          t.turnID,
-		ToolName:        "listUserMemory",
-		ArgumentsInJSON: argumentsInJSON,
-		ResultJSON:      resultJSON,
-	}); err != nil {
-		t.helpers.logger.Warn(ctx, "listUserMemory.publish_failed", map[string]any{
-			"error": err.Error(),
-		})
-	}
 }
 
 // =============================================================================

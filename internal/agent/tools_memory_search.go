@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/pkg/logger"
+	"github.com/rtc-agent/server/pkg/memory"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -82,7 +82,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if args.Query == "" {
 		span.SetStatus(codes.Error, "query_required")
 		errMsg := "Error: query is required"
-		// 持久化验证错误到 DB
+		// Persist validation error to DB.
 		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
 			Helpers:         t.helpers,
 			SessionID:       t.session.ID,
@@ -171,7 +171,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		resultJSON = formatSearchResultsList(len(results), items)
 	}
 
-	// 持久化结果到 DB
+	// Persist results to DB.
 	if err := publishToolMessages(ctx, publishToolMessagesInput{
 		Helpers:         t.helpers,
 		SessionID:       t.session.ID,
@@ -209,12 +209,12 @@ func (t *searchMemoryTool) searchSessionMemories(
 	limit int,
 ) ([]searchResult, error) {
 	// Query memories (with optional category filter)
-	var memories []*model.SessionMemory
+	var memories []*memory.Memory
 	var err error
 	if category != "" {
-		memories, err = t.helpers.deps.SessionMemoryRepo.ListByCategory(ctx, t.session.ID, category, limit*2)
+		memories, err = t.helpers.deps.MemoryRepo.ListByScope(ctx, memory.ScopeSession, t.session.ID, memory.ListOptions{Type: category, Limit: limit * 2})
 	} else {
-		memories, err = t.helpers.deps.SessionMemoryRepo.ListBySession(ctx, t.session.ID, limit*2)
+		memories, err = t.helpers.deps.MemoryRepo.ListByScope(ctx, memory.ScopeSession, t.session.ID, memory.ListOptions{Limit: limit * 2})
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list session memories: %w", err)
@@ -231,7 +231,7 @@ func (t *searchMemoryTool) searchSessionMemories(
 			results = append(results, searchResult{
 				MemoryType: "session",
 				ID:         mem.ID.String(),
-				Category:   mem.Category,
+				Category:   mem.Type,
 				Title:      mem.Title,
 				Content:    mem.Content,
 				CreatedAt:  mem.CreatedAt,
@@ -261,7 +261,7 @@ func (t *searchMemoryTool) searchUserMemories(
 	}
 
 	// Keyword search.
-	keywordResults, err := t.helpers.deps.UserMemoryRepo.SearchByKeyword(ctx, userID, query, limit*2)
+	keywordResults, err := t.helpers.deps.MemoryRepo.Search(ctx, memory.ScopeUser, userID, query, limit*2)
 	if err != nil {
 		t.helpers.logger.Warn(ctx, "searchMemory.user_keyword_error", map[string]any{
 			"error": err.Error(),
@@ -271,17 +271,17 @@ func (t *searchMemoryTool) searchUserMemories(
 
 	// Apply importance weights and sort.
 	type scoredEntry struct {
-		memory *model.UserMemory
+		memory *memory.Memory
 		score  float64
 	}
 	var entries []scoredEntry
 	for _, mem := range keywordResults {
-		if category != "" && mem.Category != category {
+		if category != "" && mem.Type != category {
 			continue
 		}
 		entries = append(entries, scoredEntry{
 			memory: mem,
-			score:  model.ImportanceWeight(mem.Importance),
+			score:  model.ImportanceWeight(extractImportanceFromMetadata(mem.Metadata)),
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -295,24 +295,11 @@ func (t *searchMemoryTool) searchUserMemories(
 			break
 		}
 		mem := entry.memory
-		// Async update access count (non-blocking for search).
-		// Use logger.SafeGo to prevent a panic in the DB driver from
-		// crashing the entire server process.
-		// Use context.WithoutCancel(ctx) to preserve trace context in the background goroutine.
-		detachedCtx := context.WithoutCancel(ctx)
-		logger.SafeGo("memory-access-count", func() {
-			if err := t.helpers.deps.UserMemoryRepo.IncrementAccessCount(detachedCtx, mem.ID); err != nil {
-				t.helpers.logger.Warn(detachedCtx, "memory.access_count_update_failed", map[string]any{
-					"memory_id": mem.ID.String(),
-					"error":     err.Error(),
-				})
-			}
-		})
 
 		results = append(results, searchResult{
 			MemoryType: "user",
 			ID:         mem.ID.String(),
-			Category:   mem.Category,
+			Category:   mem.Type,
 			Title:      mem.Title,
 			Content:    mem.Content,
 			CreatedAt:  mem.CreatedAt,
