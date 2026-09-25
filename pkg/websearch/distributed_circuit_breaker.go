@@ -123,6 +123,9 @@ if state == 'half_open' then
         if success_count >= half_open_max then
             redis.call('HSET', key, 'state', 'closed', 'half_open_count', '0', 'half_open_success_count', '0')
             redis.call('DEL', window_key)  -- Reset window
+            -- Reset TTL to prevent orphaned keys (consistent with other transitions)
+            local ttl = open_timeout * 2
+            redis.call('EXPIRE', key, ttl)
             return 'closed'
         end
         return 'half_open'

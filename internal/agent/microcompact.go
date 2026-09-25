@@ -23,6 +23,7 @@ var CompactableTools = map[string]struct{}{
 	"find":      {},
 	"script":    {},
 	"todoWrite": {}, // Allow microcompact to clean up old todo list results
+	"webSearch": {}, // Web search results can be large and are safe to clear
 }
 
 // MCClearedMessage is the placeholder text that replaces the content of a

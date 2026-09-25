@@ -202,10 +202,8 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 	}
 
 	// Add Web Search tool (if configured)
-	if h.deps.WebSearchManager != nil {
-		if webSearchTool, err := h.createWebSearchTool(); err == nil && webSearchTool != nil {
-			tools = append(tools, webSearchTool)
-		}
+	if webSearchTool := h.createWebSearchTool(session, tid); webSearchTool != nil {
+		tools = append(tools, webSearchTool)
 	}
 
 	// Slash-command framework: collect tools from ALL registered commands.

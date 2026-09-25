@@ -16,6 +16,7 @@ type HybridCircuitBreaker struct {
 	local          *CircuitBreaker
 	remote         *DistributedCircuitBreaker
 	redisClient    *redis.Client
+	clientMu       sync.RWMutex // guards redisClient and remote.redisClient for safe resetClient
 	redisHealthy   atomic.Bool
 	redisCheckStop chan struct{}
 	stopOnce       sync.Once
@@ -63,7 +64,9 @@ func (h *HybridCircuitBreaker) Allow() bool {
 		ctx, cancel := context.WithTimeout(h.internalCtx, 2*time.Second)
 		defer cancel()
 
+		h.clientMu.RLock()
 		allowed, err := h.remote.AllowWithErr(ctx)
+		h.clientMu.RUnlock()
 		if err != nil {
 			// Redis communication failed, switch to local mode
 			h.logger.Warn("Redis circuit breaker failed, falling back to local",
@@ -89,7 +92,10 @@ func (h *HybridCircuitBreaker) RecordSuccess() {
 		ctx, cancel := context.WithTimeout(h.internalCtx, 2*time.Second)
 		defer cancel()
 
-		if err := h.remote.RecordOutcome(ctx, true); err != nil {
+		h.clientMu.RLock()
+		err := h.remote.RecordOutcome(ctx, true)
+		h.clientMu.RUnlock()
+		if err != nil {
 			h.logger.Warn("Redis record success failed, falling back to local",
 				zap.Error(err))
 			h.redisHealthy.Store(false)
@@ -109,7 +115,10 @@ func (h *HybridCircuitBreaker) RecordFailure() {
 		ctx, cancel := context.WithTimeout(h.internalCtx, 2*time.Second)
 		defer cancel()
 
-		if err := h.remote.RecordOutcome(ctx, false); err != nil {
+		h.clientMu.RLock()
+		err := h.remote.RecordOutcome(ctx, false)
+		h.clientMu.RUnlock()
+		if err != nil {
 			h.logger.Warn("Redis record failure failed, falling back to local",
 				zap.Error(err))
 			h.redisHealthy.Store(false)
@@ -148,7 +157,11 @@ func (h *HybridCircuitBreaker) checkRedisHealth() {
 	ctx, cancel := context.WithTimeout(h.internalCtx, 2*time.Second)
 	defer cancel()
 
-	err := h.redisClient.Ping(ctx).Err()
+	h.clientMu.RLock()
+	client := h.redisClient
+	h.clientMu.RUnlock()
+
+	err := client.Ping(ctx).Err()
 	if err == nil {
 		if !h.redisHealthy.Load() {
 			h.logger.Info("Redis recovered, switching back to distributed mode")
@@ -172,4 +185,21 @@ func (h *HybridCircuitBreaker) Shutdown() {
 		}
 		h.wg.Wait()
 	})
+}
+
+// resetClient safely replaces the underlying Redis client pointers.
+// This acquires the client mutex so the background health check and any
+// in-flight Allow/Record calls see a consistent view. Useful for failover
+// scenarios where the Redis address changes (e.g., replica promotion).
+func (h *HybridCircuitBreaker) resetClient(addr string) {
+	h.clientMu.Lock()
+	old := h.redisClient
+	h.redisClient = redis.NewClient(&redis.Options{Addr: addr})
+	if h.remote != nil {
+		h.remote.redisClient = h.redisClient
+	}
+	h.clientMu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
 }

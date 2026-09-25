@@ -101,7 +101,7 @@ var listUserMemoryDesc string
 //go:embed prompts/tools/searchMemory.md
 var searchMemoryDesc string
 
-//go:embed prompts/tools/web_search.md
+//go:embed prompts/tools/webSearch.md
 var webSearchDesc string
 
 //go:embed prompts/tools/sendMessageToSubAgent.md

@@ -1258,8 +1258,8 @@ func TestHybridCircuitBreaker_FullRecoveryCycle_DegradesAndRestores(t *testing.T
 	require.NoError(t, err)
 	defer s2.Close()
 
-	// Point the client at the new Redis via resetClient (safe swap under health mutex)
-	hybrid.redisClient = redis.NewClient(&redis.Options{Addr: s2.Addr()})
+	// Point the client at the new Redis via resetClient (safe swap under client mutex)
+	hybrid.resetClient(s2.Addr())
 
 	// Wait for health check to detect recovery (5s interval)
 	time.Sleep(6 * time.Second)
@@ -1402,4 +1402,226 @@ func TestDistributedCircuitBreaker_FullLifecycle_TTLPreserved(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, wTTL.Seconds(), float64(0),
 		"[recovered-closed] window key must have TTL after recreation")
+}
+
+// TestDistributedCircuitBreaker_HalfOpenToClosed_TTLReset verifies that the
+// half_open -> closed transition resets the main key TTL, preventing orphaned
+// keys when the probe phase consumes most of the previous TTL.
+func TestDistributedCircuitBreaker_HalfOpenToClosed_TTLReset(t *testing.T) {
+	s, err := miniredis.Run()
+	require.NoError(t, err)
+	defer s.Close()
+
+	client := redis.NewClient(&redis.Options{Addr: s.Addr()})
+	defer client.Close()
+
+	cfg := CircuitBreakerConfig{
+		FailureThreshold:   50,
+		OpenTimeout:        2 * time.Second, // TTL will be 4s
+		HalfOpenMaxRequests: 1,               // Only 1 success needed
+		WindowSize:         4,
+	}
+
+	cb := NewDistributedCircuitBreaker("test", client, cfg)
+	ctx := context.Background()
+	mainKey := "websearch:cb:test"
+
+	// Trigger open state
+	for i := 0; i < 5; i++ {
+		_ = cb.RecordOutcome(ctx, false)
+	}
+
+	// Verify open
+	allowed, err := cb.AllowWithErr(ctx)
+	require.NoError(t, err)
+	assert.False(t, allowed, "should be open")
+
+	// Wait for timeout -> half_open
+	time.Sleep(2100 * time.Millisecond)
+
+	// Transition to half_open (this sets TTL = open_timeout * 2 = 4s)
+	allowed, err = cb.AllowWithErr(ctx)
+	require.NoError(t, err)
+	assert.True(t, allowed, "should allow probe in half_open")
+
+	// Check TTL after entering half_open
+	ttlBefore, err := client.TTL(ctx, mainKey).Result()
+	require.NoError(t, err)
+	assert.Greater(t, ttlBefore.Seconds(), float64(0), "main key should have TTL in half_open")
+
+	// Record success -> should transition to closed
+	_ = cb.RecordOutcome(ctx, true)
+
+	// Verify closed
+	allowed, err = cb.AllowWithErr(ctx)
+	require.NoError(t, err)
+	assert.True(t, allowed, "should be closed after recovery")
+
+	// Check TTL immediately after half_open -> closed transition
+	// The TTL should be reset to open_timeout * 2 = 4s
+	ttlAfter, err := client.TTL(ctx, mainKey).Result()
+	require.NoError(t, err)
+	assert.Greater(t, ttlAfter.Seconds(), float64(0),
+		"main key must have TTL after half_open->closed transition")
+	assert.GreaterOrEqual(t, ttlAfter.Seconds(), float64(3),
+		"TTL should be close to open_timeout*2 (4s), not the remaining TTL from half_open")
+	assert.LessOrEqual(t, ttlAfter.Seconds(), float64(4),
+		"TTL should not exceed open_timeout*2 (4s)")
+
+	// Verify window_key was deleted during recovery
+	windowKey := mainKey + ":window"
+	wTTL, err := client.TTL(ctx, windowKey).Result()
+	require.NoError(t, err)
+	assert.Equal(t, time.Duration(-2), wTTL,
+		"window key should be deleted after half_open->closed transition")
+}
+
+// TestDistributedCircuitBreaker_ConcurrentOpenToHalfOpen_Transition verifies that
+// when multiple goroutines simultaneously detect the open timeout has expired,
+// only one transitions to half_open and the others see the updated state.
+func TestDistributedCircuitBreaker_ConcurrentOpenToHalfOpen_Transition(t *testing.T) {
+	s, err := miniredis.Run()
+	require.NoError(t, err)
+	defer s.Close()
+
+	client := redis.NewClient(&redis.Options{Addr: s.Addr()})
+	defer client.Close()
+
+	cfg := CircuitBreakerConfig{
+		FailureThreshold:   50,
+		OpenTimeout:        1 * time.Second,
+		HalfOpenMaxRequests: 3,
+		WindowSize:         4,
+	}
+
+	cb := NewDistributedCircuitBreaker("test", client, cfg)
+	ctx := context.Background()
+
+	// Trigger open state
+	for i := 0; i < 5; i++ {
+		_ = cb.RecordOutcome(ctx, false)
+	}
+
+	// Wait for timeout
+	time.Sleep(1100 * time.Millisecond)
+
+	// Fire concurrent Allow() calls - all should see consistent state
+	const goroutines = 10
+	var wg sync.WaitGroup
+	results := make(chan bool, goroutines)
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			ok, err := cb.AllowWithErr(ctx)
+			results <- err == nil && ok
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	allowedCount := 0
+	for ok := range results {
+		if ok {
+			allowedCount++
+		}
+	}
+
+	// Exactly HalfOpenMaxRequests should be allowed
+	assert.Equal(t, 3, allowedCount,
+		"exactly HalfOpenMaxRequests (3) should be allowed in concurrent half_open")
+
+	// Verify state is half_open with correct counts
+	mainKey := "websearch:cb:test"
+	state, err := client.HGet(ctx, mainKey, "state").Result()
+	require.NoError(t, err)
+	assert.Equal(t, "half_open", state, "state should be half_open")
+
+	count, err := client.HGet(ctx, mainKey, "half_open_count").Result()
+	require.NoError(t, err)
+	assert.Equal(t, "3", count, "half_open_count should be 3")
+}
+
+// TestDistributedCircuitBreaker_OpenStateFailure_UpdatesLastFailure verifies that
+// recording a failure in open state updates last_failure and resets TTL, ensuring
+// the open timeout countdown restarts from the new failure.
+func TestDistributedCircuitBreaker_OpenStateFailure_UpdatesLastFailure(t *testing.T) {
+	s, err := miniredis.Run()
+	require.NoError(t, err)
+	defer s.Close()
+
+	client := redis.NewClient(&redis.Options{Addr: s.Addr()})
+	defer client.Close()
+
+	// Use a long timeout to avoid timing-sensitive assertions with second-precision Unix timestamps.
+	cfg := CircuitBreakerConfig{
+		FailureThreshold:    50,
+		OpenTimeout:         5 * time.Second,
+		HalfOpenMaxRequests: 1,
+		WindowSize:          4,
+	}
+
+	cb := NewDistributedCircuitBreaker("test", client, cfg)
+	ctx := context.Background()
+	mainKey := "websearch:cb:test"
+
+	// Trigger open state
+	for i := 0; i < 5; i++ {
+		_ = cb.RecordOutcome(ctx, false)
+	}
+
+	// Verify open
+	allowed, err := cb.AllowWithErr(ctx)
+	require.NoError(t, err)
+	assert.False(t, allowed, "should be open")
+
+	// Get initial last_failure timestamp
+	lastFailure1, err := client.HGet(ctx, mainKey, "last_failure").Result()
+	require.NoError(t, err)
+
+	// Wait until we cross a second boundary so the next failure gets a different Unix timestamp.
+	// time.Now().Unix() has second precision; without this, both failures might share the same
+	// timestamp and the "reset" would be invisible.
+	waitForSecondBoundary(t)
+
+	// Record another failure in open state — this should update last_failure to a new second.
+	_ = cb.RecordOutcome(ctx, false)
+
+	// Verify last_failure was updated to a different second.
+	lastFailure2, err := client.HGet(ctx, mainKey, "last_failure").Result()
+	require.NoError(t, err)
+	require.NotEqual(t, lastFailure1, lastFailure2,
+		"last_failure should be updated when recording failure in open state")
+
+	// Verify TTL was reset to open_timeout*2 = 10s.
+	ttl, err := client.TTL(ctx, mainKey).Result()
+	require.NoError(t, err)
+	assert.Greater(t, ttl.Seconds(), float64(8),
+		"TTL should be close to open_timeout*2 (10s) after failure in open state")
+
+	// At this point, last_failure = T (current second). We need to verify:
+	//   - At T+3s: still open (3s < 5s timeout)
+	//   - At T+6s: half_open (6s >= 5s timeout)
+
+	// Sleep 3s — should still be open (3s < 5s timeout from second failure).
+	time.Sleep(3 * time.Second)
+	allowed, err = cb.AllowWithErr(ctx)
+	require.NoError(t, err)
+	assert.False(t, allowed, "should still be open (3s < 5s timeout)")
+
+	// Sleep 3s more (total ~6s from second failure) — should now be half_open.
+	time.Sleep(3 * time.Second)
+	allowed, err = cb.AllowWithErr(ctx)
+	require.NoError(t, err)
+	assert.True(t, allowed, "should be half_open after timeout expires")
+}
+
+// waitForSecondBoundary blocks until time.Now().Unix() advances to the next second.
+// This ensures that subsequent calls to time.Now().Unix() return a different value.
+func waitForSecondBoundary(t *testing.T) {
+	t.Helper()
+	start := time.Now().Unix()
+	for time.Now().Unix() == start {
+		time.Sleep(10 * time.Millisecond)
+	}
 }
