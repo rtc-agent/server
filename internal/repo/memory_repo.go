@@ -170,29 +170,21 @@ func (r *memoryRepo) Search(ctx context.Context, scope memory.ScopeType, scopeID
 	db := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("scope = ? AND scope_id = ?", scope, scopeID)
 
-	// Build OR conditions: each word matches title OR content OR description.
-	// Choose case-insensitive pattern matching based on database dialect.
+	// Build word-matching conditions wrapped in parentheses to ensure correct SQL precedence:
+	// WHERE scope = ? AND scope_id = ? AND (word1_matches OR word2_matches OR ...)
 	isSQLite := getDialectName(db) == "sqlite"
-	for i, word := range words {
+	var wordConditions []string
+	var wordArgs []any
+	for _, word := range words {
 		likeQuery := "%" + escapeLikePattern(word) + "%"
 		if isSQLite {
-			if i == 0 {
-				db = db.Where("title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
-					likeQuery, likeQuery, likeQuery)
-			} else {
-				db = db.Or("title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
-					likeQuery, likeQuery, likeQuery)
-			}
+			wordConditions = append(wordConditions, "(title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')")
 		} else {
-			if i == 0 {
-				db = db.Where("title ILIKE ? OR content ILIKE ? OR description ILIKE ?",
-					likeQuery, likeQuery, likeQuery)
-			} else {
-				db = db.Or("title ILIKE ? OR content ILIKE ? OR description ILIKE ?",
-					likeQuery, likeQuery, likeQuery)
-			}
+			wordConditions = append(wordConditions, "(title ILIKE ? OR content ILIKE ? OR description ILIKE ?)")
 		}
+		wordArgs = append(wordArgs, likeQuery, likeQuery, likeQuery)
 	}
+	db = db.Where("("+strings.Join(wordConditions, " OR ")+")", wordArgs...)
 
 	err := db.Order("updated_at DESC").Limit(limit).Find(&memories).Error
 	if err != nil {
