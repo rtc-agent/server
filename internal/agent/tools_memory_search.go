@@ -170,7 +170,8 @@ func (t *searchMemoryTool) searchMemories(
 	category string,
 	limit int,
 ) ([]searchResult, error) {
-	userID, err := t.helpers.getUserIDFromContext(ctx)
+	// Get user ID directly from session (consistent with other memory tools)
+	userID, err := uuid.Parse(t.session.OwnerRefID)
 	if err != nil {
 		return nil, err
 	}
