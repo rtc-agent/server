@@ -153,29 +153,15 @@ func (t *webSearchTool) InvokableRun(ctx context.Context, argumentsInJSON string
 
 	resp, err := t.helpers.deps.WebSearchManager.Search(ctx, req)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "search_failed")
-		t.helpers.logger.Warn(ctx, "webSearch.search_failed", map[string]any{
-			"query": args.Query,
-			"error": err.Error(),
-		})
-
-		// Persist failure as toolcall_output so the message structure is
-		// consistent for cache and checkpoint resume.
-		errMsg := fmt.Sprintf("Error: web search failed: %s", err.Error())
-		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
-			Helpers:         t.helpers,
-			SessionID:       t.session.ID,
-			OwnerRefID:      t.session.OwnerRefID,
-			TurnID:          t.turnID,
-			ToolName:        "webSearch",
-			ArgumentsInJSON: argumentsInJSON,
-			ResultJSON:      errMsg,
-		}); publishErr != nil {
-			t.helpers.logger.Warn(ctx, "webSearch.persist_search_error_failed", map[string]any{
-				"error": publishErr.Error(),
-			})
-		}
+		errMsg := publishToolError(
+			ctx, span, t.helpers, t.session, t.turnID,
+			"webSearch",
+			"webSearch.search_failed",
+			"webSearch.persist_search_error_failed",
+			map[string]any{"query": args.Query, "error": err.Error()},
+			err,
+			argumentsInJSON,
+		)
 		return errMsg, nil
 	}
 
@@ -232,4 +218,41 @@ func buildWebSearchResult(query string, resp *websearch.SearchResponse) webSearc
 		ResultCount: len(resp.Results),
 		Results:     entries,
 	}
+}
+
+// publishToolError handles common error publishing logic for tool invocations.
+// It records the error on the span, logs it, publishes an error message, and
+// returns the formatted error string for the LLM.
+func publishToolError(
+	ctx context.Context,
+	span trace.Span,
+	h *helpers,
+	session *model.Session,
+	turnID uuid.UUID,
+	toolName string,
+	logEvent string,
+	persistLogEvent string,
+	errorContext map[string]any,
+	err error,
+	argumentsInJSON string,
+) string {
+	span.RecordError(err)
+	span.SetStatus(codes.Error, "tool_failed")
+	h.logger.Warn(ctx, logEvent, errorContext)
+
+	errMsg := fmt.Sprintf("Error: %s failed: %s", toolName, err.Error())
+	if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         h,
+		SessionID:       session.ID,
+		OwnerRefID:      session.OwnerRefID,
+		TurnID:          turnID,
+		ToolName:        toolName,
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      errMsg,
+	}); publishErr != nil {
+		h.logger.Warn(ctx, persistLogEvent, map[string]any{
+			"error": publishErr.Error(),
+		})
+	}
+	return errMsg
 }

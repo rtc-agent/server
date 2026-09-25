@@ -67,3 +67,46 @@ tracing:
   enabled: true
   endpoint: "jaeger:4317"
   sample_rate: 1.0
+
+# Web Search 配置
+web_search:
+  enabled: true
+  balancer_type: "round_robin"
+  global_timeout: 30s
+
+  providers:
+    - name: "tavily"
+      type: "tavily"
+      weight: 100
+      enabled: true
+      api_key: "${TAVILY_API_KEY}"
+      max_results: 10
+      search_depth: "basic"
+      include_answer: false
+
+  proxies:
+    - url: "socks5://192.168.31.60:7897"
+      type: "socks5"
+      region: "global"
+      priority: 10
+
+  circuit_breaker:
+    failure_threshold: 50
+    open_timeout: 60s
+    half_open_max_requests: 3
+    window_size: 100
+    window_duration: 5m
+
+  rate_limiter:
+    rate: 10
+    burst: 20
+
+  retry:
+    max_retries: 3
+    retry_delay: 1s
+    backoff_factor: 2.0
+
+  redis:
+    addr: "redis:6379"
+    password: ""
+    db: 0

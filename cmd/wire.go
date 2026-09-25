@@ -36,6 +36,8 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
+	"github.com/rtc-agent/server/pkg/webfetch"
+	"github.com/rtc-agent/server/pkg/websearch"
 )
 
 // =============================================================================
@@ -73,6 +75,8 @@ var UsecaseSet = wire.NewSet(
 	provideMetrics,
 	provideChatModel,
 	provideTaskScheduler,
+	provideWebSearchManager,
+	provideWebFetchManager,
 	provideUsecaseDependencies,
 )
 
@@ -208,8 +212,10 @@ func provideUsecaseDependencies(
 	chatModelResult *chatModelResult,
 	cfg *config.Config,
 	taskScheduler usecase.TaskScheduler,
+	webSearchManager *websearch.WebSearchManager,
+	webFetchManager *webfetch.WebFetchManager,
 ) *usecase.Dependencies {
-	return &usecase.Dependencies{
+	deps := &usecase.Dependencies{
 		DB:                svcCtx.DB,
 		Redis:             svcCtx.Redis,
 		SessionRepo:       svcCtx.SessionRepo,
@@ -227,7 +233,22 @@ func provideUsecaseDependencies(
 		WorkerConfig:      cfg.Worker,
 		CommandRegistry:   command.NewCommandRegistry(),
 		TaskScheduler:     taskScheduler,
+		WebSearchManager:  webSearchManager,
+		WebFetchManager:   webFetchManager,
 	}
+
+	// Inject LLM extractor into WebFetchManager now that deps is available.
+	// TokenCallbackHandler is set inside agent.New(), so we pass deps for lazy access.
+	if webFetchManager != nil && chatModelResult != nil && chatModelResult.model != nil {
+		llmAdapter := server.NewEinoLLMClientAdapter(chatModelResult.model, cfg.LLM, deps)
+		if llmAdapter != nil {
+			extractor := webfetch.NewLLMExtractor(llmAdapter, nil, cfg.WebFetch.LLMMaxTokens)
+			webFetchManager.SetLLMExtractor(extractor)
+			logger.Info(context.Background(), "LLM extractor injected into web fetch manager")
+		}
+	}
+
+	return deps
 }
 
 func provideQueue(rdb *redis.Client) *rtcqueue.Queue {
@@ -282,6 +303,239 @@ func convertModelPricing(cfg *config.ModelPricingConfig) *agent.ModelPricingConf
 // provideMetrics creates a Prometheus metrics collector.
 func provideMetrics() *turnagent.PrometheusMetrics {
 	return turnagent.NewPrometheusMetrics()
+}
+
+// provideWebSearchManager creates the WebSearchManager if web search is enabled.
+// Returns nil when disabled, making the dependency optional.
+func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
+	if !cfg.WebSearch.Enabled {
+		return nil
+	}
+
+	// Build search providers from config.
+	var providers []websearch.WebSearchProvider
+	for _, p := range cfg.WebSearch.Providers {
+		if !p.Enabled {
+			continue
+		}
+
+		var provider websearch.WebSearchProvider
+		var err error
+
+		switch p.Type {
+		case "duckduckgo":
+			ddgCfg := websearch.DefaultDuckDuckGoConfig()
+			if p.Region != "" {
+				ddgCfg.Region = p.Region
+			}
+			if p.MaxResults > 0 {
+				ddgCfg.MaxResults = p.MaxResults
+			}
+			if p.Timeout > 0 {
+				ddgCfg.Timeout = p.Timeout
+			}
+			provider, err = websearch.NewDuckDuckGoProvider(ddgCfg)
+
+		case "bing":
+			bingCfg := websearch.DefaultBingConfig()
+			if p.APIKey != "" {
+				bingCfg.APIKey = p.APIKey
+			}
+			if p.Endpoint != "" {
+				bingCfg.Endpoint = p.Endpoint
+			}
+			if p.Market != "" {
+				bingCfg.Market = p.Market
+			}
+			if p.MaxResults > 0 {
+				bingCfg.MaxResults = p.MaxResults
+			}
+			if p.Timeout > 0 {
+				bingCfg.Timeout = p.Timeout
+			}
+			provider, err = websearch.NewBingProvider(bingCfg)
+
+		case "searxng":
+			searCfg := websearch.DefaultSearXNGConfig()
+			if p.BaseURL != "" {
+				searCfg.BaseURL = p.BaseURL
+			}
+			if p.Language != "" {
+				searCfg.Language = p.Language
+			}
+			if p.MaxResults > 0 {
+				searCfg.MaxResults = p.MaxResults
+			}
+			if p.Timeout > 0 {
+				searCfg.Timeout = p.Timeout
+			}
+			provider, err = websearch.NewSearXNGProvider(searCfg)
+
+		case "tavily":
+			tavilyCfg := websearch.DefaultTavilyConfig()
+			if p.APIKey != "" {
+				tavilyCfg.APIKey = p.APIKey
+			}
+			if p.SearchDepth != "" {
+				tavilyCfg.SearchDepth = p.SearchDepth
+			}
+			if p.MaxResults > 0 {
+				tavilyCfg.MaxResults = p.MaxResults
+			}
+			if p.Timeout > 0 {
+				tavilyCfg.Timeout = p.Timeout
+			}
+			tavilyCfg.IncludeAnswer = p.IncludeAnswer
+			provider, err = websearch.NewTavilyProvider(tavilyCfg)
+
+		default:
+			logger.Error(context.Background(), "unknown web search provider type", zap.String("type", p.Type))
+			continue
+		}
+
+		if err != nil {
+			logger.Error(context.Background(), "failed to create web search provider",
+				zap.String("name", p.Name), zap.Error(err))
+			continue
+		}
+		providers = append(providers, provider)
+	}
+
+	if len(providers) == 0 {
+		logger.Warn(context.Background(), "web search enabled but no valid providers configured, web search will be disabled")
+		return nil
+	}
+
+	// Convert config types.
+	wsCfg := websearch.WebSearchConfig{
+		BalancerType:    cfg.WebSearch.BalancerType,
+		GlobalTimeout:   cfg.WebSearch.GlobalTimeout,
+		ProxyHealthURL:  cfg.WebSearch.ProxyHealthURL,
+		ProxyCheckInterval: cfg.WebSearch.ProxyCheckInterval,
+		CircuitBreaker: websearch.CircuitBreakerConfig{
+			FailureThreshold:    cfg.WebSearch.CircuitBreaker.FailureThreshold,
+			OpenTimeout:         cfg.WebSearch.CircuitBreaker.OpenTimeout,
+			HalfOpenMaxRequests: cfg.WebSearch.CircuitBreaker.HalfOpenMaxRequests,
+			WindowSize:          cfg.WebSearch.CircuitBreaker.WindowSize,
+			WindowDuration:      cfg.WebSearch.CircuitBreaker.WindowDuration,
+		},
+		RateLimiter: websearch.RateLimiterConfig{
+			Rate:  cfg.WebSearch.RateLimiter.Rate,
+			Burst: cfg.WebSearch.RateLimiter.Burst,
+		},
+		Retry: websearch.RetryConfig{
+			MaxRetries:    cfg.WebSearch.Retry.MaxRetries,
+			RetryDelay:    cfg.WebSearch.Retry.RetryDelay,
+			BackoffFactor: cfg.WebSearch.Retry.BackoffFactor,
+		},
+	}
+
+	// Convert provider configs.
+	for _, p := range cfg.WebSearch.Providers {
+		if !p.Enabled {
+			continue
+		}
+		wsCfg.Providers = append(wsCfg.Providers, websearch.ProviderConfig{
+			Name:    p.Name,
+			Type:    p.Type,
+			Weight:  p.Weight,
+			Enabled: p.Enabled,
+		})
+	}
+
+	// Convert proxy configs.
+	for _, p := range cfg.WebSearch.Proxies {
+		wsCfg.Proxies = append(wsCfg.Proxies, websearch.ProxyConfig{
+			URL:      p.URL,
+			Type:     websearch.ProxyType(p.Type),
+			Region:   p.Region,
+			Priority: p.Priority,
+		})
+	}
+
+	manager, err := websearch.NewWebSearchManager(wsCfg, providers, nil)
+	if err != nil {
+		logger.Error(context.Background(), "failed to create web search manager, web search will be disabled", zap.Error(err))
+		return nil
+	}
+
+	logger.Info(context.Background(), "web search manager initialized",
+		zap.Int("providers", len(providers)),
+		zap.Int("proxies", len(wsCfg.Proxies)),
+	)
+	return manager
+}
+
+// provideWebFetchManager creates the WebFetchManager if web fetch is enabled.
+// Returns nil when disabled, making the dependency optional.
+// LLM extractor is injected later in provideUsecaseDependencies (after deps is created).
+func provideWebFetchManager(cfg *config.Config, redisClient redis.UniversalClient) *webfetch.WebFetchManager {
+	if !cfg.WebFetch.Enabled {
+		return nil
+	}
+
+	wfCfg := webfetch.WebFetchConfig{
+		Enabled:                    cfg.WebFetch.Enabled,
+		MaxConcurrency:             cfg.WebFetch.MaxConcurrency,
+		MaxDomainConcurrency:       cfg.WebFetch.MaxDomainConcurrency,
+		CacheTTL:                   cfg.WebFetch.CacheTTL,
+		MaxURLLength:               cfg.WebFetch.MaxURLLength,
+		MaxContentSize:             cfg.WebFetch.MaxContentSize,
+		FetchTimeout:               cfg.WebFetch.FetchTimeout,
+		MaxRedirects:               cfg.WebFetch.MaxRedirects,
+		LLMExtractThresholdBytes:   cfg.WebFetch.LLMExtractThresholdBytes,
+		LLMMaxTokens:               cfg.WebFetch.LLMMaxTokens,
+		MaxLLMExtractPerSession:    cfg.WebFetch.MaxLLMExtractPerSession,
+		UserAgent:                  cfg.WebFetch.UserAgent,
+		RespectRobotsTxt:           cfg.WebFetch.RespectRobotsTxt,
+		RobotsCacheTTL:             cfg.WebFetch.RobotsCacheTTL,
+		PreApprovedDomains:         cfg.WebFetch.PreApprovedDomains,
+		BlockedDomains:             cfg.WebFetch.BlockedDomains,
+		AllowedSchemes:             []string{"https", "http"},
+		RateLimit: webfetch.RateLimitConfig{
+			GlobalRPS:   cfg.WebFetch.RateLimit.GlobalRPS,
+			GlobalBurst: cfg.WebFetch.RateLimit.GlobalBurst,
+			DomainRPS:   cfg.WebFetch.RateLimit.DomainRPS,
+			DomainBurst: cfg.WebFetch.RateLimit.DomainBurst,
+		},
+	}
+
+	// Fall back to default pre-approved domains if none configured.
+	if len(wfCfg.PreApprovedDomains) == 0 {
+		defaults := webfetch.DefaultWebFetchConfig()
+		wfCfg.PreApprovedDomains = defaults.PreApprovedDomains
+	}
+
+	// Fall back to default rate limit config if not configured.
+	if wfCfg.RateLimit.GlobalRPS == 0 {
+		wfCfg.RateLimit = webfetch.DefaultRateLimitConfig()
+	}
+
+	// Fall back to default robots cache TTL if not configured.
+	if wfCfg.RobotsCacheTTL == 0 {
+		wfCfg.RobotsCacheTTL = 24 * time.Hour
+	}
+
+	// Fall back to default LLM max tokens if not configured.
+	if wfCfg.LLMMaxTokens == 0 {
+		wfCfg.LLMMaxTokens = 4096
+	}
+
+	// NOTE: pass nil for loggers to match websearch pattern (uses zap.NewNop).
+	// TODO: export zap logger from pkg/logger for production audit logging.
+	manager, err := webfetch.NewWebFetchManager(wfCfg, redisClient, nil, nil)
+	if err != nil {
+		logger.Error(context.Background(), "failed to create web fetch manager, web fetch will be disabled", zap.Error(err))
+		return nil
+	}
+
+	if err := manager.Start(context.Background()); err != nil {
+		logger.Error(context.Background(), "failed to start web fetch manager", zap.Error(err))
+		return nil
+	}
+
+	logger.Info(context.Background(), "web fetch manager initialized")
+	return manager
 }
 
 func provideQueueWorker(

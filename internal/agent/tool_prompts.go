@@ -104,5 +104,8 @@ var searchMemoryDesc string
 //go:embed prompts/tools/webSearch.md
 var webSearchDesc string
 
+//go:embed prompts/tools/webFetch.md
+var webFetchDesc string
+
 //go:embed prompts/tools/sendMessageToSubAgent.md
 var sendMessageToSubAgentDesc string

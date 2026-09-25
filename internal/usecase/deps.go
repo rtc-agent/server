@@ -16,6 +16,7 @@ import (
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"github.com/rtc-agent/server/pkg/webfetch"
 	"github.com/rtc-agent/server/pkg/websearch"
 
 	"github.com/cloudwego/eino/callbacks"
@@ -83,6 +84,10 @@ type Dependencies struct {
 	// WebSearchManager provides web search capabilities.
 	// Optional: if nil, web search tool will not be available.
 	WebSearchManager *websearch.WebSearchManager
+
+	// WebFetchManager provides web page fetching capabilities.
+	// Optional: if nil, web fetch tool will not be available.
+	WebFetchManager *webfetch.WebFetchManager
 }
 
 // TaskScheduler is the interface for delayed task scheduling.

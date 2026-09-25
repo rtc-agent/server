@@ -25,6 +25,7 @@ require (
 	github.com/rtc-agent/server/pkg/centrifuge-plus v0.0.0-00010101000000-000000000000
 	github.com/rtc-agent/server/pkg/protocol v0.0.0-00010101000000-000000000000
 	github.com/rtc-agent/server/pkg/rtc-queue v0.0.0-00010101000000-000000000000
+	github.com/rtc-agent/server/pkg/webfetch v0.0.0-00010101000000-000000000000
 	github.com/rtc-agent/server/pkg/websearch v0.0.0-00010101000000-000000000000
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/viper v1.18.2
@@ -47,6 +48,8 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.3 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/FZambia/eagle v0.2.0 // indirect
+	github.com/JohannesKaufmann/dom v0.2.0 // indirect
+	github.com/JohannesKaufmann/html-to-markdown/v2 v2.3.0 // indirect
 	github.com/PuerkitoBio/goquery v1.13.0 // indirect
 	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.33.0 // indirect
@@ -187,3 +190,7 @@ replace github.com/rtc-agent/server/pkg/rtc-queue => ./pkg/rtc-queue
 replace github.com/leichujun/rtc-agent/server/pkg/websearch => ./pkg/websearch
 
 replace github.com/rtc-agent/server/pkg/websearch => ./pkg/websearch
+
+replace github.com/rtc-agent/server/pkg/webfetch => ./pkg/webfetch
+
+replace github.com/leichujun/rtc-agent/server/pkg/webfetch => ./pkg/webfetch

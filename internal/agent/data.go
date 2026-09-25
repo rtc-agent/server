@@ -206,6 +206,11 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 		tools = append(tools, webSearchTool)
 	}
 
+	// Add Web Fetch tool (if configured)
+	if webFetchTool := h.createWebFetchTool(session, tid); webFetchTool != nil {
+		tools = append(tools, webFetchTool)
+	}
+
 	// Slash-command framework: collect tools from ALL registered commands.
 	//
 	// Static registration: tools are always available to the LLM, regardless

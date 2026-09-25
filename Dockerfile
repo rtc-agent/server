@@ -11,6 +11,7 @@ COPY go.mod go.sum ./
 COPY pkg/centrifuge-plus/go.mod pkg/centrifuge-plus/go.sum ./pkg/centrifuge-plus/
 COPY pkg/protocol/go.mod ./pkg/protocol/
 COPY pkg/rtc-queue/go.mod pkg/rtc-queue/go.sum ./pkg/rtc-queue/
+COPY pkg/websearch/go.mod pkg/websearch/go.sum ./pkg/websearch/
 RUN go mod download
 
 # Copy source code
