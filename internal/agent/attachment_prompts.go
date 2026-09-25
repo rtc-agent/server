@@ -58,6 +58,8 @@ type userMemoryCategory struct {
 //
 // The inner content (preamble + category blocks) is pre-formatted in Go so that
 // the template stays trivial and the exact newline layout is easy to verify.
+// The output is wrapped in <persistent_memory> tags to avoid leaking the
+// internal "user memory" naming to the agent.
 func formatUserMemoryWrapper(lang string, categories []userMemoryCategory) string {
 	preamble := userMemoryPreambleText(lang)
 	content := buildUserMemoryContent(preamble, categories)
@@ -77,7 +79,7 @@ func formatUserMemoryWrapper(lang string, categories []userMemoryCategory) strin
 //	\n
 //
 // One blank line separates the preamble from the first category, adjacent
-// categories, and the last category from the closing </user_memory> tag.
+// categories, and the last category from the closing </persistent_memory> tag.
 func buildUserMemoryContent(preamble string, categories []userMemoryCategory) string {
 	var sb strings.Builder
 	sb.WriteString(preamble)

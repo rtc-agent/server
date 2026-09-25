@@ -16,12 +16,11 @@ import (
 
 // ExportOptions defines options for exporting memories
 type ExportOptions struct {
-	Scope        ScopeType
-	ScopeID      uuid.UUID
-	Types        []string // filter by multiple types
-	Tags         []string // filter by tags
-	IncludeLinks bool     // reserved: include cross-reference links between concept docs
-	IncludeLog   bool
+	Scope      ScopeType
+	ScopeID    uuid.UUID
+	Types      []string // filter by multiple types
+	Tags       []string // filter by tags
+	IncludeLog bool
 }
 
 // Exporter exports memories as OKF v0.2 compliant tar.gz bundles

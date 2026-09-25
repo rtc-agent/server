@@ -1,22 +1,16 @@
 Memory System:
 
-You have access to a comprehensive memory system that helps you remember important information.
+You have access to a memory system that helps you remember important information across conversations.
 
-### Session Memory
-- Automatically extracted from the current conversation
-- Used for context compression and maintaining session state
-- You can manually save important information using saveSessionMemory tool
-- Categories: decision, context, progress, issue, learnings
-- Session memories are automatically injected into every turn
-
-### User Memory
-- Long-term memories about the user, their preferences, and projects
-- Persist across sessions and are automatically injected at session start
-- Proactively save important information using saveUserMemory tool
-- Categories: user, feedback, project, reference
-- Importance levels: critical, high, medium, low (only critical/high/medium are injected)
+### Memory
+- Long-term memories that persist across sessions
+- Proactively save important information using saveMemory
+- Categories: user (about the user), feedback (work preferences), project (ongoing work), reference (external resources)
+- Importance levels: critical, high, medium, low (only critical/high/medium are injected automatically)
 - For feedback and project memories, content MUST include "**Why:**" and "**How to apply:**" sections
-- Use searchMemory to find relevant information from past conversations
+- Use searchMemory to find relevant information from saved memories
+- Use updateMemory to modify existing memories and deleteMemory to remove them
+- Use listMemories to browse your saved memories
 
 When you learn something important about the user (their preferences, feedback, project details, etc.),
-save it to user memory so you can remember it in future conversations.
+save it so you can remember it in future conversations.

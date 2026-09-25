@@ -40,9 +40,9 @@ func (h *helpers) getUserIDFromContext(ctx context.Context) (uuid.UUID, error) {
 	return userID, nil
 }
 
-// userMemoryToolBase holds the shared fields and methods for all user memory tools.
+// memoryToolBase holds the shared fields and methods for all memory tools.
 // Embedding this struct eliminates duplicated persistError/persistResult boilerplate.
-type userMemoryToolBase struct {
+type memoryToolBase struct {
 	session  *model.Session
 	helpers  *helpers
 	turnID   uuid.UUID
@@ -50,29 +50,29 @@ type userMemoryToolBase struct {
 }
 
 // persistError persists an error message to DB for cache consistency.
-func (b *userMemoryToolBase) persistError(ctx context.Context, argumentsInJSON, errMsg string) {
+func (b *memoryToolBase) persistError(ctx context.Context, argumentsInJSON, errMsg string) {
 	persistToolError(ctx, b.helpers, b.session, b.turnID, b.toolName, argumentsInJSON, errMsg)
 }
 
 // persistResult persists a success result to DB for cache consistency.
-func (b *userMemoryToolBase) persistResult(ctx context.Context, argumentsInJSON, resultJSON string) {
+func (b *memoryToolBase) persistResult(ctx context.Context, argumentsInJSON, resultJSON string) {
 	persistToolResult(ctx, b.helpers, b.session, b.turnID, b.toolName, argumentsInJSON, resultJSON)
 }
 
 // =============================================================================
-// saveUserMemory
+// saveMemory
 // =============================================================================
 
-type saveUserMemoryTool struct{ userMemoryToolBase }
+type saveMemoryTool struct{ memoryToolBase }
 
-func (h *helpers) createSaveUserMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
-	return &saveUserMemoryTool{userMemoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "saveUserMemory"}}
+func (h *helpers) createSaveMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
+	return &saveMemoryTool{memoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "saveMemory"}}
 }
 
-func (t *saveUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+func (t *saveMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "saveUserMemory",
-		Desc: saveUserMemoryDesc,
+		Name: "saveMemory",
+		Desc: saveMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
 				Type:     schema.String,
@@ -115,8 +115,8 @@ func (t *saveUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 	}, nil
 }
 
-func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.saveUserMemory",
+func (t *saveMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.saveMemory",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.String("turn_id", t.turnID.String()),
@@ -133,7 +133,7 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		Tags        []string       `json:"tags,omitempty"`
 		Metadata    map[string]any `json:"metadata,omitempty"`
 	}
-	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "saveUserMemory", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "saveMemory", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 
@@ -151,10 +151,10 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	)
 
 	// Validate category
-	if !memory.IsValidMemoryType(args.Category) {
+	if !memory.IsValidUserMemoryType(args.Category) {
 		span.SetStatus(codes.Error, "invalid_category")
 		errMsg := fmt.Sprintf("Error: invalid category: %s (must be one of: %s)",
-			args.Category, strings.Join([]string{"user", "feedback", "project", "reference"}, ", "))
+			args.Category, strings.Join(memory.ValidUserMemoryTypes, ", "))
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
@@ -219,6 +219,7 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		Content:     args.Content,
 		Description: descStr,
 		Tags:        memory.StringArray(args.Tags),
+		TokenCount:  estimateMemoryTokens(args.Content),
 		Timestamp:   time.Now(),
 		Metadata:    memory.JSONBString(metadataJSON),
 	}
@@ -226,39 +227,39 @@ func (t *saveUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	if err := t.helpers.deps.MemoryRepo.Create(ctx, mem); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "create_failed")
-		errMsg := fmt.Sprintf("Error: save user memory: %v", err)
+		errMsg := fmt.Sprintf("Error: save memory: %v", err)
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
 
 	span.SetAttributes(attribute.String("memory_id", mem.ID.String()))
-	t.helpers.logger.Info(ctx, "saveUserMemory.success", map[string]any{
+	t.helpers.logger.Info(ctx, "saveMemory.success", map[string]any{
 		"user_id":    userID.String(),
 		"memory_id":  mem.ID.String(),
 		"category":   args.Category,
 		"importance": args.Importance,
 	})
 
-	resultJSON := formatUserMemorySaved(mem.ID.String(), args.Category, args.Importance, args.Title)
+	resultJSON := formatMemorySaved(mem.ID.String(), args.Category, args.Importance, args.Title)
 	t.persistResult(ctx, argumentsInJSON, resultJSON)
 
 	return resultJSON, nil
 }
 
 // =============================================================================
-// updateUserMemory
+// updateMemory
 // =============================================================================
 
-type updateUserMemoryTool struct{ userMemoryToolBase }
+type updateMemoryTool struct{ memoryToolBase }
 
-func (h *helpers) createUpdateUserMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
-	return &updateUserMemoryTool{userMemoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "updateUserMemory"}}
+func (h *helpers) createUpdateMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
+	return &updateMemoryTool{memoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "updateMemory"}}
 }
 
-func (t *updateUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+func (t *updateMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "updateUserMemory",
-		Desc: updateUserMemoryDesc,
+		Name: "updateMemory",
+		Desc: updateMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"memory_id": {
 				Type:     schema.String,
@@ -300,8 +301,8 @@ func (t *updateUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, erro
 	}, nil
 }
 
-func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.updateUserMemory",
+func (t *updateMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.updateMemory",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.String("turn_id", t.turnID.String()),
@@ -318,7 +319,7 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		Tags        []string       `json:"tags,omitempty"`
 		Metadata    map[string]any `json:"metadata,omitempty"`
 	}
-	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "updateUserMemory", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "updateMemory", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 
@@ -357,9 +358,15 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
+	if existing.Scope != memory.ScopeUser {
+		span.SetStatus(codes.Error, "wrong_scope")
+		errMsg := fmt.Sprintf("Error: memory %s not found", args.MemoryID)
+		t.persistError(ctx, argumentsInJSON, errMsg)
+		return errMsg, nil
+	}
 	if existing.ScopeID != userID {
 		span.SetStatus(codes.Error, "not_owner")
-		errMsg := fmt.Sprintf("Error: memory %s does not belong to current user", args.MemoryID)
+		errMsg := fmt.Sprintf("Error: memory %s not found", args.MemoryID)
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
@@ -395,26 +402,26 @@ func (t *updateUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		return errMsg, nil
 	}
 
-	resultJSON := formatUserMemoryUpdated(args.MemoryID)
+	resultJSON := formatMemoryUpdated(args.MemoryID)
 	t.persistResult(ctx, argumentsInJSON, resultJSON)
 
 	return resultJSON, nil
 }
 
 // =============================================================================
-// deleteUserMemory
+// deleteMemory
 // =============================================================================
 
-type deleteUserMemoryTool struct{ userMemoryToolBase }
+type deleteMemoryTool struct{ memoryToolBase }
 
-func (h *helpers) createDeleteUserMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
-	return &deleteUserMemoryTool{userMemoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "deleteUserMemory"}}
+func (h *helpers) createDeleteMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
+	return &deleteMemoryTool{memoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "deleteMemory"}}
 }
 
-func (t *deleteUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+func (t *deleteMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "deleteUserMemory",
-		Desc: deleteUserMemoryDesc,
+		Name: "deleteMemory",
+		Desc: deleteMemoryDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"memory_id": {
 				Type:     schema.String,
@@ -425,8 +432,8 @@ func (t *deleteUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, erro
 	}, nil
 }
 
-func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.deleteUserMemory",
+func (t *deleteMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.deleteMemory",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.String("turn_id", t.turnID.String()),
@@ -437,7 +444,7 @@ func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 	var args struct {
 		MemoryID string `json:"memory_id"`
 	}
-	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "deleteUserMemory", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "deleteMemory", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 
@@ -476,9 +483,15 @@ func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
+	if existing.Scope != memory.ScopeUser {
+		span.SetStatus(codes.Error, "wrong_scope")
+		errMsg := fmt.Sprintf("Error: memory %s not found", args.MemoryID)
+		t.persistError(ctx, argumentsInJSON, errMsg)
+		return errMsg, nil
+	}
 	if existing.ScopeID != userID {
 		span.SetStatus(codes.Error, "not_owner")
-		errMsg := fmt.Sprintf("Error: memory %s does not belong to current user", args.MemoryID)
+		errMsg := fmt.Sprintf("Error: memory %s not found", args.MemoryID)
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
@@ -491,26 +504,26 @@ func (t *deleteUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON
 		return errMsg, nil
 	}
 
-	resultJSON := formatUserMemoryDeleted(args.MemoryID)
+	resultJSON := formatMemoryDeleted(args.MemoryID)
 	t.persistResult(ctx, argumentsInJSON, resultJSON)
 
 	return resultJSON, nil
 }
 
 // =============================================================================
-// listUserMemory
+// listMemories
 // =============================================================================
 
-type listUserMemoryTool struct{ userMemoryToolBase }
+type listMemoriesTool struct{ memoryToolBase }
 
-func (h *helpers) createListUserMemoryTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
-	return &listUserMemoryTool{userMemoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "listUserMemory"}}
+func (h *helpers) createListMemoriesTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
+	return &listMemoriesTool{memoryToolBase{session: session, helpers: h, turnID: turnID, toolName: "listMemories"}}
 }
 
-func (t *listUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+func (t *listMemoriesTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
-		Name: "listUserMemory",
-		Desc: listUserMemoryDesc,
+		Name: "listMemories",
+		Desc: listMemoriesDesc,
 		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
 			"category": {
 				Type:     schema.String,
@@ -527,8 +540,8 @@ func (t *listUserMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 	}, nil
 }
 
-func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.listUserMemory",
+func (t *listMemoriesTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.listMemories",
 		trace.WithAttributes(
 			attribute.String("session_id", t.session.ID.String()),
 			attribute.String("turn_id", t.turnID.String()),
@@ -540,7 +553,7 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		Category string `json:"category"`
 		Limit    int    `json:"limit"`
 	}
-	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "listUserMemory", argumentsInJSON, &args); !ok {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "listMemories", argumentsInJSON, &args); !ok {
 		return errMsg, nil
 	}
 
@@ -564,7 +577,7 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	span.SetAttributes(attribute.Int("limit", args.Limit))
 
 	// Validate category if provided
-	if args.Category != "" && !memory.IsValidMemoryType(args.Category) {
+	if args.Category != "" && !memory.IsValidUserMemoryType(args.Category) {
 		span.SetStatus(codes.Error, "invalid_category")
 		errMsg := fmt.Sprintf("Error: invalid category: %s", args.Category)
 		t.persistError(ctx, argumentsInJSON, errMsg)
@@ -580,7 +593,7 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "list_failed")
-		errMsg := fmt.Sprintf("Error: list user memories: %v", err)
+		errMsg := fmt.Sprintf("Error: list memories: %v", err)
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
@@ -588,11 +601,11 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 	var resultJSON string
 	if len(memories) == 0 {
 		span.SetAttributes(attribute.Int("count", 0))
-		resultJSON = formatNoUserMemories()
+		resultJSON = formatNoMemories()
 	} else {
-		items := make([]userMemoryItem, len(memories))
+		items := make([]memoryListItem, len(memories))
 		for i, mem := range memories {
-			items[i] = userMemoryItem{
+			items[i] = memoryListItem{
 				Index:      i + 1,
 				Category:   mem.Type,
 				Importance: extractImportanceFromMetadata(mem.Metadata),
@@ -604,7 +617,7 @@ func (t *listUserMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON s
 		}
 
 		span.SetAttributes(attribute.Int("count", len(memories)))
-		resultJSON = formatUserMemoriesList(len(memories), items)
+		resultJSON = formatMemoriesList(len(memories), items)
 	}
 
 	t.persistResult(ctx, argumentsInJSON, resultJSON)

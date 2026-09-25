@@ -34,7 +34,7 @@ func NewUserMemoryAttachment(h *helpers) *UserMemoryAttachment {
 
 // Name returns the attachment name.
 func (a *UserMemoryAttachment) Name() string {
-	return "UserMemory"
+	return "Memory"
 }
 
 // Build generates the user memory content for injection.
@@ -44,7 +44,7 @@ func (a *UserMemoryAttachment) Name() string {
 // - No memories exist for the user
 // - Query fails
 //
-// The output is wrapped in <user_memory> tags and grouped by type:
+// The output is wrapped in <persistent_memory> tags and grouped by type:
 // - About the user (user)
 // - Work preferences and feedback (feedback)
 // - Project information (project)

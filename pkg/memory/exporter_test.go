@@ -3,6 +3,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,30 @@ func TestUuidShort(t *testing.T) {
 }
 
 // ─── Export tests ───
+
+func TestExportOptions_NoIncludeLinksField(t *testing.T) {
+	// Compile-time check: ExportOptions must not have IncludeLinks field (P2-3 fix).
+	// This test verifies the struct only has the expected fields by constructing
+	// a valid ExportOptions with known fields. If IncludeLinks were added back,
+	// this test would still compile, but the reflection check below would catch it.
+	opts := ExportOptions{
+		Scope:      ScopeUser,
+		ScopeID:    uuid.New(),
+		Types:      []string{"decision"},
+		Tags:       []string{"test"},
+		IncludeLog: true,
+	}
+	assert.Equal(t, ScopeUser, opts.Scope)
+	assert.True(t, opts.IncludeLog)
+
+	// Reflection check: ensure no "IncludeLinks" field exists
+	val := reflect.ValueOf(opts)
+	typ := val.Type()
+	for i := 0; i < typ.NumField(); i++ {
+		assert.NotEqual(t, "IncludeLinks", typ.Field(i).Name,
+			"ExportOptions must not have IncludeLinks field (P2-3 fix: IncludeLinks removed)")
+	}
+}
 
 func TestExportEmpty(t *testing.T) {
 	repo := &mockRepo{memories: []*Memory{}}

@@ -2,9 +2,7 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -18,8 +16,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// searchMemoryTool searches memories (both Session Memory and User Memory).
-// Currently only Session Memory search is implemented; User Memory will be in the next phase.
+// searchMemoryTool searches memories.
 type searchMemoryTool struct {
 	session *model.Session
 	helpers *helpers
@@ -42,18 +39,12 @@ func (t *searchMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 			},
 			"category": {
 				Type:     schema.String,
-				Desc:     "Optional: filter by category (decision, context, progress, issue, learnings for session; user, feedback, project, reference for user)",
+				Desc:     "Optional: filter by category (user, feedback, project, reference)",
 				Required: false,
-			},
-			"memory_type": {
-				Type:     schema.String,
-				Desc:     "Type of memory to search: 'session', 'user', or 'all' (default: 'all')",
-				Required: false,
-				Enum:     []string{"session", "user", "all"},
 			},
 			"limit": {
 				Type:     schema.Integer,
-				Desc:     "Optional: maximum number of results per memory type (default: 5)",
+				Desc:     "Optional: maximum number of results (default: 5)",
 				Required: false,
 			},
 		}),
@@ -70,10 +61,9 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	defer span.End()
 
 	var args struct {
-		Query      string `json:"query"`
-		Category   string `json:"category"`
-		MemoryType string `json:"memory_type"`
-		Limit      int    `json:"limit"`
+		Query    string `json:"query"`
+		Category string `json:"category"`
+		Limit    int    `json:"limit"`
 	}
 	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "searchMemory", argumentsInJSON, &args); !ok {
 		return errMsg, nil
@@ -82,7 +72,6 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if args.Query == "" {
 		span.SetStatus(codes.Error, "query_required")
 		errMsg := "Error: query is required"
-		// Persist validation error to DB.
 		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
 			Helpers:         t.helpers,
 			SessionID:       t.session.ID,
@@ -101,48 +90,23 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	span.SetAttributes(
 		attribute.String("query", args.Query),
 		attribute.String("category", args.Category),
-		attribute.String("memory_type", args.MemoryType),
 	)
 
 	// Set defaults
-	if args.MemoryType == "" {
-		args.MemoryType = "all"
-	}
 	if args.Limit <= 0 {
 		args.Limit = 5
 	}
 	span.SetAttributes(attribute.Int("limit", args.Limit))
 
-	var results []searchResult
-
-	// Search session memories
-	if args.MemoryType == "all" || args.MemoryType == "session" {
-		sessionResults, err := t.searchSessionMemories(ctx, args.Query, args.Category, args.Limit)
-		if err != nil {
-			span.RecordError(err)
-			span.SetAttributes(attribute.String("session_search_error", err.Error()))
-			t.helpers.logger.Warn(ctx, "searchMemory.session_error", map[string]any{
-				"error": err.Error(),
-			})
-			// Continue with other searches even if session memory fails
-		} else {
-			results = append(results, sessionResults...)
-		}
-	}
-
-	// Search user memories
-	if args.MemoryType == "all" || args.MemoryType == "user" {
-		userResults, err := t.searchUserMemories(ctx, args.Query, args.Category, args.Limit)
-		if err != nil {
-			span.RecordError(err)
-			span.SetAttributes(attribute.String("user_search_error", err.Error()))
-			t.helpers.logger.Warn(ctx, "searchMemory.user_error", map[string]any{
-				"error": err.Error(),
-			})
-			// Continue with other searches even if user memory fails
-		} else {
-			results = append(results, userResults...)
-		}
+	results, err := t.searchMemories(ctx, args.Query, args.Category, args.Limit)
+	if err != nil {
+		span.RecordError(err)
+		span.SetAttributes(attribute.String("search_error", err.Error()))
+		t.helpers.logger.Warn(ctx, "searchMemory.error", map[string]any{
+			"error": err.Error(),
+		})
+		// Continue with empty results
+		results = nil
 	}
 
 	var resultJSON string
@@ -158,12 +122,11 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 				createdAt = result.CreatedAt.Format("2006-01-02 15:04")
 			}
 			items[i] = searchResultItem{
-				Index:      i + 1,
-				MemoryType: result.MemoryType,
-				Category:   result.Category,
-				Title:      result.Title,
-				Content:    stringutil.TruncateByRune(result.Content, 300),
-				CreatedAt:  createdAt,
+				Index:     i + 1,
+				Category:  result.Category,
+				Title:     result.Title,
+				Content:   stringutil.TruncateByRune(result.Content, 300),
+				CreatedAt: createdAt,
 			}
 		}
 
@@ -193,63 +156,15 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 
 // searchResult is the unified search result format.
 type searchResult struct {
-	MemoryType string // "session" or "user"
-	ID         string
-	Category   string
-	Title      string
-	Content    string
-	CreatedAt  time.Time
+	ID        string
+	Category  string
+	Title     string
+	Content   string
+	CreatedAt time.Time
 }
 
-// searchSessionMemories searches session memories (simple keyword matching).
-func (t *searchMemoryTool) searchSessionMemories(
-	ctx context.Context,
-	query string,
-	category string,
-	limit int,
-) ([]searchResult, error) {
-	// Query memories (with optional category filter)
-	var memories []*memory.Memory
-	var err error
-	if category != "" {
-		memories, err = t.helpers.deps.MemoryRepo.ListByScope(ctx, memory.ScopeSession, t.session.ID, memory.ListOptions{Type: category, Limit: limit * 2})
-	} else {
-		memories, err = t.helpers.deps.MemoryRepo.ListByScope(ctx, memory.ScopeSession, t.session.ID, memory.ListOptions{Limit: limit * 2})
-	}
-	if err != nil {
-		return nil, fmt.Errorf("list session memories: %w", err)
-	}
-
-	// Simple keyword filtering (case-insensitive)
-	queryLower := strings.ToLower(query)
-	var results []searchResult
-
-	for _, mem := range memories {
-		// Check if query matches title or content
-		if strings.Contains(strings.ToLower(mem.Title), queryLower) ||
-			strings.Contains(strings.ToLower(mem.Content), queryLower) {
-			results = append(results, searchResult{
-				MemoryType: "session",
-				ID:         mem.ID.String(),
-				Category:   mem.Type,
-				Title:      mem.Title,
-				Content:    mem.Content,
-				CreatedAt:  mem.CreatedAt,
-			})
-		}
-
-		// Stop when we have enough results
-		if len(results) >= limit {
-			break
-		}
-	}
-
-	return results, nil
-}
-
-// searchUserMemories searches user memories.
-// Uses keyword search with importance-weighted ranking.
-func (t *searchMemoryTool) searchUserMemories(
+// searchMemories searches memories using keyword search with importance-weighted ranking.
+func (t *searchMemoryTool) searchMemories(
 	ctx context.Context,
 	query string,
 	category string,
@@ -263,7 +178,7 @@ func (t *searchMemoryTool) searchUserMemories(
 	// Keyword search.
 	keywordResults, err := t.helpers.deps.MemoryRepo.Search(ctx, memory.ScopeUser, userID, query, limit*2)
 	if err != nil {
-		t.helpers.logger.Warn(ctx, "searchMemory.user_keyword_error", map[string]any{
+		t.helpers.logger.Warn(ctx, "searchMemory.keyword_error", map[string]any{
 			"error": err.Error(),
 		})
 		return nil, nil
@@ -285,7 +200,11 @@ func (t *searchMemoryTool) searchUserMemories(
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].score > entries[j].score
+		if entries[i].score != entries[j].score {
+			return entries[i].score > entries[j].score
+		}
+		// Tiebreaker: newer first
+		return entries[i].memory.CreatedAt.After(entries[j].memory.CreatedAt)
 	})
 
 	// Convert to unified results.
@@ -297,12 +216,11 @@ func (t *searchMemoryTool) searchUserMemories(
 		mem := entry.memory
 
 		results = append(results, searchResult{
-			MemoryType: "user",
-			ID:         mem.ID.String(),
-			Category:   mem.Type,
-			Title:      mem.Title,
-			Content:    mem.Content,
-			CreatedAt:  mem.CreatedAt,
+			ID:        mem.ID.String(),
+			Category:  mem.Type,
+			Title:     mem.Title,
+			Content:   mem.Content,
+			CreatedAt: mem.CreatedAt,
 		})
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -167,7 +168,8 @@ func (r *memoryRepo) Search(ctx context.Context, scope memory.ScopeType, scopeID
 	switch getDialectName(db) {
 	case "sqlite":
 		// SQLite LIKE is case-insensitive for ASCII by default.
-		db = db.Where("title LIKE ? OR content LIKE ? OR description LIKE ?",
+		// Use ESCAPE clause to support escaped wildcards.
+		db = db.Where("title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'",
 			likeQuery, likeQuery, likeQuery)
 	default:
 		// PostgreSQL uses ILIKE for case-insensitive matching.
@@ -238,6 +240,10 @@ func (r *memoryRepo) GetLinked(ctx context.Context, id uuid.UUID, relation strin
 
 func (r *memoryRepo) CreateLink(ctx context.Context, link *memory.MemoryLink) error {
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(link).Error; err != nil {
+		if strings.Contains(err.Error(), "duplicate key") ||
+			strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return fmt.Errorf("create memory link: %w", memory.ErrDuplicateLink)
+		}
 		return fmt.Errorf("create memory link: %w", err)
 	}
 	return nil

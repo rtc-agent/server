@@ -9,12 +9,8 @@ RUN apk add --no-cache git
 # Copy root go mod files + local module go.mod files (for replace directives)
 COPY go.mod go.sum ./
 COPY pkg/centrifuge-plus/go.mod pkg/centrifuge-plus/go.sum ./pkg/centrifuge-plus/
-COPY pkg/circuitbreaker/go.mod pkg/circuitbreaker/go.sum ./pkg/circuitbreaker/
 COPY pkg/protocol/go.mod ./pkg/protocol/
-COPY pkg/proxy/go.mod pkg/proxy/go.sum ./pkg/proxy/
 COPY pkg/rtc-queue/go.mod pkg/rtc-queue/go.sum ./pkg/rtc-queue/
-COPY pkg/webfetch/go.mod pkg/webfetch/go.sum ./pkg/webfetch/
-COPY pkg/websearch/go.mod pkg/websearch/go.sum ./pkg/websearch/
 RUN go mod download
 
 # Copy source code

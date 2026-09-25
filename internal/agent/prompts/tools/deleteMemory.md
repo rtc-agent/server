@@ -1,0 +1,1 @@
+Soft-delete a memory. The memory will be marked as deleted and won't appear in future queries.

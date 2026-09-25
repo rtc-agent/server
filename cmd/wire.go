@@ -224,6 +224,7 @@ func provideUsecaseDependencies(
 		RtcRepo:           svcCtx.RtcRepo,
 		GoalRepo:          svcCtx.GoalRepo,
 		LoopRepo:          svcCtx.LoopRepo,
+		MemoryRepo:        svcCtx.MemoryRepo,
 		UpdatePublisher:   svcCtx.UpdatePublisher,
 		ChatModel:         chatModelResult.model,
 		LLMConfig:         cfg.LLM,

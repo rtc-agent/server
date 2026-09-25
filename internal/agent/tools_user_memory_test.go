@@ -7,6 +7,38 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestEstimateMemoryTokens_NonEmpty verifies that estimateMemoryTokens returns
+// a positive count for non-empty content. This validates the P2-2 fix where
+// saveMemory now sets TokenCount via estimateMemoryTokens(content).
+func TestEstimateMemoryTokens_NonEmpty(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantGT  int // result must be > wantGT
+	}{
+		{"short string", "hello world", 0},
+		{"sentence", "The quick brown fox jumps over the lazy dog", 0},
+		{"paragraph", strings.Repeat("word ", 100), 0},
+		{"chinese", "这是一个中文测试字符串，用于验证令牌计数功能", 0},
+		{"mixed", "Hello 你好 World 世界", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := estimateMemoryTokens(tt.content)
+			assert.Greater(t, got, tt.wantGT,
+				"estimateMemoryTokens(%q) should return > %d, got %d",
+				tt.content, tt.wantGT, got)
+		})
+	}
+}
+
+// TestEstimateMemoryTokens_Empty verifies that empty content returns 0 tokens.
+func TestEstimateMemoryTokens_Empty(t *testing.T) {
+	assert.Equal(t, 0, estimateMemoryTokens(""),
+		"empty string should have 0 tokens")
+}
+
 func TestValidateStructuredContent(t *testing.T) {
 	tests := []struct {
 		name           string

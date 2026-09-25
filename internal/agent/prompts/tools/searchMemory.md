@@ -1,1 +1,1 @@
-Search across session memories and user memories. Use this to find relevant information from past conversations or general knowledge. User memories support keyword-based search.
+Search across your saved memories to find relevant information. Memories are categorized as: user (about the user), feedback (work preferences), project (ongoing work), reference (external resources). Supports keyword-based search with importance-weighted ranking.
