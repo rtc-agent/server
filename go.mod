@@ -7,7 +7,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.56.0
 	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/centrifugal/centrifuge v0.39.0
-	github.com/cloudwego/eino v0.9.18
+	github.com/cloudwego/eino v0.9.21
 	github.com/cloudwego/eino-ext/components/model/claude v0.1.25
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/eino-contrib/jsonschema v1.0.3
@@ -25,6 +25,7 @@ require (
 	github.com/rtc-agent/server/pkg/centrifuge-plus v0.0.0-00010101000000-000000000000
 	github.com/rtc-agent/server/pkg/protocol v0.0.0-00010101000000-000000000000
 	github.com/rtc-agent/server/pkg/rtc-queue v0.0.0-00010101000000-000000000000
+	github.com/rtc-agent/server/pkg/websearch v0.0.0-00010101000000-000000000000
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/viper v1.18.2
 	github.com/stretchr/testify v1.12.1
@@ -33,8 +34,8 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.44.0
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
-	go.uber.org/zap v1.27.0
-	golang.org/x/time v0.14.0
+	go.uber.org/zap v1.28.0
+	golang.org/x/time v0.16.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gorm.io/driver/postgres v1.5.7
 	gorm.io/driver/sqlite v1.6.0
@@ -46,6 +47,8 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.3 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/FZambia/eagle v0.2.0 // indirect
+	github.com/PuerkitoBio/goquery v1.13.0 // indirect
+	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.33.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.3 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.29.1 // indirect
@@ -158,9 +161,9 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/arch v0.22.0 // indirect
-	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
-	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
@@ -180,3 +183,7 @@ replace github.com/rtc-agent/server/pkg/protocol => ./pkg/protocol
 replace github.com/rtc-agent/server/pkg/centrifuge-plus => ./pkg/centrifuge-plus
 
 replace github.com/rtc-agent/server/pkg/rtc-queue => ./pkg/rtc-queue
+
+replace github.com/leichujun/rtc-agent/server/pkg/websearch => ./pkg/websearch
+
+replace github.com/rtc-agent/server/pkg/websearch => ./pkg/websearch

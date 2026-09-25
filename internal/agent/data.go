@@ -201,6 +201,13 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 		tools = append(tools, listUserMemoryTool)
 	}
 
+	// Add Web Search tool (if configured)
+	if h.deps.WebSearchManager != nil {
+		if webSearchTool, err := h.createWebSearchTool(); err == nil && webSearchTool != nil {
+			tools = append(tools, webSearchTool)
+		}
+	}
+
 	// Slash-command framework: collect tools from ALL registered commands.
 	//
 	// Static registration: tools are always available to the LLM, regardless

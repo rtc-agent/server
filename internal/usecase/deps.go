@@ -16,6 +16,7 @@ import (
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"github.com/rtc-agent/server/pkg/websearch"
 
 	"github.com/cloudwego/eino/callbacks"
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -78,6 +79,10 @@ type Dependencies struct {
 	// Actual implementation is provided in batch 3; nil checks are used
 	// in batch 2 for graceful degradation.
 	TaskScheduler TaskScheduler
+
+	// WebSearchManager provides web search capabilities.
+	// Optional: if nil, web search tool will not be available.
+	WebSearchManager *websearch.WebSearchManager
 }
 
 // TaskScheduler is the interface for delayed task scheduling.
