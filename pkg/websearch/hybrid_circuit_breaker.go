@@ -2,6 +2,7 @@ package websearch
 
 import (
 	"context"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,7 +52,16 @@ func NewHybridCircuitBreaker(
 	// Initially assume Redis is available, start background health check
 	h.redisHealthy.Store(true)
 	h.wg.Add(1)
-	go h.redisHealthLoop()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				h.logger.Error("redis health check goroutine panic recovered",
+					zap.Any("panic", r),
+					zap.String("stack", string(debug.Stack())))
+			}
+		}()
+		h.redisHealthLoop()
+	}()
 
 	return h
 }

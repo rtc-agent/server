@@ -109,7 +109,7 @@ func ExampleProxyTypes() {
 	proxies := []websearch.ProxyConfig{socks5Proxy, httpProxy, httpsProxy}
 
 	// Create proxy pool
-	pool := websearch.NewProxyPool(proxies, "https://www.google.com", 30*time.Second)
+	pool := websearch.NewProxyPool(proxies, "https://www.google.com", 30*time.Second, nil)
 
 	pool.Start()
 	defer pool.Stop()
@@ -128,7 +128,7 @@ func ExampleProxyHealth() {
 		{URL: "http://proxy2.example.com:8080", Type: websearch.ProxyTypeHTTP},
 	}
 
-	pool := websearch.NewProxyPool(proxies, "https://www.google.com", 10*time.Second)
+	pool := websearch.NewProxyPool(proxies, "https://www.google.com", 10*time.Second, nil)
 
 	pool.Start()
 	defer pool.Stop()

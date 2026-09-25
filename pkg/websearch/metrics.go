@@ -53,21 +53,21 @@ func newMetrics() *Metrics {
 		// Request counters
 		searchTotal: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "websearch_requests_total",
+				Name: "rtc_agent_websearch_requests_total",
 				Help: "Total number of search requests",
 			},
 			[]string{"provider", "status"},
 		),
 		searchErrors: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "websearch_errors_total",
+				Name: "rtc_agent_websearch_errors_total",
 				Help: "Total number of search errors",
 			},
 			[]string{"provider", "error_type"},
 		),
 		searchDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
-				Name:    "websearch_duration_seconds",
+				Name:    "rtc_agent_websearch_duration_seconds",
 				Help:    "Search request duration in seconds",
 				Buckets: prometheus.DefBuckets,
 			},
@@ -77,14 +77,14 @@ func newMetrics() *Metrics {
 		// Provider metrics
 		providerHealth: promauto.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "websearch_provider_health",
+				Name: "rtc_agent_websearch_provider_health",
 				Help: "Provider health status (1=healthy, 0=unhealthy)",
 			},
 			[]string{"provider"},
 		),
 		circuitState: promauto.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "websearch_circuit_state",
+				Name: "rtc_agent_websearch_circuit_state",
 				Help: "Circuit breaker state (0=closed, 1=half_open, 2=open)",
 			},
 			[]string{"provider"},
@@ -93,21 +93,21 @@ func newMetrics() *Metrics {
 		// Proxy metrics
 		proxyHealth: promauto.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "websearch_proxy_health",
+				Name: "rtc_agent_websearch_proxy_health",
 				Help: "Proxy health status (1=healthy, 0=unhealthy)",
 			},
 			[]string{"proxy_url"},
 		),
 		proxyLatency: promauto.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "websearch_proxy_latency_seconds",
+				Name: "rtc_agent_websearch_proxy_latency_seconds",
 				Help: "Proxy average latency in seconds",
 			},
 			[]string{"proxy_url"},
 		),
 		proxyAvailable: promauto.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "websearch_proxy_available",
+				Name: "rtc_agent_websearch_proxy_available",
 				Help: "Number of available healthy proxies",
 			},
 			[]string{},
@@ -116,13 +116,13 @@ func newMetrics() *Metrics {
 		// Cache metrics
 		cacheHits: promauto.NewCounter(
 			prometheus.CounterOpts{
-				Name: "websearch_cache_hits_total",
+				Name: "rtc_agent_websearch_cache_hits_total",
 				Help: "Total number of cache hits",
 			},
 		),
 		cacheMisses: promauto.NewCounter(
 			prometheus.CounterOpts{
-				Name: "websearch_cache_misses_total",
+				Name: "rtc_agent_websearch_cache_misses_total",
 				Help: "Total number of cache misses",
 			},
 		),
@@ -130,7 +130,7 @@ func newMetrics() *Metrics {
 		// Rate limiter metrics
 		rateLimited: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "websearch_rate_limited_total",
+				Name: "rtc_agent_websearch_rate_limited_total",
 				Help: "Total number of rate limited requests",
 			},
 			[]string{"provider"},

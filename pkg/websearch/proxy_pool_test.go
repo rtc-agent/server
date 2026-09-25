@@ -8,7 +8,7 @@ import (
 )
 
 func TestProxyPool_EmptyPool(t *testing.T) {
-	pool := NewProxyPool(nil, "", 0)
+	pool := NewProxyPool(nil, "", 0, nil)
 
 	// Next should return nil for empty pool
 	if p := pool.Next(); p != nil {
@@ -33,7 +33,7 @@ func TestProxyPool_RoundRobin(t *testing.T) {
 		{URL: "http://proxy3.example.com:8080", Type: ProxyTypeHTTP, Region: "sg"},
 	}
 
-	pool := NewProxyPool(configs, "", 0)
+	pool := NewProxyPool(configs, "", 0, nil)
 
 	// Test round-robin selection
 	selected := make(map[string]int)
@@ -59,7 +59,7 @@ func TestProxyPool_HealthTracking(t *testing.T) {
 		{URL: "http://proxy1.example.com:8080", Type: ProxyTypeHTTP},
 	}
 
-	pool := NewProxyPool(configs, "", 0)
+	pool := NewProxyPool(configs, "", 0, nil)
 
 	// Initially no health data
 	health := pool.GetHealth("http://proxy1.example.com:8080")
@@ -97,7 +97,7 @@ func TestProxyPool_NextHealthy(t *testing.T) {
 		{URL: "http://unhealthy.example.com:8080", Type: ProxyTypeHTTP},
 	}
 
-	pool := NewProxyPool(configs, "", 0)
+	pool := NewProxyPool(configs, "", 0, nil)
 
 	// Mark first proxy as healthy
 	healthData, _ := pool.healthMap.LoadOrStore("http://healthy.example.com:8080", &ProxyHealth{})
@@ -128,7 +128,7 @@ func TestProxyPool_StartStop(t *testing.T) {
 		{URL: "http://proxy1.example.com:8080", Type: ProxyTypeHTTP},
 	}
 
-	pool := NewProxyPool(configs, "https://www.google.com", 100*time.Millisecond)
+	pool := NewProxyPool(configs, "https://www.google.com", 100*time.Millisecond, nil)
 
 	pool.Start()
 

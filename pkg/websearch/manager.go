@@ -113,7 +113,7 @@ func NewWebSearchManager(cfg WebSearchConfig, providers []WebSearchProvider, log
 	// Create proxy pool if proxies configured
 	var proxyPool *ProxyPool
 	if len(cfg.Proxies) > 0 {
-		proxyPool = NewProxyPool(cfg.Proxies, cfg.ProxyHealthURL, cfg.ProxyCheckInterval)
+		proxyPool = NewProxyPool(cfg.Proxies, cfg.ProxyHealthURL, cfg.ProxyCheckInterval, logger)
 	}
 
 	return &WebSearchManager{

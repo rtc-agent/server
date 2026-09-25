@@ -6,10 +6,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
 	"golang.org/x/net/proxy"
 )
 
@@ -55,15 +57,21 @@ type ProxyPool struct {
 	healthMap      sync.Map // map[string]*ProxyHealth
 	checkStop      chan struct{}
 	stopOnce       sync.Once
+	startOnce      sync.Once // guards Start() from being called multiple times
 	wg             sync.WaitGroup
 	healthCheckURL string
 	checkInterval  time.Duration
 	internalCtx    context.Context
 	internalCancel context.CancelFunc
+	logger         *zap.Logger
 }
 
 // NewProxyPool creates a new proxy pool
-func NewProxyPool(configs []ProxyConfig, healthCheckURL string, checkInterval time.Duration) *ProxyPool {
+func NewProxyPool(configs []ProxyConfig, healthCheckURL string, checkInterval time.Duration, logger *zap.Logger) *ProxyPool {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
 	proxies := make([]Proxy, 0, len(configs))
 	for _, cfg := range configs {
 		p := Proxy{
@@ -99,39 +107,50 @@ func NewProxyPool(configs []ProxyConfig, healthCheckURL string, checkInterval ti
 		checkStop:      make(chan struct{}),
 		healthCheckURL: healthCheckURL,
 		checkInterval:  checkInterval,
+		logger:         logger,
 	}
 }
 
 // Start begins background health checking.
-// Must be called exactly once; subsequent calls will leak goroutines.
+// Safe to call multiple times; subsequent calls are no-ops.
 func (p *ProxyPool) Start() {
 	if len(p.proxies) == 0 {
 		return
 	}
 
-	// Use internal context to decouple from caller's lifecycle
-	p.internalCtx, p.internalCancel = context.WithCancel(context.Background())
+	// Use sync.Once to prevent multiple calls from leaking goroutines
+	p.startOnce.Do(func() {
+		// Use internal context to decouple from caller's lifecycle
+		p.internalCtx, p.internalCancel = context.WithCancel(context.Background())
 
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
-		ticker := time.NewTicker(p.checkInterval)
-		defer ticker.Stop()
+		p.wg.Add(1)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					p.logger.Error("proxy health check goroutine panic recovered",
+						zap.Any("panic", r),
+						zap.String("stack", string(debug.Stack())))
+				}
+			}()
+			defer p.wg.Done()
+			ticker := time.NewTicker(p.checkInterval)
+			defer ticker.Stop()
 
-		// Initial check
-		p.checkAllProxies(p.internalCtx)
+			// Initial check
+			p.checkAllProxies(p.internalCtx)
 
-		for {
-			select {
-			case <-ticker.C:
-				p.checkAllProxies(p.internalCtx)
-			case <-p.checkStop:
-				return
-			case <-p.internalCtx.Done():
-				return
+			for {
+				select {
+				case <-ticker.C:
+					p.checkAllProxies(p.internalCtx)
+				case <-p.checkStop:
+					return
+				case <-p.internalCtx.Done():
+					return
+				}
 			}
-		}
-	}()
+		}()
+	})
 }
 
 // Stop stops background health checking
@@ -232,6 +251,14 @@ func (p *ProxyPool) checkAllProxies(ctx context.Context) {
 		h := health.(*ProxyHealth)
 
 		go func(proxy *Proxy, h *ProxyHealth) {
+			defer func() {
+				if r := recover(); r != nil {
+					p.logger.Error("proxy health check panic recovered",
+						zap.String("proxy_url", proxy.URL),
+						zap.Any("panic", r),
+						zap.String("stack", string(debug.Stack())))
+				}
+			}()
 			defer wg.Done()
 
 			// Check proxy health
