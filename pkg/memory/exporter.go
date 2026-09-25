@@ -137,7 +137,7 @@ func (e *Exporter) Export(ctx context.Context, opts ExportOptions, w io.Writer) 
 	bundleName := fmt.Sprintf("%s-%s-%s",
 		string(opts.Scope),
 		uuidShort(opts.ScopeID),
-		time.Now().Format("20060102-150405"),
+		time.Now().UTC().Format("20060102-150405"),
 	)
 
 	gzWriter := gzip.NewWriter(w)
