@@ -1,10 +1,14 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/pkg/memory"
 )
 
 // validateStructuredContent validates the content structure for feedback/project types.
@@ -35,12 +39,22 @@ func validateMemoryUpdateArgs(args struct {
 	Importance  *string        `json:"importance,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
-}, existing *model.UserMemory) error {
-	if args.Importance != nil && !model.IsValidImportance(*args.Importance) {
-		return fmt.Errorf("invalid importance: %s", *args.Importance)
+}, existing *memory.Memory) error {
+	if args.Importance != nil {
+		validImportances := []string{"low", "medium", "high", "critical"}
+		valid := false
+		for _, v := range validImportances {
+			if *args.Importance == v {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("invalid importance: %s", *args.Importance)
+		}
 	}
 	if args.Content != nil &&
-		(existing.Category == model.UserMemoryCategoryFeedback || existing.Category == model.UserMemoryCategoryProject) {
+		(existing.Type == "feedback" || existing.Type == "project") {
 		if err := validateStructuredContent(*args.Content); err != nil {
 			return fmt.Errorf("content validation failed: %w", err)
 		}
@@ -49,6 +63,7 @@ func validateMemoryUpdateArgs(args struct {
 }
 
 // buildMemoryUpdateFields builds the update fields map from the update arguments.
+// Returns an error if metadata JSON marshaling fails.
 func buildMemoryUpdateFields(args struct {
 	MemoryID    string         `json:"memory_id"`
 	Title       *string        `json:"title,omitempty"`
@@ -57,7 +72,7 @@ func buildMemoryUpdateFields(args struct {
 	Importance  *string        `json:"importance,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
-}) map[string]any {
+}) (map[string]any, error) {
 	fields := make(map[string]any)
 	if args.Title != nil {
 		fields["title"] = *args.Title
@@ -68,14 +83,77 @@ func buildMemoryUpdateFields(args struct {
 	if args.Description != nil {
 		fields["description"] = *args.Description
 	}
-	if args.Importance != nil {
-		fields["importance"] = *args.Importance
-	}
 	if args.Tags != nil {
-		fields["tags"] = model.StringArray(args.Tags)
+		fields["tags"] = memory.StringArray(args.Tags)
 	}
-	if args.Metadata != nil {
-		fields["metadata"] = model.JSONObject(args.Metadata)
+	// Handle importance: store in metadata
+	if args.Importance != nil || args.Metadata != nil {
+		// Merge existing metadata with new importance/metadata
+		metadataMap := make(map[string]any)
+		if args.Metadata != nil {
+			metadataMap = args.Metadata
+		}
+		if args.Importance != nil {
+			metadataMap["importance"] = *args.Importance
+		}
+		metadataJSON, err := json.Marshal(metadataMap)
+		if err != nil {
+			return nil, fmt.Errorf("marshal metadata: %w", err)
+		}
+		fields["metadata"] = memory.JSONBString(metadataJSON)
 	}
-	return fields
+	return fields, nil
+}
+
+// persistToolError persists an error message to DB for cache consistency.
+// Used by all user memory tool structs to avoid duplicating the publishToolMessages boilerplate.
+func persistToolError(ctx context.Context, h *helpers, session *model.Session, turnID uuid.UUID, toolName, argumentsInJSON, errMsg string) {
+	if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         h,
+		SessionID:       session.ID,
+		OwnerRefID:      session.OwnerRefID,
+		TurnID:          turnID,
+		ToolName:        toolName,
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      errMsg,
+	}); publishErr != nil {
+		h.logger.Warn(ctx, toolName+".persist_error_failed", map[string]any{
+			"error": publishErr.Error(),
+		})
+	}
+}
+
+// persistToolResult persists a success result to DB for cache consistency.
+// Used by all user memory tool structs to avoid duplicating the publishToolMessages boilerplate.
+func persistToolResult(ctx context.Context, h *helpers, session *model.Session, turnID uuid.UUID, toolName, argumentsInJSON, resultJSON string) {
+	if err := publishToolMessages(ctx, publishToolMessagesInput{
+		Helpers:         h,
+		SessionID:       session.ID,
+		OwnerRefID:      session.OwnerRefID,
+		TurnID:          turnID,
+		ToolName:        toolName,
+		ArgumentsInJSON: argumentsInJSON,
+		ResultJSON:      resultJSON,
+	}); err != nil {
+		h.logger.Warn(ctx, toolName+".publish_failed", map[string]any{
+			"error": err.Error(),
+		})
+	}
+}
+
+// extractImportanceFromMetadata extracts the "importance" field from memory metadata JSON.
+// Returns "medium" as default if not found.
+func extractImportanceFromMetadata(metadata memory.JSONBString) string {
+	if metadata == "" {
+		return "medium"
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(metadata), &m); err != nil {
+		return "medium"
+	}
+	v, ok := m["importance"].(string)
+	if !ok || v == "" {
+		return "medium"
+	}
+	return v
 }

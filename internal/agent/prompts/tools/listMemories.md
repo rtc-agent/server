@@ -1,0 +1,1 @@
+List memories. Optionally filter by category. Shows title, category, importance, and a preview of content.

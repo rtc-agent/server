@@ -80,22 +80,22 @@ var noSessionMemoriesTmpl string
 //go:embed prompts/outputs/session-memories-list.md.tmpl
 var sessionMemoriesListTmpl string
 
-// --- User memory output templates ---
+// --- Memory output templates ---
 
-//go:embed prompts/outputs/user-memory-saved.md.tmpl
-var userMemorySavedTmpl string
+//go:embed prompts/outputs/memory-saved.md.tmpl
+var memorySavedTmpl string
 
-//go:embed prompts/outputs/user-memory-updated.md.tmpl
-var userMemoryUpdatedTmpl string
+//go:embed prompts/outputs/memory-updated.md.tmpl
+var memoryUpdatedTmpl string
 
-//go:embed prompts/outputs/user-memory-deleted.md.tmpl
-var userMemoryDeletedTmpl string
+//go:embed prompts/outputs/memory-deleted.md.tmpl
+var memoryDeletedTmpl string
 
-//go:embed prompts/outputs/no-user-memories.md
-var noUserMemoriesTmpl string
+//go:embed prompts/outputs/no-memories.md
+var noMemoriesTmpl string
 
-//go:embed prompts/outputs/user-memories-list.md.tmpl
-var userMemoriesListTmpl string
+//go:embed prompts/outputs/memories-list.md.tmpl
+var memoriesListTmpl string
 
 // --- Search memory output templates ---
 
@@ -239,10 +239,10 @@ func formatSessionMemoriesList(count int, memories []sessionMemoryItem) string {
 	})
 }
 
-// --- User memory ---
+// --- Memory ---
 
-func formatUserMemorySaved(id, category, importance, title string) string {
-	return templateutil.MustRender("user-memory-saved", userMemorySavedTmpl, map[string]any{
+func formatMemorySaved(id, category, importance, title string) string {
+	return templateutil.MustRender("memory-saved", memorySavedTmpl, map[string]any{
 		"ID":         id,
 		"Category":   category,
 		"Importance": importance,
@@ -250,23 +250,23 @@ func formatUserMemorySaved(id, category, importance, title string) string {
 	})
 }
 
-func formatUserMemoryUpdated(memoryID string) string {
-	return templateutil.MustRender("user-memory-updated", userMemoryUpdatedTmpl, map[string]any{
+func formatMemoryUpdated(memoryID string) string {
+	return templateutil.MustRender("memory-updated", memoryUpdatedTmpl, map[string]any{
 		"MemoryID": memoryID,
 	})
 }
 
-func formatUserMemoryDeleted(memoryID string) string {
-	return templateutil.MustRender("user-memory-deleted", userMemoryDeletedTmpl, map[string]any{
+func formatMemoryDeleted(memoryID string) string {
+	return templateutil.MustRender("memory-deleted", memoryDeletedTmpl, map[string]any{
 		"MemoryID": memoryID,
 	})
 }
 
-func formatNoUserMemories() string {
-	return renderStatic(noUserMemoriesTmpl)
+func formatNoMemories() string {
+	return renderStatic(noMemoriesTmpl)
 }
 
-type userMemoryItem struct {
+type memoryListItem struct {
 	Index       int
 	Category    string
 	Importance  string
@@ -277,8 +277,8 @@ type userMemoryItem struct {
 	AccessCount int
 }
 
-func formatUserMemoriesList(count int, memories []userMemoryItem) string {
-	return templateutil.MustRender("user-memories-list", userMemoriesListTmpl, map[string]any{
+func formatMemoriesList(count int, memories []memoryListItem) string {
+	return templateutil.MustRender("memories-list", memoriesListTmpl, map[string]any{
 		"Count":    count,
 		"Memories": memories,
 	})
@@ -291,12 +291,11 @@ func formatNoSearchResults() string {
 }
 
 type searchResultItem struct {
-	Index      int
-	MemoryType string
-	Category   string
-	Title      string
-	Content    string
-	CreatedAt  string
+	Index     int
+	Category  string
+	Title     string
+	Content   string
+	CreatedAt string
 }
 
 func formatSearchResultsList(count int, memories []searchResultItem) string {

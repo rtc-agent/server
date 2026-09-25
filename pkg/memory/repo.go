@@ -40,7 +40,6 @@ type ListOptions struct {
 	Type           string    // filter by type (backward compatible)
 	Types          []string  // filter by multiple types (new)
 	Tags           []string  // filter by tags (OR logic)
-	ScopeID        uuid.UUID // filter by ScopeID (optional, overrides method parameter)
 	CreatedAfter   time.Time // lower bound on creation time
 	CreatedBefore  time.Time // upper bound on creation time
 	IncludeDeleted bool      // whether to include soft-deleted records

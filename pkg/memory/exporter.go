@@ -16,12 +16,11 @@ import (
 
 // ExportOptions defines options for exporting memories
 type ExportOptions struct {
-	Scope        ScopeType
-	ScopeID      uuid.UUID
-	Types        []string // filter by multiple types
-	Tags         []string // filter by tags
-	IncludeLinks bool     // reserved: include cross-reference links between concept docs
-	IncludeLog   bool
+	Scope      ScopeType
+	ScopeID    uuid.UUID
+	Types      []string // filter by multiple types
+	Tags       []string // filter by tags
+	IncludeLog bool
 }
 
 // Exporter exports memories as OKF v0.2 compliant tar.gz bundles
@@ -138,7 +137,7 @@ func (e *Exporter) Export(ctx context.Context, opts ExportOptions, w io.Writer) 
 	bundleName := fmt.Sprintf("%s-%s-%s",
 		string(opts.Scope),
 		uuidShort(opts.ScopeID),
-		time.Now().Format("20060102-150405"),
+		time.Now().UTC().Format("20060102-150405"),
 	)
 
 	gzWriter := gzip.NewWriter(w)

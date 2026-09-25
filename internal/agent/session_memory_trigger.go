@@ -49,7 +49,7 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 	// Create extractor
 	extractor := NewSessionMemoryExtractor(
 		h.deps.ChatModel,
-		h.deps.SessionMemoryRepo,
+		h.deps.MemoryRepo,
 		turnagent.CumulativeTokenCounter,
 		h.logger,
 		h.noThinkingOptions(),  // disable thinking to save tokens

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -157,23 +158,33 @@ func (r *memoryRepo) Search(ctx context.Context, scope memory.ScopeType, scopeID
 	if limit <= 0 {
 		limit = 20
 	}
-	likeQuery := "%" + escapeLikePattern(query) + "%"
+
+	// Split query into words for OR-based matching.
+	// "saveMemory tool test" matches memories containing ANY of these words.
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return []*memory.Memory{}, nil
+	}
 
 	var memories []*memory.Memory
 	db := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("scope = ? AND scope_id = ?", scope, scopeID)
 
-	// Choose case-insensitive pattern matching based on database dialect.
-	switch getDialectName(db) {
-	case "sqlite":
-		// SQLite LIKE is case-insensitive for ASCII by default.
-		db = db.Where("title LIKE ? OR content LIKE ? OR description LIKE ?",
-			likeQuery, likeQuery, likeQuery)
-	default:
-		// PostgreSQL uses ILIKE for case-insensitive matching.
-		db = db.Where("title ILIKE ? OR content ILIKE ? OR description ILIKE ?",
-			likeQuery, likeQuery, likeQuery)
+	// Build word-matching conditions wrapped in parentheses to ensure correct SQL precedence:
+	// WHERE scope = ? AND scope_id = ? AND (word1_matches OR word2_matches OR ...)
+	isSQLite := getDialectName(db) == "sqlite"
+	var wordConditions []string
+	var wordArgs []any
+	for _, word := range words {
+		likeQuery := "%" + escapeLikePattern(word) + "%"
+		if isSQLite {
+			wordConditions = append(wordConditions, "(title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')")
+		} else {
+			wordConditions = append(wordConditions, "(title ILIKE ? OR content ILIKE ? OR description ILIKE ?)")
+		}
+		wordArgs = append(wordArgs, likeQuery, likeQuery, likeQuery)
 	}
+	db = db.Where("("+strings.Join(wordConditions, " OR ")+")", wordArgs...)
 
 	err := db.Order("updated_at DESC").Limit(limit).Find(&memories).Error
 	if err != nil {
@@ -238,6 +249,10 @@ func (r *memoryRepo) GetLinked(ctx context.Context, id uuid.UUID, relation strin
 
 func (r *memoryRepo) CreateLink(ctx context.Context, link *memory.MemoryLink) error {
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(link).Error; err != nil {
+		if strings.Contains(err.Error(), "duplicate key") ||
+			strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return fmt.Errorf("create memory link: %w", memory.ErrDuplicateLink)
+		}
 		return fmt.Errorf("create memory link: %w", err)
 	}
 	return nil

@@ -1,10 +1,15 @@
 package memory
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // Formatter formats Memory objects into text for various purposes.
@@ -45,7 +50,7 @@ func (f *Formatter) FormatForInjection(memories []*Memory, language string) stri
 
 	var sb strings.Builder
 	sb.WriteString("<system-reminder>\n")
-	sb.WriteString("## Session Memory (Current Session)\n\n")
+	sb.WriteString("## Memory (Current Session)\n\n")
 	sb.WriteString("Key information from this session:\n\n")
 
 	for _, memType := range typeOrder {
@@ -92,7 +97,7 @@ func (f *Formatter) FormatForSummary(memories []*Memory) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("# Session Memory\n\n")
+	sb.WriteString("# Memory Summary\n\n")
 	sb.WriteString("This is a summary of the current session, extracted from the conversation history.\n\n")
 
 	// Type order and display names — covers all ValidMemoryTypes.
@@ -161,8 +166,13 @@ func writeProvenanceBlock(sb *strings.Builder, metadata map[string]any) {
 	for _, src := range sources {
 		if s, ok := src.(map[string]any); ok {
 			sb.WriteString("  - \n")
-			for k, v := range s {
-				fmt.Fprintf(sb, "    %s: %v\n", k, v)
+			keys := make([]string, 0, len(s))
+			for k := range s {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Fprintf(sb, "    %s: %v\n", k, s[k])
 			}
 		}
 	}
@@ -188,8 +198,13 @@ func writeTrustBlock(sb *strings.Builder, metadata map[string]any, createdAt tim
 	for _, v := range verified {
 		if vMap, ok := v.(map[string]any); ok {
 			sb.WriteString("  - \n")
-			for k, val := range vMap {
-				fmt.Fprintf(sb, "    %s: %v\n", k, val)
+			keys := make([]string, 0, len(vMap))
+			for k := range vMap {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Fprintf(sb, "    %s: %v\n", k, vMap[k])
 			}
 		}
 	}
@@ -219,7 +234,10 @@ func (f *Formatter) FormatForExport(m *Memory) string {
 	// Parse Metadata
 	var metadata map[string]any
 	if m.Metadata != "" {
-		_ = json.Unmarshal([]byte(m.Metadata), &metadata)
+		if err := json.Unmarshal([]byte(m.Metadata), &metadata); err != nil {
+			logger.Warn(context.Background(), "FormatForExport: failed to parse metadata",
+				zap.String("memory_id", m.ID.String()), zap.Error(err))
+		}
 	}
 
 	// YAML frontmatter
@@ -234,7 +252,7 @@ func (f *Formatter) FormatForExport(m *Memory) string {
 	if len(m.Tags) > 0 {
 		sb.WriteString("tags:\n")
 		for _, tag := range m.Tags {
-			fmt.Fprintf(&sb, "  - %s\n", tag)
+			fmt.Fprintf(&sb, "  - %s\n", yamlQuote(tag))
 		}
 	}
 	if m.Resource != "" {

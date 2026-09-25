@@ -14,6 +14,7 @@ import (
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
+	"github.com/rtc-agent/server/pkg/memory"
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"github.com/google/uuid"
@@ -80,7 +81,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		}
 
 		// Delete session memories (soft delete; they have served their purpose for compression).
-		if err := h.deps.Deps.SessionMemoryRepo.DeleteBySession(txCtx, session.ID); err != nil {
+		if err := h.deps.Deps.MemoryRepo.DeleteByScope(txCtx, memory.ScopeSession, session.ID); err != nil {
 			// Non-fatal: log but don't block session close.
 			logger.Warn(ctx, "[CloseSession] failed to delete session memories (non-fatal)",
 				zap.String("session", session.ID.String()),

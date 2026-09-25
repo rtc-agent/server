@@ -522,10 +522,10 @@ func TestMemoryRepo_Search(t *testing.T) {
 	assert.Len(t, results, 1)
 	assert.Equal(t, "Database Choice", results[0].Title)
 
-	// Search by description
+	// Search by description (word-level OR matching: "auth" OR "module")
 	results, err = repo.Search(ctx, memory.ScopeSession, sessionID, "auth module", 10)
 	require.NoError(t, err)
-	assert.Len(t, results, 1)
+	assert.Len(t, results, 2) // "Authentication Flow" (auth) + "Auth Testing" (auth + module)
 
 	// Search with limit
 	results, err = repo.Search(ctx, memory.ScopeSession, sessionID, "auth", 1)

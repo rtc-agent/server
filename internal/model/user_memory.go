@@ -23,8 +23,8 @@ type UserMemory struct {
 	Content     string  `gorm:"type:text;not null" json:"content"`
 	Description *string `gorm:"size:500" json:"description,omitempty"` // one-line description for retrieval
 
-	// Tags for keyword matching
-	Tags StringArray `gorm:"type:text[]" json:"tags,omitempty"`
+	// Tags for keyword matching (stored as JSONB array)
+	Tags StringArray `gorm:"type:jsonb" json:"tags,omitempty"`
 
 	// Metadata
 	Metadata        JSONObject `gorm:"type:jsonb;default:'{}'" json:"metadata"`

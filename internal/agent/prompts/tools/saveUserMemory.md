@@ -1,1 +1,0 @@
-Save persistent user-level memory that persists across sessions. Use this to remember user preferences, project details, feedback, and references. Categories: user (about the user), feedback (how to work with user), project (ongoing work), reference (external resources). For feedback and project categories, content MUST include '**Why:**' and '**How to apply:**' sections.

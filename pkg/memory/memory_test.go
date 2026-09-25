@@ -398,7 +398,7 @@ func TestFormatter_FormatForSummary_Basic(t *testing.T) {
 
 	result := f.FormatForSummary(memories)
 
-	assert.Contains(t, result, "# Session Memory")
+	assert.Contains(t, result, "# Memory Summary")
 	assert.Contains(t, result, "## Current Context")
 	assert.Contains(t, result, "### Current task")
 	assert.Contains(t, result, "Building memory system")
@@ -534,6 +534,36 @@ func TestFormatter_FormatForSummary_UnknownType(t *testing.T) {
 	assert.Contains(t, result, "## Current Context")
 	assert.Contains(t, result, "## Other")
 	assert.Contains(t, result, "### Unknown")
+}
+
+func TestFormatter_FormatForInjection_NoSessionMemoryLeak(t *testing.T) {
+	f := NewFormatter()
+	memories := []*Memory{
+		newTestMemory("context", "Working on auth", "Implementing JWT authentication"),
+		newTestMemory("decision", "Use RS256", "Chose RS256 for token signing"),
+		newTestMemory("user", "Engineer", "Backend developer"),
+		newTestMemory("feedback", "Be terse", "Short answers please"),
+	}
+
+	result := f.FormatForInjection(memories, "en")
+
+	assert.NotContains(t, result, "Session Memory",
+		"FormatForInjection output must not contain 'Session Memory' (P1-1 fix)")
+}
+
+func TestFormatter_FormatForSummary_NoSessionMemoryLeak(t *testing.T) {
+	f := NewFormatter()
+	memories := []*Memory{
+		newTestMemory("context", "Current task", "Building memory system"),
+		newTestMemory("decision", "Use GORM", "For database access"),
+		newTestMemory("user", "Engineer", "Backend developer"),
+		newTestMemory("feedback", "Be terse", "Short answers please"),
+	}
+
+	result := f.FormatForSummary(memories)
+
+	assert.NotContains(t, result, "Session Memory",
+		"FormatForSummary output must not contain 'Session Memory' (P1-1 fix)")
 }
 
 func TestFormatter_FormatForExport_YAMLSpecialChars(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/pkg/memory"
 )
 
 // SessionMemoryAttachment injects session memories into LLM context.
@@ -36,12 +37,11 @@ func (a *SessionMemoryAttachment) Name() string {
 // - No session memories exist
 // - Query fails
 //
-// The output is formatted using the existing formatSessionMemoriesForInjection
-// function (defined in session_memory_compact.go), which groups memories by
-// category and formats them as a system reminder.
+// The output is formatted using memory.NewFormatter().FormatForInjection,
+// which groups memories by type and formats them as a system reminder.
 func (a *SessionMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, userID uuid.UUID) (string, error) {
 	// Query recent session memories for injection
-	memories, err := a.helpers.deps.SessionMemoryRepo.ListRecentForInjection(ctx, sessionID, 5, 5000)
+	memories, err := a.helpers.deps.MemoryRepo.ListRecentForInjection(ctx, memory.ScopeSession, sessionID, 5, 5000)
 	if err != nil {
 		return "", fmt.Errorf("query session memories: %w", err)
 	}
@@ -50,6 +50,6 @@ func (a *SessionMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID
 		return "", nil
 	}
 
-	// Format for injection (reuses existing formatter)
-	return formatSessionMemoriesForInjection(memories), nil
+	// Format for injection using the unified memory formatter
+	return memory.NewFormatter().FormatForInjection(memories, "en"), nil
 }

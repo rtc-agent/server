@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/callbacks"
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -13,9 +14,8 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/stringutil"
-	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	loggerpkg "github.com/rtc-agent/server/pkg/logger"
+	"github.com/rtc-agent/server/pkg/memory"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -31,7 +31,7 @@ var sessionMemoryExtractPrompt string
 //   - token growth >= 5,000 AND last assistant turn has no tool calls (natural conversation breakpoint)
 type SessionMemoryExtractor struct {
 	chatModel    einomodel.ToolCallingChatModel
-	memoryRepo   repo.SessionMemoryRepo
+	memoryRepo   memory.Repository
 	tokenCounter turnagent.TokenCounterFunc
 	logger       turnagent.Logger
 
@@ -50,7 +50,7 @@ type SessionMemoryExtractor struct {
 // NewSessionMemoryExtractor creates a SessionMemoryExtractor.
 func NewSessionMemoryExtractor(
 	chatModel einomodel.ToolCallingChatModel,
-	memoryRepo repo.SessionMemoryRepo,
+	memoryRepo memory.Repository,
 	tokenCounter turnagent.TokenCounterFunc,
 	logger turnagent.Logger,
 	noThinkingOptions []einomodel.Option,
@@ -150,7 +150,7 @@ func (e *SessionMemoryExtractor) ExtractIfNeeded(
 	})
 
 	// Query existing session memories (to avoid duplicate extraction).
-	existingMemories, err := e.memoryRepo.ListBySession(ctx, sessionID, 50)
+	existingMemories, err := e.memoryRepo.ListByScope(ctx, memory.ScopeSession, sessionID, memory.ListOptions{Limit: 50})
 	if err != nil {
 		return false, state, fmt.Errorf("list existing memories: %w", err)
 	}
@@ -199,8 +199,8 @@ func (e *SessionMemoryExtractor) extractMemories(
 	ctx context.Context,
 	sessionID uuid.UUID,
 	messages []*schema.Message,
-	existingMemories []*model.SessionMemory,
-) ([]*model.SessionMemory, error) {
+	existingMemories []*memory.Memory,
+) ([]*memory.Memory, error) {
 	// Set sessionID in context (may already be set by caller, but ensure it's there
 	// for the token callback handler to find).
 	ctx = turnagent.WithSessionID(ctx, sessionID.String())
@@ -273,27 +273,35 @@ func (e *SessionMemoryExtractor) extractMemories(
 		return nil, fmt.Errorf("unmarshal tool args: %w", err)
 	}
 
-	// Convert to model.SessionMemory.
-	var memories []*model.SessionMemory
-	addMemories := func(category string, items []memoryItem) {
+	// Convert to memory.Memory.
+	var memories []*memory.Memory
+	addMemories := func(memType string, items []memoryItem) {
 		for _, item := range items {
 			tokenCount := estimateMemoryTokens(item.Content)
-			mem := &model.SessionMemory{
-				SessionID:  sessionID,
-				Category:   category,
+			mem := &memory.Memory{
+				Scope:      memory.ScopeSession,
+				ScopeID:    sessionID,
+				Type:       memType,
 				Title:      item.Title,
 				Content:    item.Content,
-				Metadata:   item.Metadata,
-				TokenCount: &tokenCount,
+				Timestamp:  time.Now(),
+				TokenCount: tokenCount,
+			}
+			// Convert metadata map to JSONBString
+			if len(item.Metadata) > 0 {
+				metadataJSON, err := json.Marshal(item.Metadata)
+				if err == nil {
+					mem.Metadata = memory.JSONBString(metadataJSON)
+				}
 			}
 			memories = append(memories, mem)
 		}
 	}
-	addMemories(model.SessionMemoryCategoryDecision, args.Decision)
-	addMemories(model.SessionMemoryCategoryContext, args.Context)
-	addMemories(model.SessionMemoryCategoryProgress, args.Progress)
-	addMemories(model.SessionMemoryCategoryIssue, args.Issue)
-	addMemories(model.SessionMemoryCategoryLearnings, args.Learnings)
+	addMemories("decision", args.Decision)
+	addMemories("context", args.Context)
+	addMemories("progress", args.Progress)
+	addMemories("issue", args.Issue)
+	addMemories("learnings", args.Learnings)
 
 	return memories, nil
 }
@@ -370,7 +378,7 @@ type memoryItem struct {
 // buildExtractPrompt builds the extraction prompt.
 func (e *SessionMemoryExtractor) buildExtractPrompt(
 	messages []*schema.Message,
-	existingMemories []*model.SessionMemory,
+	existingMemories []*memory.Memory,
 ) string {
 	var sb strings.Builder
 
@@ -383,7 +391,7 @@ func (e *SessionMemoryExtractor) buildExtractPrompt(
 		sb.WriteString("# Existing Session Memories\n\n")
 		sb.WriteString("The following memories have already been extracted. Do NOT duplicate them, only extract NEW information:\n\n")
 		for _, mem := range existingMemories {
-			fmt.Fprintf(&sb, "- **[%s]** %s: %s\n", mem.Category, mem.Title, stringutil.TruncateByRune(mem.Content, 200))
+			fmt.Fprintf(&sb, "- **[%s]** %s: %s\n", mem.Type, mem.Title, stringutil.TruncateByRune(mem.Content, 200))
 		}
 		sb.WriteString("\n")
 	}

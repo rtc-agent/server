@@ -15,7 +15,10 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
+	"github.com/rtc-agent/server/pkg/memory"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"github.com/rtc-agent/server/pkg/webfetch"
+	"github.com/rtc-agent/server/pkg/websearch"
 
 	"github.com/cloudwego/eino/callbacks"
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -44,8 +47,7 @@ type Dependencies struct {
 	RtcRepo           repo.RtcRepo
 	GoalRepo          repo.GoalRepo
 	LoopRepo          repo.LoopRepo
-	SessionMemoryRepo repo.SessionMemoryRepo
-	UserMemoryRepo    repo.UserMemoryRepo
+	MemoryRepo        memory.Repository // unified Memory storage (OKF spec)
 	UpdatePublisher   Publisher
 
 	// ChatModel is the eino ChatModel for LLM interactions.
@@ -78,6 +80,14 @@ type Dependencies struct {
 	// Actual implementation is provided in batch 3; nil checks are used
 	// in batch 2 for graceful degradation.
 	TaskScheduler TaskScheduler
+
+	// WebSearchManager provides web search capabilities.
+	// Optional: if nil, web search tool will not be available.
+	WebSearchManager *websearch.WebSearchManager
+
+	// WebFetchManager provides web page fetching capabilities.
+	// Optional: if nil, web fetch tool will not be available.
+	WebFetchManager *webfetch.WebFetchManager
 }
 
 // TaskScheduler is the interface for delayed task scheduling.

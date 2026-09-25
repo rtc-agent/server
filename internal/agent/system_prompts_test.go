@@ -28,8 +28,7 @@ func TestBuildDefaultSystemPrompt(t *testing.T) {
 		"Language:",
 		"Principles:",
 		"Memory System:",
-		"Session Memory",
-		"User Memory",
+		"Memory",
 		"Todo List",
 		"todoWrite",
 	}

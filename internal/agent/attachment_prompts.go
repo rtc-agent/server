@@ -1,37 +1,16 @@
-// attachment_prompts.go — Context attachment templates.
-//
-// Attachments are content blocks injected into the LLM context at the start of
-// each turn (e.g. session memories, user memories). These templates
-// format that content as Markdown or XML for consumption by the model.
-//
-// Note: formatTodoList is still defined here and used by todoWriteTool to
-// produce the tool_result content, even though TodoList is no longer an
-// attachment (it is persisted as tool_result messages via publishToolMessages).
-//
-// Naming convention:
-//   - Variables: <name>Tmpl (e.g. todoListTmpl, sessionMemoryInjectionTmpl)
-//   - Accessors: format<Name>(args...) string (e.g. formatTodoList, formatSessionMemoryInjection)
-//   - Files: prompts/attachments/<name>.md.tmpl (all use text/template syntax)
 package agent
 
 import (
 	_ "embed"
-	"sort"
 	"strings"
 
-	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/agent/templateutil"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/pkg/memory"
 )
 
 //go:embed prompts/attachments/todo-list.md.tmpl
 var todoListTmpl string
-
-//go:embed prompts/attachments/session-memory-injection.md.tmpl
-var sessionMemoryInjectionTmpl string
-
-//go:embed prompts/attachments/session-memory-summary.md.tmpl
-var sessionMemorySummaryTmpl string
 
 //go:embed prompts/attachments/user-memory-wrapper.md.tmpl
 var userMemoryWrapperTmpl string
@@ -68,123 +47,10 @@ func formatTodoList(todos []model.TodoItem) string {
 	})
 }
 
-// injectionItem is a flat view of a single memory for template rendering.
-type injectionItem struct {
-	Category string
-	Title    string
-	Content  string
-}
-
-// summaryCategory carries a display name and its grouped memory items.
-type summaryCategory struct {
-	DisplayName string
-	Items       []*model.SessionMemory
-}
-
 // userMemoryCategory carries a localized label and its grouped memory items.
 type userMemoryCategory struct {
 	Label string
-	Items []*model.UserMemory
-}
-
-// formatSessionMemoryInjection renders session memories as a system-reminder
-// block for injection at the start of each turn.
-//
-// Each category shows at most 3 items, and content is truncated to 200 chars.
-func formatSessionMemoryInjection(memories []*model.SessionMemory) string {
-	if len(memories) == 0 {
-		return ""
-	}
-
-	grouped := make(map[string][]*model.SessionMemory)
-	for _, mem := range memories {
-		grouped[mem.Category] = append(grouped[mem.Category], mem)
-	}
-
-	// Collect items per category, capped at 3 and truncated.
-	var items []injectionItem
-	categories := []string{
-		model.SessionMemoryCategoryContext,
-		model.SessionMemoryCategoryProgress,
-		model.SessionMemoryCategoryDecision,
-		model.SessionMemoryCategoryIssue,
-		model.SessionMemoryCategoryLearnings,
-	}
-	for _, cat := range categories {
-		mems, ok := grouped[cat]
-		if !ok || len(mems) == 0 {
-			continue
-		}
-		limit := 3
-		if len(mems) < limit {
-			limit = len(mems)
-		}
-		for i := 0; i < limit; i++ {
-			items = append(items, injectionItem{
-				Category: cat,
-				Title:    mems[i].Title,
-				Content:  stringutil.TruncateByByte(mems[i].Content, 200),
-			})
-		}
-	}
-
-	if len(items) == 0 {
-		return ""
-	}
-
-	return templateutil.MustRender("session-memory-injection", sessionMemoryInjectionTmpl, map[string]any{
-		"Items": items,
-	})
-}
-
-// buildSummaryFromMemoriesTmpl renders session memories as a Markdown summary,
-// grouped by category with newest items first within each group.
-func buildSummaryFromMemoriesTmpl(memories []*model.SessionMemory) string {
-	if len(memories) == 0 {
-		return ""
-	}
-
-	grouped := make(map[string][]*model.SessionMemory)
-	for _, mem := range memories {
-		grouped[mem.Category] = append(grouped[mem.Category], mem)
-	}
-
-	// Sort each group by created_at descending (newest first).
-	for _, items := range grouped {
-		sortByCreatedAtDesc(items)
-	}
-
-	// Build ordered category list with display names.
-	categories := []struct {
-		key         string
-		displayName string
-	}{
-		{model.SessionMemoryCategoryContext, "Current Context"},
-		{model.SessionMemoryCategoryProgress, "Progress"},
-		{model.SessionMemoryCategoryDecision, "Decisions"},
-		{model.SessionMemoryCategoryIssue, "Issues & Solutions"},
-		{model.SessionMemoryCategoryLearnings, "Learnings"},
-	}
-
-	var cats []summaryCategory
-	for _, cat := range categories {
-		items, ok := grouped[cat.key]
-		if !ok || len(items) == 0 {
-			continue
-		}
-		cats = append(cats, summaryCategory{
-			DisplayName: cat.displayName,
-			Items:       items,
-		})
-	}
-
-	if len(cats) == 0 {
-		return ""
-	}
-
-	return templateutil.MustRender("session-memory-summary", sessionMemorySummaryTmpl, map[string]any{
-		"Categories": cats,
-	})
+	Items []*memory.Memory
 }
 
 // formatUserMemoryWrapper renders the user memory XML wrapper with preamble
@@ -192,6 +58,8 @@ func buildSummaryFromMemoriesTmpl(memories []*model.SessionMemory) string {
 //
 // The inner content (preamble + category blocks) is pre-formatted in Go so that
 // the template stays trivial and the exact newline layout is easy to verify.
+// The output is wrapped in <persistent_memory> tags to avoid leaking the
+// internal "user memory" naming to the agent.
 func formatUserMemoryWrapper(lang string, categories []userMemoryCategory) string {
 	preamble := userMemoryPreambleText(lang)
 	content := buildUserMemoryContent(preamble, categories)
@@ -211,7 +79,7 @@ func formatUserMemoryWrapper(lang string, categories []userMemoryCategory) strin
 //	\n
 //
 // One blank line separates the preamble from the first category, adjacent
-// categories, and the last category from the closing </user_memory> tag.
+// categories, and the last category from the closing </persistent_memory> tag.
 func buildUserMemoryContent(preamble string, categories []userMemoryCategory) string {
 	var sb strings.Builder
 	sb.WriteString(preamble)
@@ -261,12 +129,4 @@ func userMemoryLabels(lang string) map[string]string {
 			model.UserMemoryCategoryReference: "References",
 		}
 	}
-}
-
-// sortByCreatedAtDesc sorts session memories by created_at in descending order
-// (newest first).
-func sortByCreatedAtDesc(items []*model.SessionMemory) {
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].CreatedAt.After(items[j].CreatedAt)
-	})
 }

@@ -6,6 +6,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestUserMemoryAttachment_Name(t *testing.T) {
+	// P1-2 fix: MemoryAttachment.Name() must return "Memory", not "Session Memory"
+	// or "User Memory". The agent should only see a generic "Memory" label.
+	a := &UserMemoryAttachment{}
+	assert.Equal(t, "Memory", a.Name(),
+		"Name() must return 'Memory' (P1-2 fix: no 'Session Memory' or 'User Memory' leak)")
+}
+
 func TestUserMemoryPreamble(t *testing.T) {
 	tests := []struct {
 		name     string

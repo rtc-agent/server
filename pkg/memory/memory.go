@@ -58,6 +58,36 @@ func IsValidMemoryType(t string) bool {
 	return false
 }
 
+// ValidSessionMemoryTypes lists memory types valid for session scope.
+var ValidSessionMemoryTypes = []string{
+	"decision", "context", "progress", "issue", "learnings",
+}
+
+// IsValidSessionMemoryType reports whether the given type is valid for session scope.
+func IsValidSessionMemoryType(t string) bool {
+	for _, v := range ValidSessionMemoryTypes {
+		if v == t {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidUserMemoryTypes lists memory types valid for user scope.
+var ValidUserMemoryTypes = []string{
+	"user", "feedback", "project", "reference",
+}
+
+// IsValidUserMemoryType reports whether the given type is valid for user scope.
+func IsValidUserMemoryType(t string) bool {
+	for _, v := range ValidUserMemoryTypes {
+		if v == t {
+			return true
+		}
+	}
+	return false
+}
+
 // Memory is an OKF-compatible knowledge unit.
 type Memory struct {
 	ID uuid.UUID `json:"id" gorm:"type:uuid;primaryKey"`

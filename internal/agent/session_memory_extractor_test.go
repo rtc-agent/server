@@ -11,8 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/pkg/memory"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -27,46 +26,55 @@ func (noopLogger) Info(context.Context, string, map[string]any)  {}
 func (noopLogger) Warn(context.Context, string, map[string]any)  {}
 func (noopLogger) Error(context.Context, string, map[string]any) {}
 
-// mockSessionMemoryRepo is a minimal mock that only implements ListBySession;
+// mockMemoryRepo is a minimal mock that only implements ListByScope;
 // other methods panic to surface unexpected usage.
-type mockSessionMemoryRepo struct {
-	listBySessionFn func(ctx context.Context, sessionID uuid.UUID, limit int) ([]*model.SessionMemory, error)
+type mockMemoryRepo struct {
+	listByScopeFn func(ctx context.Context, scope memory.ScopeType, scopeID uuid.UUID, opts memory.ListOptions) ([]*memory.Memory, error)
 }
 
-var _ repo.SessionMemoryRepo = (*mockSessionMemoryRepo)(nil)
+var _ memory.Repository = (*mockMemoryRepo)(nil)
 
-func (m *mockSessionMemoryRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, limit int) ([]*model.SessionMemory, error) {
-	if m.listBySessionFn != nil {
-		return m.listBySessionFn(ctx, sessionID, limit)
+func (m *mockMemoryRepo) ListByScope(ctx context.Context, scope memory.ScopeType, scopeID uuid.UUID, opts memory.ListOptions) ([]*memory.Memory, error) {
+	if m.listByScopeFn != nil {
+		return m.listByScopeFn(ctx, scope, scopeID, opts)
 	}
 	return nil, nil
 }
 
-func (*mockSessionMemoryRepo) Create(context.Context, *model.SessionMemory) error {
+func (*mockMemoryRepo) Create(context.Context, *memory.Memory) error {
 	panic("not implemented")
 }
-func (*mockSessionMemoryRepo) BatchCreate(context.Context, []*model.SessionMemory) error {
+func (*mockMemoryRepo) BatchCreate(context.Context, []*memory.Memory) error {
 	panic("not implemented")
 }
-func (*mockSessionMemoryRepo) Update(context.Context, uuid.UUID, map[string]any) error {
+func (*mockMemoryRepo) Update(context.Context, uuid.UUID, map[string]any) error {
 	panic("not implemented")
 }
-func (*mockSessionMemoryRepo) Delete(context.Context, uuid.UUID) error {
+func (*mockMemoryRepo) Delete(context.Context, uuid.UUID) error {
 	panic("not implemented")
 }
-func (*mockSessionMemoryRepo) GetByID(context.Context, uuid.UUID) (*model.SessionMemory, error) {
+func (*mockMemoryRepo) GetByID(context.Context, uuid.UUID) (*memory.Memory, error) {
 	panic("not implemented")
 }
-func (*mockSessionMemoryRepo) ListByCategory(context.Context, uuid.UUID, string, int) ([]*model.SessionMemory, error) {
+func (*mockMemoryRepo) ListRecentForInjection(context.Context, memory.ScopeType, uuid.UUID, int, int) ([]*memory.Memory, error) {
 	panic("not implemented")
 }
-func (*mockSessionMemoryRepo) ListRecentForInjection(context.Context, uuid.UUID, int, int) ([]*model.SessionMemory, error) {
+func (*mockMemoryRepo) Search(context.Context, memory.ScopeType, uuid.UUID, string, int) ([]*memory.Memory, error) {
 	panic("not implemented")
 }
-func (*mockSessionMemoryRepo) DeleteBySession(context.Context, uuid.UUID) error {
+func (*mockMemoryRepo) DeleteByScope(context.Context, memory.ScopeType, uuid.UUID) error {
 	panic("not implemented")
 }
-func (*mockSessionMemoryRepo) CountTokensBySession(context.Context, uuid.UUID) (int, error) {
+func (*mockMemoryRepo) GetLinked(context.Context, uuid.UUID, string) ([]*memory.Memory, error) {
+	panic("not implemented")
+}
+func (*mockMemoryRepo) CreateLink(context.Context, *memory.MemoryLink) error {
+	panic("not implemented")
+}
+func (*mockMemoryRepo) DeleteLink(context.Context, uuid.UUID, uuid.UUID) error {
+	panic("not implemented")
+}
+func (*mockMemoryRepo) CountTokensByScope(context.Context, memory.ScopeType, uuid.UUID) (int, error) {
 	panic("not implemented")
 }
 
@@ -295,8 +303,8 @@ func TestExtractIfNeeded(t *testing.T) {
 		assistantWithToolCalls(1),
 	}
 
-	mockRepo := &mockSessionMemoryRepo{
-		listBySessionFn: func(ctx context.Context, sid uuid.UUID, limit int) ([]*model.SessionMemory, error) {
+	mockRepo := &mockMemoryRepo{
+		listByScopeFn: func(ctx context.Context, scope memory.ScopeType, scopeID uuid.UUID, opts memory.ListOptions) ([]*memory.Memory, error) {
 			return nil, nil
 		},
 	}

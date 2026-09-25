@@ -176,29 +176,31 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 		},
 	}
 
-	// Add Session Memory tools
-	if saveMemoryTool := h.createSaveSessionMemoryTool(session, tid); saveMemoryTool != nil {
-		tools = append(tools, saveMemoryTool)
-	}
-	if listMemoriesTool := h.createListSessionMemoriesTool(session, tid); listMemoriesTool != nil {
-		tools = append(tools, listMemoriesTool)
-	}
+	// Add Memory tools
 	if searchMemoryTool := h.createSearchMemoryTool(session, tid); searchMemoryTool != nil {
 		tools = append(tools, searchMemoryTool)
 	}
+	if saveMemoryTool := h.createSaveMemoryTool(session, tid); saveMemoryTool != nil {
+		tools = append(tools, saveMemoryTool)
+	}
+	if updateMemoryTool := h.createUpdateMemoryTool(session, tid); updateMemoryTool != nil {
+		tools = append(tools, updateMemoryTool)
+	}
+	if deleteMemoryTool := h.createDeleteMemoryTool(session, tid); deleteMemoryTool != nil {
+		tools = append(tools, deleteMemoryTool)
+	}
+	if listMemoriesTool := h.createListMemoriesTool(session, tid); listMemoriesTool != nil {
+		tools = append(tools, listMemoriesTool)
+	}
 
-	// Add User Memory tools
-	if saveUserMemoryTool := h.createSaveUserMemoryTool(session, tid); saveUserMemoryTool != nil {
-		tools = append(tools, saveUserMemoryTool)
+	// Add Web Search tool (if configured)
+	if webSearchTool := h.createWebSearchTool(session, tid); webSearchTool != nil {
+		tools = append(tools, webSearchTool)
 	}
-	if updateUserMemoryTool := h.createUpdateUserMemoryTool(session, tid); updateUserMemoryTool != nil {
-		tools = append(tools, updateUserMemoryTool)
-	}
-	if deleteUserMemoryTool := h.createDeleteUserMemoryTool(session, tid); deleteUserMemoryTool != nil {
-		tools = append(tools, deleteUserMemoryTool)
-	}
-	if listUserMemoryTool := h.createListUserMemoryTool(session, tid); listUserMemoryTool != nil {
-		tools = append(tools, listUserMemoryTool)
+
+	// Add Web Fetch tool (if configured)
+	if webFetchTool := h.createWebFetchTool(session, tid); webFetchTool != nil {
+		tools = append(tools, webFetchTool)
 	}
 
 	// Slash-command framework: collect tools from ALL registered commands.

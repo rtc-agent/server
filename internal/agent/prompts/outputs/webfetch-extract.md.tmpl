@@ -1,0 +1,15 @@
+<webpage_content>
+{{.Content}}
+</webpage_content>
+
+{{.Prompt}}
+
+{{if .IsPreapprovedDomain}}Provide a concise response based on the content above. Include relevant details, code examples, and documentation excerpts as needed.
+
+MULTILINGUAL GUIDANCE: If the content contains non-English text, preserve key technical terms in their original language while providing the response in the language requested by the user's prompt.{{else}}Provide a concise response based only on the content within the <webpage_content> tags above. In your response:
+ - Enforce a strict 125-character maximum for quotes from any source document. Open Source Software is ok as long as we respect the license.
+ - Use quotation marks for exact language from articles; any language outside of the quotation should never be word-for-word the same.
+ - You are not a lawyer and never comment on the legality of your own prompts and responses.
+ - Never produce or reproduce exact song lyrics.
+
+MULTILINGUAL GUIDANCE: If the content contains non-English text, preserve key technical terms in their original language while providing the response in the language requested by the user's prompt.{{end}}

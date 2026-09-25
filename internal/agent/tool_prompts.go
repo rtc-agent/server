@@ -86,20 +86,26 @@ var saveSessionMemoryDesc string
 //go:embed prompts/tools/listSessionMemories.md
 var listSessionMemoriesDesc string
 
-//go:embed prompts/tools/saveUserMemory.md
-var saveUserMemoryDesc string
+//go:embed prompts/tools/saveMemory.md
+var saveMemoryDesc string
 
-//go:embed prompts/tools/updateUserMemory.md
-var updateUserMemoryDesc string
+//go:embed prompts/tools/updateMemory.md
+var updateMemoryDesc string
 
-//go:embed prompts/tools/deleteUserMemory.md
-var deleteUserMemoryDesc string
+//go:embed prompts/tools/deleteMemory.md
+var deleteMemoryDesc string
 
-//go:embed prompts/tools/listUserMemory.md
-var listUserMemoryDesc string
+//go:embed prompts/tools/listMemories.md
+var listMemoriesDesc string
 
 //go:embed prompts/tools/searchMemory.md
 var searchMemoryDesc string
+
+//go:embed prompts/tools/webSearch.md
+var webSearchDesc string
+
+//go:embed prompts/tools/webFetch.md
+var webFetchDesc string
 
 //go:embed prompts/tools/sendMessageToSubAgent.md
 var sendMessageToSubAgentDesc string

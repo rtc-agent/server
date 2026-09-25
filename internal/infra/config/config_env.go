@@ -31,6 +31,15 @@ func expandEnvVars(cfg *Config) {
 	// Metrics password.
 	cfg.Metrics.Password = expandEnvRef(cfg.Metrics.Password)
 	cfg.Debug.Password = expandEnvRef(cfg.Debug.Password)
+
+	// Web search sensitive fields.
+	cfg.WebSearch.Redis.Password = expandEnvRef(cfg.WebSearch.Redis.Password)
+	for i := range cfg.WebSearch.Providers {
+		cfg.WebSearch.Providers[i].APIKey = expandEnvRef(cfg.WebSearch.Providers[i].APIKey)
+	}
+	for i := range cfg.WebSearch.Proxies {
+		cfg.WebSearch.Proxies[i].URL = expandEnvRef(cfg.WebSearch.Proxies[i].URL)
+	}
 }
 
 // envRefPattern matches environment variable references in ${VAR_NAME} form.

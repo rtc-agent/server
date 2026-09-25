@@ -41,13 +41,12 @@ func (h *MemoriesHandler) RegisterRoutes(mux *http.ServeMux, allowDevBypass bool
 
 // ExportRequest defines the JSON request body for memory export.
 type ExportRequest struct {
-	Scope        string   `json:"scope"`        // "session" | "user" | "global"
-	ScopeID      string   `json:"scopeId"`      // UUID string
-	Format       string   `json:"format"`       // "okf-bundle"
-	Types        []string `json:"types"`        // filter by types
-	Tags         []string `json:"tags"`         // filter by tags
-	IncludeLinks bool     `json:"includeLinks"` // include cross-references
-	IncludeLog   bool     `json:"includeLog"`   // generate log.md
+	Scope      string   `json:"scope"`      // "session" | "user" | "global"
+	ScopeID    string   `json:"scopeId"`    // UUID string
+	Format     string   `json:"format"`     // "okf-bundle"
+	Types      []string `json:"types"`      // filter by types
+	Tags       []string `json:"tags"`       // filter by tags
+	IncludeLog bool     `json:"includeLog"` // generate log.md
 }
 
 // ExportMemories handles POST /api/memories/export.
@@ -151,12 +150,11 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 
 	// Build export options
 	opts := memory.ExportOptions{
-		Scope:        memory.ScopeType(req.Scope),
-		ScopeID:      scopeID,
-		Types:        req.Types,
-		Tags:         req.Tags,
-		IncludeLinks: req.IncludeLinks,
-		IncludeLog:   req.IncludeLog,
+		Scope:      memory.ScopeType(req.Scope),
+		ScopeID:    scopeID,
+		Types:      req.Types,
+		Tags:       req.Tags,
+		IncludeLog: req.IncludeLog,
 	}
 
 	// Create exporter and run export
