@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/leichujun/rtc-agent/server/pkg/proxy"
+	"github.com/rtc-agent/server/pkg/proxy"
 )
 
 // DuckDuckGo JSON API endpoint (same as eino-ext)
@@ -18,9 +18,9 @@ const duckDuckGoSearchURL = "https://links.duckduckgo.com/d.js"
 
 // DuckDuckGoConfig defines DuckDuckGo provider configuration
 type DuckDuckGoConfig struct {
-	MaxResults int           `json:"max_results"` // Default: 10
-	Timeout    time.Duration `json:"timeout"`     // Default: 30s
-	Region     string        `json:"region"`      // e.g., "us-en", "wt-wt"
+	MaxResults int           `mapstructure:"max_results"` // Default: 10
+	Timeout    time.Duration `mapstructure:"timeout"`     // Default: 30s
+	Region     string        `mapstructure:"region"`      // e.g., "us-en", "wt-wt"
 }
 
 // DefaultDuckDuckGoConfig returns sensible defaults

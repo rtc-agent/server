@@ -3,8 +3,8 @@ package webfetch
 import (
 	"time"
 
-	"github.com/leichujun/rtc-agent/server/pkg/circuitbreaker"
-	"github.com/leichujun/rtc-agent/server/pkg/proxy"
+	"github.com/rtc-agent/server/pkg/circuitbreaker"
+	"github.com/rtc-agent/server/pkg/proxy"
 )
 
 // WebFetchConfig holds all configuration for the WebFetchManager.
@@ -29,9 +29,9 @@ type WebFetchConfig struct {
 
 	// LLM extraction.
 	LLMExtractThresholdBytes int           `mapstructure:"llm_extract_threshold"` // bytes threshold to trigger LLM extraction, default 50000
-	LLMCacheTTL             time.Duration `mapstructure:"llm_cache_ttl"`          // LLM result cache TTL, default 1h
-	MaxLLMExtractPerSession int           `mapstructure:"max_llm_per_session"`    // daily LLM extraction limit per session, default 50
-	LLMMaxTokens            int           `mapstructure:"llm_max_tokens"`         // max output tokens for LLM extraction, default 4096
+	LLMCacheTTL              time.Duration `mapstructure:"llm_cache_ttl"`         // LLM result cache TTL, default 1h
+	MaxLLMExtractPerSession  int           `mapstructure:"max_llm_per_session"`   // daily LLM extraction limit per session, default 50
+	LLMMaxTokens             int           `mapstructure:"llm_max_tokens"`        // max output tokens for LLM extraction, default 4096
 
 	// Rate limiting.
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"` // dual-layer rate limiting config
@@ -47,13 +47,6 @@ type WebFetchConfig struct {
 	Proxies            []proxy.ProxyConfig `mapstructure:"proxies"`              // proxy list
 	ProxyHealthURL     string              `mapstructure:"proxy_health_url"`     // URL for proxy health checks
 	ProxyCheckInterval time.Duration       `mapstructure:"proxy_check_interval"` // proxy health check interval
-
-	// Distributed cache sync (Phase 3).
-	// WARNING: This feature is incomplete and non-functional.
-	// See distributed_cache_sync.go for details.
-	CacheSyncEnabled  bool   `mapstructure:"cache_sync_enabled"`  // whether to enable distributed cache sync (default: false, feature incomplete)
-	CacheSyncChannel  string `mapstructure:"cache_sync_channel"`  // Redis Pub/Sub channel for cache sync
-	CacheSyncSourceID string `mapstructure:"cache_sync_source_id"` // unique ID for this instance
 
 	// Security.
 	PreApprovedDomains []string `mapstructure:"pre_approved_domains"` // pre-approved domain list
@@ -88,27 +81,26 @@ func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
 // DefaultWebFetchConfig returns a WebFetchConfig with sensible defaults.
 func DefaultWebFetchConfig() WebFetchConfig {
 	return WebFetchConfig{
-		Enabled:                    false,
-		MaxConcurrency:             20,
-		MaxDomainConcurrency:       5,
-		CacheTTL:                   30 * time.Minute,
-		CacheMaxSize:               1000,
-		MaxURLLength:               2000,
-		MaxContentSize:             10 * 1024 * 1024, // 10MB
-		FetchTimeout:               60 * time.Second,
-		MaxRedirects:               10,
-		LLMExtractThresholdBytes:   50000,
-		LLMCacheTTL:                1 * time.Hour,
-		MaxLLMExtractPerSession:    50,
-		LLMMaxTokens:               4096,
-		RateLimit:                  DefaultRateLimitConfig(),
-		RespectRobotsTxt:           true,
-		RobotsCacheTTL:             24 * time.Hour,
-		CircuitBreaker:             DefaultCircuitBreakerConfig(),
-		AllowedSchemes:             []string{"https", "http"},
-		UserAgent:                  "RTCAgent-WebFetch/1.0",
-		PreApprovedDomains:         defaultPreApprovedDomains(),
-		CacheSyncEnabled:           false, // Feature incomplete, disabled by default
+		Enabled:                  false,
+		MaxConcurrency:           20,
+		MaxDomainConcurrency:     5,
+		CacheTTL:                 30 * time.Minute,
+		CacheMaxSize:             1000,
+		MaxURLLength:             2000,
+		MaxContentSize:           10 * 1024 * 1024, // 10MB
+		FetchTimeout:             60 * time.Second,
+		MaxRedirects:             10,
+		LLMExtractThresholdBytes: 50000,
+		LLMCacheTTL:              1 * time.Hour,
+		MaxLLMExtractPerSession:  50,
+		LLMMaxTokens:             4096,
+		RateLimit:                DefaultRateLimitConfig(),
+		RespectRobotsTxt:         true,
+		RobotsCacheTTL:           24 * time.Hour,
+		CircuitBreaker:           DefaultCircuitBreakerConfig(),
+		AllowedSchemes:           []string{"https", "http"},
+		UserAgent:                "RTCAgent-WebFetch/1.0",
+		PreApprovedDomains:       defaultPreApprovedDomains(),
 	}
 }
 

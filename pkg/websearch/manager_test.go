@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leichujun/rtc-agent/server/pkg/circuitbreaker"
+	"github.com/rtc-agent/server/pkg/circuitbreaker"
 )
 
 // MockProvider implements WebSearchProvider for testing
@@ -118,8 +118,8 @@ func TestCircuitBreaker(t *testing.T) {
 		t.Error("expected Allow() = true in closed state")
 	}
 
-	// Record failures to trigger open
-	for i := 0; i < 6; i++ {
+	// Record failures to trigger open (need at least 10 requests for ReadyToTrip)
+	for i := 0; i < 12; i++ {
 		cb.RecordFailure()
 	}
 

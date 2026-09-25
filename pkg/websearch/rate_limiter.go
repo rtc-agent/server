@@ -6,8 +6,8 @@ import (
 
 // RateLimiterConfig defines rate limiter parameters
 type RateLimiterConfig struct {
-	Rate  float64 `json:"rate"`  // Requests per second
-	Burst int     `json:"burst"` // Burst capacity
+	Rate  float64 `mapstructure:"rate"`  // Requests per second
+	Burst int     `mapstructure:"burst"` // Burst capacity
 }
 
 // DefaultRateLimiterConfig returns sensible defaults

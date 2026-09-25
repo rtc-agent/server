@@ -11,9 +11,9 @@ import (
 
 // RedisConfig defines Redis connection configuration
 type RedisConfig struct {
-	Addr     string `json:"addr"`       // e.g., localhost:6379
-	Password string `json:"password"`
-	DB       int    `json:"db"`
+	Addr     string `mapstructure:"addr"` // e.g., localhost:6379
+	Password string `mapstructure:"password"`
+	DB       int    `mapstructure:"db"`
 }
 
 // DefaultRedisConfig returns sensible defaults
@@ -27,15 +27,15 @@ func DefaultRedisConfig() RedisConfig {
 
 // RedisClient wraps redis.Client with health checking
 type RedisClient struct {
-	client       *redis.Client
-	config       RedisConfig
-	healthy      bool
-	healthMu     sync.RWMutex
-	checkStop    chan struct{}
-	stopOnce     sync.Once
-	startOnce    sync.Once // Prevents multiple Start() calls
-	wg           sync.WaitGroup
-	internalCtx  context.Context
+	client         *redis.Client
+	config         RedisConfig
+	healthy        bool
+	healthMu       sync.RWMutex
+	checkStop      chan struct{}
+	stopOnce       sync.Once
+	startOnce      sync.Once // Prevents multiple Start() calls
+	wg             sync.WaitGroup
+	internalCtx    context.Context
 	internalCancel context.CancelFunc
 }
 

@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/leichujun/rtc-agent/server/pkg/circuitbreaker"
-	"github.com/leichujun/rtc-agent/server/pkg/proxy"
 	"github.com/redis/go-redis/v9"
+	"github.com/rtc-agent/server/pkg/circuitbreaker"
+	"github.com/rtc-agent/server/pkg/proxy"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
@@ -32,7 +32,6 @@ type WebFetchManager struct {
 	singleFlight   *singleflight.Group
 	llmExtractor   LLMExtractor
 	llmResultCache *LLMResultCache
-	cacheSync      *DistributedCacheSync
 	pdfExtractor   *pdfExtractor
 	rateLimiter    *WebFetchRateLimiter
 	robots         *RobotsChecker
@@ -82,12 +81,6 @@ func NewWebFetchManager(
 	// Phase 3: LLM result cache.
 	llmResultCache := NewLLMResultCache(redisClient, config.LLMCacheTTL)
 
-	// Phase 3: Distributed cache sync.
-	var cacheSync *DistributedCacheSync
-	if config.CacheSyncEnabled {
-		cacheSync = NewDistributedCacheSync(redisClient, config.CacheSyncChannel, config.CacheSyncSourceID, logger)
-	}
-
 	m := &WebFetchManager{
 		config:         config,
 		httpClient:     httpClient,
@@ -98,7 +91,6 @@ func NewWebFetchManager(
 		singleFlight:   &singleflight.Group{},
 		llmExtractor:   nil, // Set via SetLLMExtractor after creation.
 		llmResultCache: llmResultCache,
-		cacheSync:      cacheSync,
 		pdfExtractor:   newPDFExtractor(logger),
 		rateLimiter:    rateLimiter,
 		robots:         robots,
@@ -129,26 +121,6 @@ func (m *WebFetchManager) Start(ctx context.Context) error {
 	if m.proxyPool != nil {
 		m.proxyPool.Start()
 	}
-	if m.cacheSync != nil {
-		if err := m.cacheSync.Start(ctx); err != nil {
-			m.logger.Warn("failed to start distributed cache sync", zap.Error(err))
-		} else {
-			m.logger.Warn("distributed cache sync started but is NON-FUNCTIONAL - feature incomplete, see distributed_cache_sync.go")
-			// Register callbacks to sync cache operations from other instances.
-			m.cacheSync.OnSet(func(ctx context.Context, key, value string) {
-				// Sync cache set from other instance.
-				// Note: We need to deserialize the FetchResponse from the value.
-				// For simplicity, we'll skip the actual sync logic here since it requires
-				// the cache implementation details. In production, this would deserialize
-				// and set the cache entry.
-				m.logger.Debug("cache sync: set from remote (NOT ACTUALLY SYNCED)", zap.String("key", key))
-			})
-			m.cacheSync.OnDelete(func(ctx context.Context, key string) {
-				// Sync cache delete from other instance.
-				m.logger.Debug("cache sync: delete from remote", zap.String("key", key))
-			})
-		}
-	}
 	m.logger.Info("webfetch manager started")
 	return nil
 }
@@ -160,11 +132,6 @@ func (m *WebFetchManager) Stop(ctx context.Context) error {
 		atomic.StoreInt32(&m.started, 0)
 		if m.proxyPool != nil {
 			m.proxyPool.Stop()
-		}
-		if m.cacheSync != nil {
-			if err := m.cacheSync.Stop(); err != nil {
-				m.logger.Warn("failed to stop distributed cache sync", zap.Error(err))
-			}
 		}
 		m.logger.Info("webfetch manager stopped")
 	})
@@ -342,16 +309,6 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 			return nil, err
 		}
 		m.cache.Set(ctx, cacheKey, response, m.config.CacheTTL)
-
-		// Phase 3: Publish cache set to other instances.
-		if m.cacheSync != nil {
-			// Note: We need to serialize the response for the sync message.
-			// For simplicity, we'll just publish the key. In production, this would
-			// serialize the full response and publish it.
-			if err := m.cacheSync.PublishSet(ctx, cacheKey, ""); err != nil {
-				m.logger.Warn("failed to publish cache sync", zap.Error(err))
-			}
-		}
 
 		return response, nil
 	})

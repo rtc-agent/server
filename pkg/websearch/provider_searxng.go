@@ -10,15 +10,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leichujun/rtc-agent/server/pkg/proxy"
+	"github.com/rtc-agent/server/pkg/proxy"
 )
 
 // SearXNGConfig defines SearXNG provider configuration
 type SearXNGConfig struct {
-	BaseURL    string        `json:"base_url"`    // e.g., http://localhost:8080
-	MaxResults int           `json:"max_results"` // Default: 10
-	Timeout    time.Duration `json:"timeout"`     // Default: 30s
-	Language   string        `json:"language"`    // e.g., "en", "zh"
+	BaseURL    string        `mapstructure:"base_url"`    // e.g., http://localhost:8080
+	MaxResults int           `mapstructure:"max_results"` // Default: 10
+	Timeout    time.Duration `mapstructure:"timeout"`     // Default: 30s
+	Language   string        `mapstructure:"language"`    // e.g., "en", "zh"
 }
 
 // DefaultSearXNGConfig returns sensible defaults

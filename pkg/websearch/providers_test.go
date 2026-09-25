@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leichujun/rtc-agent/server/pkg/proxy"
+	"github.com/rtc-agent/server/pkg/proxy"
 )
 
 func TestDuckDuckGoProvider(t *testing.T) {

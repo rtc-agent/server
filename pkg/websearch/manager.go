@@ -9,37 +9,37 @@ import (
 	"sync"
 	"time"
 
-	"github.com/leichujun/rtc-agent/server/pkg/circuitbreaker"
-	"github.com/leichujun/rtc-agent/server/pkg/proxy"
+	"github.com/rtc-agent/server/pkg/circuitbreaker"
+	"github.com/rtc-agent/server/pkg/proxy"
 	"go.uber.org/zap"
 )
 
 // WebSearchConfig defines the configuration for WebSearchManager
 type WebSearchConfig struct {
-	BalancerType    string                       `json:"balancer_type"` // round_robin, weighted
-	Providers       []ProviderConfig             `json:"providers"`
-	Proxies         []proxy.ProxyConfig          `json:"proxies"`
-	CircuitBreaker  circuitbreaker.CircuitBreakerConfig `json:"circuit_breaker"`
-	RateLimiter     RateLimiterConfig            `json:"rate_limiter"`
-	Retry           RetryConfig                  `json:"retry"`
-	GlobalTimeout   time.Duration                `json:"global_timeout"`
-	ProxyHealthURL  string                       `json:"proxy_health_url"`  // URL for proxy health checks
-	ProxyCheckInterval time.Duration             `json:"proxy_check_interval"` // Proxy health check interval
+	BalancerType       string                              `mapstructure:"balancer_type"` // round_robin, weighted
+	Providers          []ProviderConfig                    `mapstructure:"providers"`
+	Proxies            []proxy.ProxyConfig                 `mapstructure:"proxies"`
+	CircuitBreaker     circuitbreaker.CircuitBreakerConfig `mapstructure:"circuit_breaker"`
+	RateLimiter        RateLimiterConfig                   `mapstructure:"rate_limiter"`
+	Retry              RetryConfig                         `mapstructure:"retry"`
+	GlobalTimeout      time.Duration                       `mapstructure:"global_timeout"`
+	ProxyHealthURL     string                              `mapstructure:"proxy_health_url"`     // URL for proxy health checks
+	ProxyCheckInterval time.Duration                       `mapstructure:"proxy_check_interval"` // Proxy health check interval
 }
 
 // ProviderConfig defines provider configuration
 type ProviderConfig struct {
-	Name    string `json:"name"`    // Provider name
-	Type    string `json:"type"`    // Provider type
-	Weight  int    `json:"weight"`  // Load balancer weight (0-100)
-	Enabled bool   `json:"enabled"` // Whether enabled
+	Name    string `mapstructure:"name"`    // Provider name
+	Type    string `mapstructure:"type"`    // Provider type
+	Weight  int    `mapstructure:"weight"`  // Load balancer weight (0-100)
+	Enabled bool   `mapstructure:"enabled"` // Whether enabled
 }
 
 // RetryConfig defines retry parameters
 type RetryConfig struct {
-	MaxRetries    int           `json:"max_retries"`    // Maximum retry attempts
-	RetryDelay    time.Duration `json:"retry_delay"`    // Initial retry delay
-	BackoffFactor float64       `json:"backoff_factor"` // Exponential backoff factor
+	MaxRetries    int           `mapstructure:"max_retries"`    // Maximum retry attempts
+	RetryDelay    time.Duration `mapstructure:"retry_delay"`    // Initial retry delay
+	BackoffFactor float64       `mapstructure:"backoff_factor"` // Exponential backoff factor
 }
 
 // DefaultWebSearchConfig returns sensible defaults
@@ -70,7 +70,6 @@ type WebSearchManager struct {
 
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
-	wg           sync.WaitGroup
 }
 
 // NewWebSearchManager creates a new WebSearchManager
@@ -338,21 +337,6 @@ func (m *WebSearchManager) Stop(ctx context.Context) error {
 		}
 		if len(errs) > 0 {
 			firstErr = errors.Join(errs...)
-		}
-
-		// Wait for background goroutines
-		done := make(chan struct{})
-		go func() {
-			m.wg.Wait()
-			close(done)
-		}()
-
-		select {
-		case <-done:
-		case <-ctx.Done():
-			if firstErr == nil {
-				firstErr = ctx.Err()
-			}
 		}
 
 		m.logger.Info("web search manager stopped")

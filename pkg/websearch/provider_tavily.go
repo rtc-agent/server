@@ -9,19 +9,19 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/leichujun/rtc-agent/server/pkg/proxy"
+	"github.com/rtc-agent/server/pkg/proxy"
 )
 
 // TavilyConfig defines Tavily provider configuration
 type TavilyConfig struct {
-	APIKey     string        `json:"api_key"`     // Required: Tavily API key
-	MaxResults int           `json:"max_results"` // Default: 10
-	Timeout    time.Duration `json:"timeout"`     // Default: 30s
+	APIKey     string        `mapstructure:"api_key"`     // Required: Tavily API key
+	MaxResults int           `mapstructure:"max_results"` // Default: 10
+	Timeout    time.Duration `mapstructure:"timeout"`     // Default: 30s
 	// SearchDepth controls the depth of search: "basic" or "advanced"
 	// "basic" is faster, "advanced" does more thorough research
-	SearchDepth string `json:"search_depth"` // Default: "basic"
+	SearchDepth string `mapstructure:"search_depth"` // Default: "basic"
 	// IncludeAnswer whether to include a generated answer summary
-	IncludeAnswer bool `json:"include_answer"` // Default: false
+	IncludeAnswer bool `mapstructure:"include_answer"` // Default: false
 }
 
 // DefaultTavilyConfig returns sensible defaults

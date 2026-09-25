@@ -9,16 +9,16 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/leichujun/rtc-agent/server/pkg/proxy"
+	"github.com/rtc-agent/server/pkg/proxy"
 )
 
 // BingConfig defines Bing API provider configuration
 type BingConfig struct {
-	APIKey     string        `json:"api_key"`     // Required: Bing Search API key
-	Endpoint   string        `json:"endpoint"`    // Default: https://api.bing.microsoft.com/v7.0/search
-	MaxResults int           `json:"max_results"` // Default: 10
-	Timeout    time.Duration `json:"timeout"`     // Default: 30s
-	Market     string        `json:"market"`      // e.g., "en-US", "zh-CN"
+	APIKey     string        `mapstructure:"api_key"`     // Required: Bing Search API key
+	Endpoint   string        `mapstructure:"endpoint"`    // Default: https://api.bing.microsoft.com/v7.0/search
+	MaxResults int           `mapstructure:"max_results"` // Default: 10
+	Timeout    time.Duration `mapstructure:"timeout"`     // Default: 30s
+	Market     string        `mapstructure:"market"`      // e.g., "en-US", "zh-CN"
 }
 
 // DefaultBingConfig returns sensible defaults

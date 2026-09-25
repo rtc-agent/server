@@ -143,7 +143,7 @@ web_fetch:
   respect_robots_txt: true
   robots_cache_ttl: 24h
 
-  # 熔断器配置（Phase 3）
+  # 熔断器配置
   circuit_breaker:
     enabled: true
     failure_threshold: 50
@@ -152,7 +152,7 @@ web_fetch:
     window_size: 20
     window_duration: 1m
 
-  # 代理池配置（Phase 3）
+  # 代理池配置
   proxies:
     - url: "socks5://192.168.31.60:7897"
       type: "socks5"
@@ -160,13 +160,6 @@ web_fetch:
       priority: 10
   proxy_health_url: "https://www.google.com"
   proxy_check_interval: 30s
-
-  # 分布式缓存同步（Phase 3）
-  # ⚠️ 功能未完成，当前实现仅发送空值，不会实际同步缓存数据
-  # 详见 pkg/webfetch/distributed_cache_sync.go 的 TODO 说明
-  cache_sync_enabled: false
-  cache_sync_channel: "webfetch:cache:sync"
-  cache_sync_source_id: "docker-instance-1"
 
   # 安全配置
   pre_approved_domains:

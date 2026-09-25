@@ -1,7 +1,6 @@
 package webfetch
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -254,56 +253,5 @@ func TestLLMResultCache_DefaultTTL(t *testing.T) {
 	cache2 := NewLLMResultCache(nil, 5*time.Minute)
 	if cache2.ttl != 5*time.Minute {
 		t.Errorf("expected TTL of 5 minutes, got %v", cache2.ttl)
-	}
-}
-
-func TestDistributedCacheSync_NilRedis(t *testing.T) {
-	sync := NewDistributedCacheSync(nil, "", "", nil)
-	if sync == nil {
-		t.Error("expected non-nil sync")
-	}
-
-	// Should not panic with nil redis
-	err := sync.PublishSet(nil, "key", "value")
-	if err != nil {
-		t.Errorf("expected no error with nil redis, got: %v", err)
-	}
-
-	err = sync.PublishDelete(nil, "key")
-	if err != nil {
-		t.Errorf("expected no error with nil redis, got: %v", err)
-	}
-}
-
-func TestDistributedCacheSync_DefaultChannel(t *testing.T) {
-	sync := NewDistributedCacheSync(nil, "", "test-id", nil)
-	if sync.channel != "webfetch:cache:sync" {
-		t.Errorf("expected default channel 'webfetch:cache:sync', got %s", sync.channel)
-	}
-}
-
-func TestDistributedCacheSync_CustomChannel(t *testing.T) {
-	sync := NewDistributedCacheSync(nil, "custom-channel", "test-id", nil)
-	if sync.channel != "custom-channel" {
-		t.Errorf("expected custom channel 'custom-channel', got %s", sync.channel)
-	}
-}
-
-func TestDistributedCacheSync_OnCallbacks(t *testing.T) {
-	sync := NewDistributedCacheSync(nil, "", "", nil)
-
-	sync.OnSet(func(ctx context.Context, key, value string) {
-		// Callback registered
-	})
-	sync.OnDelete(func(ctx context.Context, key string) {
-		// Callback registered
-	})
-
-	// Verify callbacks are registered
-	if sync.onSet == nil {
-		t.Error("expected onSet callback to be registered")
-	}
-	if sync.onDelete == nil {
-		t.Error("expected onDelete callback to be registered")
 	}
 }
