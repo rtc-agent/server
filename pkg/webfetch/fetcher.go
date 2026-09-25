@@ -30,7 +30,7 @@ type WebFetchManager struct {
 	domainSem      *DomainSemaphore
 	globalSem      chan struct{}
 	singleFlight   *singleflight.Group
-	llmExtractor   *LLMExtractor
+	llmExtractor   LLMExtractor
 	llmResultCache *LLMResultCache
 	cacheSync      *DistributedCacheSync
 	pdfExtractor   *pdfExtractor
@@ -133,6 +133,7 @@ func (m *WebFetchManager) Start(ctx context.Context) error {
 		if err := m.cacheSync.Start(ctx); err != nil {
 			m.logger.Warn("failed to start distributed cache sync", zap.Error(err))
 		} else {
+			m.logger.Warn("distributed cache sync started but is NON-FUNCTIONAL - feature incomplete, see distributed_cache_sync.go")
 			// Register callbacks to sync cache operations from other instances.
 			m.cacheSync.OnSet(func(ctx context.Context, key, value string) {
 				// Sync cache set from other instance.
@@ -140,7 +141,7 @@ func (m *WebFetchManager) Start(ctx context.Context) error {
 				// For simplicity, we'll skip the actual sync logic here since it requires
 				// the cache implementation details. In production, this would deserialize
 				// and set the cache entry.
-				m.logger.Debug("cache sync: set from remote", zap.String("key", key))
+				m.logger.Debug("cache sync: set from remote (NOT ACTUALLY SYNCED)", zap.String("key", key))
 			})
 			m.cacheSync.OnDelete(func(ctx context.Context, key string) {
 				// Sync cache delete from other instance.
@@ -191,8 +192,9 @@ func (m *WebFetchManager) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// SetLLMExtractor injects an LLM extractor (Phase 2).
-func (m *WebFetchManager) SetLLMExtractor(extractor *LLMExtractor) {
+// SetLLMExtractor injects an LLM extractor.
+// The implementation lives in internal/agent layer.
+func (m *WebFetchManager) SetLLMExtractor(extractor LLMExtractor) {
 	m.llmExtractor = extractor
 }
 
@@ -381,7 +383,10 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 			m.logAudit(ctx, req, nil, start, result.Err)
 			return nil, result.Err
 		}
-		resp := result.Val.(*FetchResponse)
+		resp, ok := result.Val.(*FetchResponse)
+		if !ok || resp == nil {
+			return nil, fmt.Errorf("unexpected result type from singleflight: %T", result.Val)
+		}
 		respCopy := *resp
 		respCopy.DurationMs = time.Since(start).Milliseconds()
 
@@ -452,7 +457,11 @@ func (m *WebFetchManager) doFetch(ctx context.Context, req *FetchRequest) (*rawF
 		if err != nil {
 			fetchErr = err
 		} else if result != nil {
-			rawResult = result.(*rawFetchResult)
+			var ok bool
+			rawResult, ok = result.(*rawFetchResult)
+			if !ok {
+				fetchErr = fmt.Errorf("unexpected result type from circuit breaker: %T", result)
+			}
 		}
 	} else {
 		// No circuit breaker, execute directly.
@@ -569,7 +578,7 @@ func (m *WebFetchManager) processContent(ctx context.Context, req *FetchRequest,
 			}
 
 			// Cache miss: call LLM.
-			extracted, err := m.llmExtractor.Extract(ctx, markdown, req.Prompt, isPreApproved, req.SessionID, m.config.MaxLLMExtractPerSession)
+			extracted, err := m.llmExtractor.Extract(ctx, markdown, req.Prompt, isPreApproved, req.SessionID)
 			if err != nil {
 				m.logger.Warn("LLM extraction failed, returning truncated content", zap.Error(err))
 				result = truncateContent(markdown, 100000) + "\n\n[Content truncated due to LLM extraction failure]"

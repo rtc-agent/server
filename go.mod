@@ -201,8 +201,4 @@ replace github.com/leichujun/rtc-agent/server/pkg/webfetch => ./pkg/webfetch
 
 replace github.com/leichujun/rtc-agent/server/pkg/circuitbreaker => ./pkg/circuitbreaker
 
-replace github.com/rtc-agent/server/pkg/circuitbreaker => ./pkg/circuitbreaker
-
 replace github.com/leichujun/rtc-agent/server/pkg/proxy => ./pkg/proxy
-
-replace github.com/rtc-agent/server/pkg/proxy => ./pkg/proxy

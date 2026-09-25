@@ -20,6 +20,20 @@ type CacheSyncMessage struct {
 }
 
 // DistributedCacheSync synchronizes cache across instances using Redis Pub/Sub.
+//
+// TODO: This implementation is incomplete and non-functional.
+// Current status:
+//   - PublishSet() sends empty value ("") instead of serialized cache data
+//   - OnSet callback only logs but doesn't actually update local cache
+//   - Multi-instance cache synchronization does NOT work
+//
+// To implement properly:
+//   1. Serialize FetchResponse to JSON in PublishSet()
+//   2. Deserialize and store in local cache in OnSet callback
+//   3. Handle cache eviction and TTL synchronization
+//   4. Add metrics for sync success/failure rates
+//
+// For now, disable this feature by setting cache_sync_enabled: false in config.
 type DistributedCacheSync struct {
 	redisClient redis.UniversalClient
 	pubSub      *redis.PubSub

@@ -106,7 +106,85 @@ web_search:
     retry_delay: 1s
     backoff_factor: 2.0
 
+  # Redis 配置（可选）
+  # 如果不配置，将使用全局 redis 配置（见上方 redis 部分）
+  # 仅在需要为 web_search 使用独立 redis 实例时才取消注释
+  # redis:
+  #   addr: "redis:6379"
+  #   password: ""
+  #   db: 0
+
+# Web Fetch 配置
+web_fetch:
+  enabled: true
+  max_concurrency: 20
+  max_domain_concurrency: 5
+  cache_ttl: 30m
+  cache_max_size: 1000
+  max_url_length: 2000
+  max_content_size: 10485760  # 10MB
+  fetch_timeout: 60s
+  max_redirects: 10
+
+  # LLM 提取配置
+  llm_extract_threshold: 50000
+  llm_cache_ttl: 1h
+  max_llm_per_session: 50
+  llm_max_tokens: 4096
+
+  # 速率限制
+  rate_limit:
+    global_rate: 100
+    global_burst: 200
+    domain_rate: 10
+    domain_burst: 20
+
+  # Robots.txt 合规
+  respect_robots_txt: true
+  robots_cache_ttl: 24h
+
+  # 熔断器配置（Phase 3）
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 50
+    open_timeout: 30s
+    half_open_max_requests: 3
+    window_size: 20
+    window_duration: 1m
+
+  # 代理池配置（Phase 3）
+  proxies:
+    - url: "socks5://192.168.31.60:7897"
+      type: "socks5"
+      region: "global"
+      priority: 10
+  proxy_health_url: "https://www.google.com"
+  proxy_check_interval: 30s
+
+  # 分布式缓存同步（Phase 3）
+  # ⚠️ 功能未完成，当前实现仅发送空值，不会实际同步缓存数据
+  # 详见 pkg/webfetch/distributed_cache_sync.go 的 TODO 说明
+  cache_sync_enabled: false
+  cache_sync_channel: "webfetch:cache:sync"
+  cache_sync_source_id: "docker-instance-1"
+
+  # 安全配置
+  pre_approved_domains:
+    - "github.com"
+    - "stackoverflow.com"
+    - "developer.mozilla.org"
+    - "docs.python.org"
+    - "pkg.go.dev"
+  blocked_domains: []
+  allowed_schemes:
+    - "https"
+    - "http"
+
+  # Redis 配置（用于缓存和速率限制）
+  # 如果不配置，将使用全局 redis 配置
   redis:
     addr: "redis:6379"
     password: ""
     db: 0
+
+  user_agent: "RTCAgent-WebFetch/1.0"

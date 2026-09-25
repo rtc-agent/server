@@ -2,7 +2,9 @@ package websearch
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/leichujun/rtc-agent/server/pkg/proxy"
 )
@@ -27,9 +29,33 @@ func TestDuckDuckGoProvider(t *testing.T) {
 		MaxResults: 5,
 	}
 
-	resp, err := provider.Search(ctx, req)
-	if err != nil {
-		t.Fatalf("search failed: %v", err)
+	// Retry up to 3 times with exponential backoff to handle anti-bot measures (202 responses)
+	var resp *SearchResponse
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			// Wait with exponential backoff: 1s, 2s, 4s
+			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
+		}
+
+		resp, lastErr = provider.Search(ctx, req)
+		if lastErr == nil {
+			break
+		}
+
+		// Check if it's an anti-bot response (202)
+		if !strings.Contains(lastErr.Error(), "202") {
+			// Not an anti-bot error, fail immediately
+			break
+		}
+		t.Logf("attempt %d: anti-bot response, retrying...", attempt+1)
+	}
+
+	if lastErr != nil {
+		if strings.Contains(lastErr.Error(), "202") {
+			t.Skipf("DuckDuckGo anti-bot mechanism blocked request (202), skipping test: %v", lastErr)
+		}
+		t.Fatalf("search failed: %v", lastErr)
 	}
 
 	if len(resp.Results) == 0 {

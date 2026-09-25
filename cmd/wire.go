@@ -33,7 +33,9 @@ import (
 	"github.com/rtc-agent/server/internal/taskscheduler"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/leichujun/rtc-agent/server/pkg/circuitbreaker"
 	"github.com/rtc-agent/server/pkg/logger"
+	"github.com/leichujun/rtc-agent/server/pkg/proxy"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"github.com/rtc-agent/server/pkg/webfetch"
@@ -242,7 +244,7 @@ func provideUsecaseDependencies(
 	if webFetchManager != nil && chatModelResult != nil && chatModelResult.model != nil {
 		llmAdapter := server.NewEinoLLMClientAdapter(chatModelResult.model, cfg.LLM, deps)
 		if llmAdapter != nil {
-			extractor := webfetch.NewLLMExtractor(llmAdapter, nil, cfg.WebFetch.LLMMaxTokens)
+			extractor := agent.NewWebFetchLLMExtractor(llmAdapter, nil, cfg.WebFetch.LLMMaxTokens, cfg.WebFetch.MaxLLMExtractPerSession)
 			webFetchManager.SetLLMExtractor(extractor)
 			logger.Info(context.Background(), "LLM extractor injected into web fetch manager")
 		}
@@ -412,7 +414,7 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 		GlobalTimeout:   cfg.WebSearch.GlobalTimeout,
 		ProxyHealthURL:  cfg.WebSearch.ProxyHealthURL,
 		ProxyCheckInterval: cfg.WebSearch.ProxyCheckInterval,
-		CircuitBreaker: websearch.CircuitBreakerConfig{
+		CircuitBreaker: circuitbreaker.CircuitBreakerConfig{
 			FailureThreshold:    cfg.WebSearch.CircuitBreaker.FailureThreshold,
 			OpenTimeout:         cfg.WebSearch.CircuitBreaker.OpenTimeout,
 			HalfOpenMaxRequests: cfg.WebSearch.CircuitBreaker.HalfOpenMaxRequests,
@@ -445,9 +447,9 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 
 	// Convert proxy configs.
 	for _, p := range cfg.WebSearch.Proxies {
-		wsCfg.Proxies = append(wsCfg.Proxies, websearch.ProxyConfig{
+		wsCfg.Proxies = append(wsCfg.Proxies, proxy.ProxyConfig{
 			URL:      p.URL,
-			Type:     websearch.ProxyType(p.Type),
+			Type:     proxy.ProxyType(p.Type),
 			Region:   p.Region,
 			Priority: p.Priority,
 		})

@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/leichujun/rtc-agent/server/pkg/proxy"
 	"github.com/leichujun/rtc-agent/server/pkg/websearch"
 	"go.uber.org/zap"
 )
@@ -25,16 +26,16 @@ func ExampleProxies() {
 	// 2. Configure proxies
 	cfg := websearch.DefaultWebSearchConfig()
 	cfg.BalancerType = "round_robin"
-	cfg.Proxies = []websearch.ProxyConfig{
+	cfg.Proxies = []proxy.ProxyConfig{
 		{
 			URL:      "socks5://user:pass@proxy1.example.com:1080",
-			Type:     websearch.ProxyTypeSOCKS5,
+			Type:     proxy.ProxyTypeSOCKS5,
 			Region:   "us",
 			Priority: 10,
 		},
 		{
 			URL:      "http://proxy2.example.com:8080",
-			Type:     websearch.ProxyTypeHTTP,
+			Type:     proxy.ProxyTypeHTTP,
 			Region:   "jp",
 			Priority: 5,
 		},
@@ -83,33 +84,33 @@ func ExampleProxies() {
 // ExampleProxyTypes demonstrates different proxy types
 func ExampleProxyTypes() {
 	// SOCKS5 proxy with authentication
-	socks5Proxy := websearch.ProxyConfig{
+	socks5Proxy := proxy.ProxyConfig{
 		URL:      "socks5://username:password@proxy.example.com:1080",
-		Type:     websearch.ProxyTypeSOCKS5,
+		Type:     proxy.ProxyTypeSOCKS5,
 		Region:   "us",
 		Priority: 10,
 	}
 
 	// HTTP proxy
-	httpProxy := websearch.ProxyConfig{
+	httpProxy := proxy.ProxyConfig{
 		URL:      "http://proxy.example.com:8080",
-		Type:     websearch.ProxyTypeHTTP,
+		Type:     proxy.ProxyTypeHTTP,
 		Region:   "jp",
 		Priority: 5,
 	}
 
 	// HTTPS proxy
-	httpsProxy := websearch.ProxyConfig{
+	httpsProxy := proxy.ProxyConfig{
 		URL:      "https://proxy.example.com:8443",
-		Type:     websearch.ProxyTypeHTTPS,
+		Type:     proxy.ProxyTypeHTTPS,
 		Region:   "sg",
 		Priority: 8,
 	}
 
-	proxies := []websearch.ProxyConfig{socks5Proxy, httpProxy, httpsProxy}
+	proxies := []proxy.ProxyConfig{socks5Proxy, httpProxy, httpsProxy}
 
 	// Create proxy pool
-	pool := websearch.NewProxyPool(proxies, "https://www.google.com", 30*time.Second, nil)
+	pool := proxy.NewProxyPool(proxies, "https://www.google.com", 30*time.Second, nil)
 
 	pool.Start()
 	defer pool.Stop()
@@ -123,12 +124,12 @@ func ExampleProxyTypes() {
 
 // ExampleProxyHealth demonstrates proxy health monitoring
 func ExampleProxyHealth() {
-	proxies := []websearch.ProxyConfig{
-		{URL: "http://proxy1.example.com:8080", Type: websearch.ProxyTypeHTTP},
-		{URL: "http://proxy2.example.com:8080", Type: websearch.ProxyTypeHTTP},
+	proxies := []proxy.ProxyConfig{
+		{URL: "http://proxy1.example.com:8080", Type: proxy.ProxyTypeHTTP},
+		{URL: "http://proxy2.example.com:8080", Type: proxy.ProxyTypeHTTP},
 	}
 
-	pool := websearch.NewProxyPool(proxies, "https://www.google.com", 10*time.Second, nil)
+	pool := proxy.NewProxyPool(proxies, "https://www.google.com", 10*time.Second, nil)
 
 	pool.Start()
 	defer pool.Stop()

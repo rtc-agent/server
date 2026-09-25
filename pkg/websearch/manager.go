@@ -231,7 +231,10 @@ func (m *WebSearchManager) Search(ctx context.Context, req *SearchRequest) (*Sea
 		}
 
 		// Success - set metadata
-		resp := result.(*SearchResponse)
+		resp, ok := result.(*SearchResponse)
+		if !ok || resp == nil {
+			return nil, fmt.Errorf("unexpected result type from provider %s: %T", provider.Name(), result)
+		}
 		resp.Provider = provider.Name()
 		resp.Duration = duration
 		m.logger.Info("search success",

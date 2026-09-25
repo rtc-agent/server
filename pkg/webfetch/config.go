@@ -3,6 +3,7 @@ package webfetch
 import (
 	"time"
 
+	"github.com/leichujun/rtc-agent/server/pkg/circuitbreaker"
 	"github.com/leichujun/rtc-agent/server/pkg/proxy"
 )
 
@@ -48,7 +49,9 @@ type WebFetchConfig struct {
 	ProxyCheckInterval time.Duration       `mapstructure:"proxy_check_interval"` // proxy health check interval
 
 	// Distributed cache sync (Phase 3).
-	CacheSyncEnabled  bool   `mapstructure:"cache_sync_enabled"`  // whether to enable distributed cache sync
+	// WARNING: This feature is incomplete and non-functional.
+	// See distributed_cache_sync.go for details.
+	CacheSyncEnabled  bool   `mapstructure:"cache_sync_enabled"`  // whether to enable distributed cache sync (default: false, feature incomplete)
 	CacheSyncChannel  string `mapstructure:"cache_sync_channel"`  // Redis Pub/Sub channel for cache sync
 	CacheSyncSourceID string `mapstructure:"cache_sync_source_id"` // unique ID for this instance
 
@@ -62,24 +65,23 @@ type WebFetchConfig struct {
 }
 
 // CircuitBreakerConfig defines circuit breaker configuration for webfetch
+// Embeds circuitbreaker.CircuitBreakerConfig and adds an Enabled field.
 type CircuitBreakerConfig struct {
-	Enabled             bool          `mapstructure:"enabled"`              // whether to enable circuit breaker
-	FailureThreshold    int           `mapstructure:"failure_threshold"`    // 0-100, percentage of failures to trigger open
-	OpenTimeout         time.Duration `mapstructure:"open_timeout"`         // wait time before half-open
-	HalfOpenMaxRequests int           `mapstructure:"half_open_max_requests"` // probe requests in half-open
-	WindowSize          int           `mapstructure:"window_size"`          // sliding window size
-	WindowDuration      time.Duration `mapstructure:"window_duration"`      // window time dimension
+	circuitbreaker.CircuitBreakerConfig `mapstructure:",squash"`
+	Enabled                             bool `mapstructure:"enabled"` // whether to enable circuit breaker
 }
 
 // DefaultCircuitBreakerConfig returns sensible defaults for webfetch
 func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
 	return CircuitBreakerConfig{
-		Enabled:             false,
-		FailureThreshold:    50,
-		OpenTimeout:         30 * time.Second,
-		HalfOpenMaxRequests: 3,
-		WindowSize:          20,
-		WindowDuration:      1 * time.Minute,
+		CircuitBreakerConfig: circuitbreaker.CircuitBreakerConfig{
+			FailureThreshold:    50,
+			OpenTimeout:         30 * time.Second,
+			HalfOpenMaxRequests: 3,
+			WindowSize:          20,
+			WindowDuration:      1 * time.Minute,
+		},
+		Enabled: false,
 	}
 }
 
@@ -106,6 +108,7 @@ func DefaultWebFetchConfig() WebFetchConfig {
 		AllowedSchemes:             []string{"https", "http"},
 		UserAgent:                  "RTCAgent-WebFetch/1.0",
 		PreApprovedDomains:         defaultPreApprovedDomains(),
+		CacheSyncEnabled:           false, // Feature incomplete, disabled by default
 	}
 }
 

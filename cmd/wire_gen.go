@@ -317,7 +317,7 @@ func provideUsecaseDependencies(
 	if webFetchManager != nil && chatModelResult2 != nil && chatModelResult2.model != nil {
 		llmAdapter := server.NewEinoLLMClientAdapter(chatModelResult2.model, cfg.LLM, deps)
 		if llmAdapter != nil {
-			extractor := webfetch.NewLLMExtractor(llmAdapter, nil, cfg.WebFetch.LLMMaxTokens)
+			extractor := agent.NewWebFetchLLMExtractor(llmAdapter, nil, cfg.WebFetch.LLMMaxTokens, cfg.WebFetch.MaxLLMExtractPerSession)
 			webFetchManager.SetLLMExtractor(extractor)
 			logger.Info(context.Background(), "LLM extractor injected into web fetch manager")
 		}
