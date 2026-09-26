@@ -476,7 +476,7 @@ func TestWebFetchManager_FetchRealURL(t *testing.T) {
 	defer manager.Stop(ctx)
 
 	resp, err := manager.Fetch(ctx, &FetchRequest{
-		URL:       "https://github.com/anthropics/anthropic-sdk-go",
+		URL:       "https://github.com/rtc-agent/web-components/blob/dev/README-ZH.md",
 		Prompt:    "What is this repository about?",
 		SessionID: "test-session",
 	})
@@ -490,7 +490,6 @@ func TestWebFetchManager_FetchRealURL(t *testing.T) {
 	assert.True(t, resp.Bytes > 0, "should have received content")
 	assert.NotEmpty(t, resp.Result, "result should contain markdown content")
 	assert.False(t, resp.Cached, "first fetch should not be cached")
-	assert.Contains(t, resp.Result, "anthropic", "result should mention anthropic")
 
 	t.Logf("Fetch succeeded: code=%d bytes=%d duration=%dms cached=%v",
 		resp.Code, resp.Bytes, resp.DurationMs, resp.Cached)

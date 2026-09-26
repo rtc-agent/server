@@ -7,7 +7,7 @@ Search the web for current information and return results with source links.
 - Searches the web and returns formatted search results with titles, URLs, and snippets
 - Provides up-to-date information beyond your knowledge cutoff
 - Supports time-based filtering to find recent or historical content
-- Returns results from multiple search engines (DuckDuckGo, Bing, SearXNG) with automatic failover
+- Returns results from multiple search engines with automatic failover
 
 ## CRITICAL REQUIREMENT - Sources Section
 
