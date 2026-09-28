@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cloudwego/eino/schema"
+	"github.com/rtc-agent/server/internal/agent/util"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -353,10 +354,7 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 				// groupAssistantByResponse to detect response boundaries:
 				// a message with this marker started a new LLM response
 				// (thinking is always produced first in a response).
-				if copied.Extra == nil {
-					copied.Extra = make(map[string]any)
-				}
-				copied.Extra[turnagent.ExtraKeyAbsorbedThinking] = true
+				copied.Extra = util.CloneWith[string, any](copied.Extra, turnagent.ExtraKeyAbsorbedThinking, true)
 				// Drop the thinking-only message; advance past it.
 				i = next
 				msg = &copied

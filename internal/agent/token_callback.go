@@ -34,6 +34,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	ucb "github.com/cloudwego/eino/utils/callbacks"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/agent/util"
 	dbmodel "github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -421,10 +422,7 @@ func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.Strea
 func (h *helpers) buildDrainedOutput(thinkingContent string, lastMessage *schema.Message, modelName string, maxUsage *model.TokenUsage) *model.CallbackOutput {
 	if thinkingContent != "" && lastMessage != nil {
 		msgCopy := *lastMessage
-		if msgCopy.Extra == nil {
-			msgCopy.Extra = make(map[string]any)
-		}
-		msgCopy.Extra["_eino_claude_thinking"] = thinkingContent
+		msgCopy.Extra = util.CloneWith[string, any](msgCopy.Extra, "_eino_claude_thinking", thinkingContent)
 		lastMessage = &msgCopy
 	}
 	return &model.CallbackOutput{

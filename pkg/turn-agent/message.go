@@ -1,6 +1,7 @@
 package turnagent
 
 import (
+	"maps"
 	"strings"
 	"time"
 
@@ -204,7 +205,7 @@ func toEinoMessage(m *Message) *schema.Message {
 		ToolName:         m.ToolName,
 		ToolCallID:       m.ToolCallID,
 		Name:             m.Name,
-		Extra:            m.Extra,
+		Extra:            maps.Clone(m.Extra),
 	}
 	for _, tc := range m.ToolCalls {
 		em.ToolCalls = append(em.ToolCalls, schema.ToolCall{
@@ -313,7 +314,7 @@ func fromEinoMessage(m *schema.Message) *Message {
 		ToolName:         m.ToolName,
 		ToolCallID:       m.ToolCallID,
 		Name:             m.Name,
-		Extra:            m.Extra,
+		Extra:            maps.Clone(m.Extra),
 		CreatedAt:        time.Now(),
 	}
 	if m.ResponseMeta != nil {
