@@ -25,7 +25,7 @@ type Credential struct {
 func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, service string) error {
 	// Parse Authorization header
 	auth := r.Header.Get("Authorization")
-	cred, signedHeaders, providedSig, err := parseAuthorizationHeader(auth)
+	cred, signedHeaders, providedSig, err := ParseAuthorizationHeader(auth)
 	if err != nil {
 		return fmt.Errorf("parse authorization header: %w", err)
 	}
@@ -112,12 +112,12 @@ func VerifySigV4Presigned(r *http.Request, secretAccessKey string, region string
 	return nil
 }
 
-// parseAuthorizationHeader parses the Authorization header.
+// ParseAuthorizationHeader parses the Authorization header.
 // Format: AWS4-HMAC-SHA256 Credential=AKID/20260930/us-east-1/s3/aws4_request,
 //
 //	SignedHeaders=host;x-amz-content-sha256;x-amz-date,
 //	Signature=abc123...
-func parseAuthorizationHeader(auth string) (*Credential, []string, string, error) {
+func ParseAuthorizationHeader(auth string) (*Credential, []string, string, error) {
 	if !strings.HasPrefix(auth, "AWS4-HMAC-SHA256 ") {
 		return nil, nil, "", fmt.Errorf("invalid authorization header prefix")
 	}
