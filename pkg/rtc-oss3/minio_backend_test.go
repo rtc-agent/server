@@ -1,0 +1,241 @@
+package rtcoss3
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+// TestMinIOBackendIntegration tests MinIO backend with real MinIO server.
+// Requires MinIO running at localhost:29000 with default credentials.
+// Run with: go test -tags=integration ./pkg/rtc-oss3/... -v
+func TestMinIOBackendIntegration(t *testing.T) {
+	if os.Getenv("INTEGRATION_TEST") != "1" {
+		t.Skip("Set INTEGRATION_TEST=1 to run integration tests")
+	}
+
+	endpoint := os.Getenv("MINIO_ENDPOINT")
+	if endpoint == "" {
+		endpoint = "localhost:29000"
+	}
+	accessKey := os.Getenv("MINIO_ACCESS_KEY")
+	if accessKey == "" {
+		accessKey = "minioadmin"
+	}
+	secretKey := os.Getenv("MINIO_SECRET_KEY")
+	if secretKey == "" {
+		secretKey = "minioadmin"
+	}
+	bucket := "test-rtc-oss3"
+
+	backend, err := NewMinIOBackend(endpoint, accessKey, secretKey, bucket, false, 100, 10, 90*time.Second)
+	if err != nil {
+		t.Fatalf("NewMinIOBackend: %v", err)
+	}
+	defer backend.Close()
+
+	ctx := context.Background()
+
+	t.Run("HealthCheck", func(t *testing.T) {
+		if err := backend.HealthCheck(ctx); err != nil {
+			t.Errorf("HealthCheck: %v", err)
+		}
+	})
+
+	t.Run("PutObject", func(t *testing.T) {
+		data := []byte("hello world")
+		etag, err := backend.PutObject(ctx, bucket, "test/hello.txt", bytes.NewReader(data), int64(len(data)), "text/plain")
+		if err != nil {
+			t.Fatalf("PutObject: %v", err)
+		}
+		if etag == "" {
+			t.Error("PutObject: expected non-empty ETag")
+		}
+	})
+
+	t.Run("GetObject", func(t *testing.T) {
+		reader, meta, err := backend.GetObject(ctx, bucket, "test/hello.txt")
+		if err != nil {
+			t.Fatalf("GetObject: %v", err)
+		}
+		defer reader.Close()
+
+		if meta.Key != "test/hello.txt" {
+			t.Errorf("GetObject: expected key 'test/hello.txt', got %q", meta.Key)
+		}
+		if meta.Size != 11 {
+			t.Errorf("GetObject: expected size 11, got %d", meta.Size)
+		}
+
+		data, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatalf("GetObject: read body: %v", err)
+		}
+		if string(data) != "hello world" {
+			t.Errorf("GetObject: expected 'hello world', got %q", string(data))
+		}
+	})
+
+	t.Run("HeadObject", func(t *testing.T) {
+		meta, err := backend.HeadObject(ctx, bucket, "test/hello.txt")
+		if err != nil {
+			t.Fatalf("HeadObject: %v", err)
+		}
+		if meta.Size != 11 {
+			t.Errorf("HeadObject: expected size 11, got %d", meta.Size)
+		}
+	})
+
+	t.Run("ListObjects", func(t *testing.T) {
+		result, err := backend.ListObjects(ctx, bucket, ListObjectsOptions{
+			Prefix: "test/",
+		})
+		if err != nil {
+			t.Fatalf("ListObjects: %v", err)
+		}
+		if len(result.Objects) == 0 {
+			t.Error("ListObjects: expected at least one object")
+		}
+	})
+
+	t.Run("CopyObject", func(t *testing.T) {
+		meta, err := backend.CopyObject(ctx, bucket, "test/hello.txt", bucket, "test/hello-copy.txt")
+		if err != nil {
+			t.Fatalf("CopyObject: %v", err)
+		}
+		if meta.Key != "test/hello-copy.txt" {
+			t.Errorf("CopyObject: expected key 'test/hello-copy.txt', got %q", meta.Key)
+		}
+	})
+
+	t.Run("DeleteObject", func(t *testing.T) {
+		if err := backend.DeleteObject(ctx, bucket, "test/hello.txt"); err != nil {
+			t.Fatalf("DeleteObject: %v", err)
+		}
+		if err := backend.DeleteObject(ctx, bucket, "test/hello-copy.txt"); err != nil {
+			t.Fatalf("DeleteObject: %v", err)
+		}
+	})
+
+	t.Run("MultipartUpload", func(t *testing.T) {
+		key := "test/multipart.bin"
+
+		// Create multipart upload
+		result, err := backend.CreateMultipartUpload(ctx, bucket, key, "application/octet-stream")
+		if err != nil {
+			t.Fatalf("CreateMultipartUpload: %v", err)
+		}
+		uploadID := result.UploadID
+
+		// Upload parts
+		part1Data := bytes.Repeat([]byte("a"), 5*1024*1024) // 5MB
+		part1ETag, err := backend.UploadPart(ctx, bucket, key, uploadID, 1, bytes.NewReader(part1Data), int64(len(part1Data)))
+		if err != nil {
+			t.Fatalf("UploadPart 1: %v", err)
+		}
+
+		part2Data := bytes.Repeat([]byte("b"), 5*1024*1024) // 5MB
+		part2ETag, err := backend.UploadPart(ctx, bucket, key, uploadID, 2, bytes.NewReader(part2Data), int64(len(part2Data)))
+		if err != nil {
+			t.Fatalf("UploadPart 2: %v", err)
+		}
+
+		// List parts
+		parts, err := backend.ListParts(ctx, bucket, key, uploadID)
+		if err != nil {
+			t.Fatalf("ListParts: %v", err)
+		}
+		if len(parts) != 2 {
+			t.Errorf("ListParts: expected 2 parts, got %d", len(parts))
+		}
+
+		// Complete multipart upload
+		completedParts := []CompletedPart{
+			{PartNumber: 1, ETag: part1ETag},
+			{PartNumber: 2, ETag: part2ETag},
+		}
+		etag, err := backend.CompleteMultipartUpload(ctx, bucket, key, uploadID, completedParts)
+		if err != nil {
+			t.Fatalf("CompleteMultipartUpload: %v", err)
+		}
+		if etag == "" {
+			t.Error("CompleteMultipartUpload: expected non-empty ETag")
+		}
+
+		// Verify object exists
+		meta, err := backend.HeadObject(ctx, bucket, key)
+		if err != nil {
+			t.Fatalf("HeadObject after complete: %v", err)
+		}
+		if meta.Size != 10*1024*1024 {
+			t.Errorf("HeadObject: expected size 10MB, got %d", meta.Size)
+		}
+
+		// Cleanup
+		if err := backend.DeleteObject(ctx, bucket, key); err != nil {
+			t.Errorf("DeleteObject: %v", err)
+		}
+	})
+
+	t.Run("AbortMultipartUpload", func(t *testing.T) {
+		key := "test/abort.bin"
+
+		result, err := backend.CreateMultipartUpload(ctx, bucket, key, "application/octet-stream")
+		if err != nil {
+			t.Fatalf("CreateMultipartUpload: %v", err)
+		}
+
+		if err := backend.AbortMultipartUpload(ctx, bucket, key, result.UploadID); err != nil {
+			t.Fatalf("AbortMultipartUpload: %v", err)
+		}
+	})
+
+	t.Run("DeleteObjects", func(t *testing.T) {
+		// Create test objects
+		for i := 0; i < 3; i++ {
+			data := []byte("test data")
+			_, _ = backend.PutObject(ctx, bucket, "test/batch-"+string(rune('0'+i))+".txt", bytes.NewReader(data), int64(len(data)), "text/plain")
+		}
+
+		// Batch delete
+		keys := []string{"test/batch-0.txt", "test/batch-1.txt", "test/batch-2.txt"}
+		results, err := backend.DeleteObjects(ctx, bucket, keys)
+		if err != nil {
+			t.Fatalf("DeleteObjects: %v", err)
+		}
+		if len(results) != 0 {
+			t.Errorf("DeleteObjects: expected 0 errors, got %d", len(results))
+		}
+	})
+
+	t.Run("ErrorMapping", func(t *testing.T) {
+		// Test non-existent object
+		_, _, err := backend.GetObject(ctx, bucket, "nonexistent.txt")
+		if err == nil {
+			t.Error("GetObject: expected error for non-existent object")
+		}
+		if !strings.Contains(err.Error(), "minio get_object") {
+			t.Errorf("GetObject: expected minio error, got: %v", err)
+		}
+	})
+}
+
+// TestMinIOBackendUnit tests MinIO backend error mapping without real MinIO.
+func TestMinIOBackendUnit(t *testing.T) {
+	t.Run("mapMinIOError_Nil", func(t *testing.T) {
+		err := mapMinIOError(nil, "test")
+		if err != nil {
+			t.Errorf("mapMinIOError(nil): expected nil, got %v", err)
+		}
+	})
+
+	t.Run("IsMinIODiskFullError", func(t *testing.T) {
+		if IsMinIODiskFullError(nil) {
+			t.Error("IsMinIODiskFullError(nil): expected false")
+		}
+	})
+}
