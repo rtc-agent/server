@@ -82,4 +82,13 @@ var (
 	ErrLockAcquireFailed    = &S3Error{"LockAcquireFailed", "Failed to acquire lock, please retry", http.StatusConflict}
 	ErrInsufficientStorage  = &S3Error{"InsufficientStorage", "Insufficient storage space available", http.StatusInsufficientStorage}                              // 507, MinIO disk full (R10 H3)
 	ErrRequestTimeTooSkewed = &S3Error{"RequestTimeTooSkewed", "The difference between the request time and the server's time is too large", http.StatusForbidden} // R10 M3
+
+	// Additional errors for 1E-3 basic operations
+	ErrInvalidURI           = &S3Error{"InvalidURI", "The specified URI is invalid", http.StatusBadRequest}
+	ErrNoSuchBucket         = &S3Error{"NoSuchBucket", "The specified bucket does not exist", http.StatusNotFound}
+	ErrNotImplemented       = &S3Error{"NotImplemented", "A parameter you provided is not yet implemented", http.StatusNotImplemented}
+	ErrMissingContentLength = &S3Error{"MissingContentLength", "You must provide the Content-Length HTTP header", http.StatusLengthRequired}
+	ErrInvalidRange         = &S3Error{"InvalidRange", "The requested range is not satisfiable", http.StatusRequestedRangeNotSatisfiable}
+	ErrInvalidCopySource    = &S3Error{"InvalidCopySource", "The specified copy source is not valid", http.StatusBadRequest}
+	ErrRateLimitExceeded    = &S3Error{"RateLimitExceeded", "You have exceeded your request rate limit", http.StatusTooManyRequests}
 )

@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -13,6 +14,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 )
@@ -144,4 +146,38 @@ func generateRandomString(length int) string {
 		}
 	}
 	return string(b)
+}
+
+// Backend returns the storage backend (exposed for handler layer).
+func (uc *OSS3Usecase) Backend() rtcoss3.Backend {
+	return uc.backend
+}
+
+// FileRecord represents a file metadata record for handler layer.
+type FileRecord struct {
+	UserID      string
+	Bucket      string
+	Key         string
+	Size        int64
+	ContentType string
+	ETag        string
+}
+
+// CreateFileRecord creates a file metadata record in the database.
+func (uc *OSS3Usecase) CreateFileRecord(ctx context.Context, record *FileRecord) error {
+	// Convert FileRecord to model.File
+	file := &model.File{
+		UserID:      record.UserID,
+		Bucket:      record.Bucket,
+		Key:         record.Key,
+		Size:        record.Size,
+		ContentType: record.ContentType,
+		ETag:        record.ETag,
+	}
+	return uc.fileRepo.Create(ctx, file)
+}
+
+// DeleteFileRecord deletes a file metadata record from the database.
+func (uc *OSS3Usecase) DeleteFileRecord(ctx context.Context, userID, key string) error {
+	return uc.fileRepo.DeleteByUserAndKey(ctx, userID, key)
 }
