@@ -27,6 +27,11 @@ func AutoMigrate(db *gorm.DB) error {
 		// Phase 2: unified Memory model
 		&memory.Memory{},
 		&memory.MemoryLink{},
+		// rtc-oss3: object storage models
+		&File{},
+		&MultipartUpload{},
+		&MultipartUploadPart{},
+		&TemporaryCredential{},
 	); err != nil {
 		return err
 	}
