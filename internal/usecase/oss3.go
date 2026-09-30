@@ -181,3 +181,30 @@ func (uc *OSS3Usecase) CreateFileRecord(ctx context.Context, record *FileRecord)
 func (uc *OSS3Usecase) DeleteFileRecord(ctx context.Context, userID, key string) error {
 	return uc.fileRepo.DeleteByUserAndKey(ctx, userID, key)
 }
+
+// CreateMultipartUploadRecord creates a multipart upload tracking record in the database.
+func (uc *OSS3Usecase) CreateMultipartUploadRecord(ctx context.Context, userID, bucket, key, uploadID string) error {
+	upload := &model.MultipartUpload{
+		UserID:    userID,
+		Key:       key,
+		UploadID:  uploadID,
+		Status:    "uploading",
+		ExpiresAt: time.Now().Add(24 * time.Hour), // 24h expiry
+	}
+	return uc.uploadRepo.Create(ctx, upload)
+}
+
+// DeleteMultipartUploadRecord deletes a multipart upload tracking record from the database.
+func (uc *OSS3Usecase) DeleteMultipartUploadRecord(ctx context.Context, uploadID string) error {
+	// First get the upload by uploadID to get the UUID
+	upload, err := uc.uploadRepo.GetByUploadID(ctx, uploadID)
+	if err != nil {
+		return err
+	}
+	// Delete parts first
+	if err := uc.uploadRepo.DeleteParts(ctx, upload.ID); err != nil {
+		return err
+	}
+	// Then delete the upload record
+	return uc.uploadRepo.Delete(ctx, upload.ID)
+}

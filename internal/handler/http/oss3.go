@@ -15,15 +15,17 @@ import (
 
 // OSS3Handler handles S3-compatible object storage operations.
 type OSS3Handler struct {
-	oss3UC *usecase.OSS3Usecase
-	bucket string // configured bucket name (e.g., "rtc-agent")
+	oss3UC    *usecase.OSS3Usecase
+	bucket    string // configured bucket name (e.g., "rtc-agent")
+	multipart *OSS3MultipartHandler
 }
 
 // NewOSS3Handler creates a new OSS3 handler.
 func NewOSS3Handler(oss3UC *usecase.OSS3Usecase, bucket string) *OSS3Handler {
 	return &OSS3Handler{
-		oss3UC: oss3UC,
-		bucket: bucket,
+		oss3UC:    oss3UC,
+		bucket:    bucket,
+		multipart: NewOSS3MultipartHandler(oss3UC, bucket),
 	}
 }
 
@@ -42,14 +44,15 @@ func (h *OSS3Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Route by HTTP method and query parameters
+	// Check if this is a multipart operation
+	if isMultipartRequest(r) {
+		h.multipart.ServeHTTP(w, r)
+		return
+	}
+
+	// Route by HTTP method for basic operations
 	switch r.Method {
 	case http.MethodPut:
-		if r.URL.Query().Has("uploadId") {
-			// UploadPart is handled in oss3_multipart.go
-			WriteS3Error(w, rtcoss3.ErrNotImplemented, r.URL.Path, "")
-			return
-		}
 		h.handlePutObject(w, r, bucket, key)
 	case http.MethodGet:
 		if key == "" {
@@ -58,29 +61,18 @@ func (h *OSS3Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.handleGetObject(w, r, bucket, key)
 		}
 	case http.MethodDelete:
-		if r.URL.Query().Has("uploadId") {
-			// AbortMultipartUpload is handled in oss3_multipart.go
-			WriteS3Error(w, rtcoss3.ErrNotImplemented, r.URL.Path, "")
-			return
-		}
 		h.handleDeleteObject(w, r, bucket, key)
 	case http.MethodHead:
 		h.handleHeadObject(w, r, bucket, key)
-	case http.MethodPost:
-		if r.URL.Query().Has("uploads") {
-			// CreateMultipartUpload is handled in oss3_multipart.go
-			WriteS3Error(w, rtcoss3.ErrNotImplemented, r.URL.Path, "")
-			return
-		}
-		if r.URL.Query().Has("uploadId") {
-			// CompleteMultipartUpload is handled in oss3_multipart.go
-			WriteS3Error(w, rtcoss3.ErrNotImplemented, r.URL.Path, "")
-			return
-		}
-		WriteS3Error(w, rtcoss3.ErrNotImplemented, r.URL.Path, "")
 	default:
 		WriteS3Error(w, rtcoss3.ErrMethodNotAllowed, r.URL.Path, "")
 	}
+}
+
+// isMultipartRequest checks if the request is a multipart upload operation.
+func isMultipartRequest(r *http.Request) bool {
+	q := r.URL.Query()
+	return q.Has("uploads") || q.Has("uploadId")
 }
 
 // parseS3Path extracts bucket and key from S3 path-style URL.

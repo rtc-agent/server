@@ -91,4 +91,8 @@ var (
 	ErrInvalidRange         = &S3Error{"InvalidRange", "The requested range is not satisfiable", http.StatusRequestedRangeNotSatisfiable}
 	ErrInvalidCopySource    = &S3Error{"InvalidCopySource", "The specified copy source is not valid", http.StatusBadRequest}
 	ErrRateLimitExceeded    = &S3Error{"RateLimitExceeded", "You have exceeded your request rate limit", http.StatusTooManyRequests}
+
+	// Additional errors for 1E-4 multipart operations
+	ErrInvalidPartNumber = &S3Error{"InvalidPartNumber", "The specified part number is not valid", http.StatusBadRequest}
+	ErrMalformedXML      = &S3Error{"MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema", http.StatusBadRequest}
 )
