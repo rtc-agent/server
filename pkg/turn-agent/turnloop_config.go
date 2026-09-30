@@ -137,7 +137,7 @@ func (mgr *SessionTurnManager) genResumeImpl(
 	// IMPORTANT: No timeout is set here. The resume context becomes the RunCtx
 	// for the entire subsequent agent execution (including LLM streaming),
 	// which can last arbitrarily long for complex tasks. A fixed timeout would
-	// kill active streams mid-output — the user-visible symptom is "响应超时"
+	// kill active streams mid-output — the user-visible symptom is "Response Timeout"
 	// even though chunks are still flowing.
 	//
 	// Cancellation is still possible: the caller's turnCtx (from Process) is

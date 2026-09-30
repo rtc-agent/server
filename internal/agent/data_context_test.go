@@ -261,7 +261,7 @@ func TestConvertDBMessage_SkipsErrorType(t *testing.T) {
 	// are stored for UI display but never sent to the LLM context.
 	// See error_feedback.go: "The message does NOT enter the LLM context
 	// (convertDBMessage's default branch skips error content type)."
-	errorContent := `{"category":"system","title":"系统错误","message":"发生未知错误","retryable":false}`
+	errorContent := `{"category":"system","title":"System Error","message":"An unknown error occurred.","retryable":false}`
 	content := `{"type":"error","data":` + errorContent + `}`
 	msg := &model.Message{
 		Content: content,

@@ -144,15 +144,15 @@ func (h *helpers) insertErrorMessage(
 //  5. default → system (not retryable)
 func classifyError(err error) (category protocol.ErrorCategory, title, message string, retryable bool) {
 	if err == nil {
-		return protocol.ErrorCategorySystem, "系统错误", "发生未知错误，请重试。", false
+		return protocol.ErrorCategorySystem, "System Error", "An unknown error occurred. Please retry.", false
 	}
 
 	// 1. Prompt too long — highest priority because it can also match as
 	//    InvalidRequestError below.
 	if turnagent.IsPromptTooLongError(err) {
 		return protocol.ErrorCategoryContext,
-			"上下文超出限制",
-			"对话内容太长，系统正在自动压缩。请稍等片刻。",
+			"Context Limit Exceeded",
+			"Conversation is too long. The system is automatically compressing the context. Please wait.",
 			true
 	}
 
@@ -161,8 +161,8 @@ func classifyError(err error) (category protocol.ErrorCategory, title, message s
 	// a broken/stalled stream, not a request-level deadline expiry.
 	if turnagent.IsStreamIdleTimeout(err) {
 		return protocol.ErrorCategoryStream,
-			"流式响应中断",
-			"AI 响应时间过长，已自动中断。请重新发送消息。",
+			"Stream Interrupted",
+			"AI response took too long and was interrupted. Please resend your message.",
 			false
 	}
 
@@ -172,33 +172,33 @@ func classifyError(err error) (category protocol.ErrorCategory, title, message s
 		switch apiErr.Type() {
 		case shared.ErrorTypeOverloadedError:
 			return protocol.ErrorCategoryAPI,
-				"服务过载",
-				"AI 服务暂时过载，系统正在自动重试。",
+				"Service Overloaded",
+				"AI service is temporarily overloaded. Please retry.",
 				true
 		case shared.ErrorTypeRateLimitError:
 			return protocol.ErrorCategoryAPI,
-				"请求频率限制",
-				"当前使用量已达上限，系统正在等待后自动重试。",
+				"Rate Limit Exceeded",
+				"Usage limit has been reached. Please wait and retry.",
 				true
 		case shared.ErrorTypeAuthenticationError:
 			return protocol.ErrorCategoryPermission,
-				"服务认证失败",
-				"服务暂时无法完成认证，请联系管理员。",
+				"Authentication Failed",
+				"Service authentication failed. Please contact the administrator.",
 				false
 		case shared.ErrorTypePermissionError:
 			return protocol.ErrorCategoryPermission,
-				"权限不足",
-				"当前账号权限不足，请联系管理员。",
+				"Insufficient Permissions",
+				"Insufficient account permissions. Please contact the administrator.",
 				false
 		case shared.ErrorTypeInvalidRequestError:
 			return protocol.ErrorCategoryContext,
-				"请求参数错误",
-				"请求参数无效，请检查输入后重试。",
+				"Invalid Request",
+				"Invalid request parameters. Please check your input and retry.",
 				false
 		case shared.ErrorTypeTimeoutError:
 			return protocol.ErrorCategoryTimeout,
-				"请求超时",
-				"AI 服务响应超时，系统正在自动重试。",
+				"Request Timeout",
+				"AI service request timed out. Please retry.",
 				true
 		default:
 			// Unknown Anthropic API error. Default to non-retryable to fail-safe
@@ -207,8 +207,8 @@ func classifyError(err error) (category protocol.ErrorCategory, title, message s
 			// errors (overloaded, rate_limit, timeout) are handled explicitly above
 			// with retryable=true.
 			return protocol.ErrorCategoryAPI,
-				"API 错误",
-				"AI 服务返回错误，请重试。如果问题持续，请联系支持。",
+				"API Error",
+				"AI service returned an error. Please retry. If the problem persists, contact support.",
 				false
 		}
 	}
@@ -217,23 +217,23 @@ func classifyError(err error) (category protocol.ErrorCategory, title, message s
 	var netErr *net.OpError
 	if errors.As(err, &netErr) {
 		return protocol.ErrorCategoryNetwork,
-			"网络错误",
-			"与 AI 服务的连接中断，系统正在自动重试。",
+			"Network Error",
+			"Connection to AI service was interrupted. Please retry.",
 			true
 	}
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
 		return protocol.ErrorCategoryNetwork,
-			"网络错误",
-			"与 AI 服务的连接中断，系统正在自动重试。",
+			"Network Error",
+			"Connection to AI service was interrupted. Please retry.",
 			true
 	}
 
 	// 4. Context deadline exceeded.
 	if errors.Is(err, context.DeadlineExceeded) {
 		return protocol.ErrorCategoryTimeout,
-			"响应超时",
-			"AI 响应时间过长，已自动中断。请重新发送消息。",
+			"Response Timeout",
+			"AI response took too long and was interrupted. Please resend your message.",
 			false
 	}
 
@@ -243,15 +243,15 @@ func classifyError(err error) (category protocol.ErrorCategory, title, message s
 	// falling through to the default "system error" category.
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return protocol.ErrorCategoryNetwork,
-			"连接中断",
-			"与 AI 服务的连接意外断开，系统正在自动重试。",
+			"Connection Interrupted",
+			"Connection to AI service was unexpectedly interrupted. Please retry.",
 			true
 	}
 
 	// 5. Default — unknown system error.
 	return protocol.ErrorCategorySystem,
-		"系统错误",
-		"发生未知错误，请重试。如果问题持续，请联系支持。",
+		"System Error",
+		"An unknown error occurred. Please retry. If the problem persists, contact support.",
 		false
 }
 

@@ -43,7 +43,8 @@ llm:
   # api_key 通过环境变量 LLM__API_KEY 配置，见 .env 文件
   model: "qwen3.7-plus"
   base_url: "http://host.docker.internal:23000"
-  max_tokens: 131072
+  max_tokens: 1000000
+  thinking_budget_tokens: 100000
   retry_max_attempts: 10
   retry_base_delay: 1s
 
@@ -61,6 +62,8 @@ worker:
   context_tokens_limit: 600000
   auto_compact_buffer_tokens: 100000
   max_output_tokens_for_summary: 20000
+  stream_chunk_ttl: "30m"
+  token_counter_mode: "tokenizer"
 
 # OpenTelemetry 分布式追踪
 tracing:

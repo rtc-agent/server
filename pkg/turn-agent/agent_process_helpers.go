@@ -507,8 +507,8 @@ func (a *Agent) tryReactiveCompactRecovery(
 		recoverySpan.AddEvent("insert_feedback_message")
 		if err := a.cfg.InsertFeedbackMessage(recoveryCtx, p.SessionID, turnID,
 			"context",
-			"上下文超出限制",
-			"对话内容太长，系统正在自动压缩后重试。请稍等片刻。",
+			"Context Limit Exceeded",
+			"Conversation is too long. The system is automatically compressing and retrying. Please wait.",
 			true, ""); err != nil {
 			a.log(recoveryCtx, LogLevelWarn, "turn.insert_feedback_message_failed", map[string]any{
 				"session_id": p.SessionID,

@@ -1,0 +1,52 @@
+# MinIO 本地构建镜像
+# 从 GitHub 源码编译，避免依赖外部镜像仓库
+
+# 阶段1：构建 MinIO
+FROM golang:1.24-bookworm AS builder
+
+# 安装构建依赖
+RUN apt-get update && apt-get install -y \
+    git \
+    make \
+    bash \
+    && rm -rf /var/lib/apt/lists/*
+
+# 设置工作目录
+WORKDIR /build
+
+# 克隆 MinIO 源码（指定版本）
+ARG MINIO_VERSION=RELEASE.2025-10-15T17-29-55Z
+RUN git clone --depth 1 --branch ${MINIO_VERSION} https://github.com/minio/minio.git .
+
+# 编译 MinIO（跳过检查以加快速度）
+RUN CGO_ENABLED=0 go build -o minio .
+
+# 阶段2：最终镜像
+FROM debian:bookworm-slim
+
+# 安装 ca-certificates 和 curl
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 从构建阶段复制二进制文件
+COPY --from=builder /build/minio /usr/bin/minio
+
+# 创建数据目录
+RUN mkdir -p /data && \
+    chmod -R 755 /data
+
+# 设置工作目录
+WORKDIR /data
+
+# 暴露端口
+EXPOSE 9000 9001
+
+# 健康检查（使用 MinIO 的健康端点）
+HEALTHCHECK --interval=5s --timeout=3s --retries=5 \
+  CMD curl -f http://localhost:9000/minio/health/live || exit 1
+
+# 启动命令
+ENTRYPOINT ["minio"]
+CMD ["server", "/data", "--console-address", ":9001"]
