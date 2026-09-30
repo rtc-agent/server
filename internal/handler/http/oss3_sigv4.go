@@ -26,6 +26,12 @@ func NewSigV4Middleware(oss3UC *usecase.OSS3Usecase, region string, next http.Ha
 
 // ServeHTTP implements the http.Handler interface.
 func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Skip signature verification for OPTIONS requests (CORS preflight)
+	if r.Method == http.MethodOptions {
+		m.next.ServeHTTP(w, r)
+		return
+	}
+
 	// Extract AccessKeyID from Authorization header
 	auth := r.Header.Get("Authorization")
 	if auth == "" {

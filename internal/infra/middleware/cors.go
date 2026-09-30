@@ -31,9 +31,10 @@ func CORS(allowedOrigins []string, isDevelopment bool) func(http.Handler) http.H
 			// Only set additional CORS headers when the origin is allowed,
 			// to avoid leaking capability information to unauthorized origins.
 			if originAllowed {
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-				w.Header().Set("Access-Control-Max-Age", "86400")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, HEAD, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-amz-*")
+				w.Header().Set("Access-Control-Expose-Headers", "ETag, x-amz-request-id, x-amz-id-2")
+				w.Header().Set("Access-Control-Max-Age", "3600")
 			}
 
 			if r.Method == http.MethodOptions {
