@@ -3,7 +3,6 @@ package httphandler
 import (
 	"encoding/xml"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 
@@ -28,12 +27,12 @@ func NewOSS3MultipartHandler(oss3UC *usecase.OSS3Usecase, bucket string) *OSS3Mu
 // handleCreateMultipartUpload handles POST /{bucket}/{key}?uploads
 func (h *OSS3MultipartHandler) handleCreateMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	// TODO: Extract user_id from context (set by SigV4 middleware)
-	userID := "user-placeholder"
+	userID := ExtractUserIDFromContext(r.Context())
 
 	// Check rate limit
-	requestID := "req-placeholder"
-	if _, err := h.oss3UC.CheckRateLimit(r.Context(), userID, requestID); err != nil {
-		WriteS3Error(w, rtcoss3.ErrRateLimitExceeded, r.URL.Path, "")
+	requestID := ExtractRequestIDFromContext(r.Context())
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
 		return
 	}
 
@@ -78,7 +77,7 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(w http.ResponseWriter
 // handleUploadPart handles PUT /{bucket}/{key}?partNumber={n}&uploadId={id}
 func (h *OSS3MultipartHandler) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
 	// TODO: Extract user_id from context
-	userID := "user-placeholder"
+	userID := ExtractUserIDFromContext(r.Context())
 
 	// Parse part number
 	partNumberStr := r.URL.Query().Get("partNumber")
@@ -133,12 +132,12 @@ func (h *OSS3MultipartHandler) handleUploadPart(w http.ResponseWriter, r *http.R
 // handleCompleteMultipartUpload handles POST /{bucket}/{key}?uploadId={id}
 func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
 	// TODO: Extract user_id from context
-	userID := "user-placeholder"
-	requestID := "req-placeholder"
+	userID := ExtractUserIDFromContext(r.Context())
+	requestID := ExtractRequestIDFromContext(r.Context())
 
 	// Check rate limit
-	if _, err := h.oss3UC.CheckRateLimit(r.Context(), userID, requestID); err != nil {
-		WriteS3Error(w, rtcoss3.ErrRateLimitExceeded, r.URL.Path, "")
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
 		return
 	}
 
@@ -166,41 +165,11 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(w http.ResponseWrit
 		}
 	}
 
-	// Complete multipart upload in backend
-	etag, err := h.oss3UC.Backend().CompleteMultipartUpload(r.Context(), bucket, key, uploadID, parts)
+	// Complete multipart upload with compensation
+	etag, err := h.oss3UC.CompleteMultipartUploadWithComp(r.Context(), userID, bucket, key, uploadID, parts)
 	if err != nil {
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
-	}
-
-	// Get total size from backend (need to query)
-	// TODO: Backend should return size in CompleteMultipartUpload result
-	meta, err := h.oss3UC.Backend().HeadObject(r.Context(), bucket, key)
-	if err != nil {
-		// Upload succeeded but we can't get metadata
-		// TODO: integrate with structured logging
-		_ = err
-	}
-
-	// Create file record in DB
-	file := &usecase.FileRecord{
-		UserID:      userID,
-		Bucket:      bucket,
-		Key:         key,
-		Size:        meta.Size,
-		ContentType: meta.ContentType,
-		ETag:        etag,
-	}
-	if err = h.oss3UC.CreateFileRecord(r.Context(), file); err != nil {
-		// DB failed but upload succeeded — orphaned object
-		// TODO: integrate with structured logging
-		_ = err
-	}
-
-	// Delete multipart upload record from DB
-	if err = h.oss3UC.DeleteMultipartUploadRecord(r.Context(), uploadID); err != nil {
-		// TODO: integrate with structured logging
-		_ = err
 	}
 
 	// Return XML response per S3 spec
@@ -227,12 +196,12 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(w http.ResponseWrit
 // handleAbortMultipartUpload handles DELETE /{bucket}/{key}?uploadId={id}
 func (h *OSS3MultipartHandler) handleAbortMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
 	// TODO: Extract user_id from context
-	userID := "user-placeholder"
-	requestID := "req-placeholder"
+	userID := ExtractUserIDFromContext(r.Context())
+	requestID := ExtractRequestIDFromContext(r.Context())
 
 	// Check rate limit
-	if _, err := h.oss3UC.CheckRateLimit(r.Context(), userID, requestID); err != nil {
-		WriteS3Error(w, rtcoss3.ErrRateLimitExceeded, r.URL.Path, "")
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
 		return
 	}
 
@@ -254,12 +223,12 @@ func (h *OSS3MultipartHandler) handleAbortMultipartUpload(w http.ResponseWriter,
 // handleListParts handles GET /{bucket}/{key}?uploadId={id}
 func (h *OSS3MultipartHandler) handleListParts(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
 	// TODO: Extract user_id from context
-	userID := "user-placeholder"
-	requestID := "req-placeholder"
+	userID := ExtractUserIDFromContext(r.Context())
+	requestID := ExtractRequestIDFromContext(r.Context())
 
 	// Check rate limit
-	if _, err := h.oss3UC.CheckRateLimit(r.Context(), userID, requestID); err != nil {
-		WriteS3Error(w, rtcoss3.ErrRateLimitExceeded, r.URL.Path, "")
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
 		return
 	}
 
@@ -362,6 +331,3 @@ func (h *OSS3MultipartHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		WriteS3Error(w, rtcoss3.ErrMethodNotAllowed, r.URL.Path, "")
 	}
 }
-
-// Unused import guard
-var _ = io.EOF

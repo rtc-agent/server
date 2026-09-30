@@ -126,9 +126,14 @@ func (uc *OSS3Usecase) decryptSessionToken(token string) (*SessionTokenPayload, 
 	return &payload, nil
 }
 
+// DecryptSessionToken decrypts a SessionToken string (exported for middleware use).
+func (uc *OSS3Usecase) DecryptSessionToken(token string) (*SessionTokenPayload, error) {
+	return uc.decryptSessionToken(token)
+}
+
 // generateRandomString generates a cryptographically secure random string
 // of the given length using rejection sampling to avoid modulo bias.
-func generateRandomString(length int) string {
+func generateRandomString(length int) (string, error) {
 	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	const maxByte = byte(255 - 255%len(charset)) // 252 for charset len 36
 
@@ -137,7 +142,7 @@ func generateRandomString(length int) string {
 	for i := range b {
 		for {
 			if _, err := rand.Read(buf); err != nil {
-				panic(fmt.Errorf("generate random string: %w", err))
+				return "", fmt.Errorf("generate random string: %w", err)
 			}
 			if buf[0] < maxByte {
 				b[i] = charset[buf[0]%byte(len(charset))]
@@ -145,7 +150,7 @@ func generateRandomString(length int) string {
 			}
 		}
 	}
-	return string(b)
+	return string(b), nil
 }
 
 // Backend returns the storage backend (exposed for handler layer).

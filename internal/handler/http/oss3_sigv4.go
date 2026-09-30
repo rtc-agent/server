@@ -1,6 +1,7 @@
 package httphandler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -64,6 +65,17 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Signature valid, call next handler
-	m.next.ServeHTTP(w, r)
+	// Decrypt SessionToken to extract user_id
+	payload, err := m.oss3UC.DecryptSessionToken(credValue.SessionToken)
+	if err != nil {
+		WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
+		return
+	}
+
+	// Inject user_id and request_id into context for downstream handlers
+	ctx := context.WithValue(r.Context(), ContextKeyUserID, payload.UserID)
+	ctx = context.WithValue(ctx, ContextKeyRequestID, r.Header.Get("X-Amz-Request-Id"))
+
+	// Signature valid, call next handler with enriched context
+	m.next.ServeHTTP(w, r.WithContext(ctx))
 }

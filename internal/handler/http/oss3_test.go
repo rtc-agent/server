@@ -5,16 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/xml"
 	"io"
-	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
-	"github.com/rtc-agent/server/internal/usecase"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -172,8 +169,3 @@ func calculateETag(data []byte) string {
 	hash := sha256.Sum256(data)
 	return "\"" + hex.EncodeToString(hash[:]) + "\""
 }
-
-// Unused import guards
-var _ = usecase.OSS3Usecase{}
-var _ = httptest.NewRecorder
-var _ = xml.Marshal

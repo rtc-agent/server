@@ -110,7 +110,11 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	}
 
 	// TODO: Extract user_id from context (set by SigV4 middleware)
-	userID := "user-placeholder" // Will be replaced with context extraction
+	userID := ExtractUserIDFromContext(r.Context())
+	if userID == "" {
+		WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
+		return
+	}
 
 	// Check quota
 	quotaRequestID, err := h.oss3UC.CheckAndReserveQuota(r.Context(), userID, contentLength)
@@ -130,7 +134,7 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 		}
 	}()
 
-	// Upload to backend
+	// Upload to backend with compensation
 	etag, err := h.oss3UC.Backend().PutObject(r.Context(), bucket, key, r.Body, contentLength, r.Header.Get("Content-Type"))
 	if err != nil {
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
@@ -144,19 +148,10 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 		_ = err
 	}
 
-	// Create file record in DB
-	file := &usecase.FileRecord{
-		UserID:      userID,
-		Bucket:      bucket,
-		Key:         key,
-		Size:        contentLength,
-		ContentType: r.Header.Get("Content-Type"),
-		ETag:        etag,
-	}
-	if err = h.oss3UC.CreateFileRecord(r.Context(), file); err != nil {
-		// DB failed but upload succeeded — orphaned object
-		// TODO: integrate with structured logging, consider async cleanup
-		_ = err
+	// Create file record in DB with compensation
+	if err = h.oss3UC.PutObjectWithComp(r.Context(), userID, bucket, key, contentLength, r.Header.Get("Content-Type"), etag); err != nil {
+		WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
+		return
 	}
 
 	w.Header().Set("ETag", etag)
@@ -166,12 +161,12 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 // handleGetObject handles GET /{bucket}/{key} — download object.
 func (h *OSS3Handler) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	// TODO: Extract user_id from context
-	userID := "user-placeholder"
-	requestID := "req-placeholder" // Will be extracted from context
+	userID := ExtractUserIDFromContext(r.Context())
+	requestID := ExtractRequestIDFromContext(r.Context()) // Will be extracted from context
 
 	// Check rate limit
-	if _, err := h.oss3UC.CheckRateLimit(r.Context(), userID, requestID); err != nil {
-		WriteS3Error(w, rtcoss3.ErrRateLimitExceeded, r.URL.Path, "")
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
 		return
 	}
 
@@ -225,12 +220,12 @@ func (h *OSS3Handler) handleGetObject(w http.ResponseWriter, r *http.Request, bu
 // handleDeleteObject handles DELETE /{bucket}/{key} — delete object.
 func (h *OSS3Handler) handleDeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	// TODO: Extract user_id from context
-	userID := "user-placeholder"
-	requestID := "req-placeholder"
+	userID := ExtractUserIDFromContext(r.Context())
+	requestID := ExtractRequestIDFromContext(r.Context())
 
 	// Check rate limit
-	if _, err := h.oss3UC.CheckRateLimit(r.Context(), userID, requestID); err != nil {
-		WriteS3Error(w, rtcoss3.ErrRateLimitExceeded, r.URL.Path, "")
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
 		return
 	}
 
@@ -253,12 +248,12 @@ func (h *OSS3Handler) handleDeleteObject(w http.ResponseWriter, r *http.Request,
 // handleHeadObject handles HEAD /{bucket}/{key} — get object metadata.
 func (h *OSS3Handler) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	// TODO: Extract user_id from context
-	userID := "user-placeholder"
-	requestID := "req-placeholder"
+	userID := ExtractUserIDFromContext(r.Context())
+	requestID := ExtractRequestIDFromContext(r.Context())
 
 	// Check rate limit
-	if _, err := h.oss3UC.CheckRateLimit(r.Context(), userID, requestID); err != nil {
-		WriteS3Error(w, rtcoss3.ErrRateLimitExceeded, r.URL.Path, "")
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
 		return
 	}
 
@@ -280,12 +275,12 @@ func (h *OSS3Handler) handleHeadObject(w http.ResponseWriter, r *http.Request, b
 // handleCopyObject handles PUT /{bucket}/{key} with X-Amz-Copy-Source header.
 func (h *OSS3Handler) handleCopyObject(w http.ResponseWriter, r *http.Request, dstBucket, dstKey, copySource string) {
 	// TODO: Extract user_id from context
-	userID := "user-placeholder"
-	requestID := "req-placeholder"
+	userID := ExtractUserIDFromContext(r.Context())
+	requestID := ExtractRequestIDFromContext(r.Context())
 
 	// Check rate limit
-	if _, err := h.oss3UC.CheckRateLimit(r.Context(), userID, requestID); err != nil {
-		WriteS3Error(w, rtcoss3.ErrRateLimitExceeded, r.URL.Path, "")
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
 		return
 	}
 
@@ -344,12 +339,12 @@ func (h *OSS3Handler) handleCopyObject(w http.ResponseWriter, r *http.Request, d
 // handleListObjects handles GET /{bucket} — list objects.
 func (h *OSS3Handler) handleListObjects(w http.ResponseWriter, r *http.Request, bucket string) {
 	// TODO: Extract user_id from context
-	userID := "user-placeholder"
-	requestID := "req-placeholder"
+	userID := ExtractUserIDFromContext(r.Context())
+	requestID := ExtractRequestIDFromContext(r.Context())
 
 	// Check rate limit
-	if _, err := h.oss3UC.CheckRateLimit(r.Context(), userID, requestID); err != nil {
-		WriteS3Error(w, rtcoss3.ErrRateLimitExceeded, r.URL.Path, "")
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
 		return
 	}
 

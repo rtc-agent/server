@@ -181,10 +181,30 @@ func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts List
 		MaxKeys:   maxKeys,
 	}
 
+	// Track common prefixes to avoid duplicates
+	commonPrefixes := make(map[string]bool)
+
 	for object := range b.client.ListObjects(ctx, bucket, listOpts) {
 		if object.Err != nil {
 			return nil, mapMinIOError(object.Err, "list_objects")
 		}
+
+		// If delimiter is set, check if this key represents a "directory"
+		if opts.Delimiter != "" && !listOpts.Recursive {
+			// Extract the part after the prefix
+			keyWithoutPrefix := strings.TrimPrefix(object.Key, opts.Prefix)
+			// Check if the key contains the delimiter
+			if idx := strings.Index(keyWithoutPrefix, opts.Delimiter); idx >= 0 {
+				// This is a common prefix (like a directory)
+				commonPrefix := opts.Prefix + keyWithoutPrefix[:idx+len(opts.Delimiter)]
+				if !commonPrefixes[commonPrefix] {
+					commonPrefixes[commonPrefix] = true
+					result.CommonPrefixes = append(result.CommonPrefixes, commonPrefix)
+				}
+				continue
+			}
+		}
+
 		result.Objects = append(result.Objects, ObjectMeta{
 			Key:          object.Key,
 			Size:         object.Size,

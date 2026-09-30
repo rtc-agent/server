@@ -258,7 +258,10 @@ func TestNewOSS3Usecase_KeyTooLong(t *testing.T) {
 
 // TestGenerateRandomString_ZeroLength tests 0-length string.
 func TestGenerateRandomString_ZeroLength(t *testing.T) {
-	s := generateRandomString(0)
+	s, err := generateRandomString(0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(s) != 0 {
 		t.Errorf("Expected empty string for length 0, got %q", s)
 	}
@@ -266,7 +269,10 @@ func TestGenerateRandomString_ZeroLength(t *testing.T) {
 
 // TestGenerateRandomString_LargeLength tests very large string.
 func TestGenerateRandomString_LargeLength(t *testing.T) {
-	s := generateRandomString(10000)
+	s, err := generateRandomString(10000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(s) != 10000 {
 		t.Errorf("Expected length 10000, got %d", len(s))
 	}
@@ -279,7 +285,10 @@ func TestGenerateRandomString_LargeLength(t *testing.T) {
 
 // TestGenerateRandomString_StatisticalDistribution tests for modulo bias.
 func TestGenerateRandomString_StatisticalDistribution(t *testing.T) {
-	s := generateRandomString(100000)
+	s, err := generateRandomString(100000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	counts := make(map[rune]int)
 	for _, c := range s {
 		counts[c]++

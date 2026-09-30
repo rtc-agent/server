@@ -24,8 +24,16 @@ type CredentialResult struct {
 //   - allowed_prefix: "user-{user_id}/"
 //   - expires_at: expiration timestamp
 func (uc *OSS3Usecase) IssueTemporaryCredentials(ctx context.Context, userID string) (*CredentialResult, error) {
-	accessKeyID := "AKIA" + generateRandomString(16) // 20 chars total
-	secretKey := generateRandomString(40)            // 40 chars
+	accessKeyIDRaw, err := generateRandomString(16)
+	if err != nil {
+		return nil, fmt.Errorf("generate access key: %w", err)
+	}
+	accessKeyID := "AKIA" + accessKeyIDRaw // 20 chars total
+
+	secretKey, err := generateRandomString(40)
+	if err != nil {
+		return nil, fmt.Errorf("generate secret key: %w", err)
+	}
 
 	// SessionToken payload
 	expiresAt := time.Now().Add(uc.cfg.Credential.SessionTokenTTL)
@@ -91,8 +99,7 @@ func (uc *OSS3Usecase) RevokeCredential(ctx context.Context, accessKeyID string)
 		return fmt.Errorf("get credential: %w", err)
 	}
 
-	now := time.Now()
-	cred.RevokedAt = &now
+	// Hard-delete the credential
 	if err := uc.credRepo.Delete(ctx, cred.ID); err != nil {
 		return fmt.Errorf("delete credential: %w", err)
 	}

@@ -136,22 +136,34 @@ func TestEncryptDecryptSessionToken(t *testing.T) {
 // TestGenerateRandomString tests random string generation.
 func TestGenerateRandomString(t *testing.T) {
 	t.Run("Length", func(t *testing.T) {
-		s := generateRandomString(20)
+		s, err := generateRandomString(20)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if len(s) != 20 {
 			t.Errorf("length: got %d, want 20", len(s))
 		}
 	})
 
 	t.Run("Uniqueness", func(t *testing.T) {
-		s1 := generateRandomString(40)
-		s2 := generateRandomString(40)
+		s1, err := generateRandomString(40)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		s2, err := generateRandomString(40)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if s1 == s2 {
 			t.Error("Generated two identical strings")
 		}
 	})
 
 	t.Run("Charset", func(t *testing.T) {
-		s := generateRandomString(100)
+		s, err := generateRandomString(100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		for _, c := range s {
 			if (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
 				t.Errorf("Invalid character: %c", c)
