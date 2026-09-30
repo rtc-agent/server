@@ -27,3 +27,17 @@ scrape_configs:
         target_label: "service"
     pipeline_stages:
       - docker: {}
+      # MinIO log parsing
+      - match:
+          selector: '{service="minio"}'
+          stages:
+            - json:
+                expressions:
+                  level: level
+                  msg: message
+                  time: time
+            - labels:
+                level:
+            - timestamp:
+                source: time
+                format: RFC3339

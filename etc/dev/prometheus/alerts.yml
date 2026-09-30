@@ -206,3 +206,84 @@ groups:
           severity: warning
         annotations:
           summary: "采集目标不可达: {{ $labels.job }}"
+
+  - name: minio-alerts
+    rules:
+      # MinIO 服务存活
+      - alert: MinIODown
+        expr: up{job="minio"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "MinIO 服务不可达"
+          description: "MinIO 实例 {{ $labels.instance }} 已持续 30s 无法采集"
+
+      # MinIO 磁盘使用率过高
+      - alert: MinIODiskUsageHigh
+        expr: |
+          (minio_node_disk_used_bytes / minio_node_disk_total_bytes) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MinIO 磁盘使用率 > 85%"
+          description: "MinIO 节点 {{ $labels.instance }} 磁盘使用率: {{ $value | humanizePercentage }}"
+
+      # MinIO 磁盘使用率严重
+      - alert: MinIODiskUsageCritical
+        expr: |
+          (minio_node_disk_used_bytes / minio_node_disk_total_bytes) > 0.95
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MinIO 磁盘使用率 > 95%"
+          description: "MinIO 节点 {{ $labels.instance }} 磁盘使用率: {{ $value | humanizePercentage }}，即将满载"
+
+      # MinIO 请求错误率
+      - alert: MinIOHighErrorRate
+        expr: |
+          (
+            sum(rate(minio_s3_requests_total{job="minio",code=~"5.."}[5m]))
+            / sum(rate(minio_s3_requests_total{job="minio"}[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MinIO S3 请求错误率 > 5%"
+          description: "MinIO S3 API 5xx 错误率: {{ $value | humanizePercentage }}"
+
+      # MinIO 请求延迟过高
+      - alert: MinIOHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(minio_s3_request_duration_seconds_bucket{job="minio"}[5m])
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MinIO S3 请求 p95 延迟 > 5s"
+          description: "MinIO S3 API p95 延迟: {{ $value | humanizeDuration }}"
+
+      # MinIO 离线节点
+      - alert: MinIOOfflineNodes
+        expr: minio_node_offline_total > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MinIO 有节点离线"
+          description: "MinIO 集群中有 {{ $value }} 个节点离线"
+
+      # MinIO 配额超限（如果配置了配额）
+      - alert: MinIOQuotaExceeded
+        expr: minio_bucket_usage_total_bytes > 10737418240  # 10GB
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MinIO bucket 使用量超过 10GB"
+          description: "Bucket {{ $labels.bucket }} 使用量: {{ $value | humanize1024 }}iB"
