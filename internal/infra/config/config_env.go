@@ -40,6 +40,13 @@ func expandEnvVars(cfg *Config) {
 	for i := range cfg.WebSearch.Proxies {
 		cfg.WebSearch.Proxies[i].URL = expandEnvRef(cfg.WebSearch.Proxies[i].URL)
 	}
+
+	// Storage (rtc-oss3) sensitive fields.
+	cfg.Storage.MinIO.AccessKey = expandEnvRef(cfg.Storage.MinIO.AccessKey)
+	cfg.Storage.MinIO.SecretKey = expandEnvRef(cfg.Storage.MinIO.SecretKey)
+	cfg.Storage.Encryption.SessionTokenKey = expandEnvRef(cfg.Storage.Encryption.SessionTokenKey)
+	cfg.Storage.S3Endpoint.TLSCert = expandEnvRef(cfg.Storage.S3Endpoint.TLSCert)
+	cfg.Storage.S3Endpoint.TLSKey = expandEnvRef(cfg.Storage.S3Endpoint.TLSKey)
 }
 
 // envRefPattern matches environment variable references in ${VAR_NAME} form.

@@ -25,6 +25,7 @@ type Config struct {
 	Debug     DebugConfig     `mapstructure:"debug"`
 	WebSearch WebSearchConfig `mapstructure:"web_search"`
 	WebFetch  WebFetchConfig  `mapstructure:"web_fetch"`
+	Storage   StorageConfig   `mapstructure:"storage"`
 }
 
 // MetricsConfig holds Prometheus /metrics endpoint authentication configuration.
@@ -556,6 +557,154 @@ type TracingConfig struct {
 	SampleRate float64 `mapstructure:"sample_rate"`
 }
 
+// StorageConfig holds object storage (rtc-oss3) configuration.
+// When Backend is empty, OSS3 is completely disabled (S3 endpoint not started, STS API returns 501).
+type StorageConfig struct {
+	// Backend is the storage backend type: "minio" (reserved: "oss", "cos", "s3").
+	// Empty disables OSS3 functionality.
+	Backend string `mapstructure:"backend"`
+
+	// MinIO holds MinIO backend configuration.
+	MinIO MinIOConfig `mapstructure:"minio"`
+
+	// S3Endpoint holds S3-compatible endpoint configuration.
+	S3Endpoint S3EndpointConfig `mapstructure:"s3_endpoint"`
+
+	// Quota holds storage quota configuration.
+	Quota QuotaConfig `mapstructure:"quota"`
+
+	// RateLimit holds S3 API rate limiting configuration.
+	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
+
+	// Credential holds temporary credential configuration.
+	Credential CredentialConfig `mapstructure:"credential"`
+
+	// Cleanup holds periodic cleanup task configuration.
+	Cleanup CleanupConfig `mapstructure:"cleanup"`
+
+	// Encryption holds SessionToken encryption configuration.
+	Encryption EncryptionConfig `mapstructure:"encryption"`
+}
+
+// IsEnabled returns true if a storage backend is configured.
+// When backend is empty, OSS3 is completely disabled:
+//   - S3 HTTP server is not started (no :9000 port)
+//   - STS API endpoints return 501 Not Implemented
+//   - Readyz "storage" field returns "not configured" (non-blocking)
+//   - Cleanup goroutine is not started
+func (c *StorageConfig) IsEnabled() bool {
+	return c.Backend != ""
+}
+
+// MinIOConfig holds MinIO backend connection configuration.
+type MinIOConfig struct {
+	// Endpoint is the MinIO server endpoint (e.g., "http://localhost:9000").
+	Endpoint string `mapstructure:"endpoint"`
+
+	// AccessKey is the MinIO access key (aligned with docker-compose MINIO_ROOT_USER).
+	AccessKey string `mapstructure:"access_key"`
+
+	// SecretKey is the MinIO secret key (aligned with docker-compose MINIO_ROOT_PASSWORD).
+	SecretKey string `mapstructure:"secret_key"`
+
+	// Bucket is the bucket name (default "rtc-agent").
+	Bucket string `mapstructure:"bucket"`
+
+	// UseSSL enables HTTPS for MinIO connection.
+	UseSSL bool `mapstructure:"use_ssl"`
+
+	// HTTP Transport tuning (R7 Review H1).
+	// MaxIdleConns is the total idle connections across all hosts. Default 1024.
+	MaxIdleConns int `mapstructure:"max_idle_conns"`
+
+	// MaxIdleConnsPerHost is the idle connections per MinIO endpoint. Default 100.
+	MaxIdleConnsPerHost int `mapstructure:"max_idle_conns_per_host"`
+
+	// IdleConnTimeout is the timeout for idle connections. Default 90s.
+	IdleConnTimeout time.Duration `mapstructure:"idle_conn_timeout"`
+
+	// Retry tuning (R7 Review H5).
+	// minio-go defaults: 10 retries with exponential backoff.
+	// Override to 3 retries to fail faster and avoid long tail latency.
+
+	// MaxRetries is the max retry attempts per request. Default 3.
+	MaxRetries int `mapstructure:"max_retries"`
+
+	// RetryTimeout is the total retry time budget. Default 30s.
+	RetryTimeout time.Duration `mapstructure:"retry_timeout"`
+}
+
+// S3EndpointConfig holds S3-compatible endpoint configuration.
+type S3EndpointConfig struct {
+	// Host is the listen address (e.g., "0.0.0.0").
+	Host string `mapstructure:"host"`
+
+	// Port is the S3 endpoint port (default 9000).
+	Port int `mapstructure:"port"`
+
+	// TLSCert is the TLS certificate path (PEM format). Optional.
+	// When both TLSCert and TLSKey are set, S3 endpoint uses HTTPS.
+	TLSCert string `mapstructure:"tls_cert"`
+
+	// TLSKey is the TLS private key path (PEM format). Optional.
+	TLSKey string `mapstructure:"tls_key"`
+
+	// AllowedOrigins is the CORS whitelist (default ["*"]).
+	AllowedOrigins []string `mapstructure:"allowed_origins"`
+}
+
+// QuotaConfig holds storage quota configuration.
+type QuotaConfig struct {
+	// MaxFileSizeBytes is the maximum single file size. Default 100MB.
+	MaxFileSizeBytes int64 `mapstructure:"max_file_size_bytes"`
+
+	// MaxUserQuotaBytes is the maximum total storage per user. Default 1GB.
+	MaxUserQuotaBytes int64 `mapstructure:"max_user_quota_bytes"`
+
+	// MaxConcurrentUploads is the maximum concurrent multipart uploads per user. Default 10.
+	MaxConcurrentUploads int `mapstructure:"max_concurrent_uploads"`
+
+	// PendingTTL is the two-phase reserve expiry duration. Default 5m.
+	PendingTTL time.Duration `mapstructure:"pending_ttl"`
+}
+
+// RateLimitConfig holds S3 API rate limiting configuration.
+type RateLimitConfig struct {
+	// RequestsPerMinute is the per-user S3 API rate limit. Default 60.
+	RequestsPerMinute int `mapstructure:"requests_per_minute"`
+}
+
+// CredentialConfig holds temporary credential configuration.
+type CredentialConfig struct {
+	// AccessTokenTTL is the access token validity duration. Default 1h.
+	AccessTokenTTL time.Duration `mapstructure:"access_token_ttl"`
+
+	// SessionTokenTTL is the session token validity duration. Default 1h.
+	SessionTokenTTL time.Duration `mapstructure:"session_token_ttl"`
+
+	// PresignedURLTTL is the presigned URL validity duration. Default 1h.
+	PresignedURLTTL time.Duration `mapstructure:"presigned_url_ttl"`
+}
+
+// CleanupConfig holds periodic cleanup task configuration.
+type CleanupConfig struct {
+	// Interval is the cleanup task execution interval. Default 1h.
+	Interval time.Duration `mapstructure:"interval"`
+
+	// MultipartExpiry is the incomplete multipart upload expiry duration. Default 24h.
+	MultipartExpiry time.Duration `mapstructure:"multipart_expiry"`
+
+	// CredentialExpiry is the expired credential cleanup threshold. Default 24h.
+	CredentialExpiry time.Duration `mapstructure:"credential_expiry"`
+}
+
+// EncryptionConfig holds SessionToken encryption configuration.
+type EncryptionConfig struct {
+	// SessionTokenKey is the AES-256 key (32 bytes) for SessionToken encryption.
+	// Injected via environment variable OSS3_SESSION_TOKEN_KEY.
+	SessionTokenKey string `mapstructure:"session_token_key"`
+}
+
 // Load loads configuration. Uses a local viper instance to avoid polluting global state; safe for parallel tests.
 //
 // Config merge strategy (when --config is not specified):
@@ -681,6 +830,36 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("web_fetch.robots_cache_ttl", 24*time.Hour)
 	v.SetDefault("web_fetch.user_agent", "RTCAgent-WebFetch/1.0")
 	v.SetDefault("web_fetch.respect_robots_txt", true)
+
+	// storage (rtc-oss3) defaults — disabled by default
+	v.SetDefault("storage.backend", "")
+	v.SetDefault("storage.minio.endpoint", "http://localhost:29000")
+	v.SetDefault("storage.minio.access_key", "")
+	v.SetDefault("storage.minio.secret_key", "")
+	v.SetDefault("storage.minio.bucket", "rtc-agent")
+	v.SetDefault("storage.minio.use_ssl", false)
+	v.SetDefault("storage.minio.max_idle_conns", 1024)
+	v.SetDefault("storage.minio.max_idle_conns_per_host", 100)
+	v.SetDefault("storage.minio.idle_conn_timeout", 90*time.Second)
+	v.SetDefault("storage.minio.max_retries", 3)
+	v.SetDefault("storage.minio.retry_timeout", 30*time.Second)
+	v.SetDefault("storage.s3_endpoint.host", "0.0.0.0")
+	v.SetDefault("storage.s3_endpoint.port", 9000)
+	v.SetDefault("storage.s3_endpoint.tls_cert", "")
+	v.SetDefault("storage.s3_endpoint.tls_key", "")
+	v.SetDefault("storage.s3_endpoint.allowed_origins", []string{"*"})
+	v.SetDefault("storage.quota.max_file_size_bytes", 100*1024*1024)   // 100MB
+	v.SetDefault("storage.quota.max_user_quota_bytes", 1024*1024*1024) // 1GB
+	v.SetDefault("storage.quota.max_concurrent_uploads", 10)
+	v.SetDefault("storage.quota.pending_ttl", 5*time.Minute)
+	v.SetDefault("storage.rate_limit.requests_per_minute", 60)
+	v.SetDefault("storage.credential.access_token_ttl", 1*time.Hour)
+	v.SetDefault("storage.credential.session_token_ttl", 1*time.Hour)
+	v.SetDefault("storage.credential.presigned_url_ttl", 1*time.Hour)
+	v.SetDefault("storage.cleanup.interval", 1*time.Hour)
+	v.SetDefault("storage.cleanup.multipart_expiry", 24*time.Hour)
+	v.SetDefault("storage.cleanup.credential_expiry", 24*time.Hour)
+	v.SetDefault("storage.encryption.session_token_key", "")
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, err
