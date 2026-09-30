@@ -172,6 +172,42 @@ const (
 	// Value: error message count within the current hour (uint64); TTL: 1 hour.
 	// Use case: prevents error message storms caused by Worker failures (max 20 messages per Session per hour).
 	PrefixErrorMessageRateLimit = "error_msg_rate:"
+
+	// ========== rtc-oss3 object storage prefixes ==========
+
+	// PrefixOSS3Quota is per-user storage quota counter.
+	// Full key: oss3:quota:{user_id}
+	// Value: total bytes used (int64); no TTL (persistent, reconciled by cleanup).
+	PrefixOSS3Quota = "oss3:quota:"
+
+	// PrefixOSS3QuotaPending is per-user pending (reserved but not yet committed) quota.
+	// Used by Lua script OSS3QuotaReserve for two-phase quota allocation.
+	// Full key: oss3:quota:pending:{user_id}:{request_id}
+	// Value: reserved bytes (int64); TTL: pendingTTL (e.g. 5m, auto-expire to prevent leaks).
+	PrefixOSS3QuotaPending = "oss3:quota:pending:"
+
+	// PrefixOSS3RateLimit is per-user S3 API rate limiter (ZSET-based sliding window).
+	// Full key: oss3:rate:{user_id}
+	// Value: ZSET where member=requestID, score=timestamp;
+	//        Lua script OSS3RateLimitCheck atomically prunes expired entries and counts.
+	// TTL: 0 (managed by ZREMRANGEBYSCORE in Lua; key auto-empty when window slides past).
+	PrefixOSS3RateLimit = "oss3:rate:"
+
+	// PrefixOSS3ConcurrentUpload is per-user concurrent multipart upload counter.
+	// Full key: oss3:upload:{user_id}
+	// Value: active upload count (int64); no TTL.
+	PrefixOSS3ConcurrentUpload = "oss3:upload:"
+
+	// PrefixOSS3CredentialCache caches temporary credential lookup by AccessKeyID.
+	// Full key: oss3:cred_cache:{access_key_id}
+	// Value: JSON {user_id, secret_access_key, expires_at}; TTL: min(remaining TTL, 5m).
+	PrefixOSS3CredentialCache = "oss3:cred_cache:"
+
+	// PrefixOSS3Lock is generic distributed lock prefix for OSS3 operations.
+	// Used by AcquireLock/ExtendLock/ReleaseLock Lua scripts.
+	// Full key: oss3:lock:{resource_name}  (e.g. oss3:lock:cleanup)
+	// Value: holderUUID (string); TTL: seconds (configurable per lock).
+	PrefixOSS3Lock = "oss3:lock:"
 )
 
 // ========== Constructor functions ==========
@@ -313,3 +349,25 @@ func RtcBatchInterruptMap(turnID string) string {
 func ErrorMessageRateLimit(sessionID, hour string) string {
 	return PrefixErrorMessageRateLimit + sessionID + ":" + hour
 }
+
+// ========== rtc-oss3 object storage ==========
+
+// OSS3Quota returns the Redis key for per-user storage quota counter.
+func OSS3Quota(userID string) string { return PrefixOSS3Quota + userID }
+
+// OSS3QuotaPending returns the Redis key for per-user pending quota reservation.
+func OSS3QuotaPending(userID, requestID string) string {
+	return PrefixOSS3QuotaPending + userID + ":" + requestID
+}
+
+// OSS3RateLimit returns the Redis key for per-user S3 API rate limiter.
+func OSS3RateLimit(userID string) string { return PrefixOSS3RateLimit + userID }
+
+// OSS3ConcurrentUpload returns the Redis key for per-user concurrent upload counter.
+func OSS3ConcurrentUpload(userID string) string { return PrefixOSS3ConcurrentUpload + userID }
+
+// OSS3CredentialCache returns the Redis key for temporary credential cache.
+func OSS3CredentialCache(accessKeyID string) string { return PrefixOSS3CredentialCache + accessKeyID }
+
+// OSS3Lock returns the Redis key for generic distributed lock.
+func OSS3Lock(resource string) string { return PrefixOSS3Lock + resource }
