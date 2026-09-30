@@ -16,6 +16,9 @@ import (
 // Flow: Lua script OSS3QuotaReserve checks (current + pending + amount <= maxQuota),
 // creates a pending key with TTL, all in one atomic call.
 func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, additionalBytes int64) (requestID string, err error) {
+	if additionalBytes <= 0 {
+		return "", fmt.Errorf("additionalBytes must be positive, got %d", additionalBytes)
+	}
 	requestID = uuid.New().String()
 	quotaKey := cache.OSS3Quota(userID)
 	pendingKey := cache.OSS3QuotaPending(userID, requestID)

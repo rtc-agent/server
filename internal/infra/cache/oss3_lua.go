@@ -40,15 +40,20 @@ return 1
 	// luaQuotaCommit atomically commits a pending quota reservation.
 	// KEYS[1] = oss3:quota:{user_id}
 	// KEYS[2] = oss3:quota:pending:{user_id}:{request_id}
-	// ARGV[1] = amount (bytes reserved in pending)
-	// Returns: 1 on success, 0 if pending key missing
+	// ARGV[1] = amount (bytes to commit, must not exceed pending)
+	// Returns: 1 on success, 0 if pending key missing, -1 if amount exceeds pending
 	luaQuotaCommit = `
 local pendingVal = redis.call('GET', KEYS[2])
 if not pendingVal then
     return 0
 end
 
+local reserved = tonumber(pendingVal)
 local amount = tonumber(ARGV[1])
+if amount > reserved then
+    return -1
+end
+
 redis.call('INCRBY', KEYS[1], amount)
 redis.call('DEL', KEYS[2])
 return 1

@@ -30,6 +30,22 @@ func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, 
 		return fmt.Errorf("parse authorization header: %w", err)
 	}
 
+	// AWS SigV4 requires "host" to be in SignedHeaders
+	hostSigned := false
+	for _, h := range signedHeaders {
+		if h == "host" {
+			hostSigned = true
+			break
+		}
+	}
+	if !hostSigned {
+		return &S3Error{
+			Code:     "SignatureDoesNotMatch",
+			Message:  "The request must have 'host' in SignedHeaders.",
+			HTTPCode: http.StatusForbidden,
+		}
+	}
+
 	// Validate credential scope
 	dateStr := cred.Date
 	scope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStr, region, service)
@@ -265,11 +281,17 @@ func buildCanonicalRequestForPresign(r *http.Request, signedHeaders []string) st
 }
 
 // canonicalURI returns the canonical URI.
+// Per AWS SigV4 spec, each path segment is URI-encoded separately,
+// but the "/" separators are preserved.
 func canonicalURI(path string) string {
 	if path == "" {
 		return "/"
 	}
-	return url.PathEscape(path)
+	segments := strings.Split(path, "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return strings.Join(segments, "/")
 }
 
 // canonicalQueryString returns the canonical query string.
@@ -285,18 +307,17 @@ func canonicalQueryString(query url.Values) string {
 	sort.Strings(keys)
 
 	var b strings.Builder
-	for i, k := range keys {
-		if i > 0 {
-			b.WriteByte('&')
-		}
-		b.WriteString(url.QueryEscape(k))
-		b.WriteByte('=')
+	first := true
+	for _, k := range keys {
 		values := query[k]
 		sort.Strings(values)
-		for j, v := range values {
-			if j > 0 {
+		for _, v := range values {
+			if !first {
 				b.WriteByte('&')
 			}
+			first = false
+			b.WriteString(url.QueryEscape(k))
+			b.WriteByte('=')
 			b.WriteString(url.QueryEscape(v))
 		}
 	}

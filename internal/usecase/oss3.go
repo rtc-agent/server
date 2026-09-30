@@ -124,16 +124,24 @@ func (uc *OSS3Usecase) decryptSessionToken(token string) (*SessionTokenPayload, 
 	return &payload, nil
 }
 
-// generateRandomString generates a random string of the given length.
-// Uses crypto/rand for cryptographic security.
+// generateRandomString generates a cryptographically secure random string
+// of the given length using rejection sampling to avoid modulo bias.
 func generateRandomString(length int) string {
 	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	const maxByte = byte(255 - 255%len(charset)) // 252 for charset len 36
+
 	b := make([]byte, length)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Errorf("generate random string: %w", err))
-	}
+	buf := make([]byte, 1)
 	for i := range b {
-		b[i] = charset[int(b[i])%len(charset)]
+		for {
+			if _, err := rand.Read(buf); err != nil {
+				panic(fmt.Errorf("generate random string: %w", err))
+			}
+			if buf[0] < maxByte {
+				b[i] = charset[buf[0]%byte(len(charset))]
+				break
+			}
+		}
 	}
 	return string(b)
 }

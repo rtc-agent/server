@@ -97,5 +97,7 @@ func (uc *OSS3Usecase) RevokeCredential(ctx context.Context, accessKeyID string)
 		return fmt.Errorf("delete credential: %w", err)
 	}
 
+	// Invalidate cache so revoked credential is immediately rejected
+	uc.InvalidateCredentialCache(ctx, accessKeyID)
 	return nil
 }
