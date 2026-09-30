@@ -42,6 +42,25 @@ services:
       retries: 5
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    container_name: rtc-full-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ACCESS_KEY:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_SECRET_KEY:-minioadmin}"
+    ports:
+      - "29000:9000"   # S3 API
+      - "29001:9001"   # MinIO Console
+    volumes:
+      - full-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   # ===========================================================================
   # 可观测性栈（复用 etc/dev/ 配置）
   # ===========================================================================
@@ -242,6 +261,7 @@ services:
 volumes:
   full-postgres-data:
   full-redis-data:
+  full-minio-data:
   full-prometheus-data:
   full-loki-data:
   full-pyroscope-data:
