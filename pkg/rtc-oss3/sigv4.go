@@ -31,27 +31,24 @@ type Credential struct {
 func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, service string) error {
 	// Parse Authorization header
 	auth := r.Header.Get("Authorization")
-	cred, _, providedSig, err := ParseAuthorizationHeader(auth)
+	cred, signedHeaders, providedSig, err := ParseAuthorizationHeader(auth)
 	if err != nil {
 		return fmt.Errorf("parse authorization header: %w", err)
 	}
 
 	// AWS SigV4 requires "host" to be in SignedHeaders
-	_, signedHeadersList, _, parseErr := ParseAuthorizationHeader(auth)
-	if parseErr == nil {
-		hostSigned := false
-		for _, h := range signedHeadersList {
-			if h == "host" {
-				hostSigned = true
-				break
-			}
+	hostSigned := false
+	for _, h := range signedHeaders {
+		if h == "host" {
+			hostSigned = true
+			break
 		}
-		if !hostSigned {
-			return &S3Error{
-				Code:     "SignatureDoesNotMatch",
-				Message:  "The request must have 'host' in SignedHeaders.",
-				HTTPCode: http.StatusForbidden,
-			}
+	}
+	if !hostSigned {
+		return &S3Error{
+			Code:     "SignatureDoesNotMatch",
+			Message:  "The request must have 'host' in SignedHeaders.",
+			HTTPCode: http.StatusForbidden,
 		}
 	}
 

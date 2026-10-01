@@ -96,24 +96,21 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 		ttl = maxCredentialCacheTTL
 	}
 
+	// Return value carries the original (unencrypted) secret key.
 	val := &credentialCacheValue{
 		UserID:          cred.UserID,
 		SessionToken:    cred.SessionToken,
 		ExpiresAt:       cred.ExpiresAt,
-		SecretAccessKey: cred.SecretAccessKey, // Return original (unencrypted) secret key
+		SecretAccessKey: cred.SecretAccessKey,
 	}
 
-	// Encrypt SecretAccessKey before caching
+	// Encrypt SecretAccessKey before caching (Redis stores encrypted form).
 	encryptedSecret, err := uc.encryptString(cred.SecretAccessKey)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt secret key: %w", err)
 	}
-	cacheVal := &credentialCacheValue{
-		UserID:          cred.UserID,
-		SessionToken:    cred.SessionToken,
-		ExpiresAt:       cred.ExpiresAt,
-		SecretAccessKey: encryptedSecret,
-	}
+	cacheVal := *val // shallow copy common fields
+	cacheVal.SecretAccessKey = encryptedSecret
 
 	data, err := json.Marshal(cacheVal)
 	if err == nil {
