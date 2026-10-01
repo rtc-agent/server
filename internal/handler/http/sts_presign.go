@@ -1,0 +1,152 @@
+package httphandler
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"time"
+
+	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/internal/infra/contextx"
+	"github.com/rtc-agent/server/internal/infra/middleware"
+	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
+)
+
+// STSPresignHandler handles presigned URL generation.
+//
+// Endpoints:
+//   - POST /api/presigned-url — generate a presigned PUT or GET URL
+type STSPresignHandler struct {
+	oss3UC *usecase.OSS3Usecase
+	signer *auth.JWTSigner
+	isDev  bool
+}
+
+// NewSTSPresignHandler creates a new presigned URL handler.
+func NewSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool) *STSPresignHandler {
+	return &STSPresignHandler{
+		oss3UC: oss3UC,
+		signer: signer,
+		isDev:  isDev,
+	}
+}
+
+// RegisterRoutes registers presigned URL API routes on the given mux.
+func (h *STSPresignHandler) RegisterRoutes(mux *http.ServeMux) {
+	if h.oss3UC == nil {
+		// OSS3 disabled — presign endpoints not registered.
+		return
+	}
+
+	authMiddleware := middleware.JWTAuth(h.signer, h.isDev)
+
+	// POST /api/presigned-url — generate a presigned URL
+	mux.Handle("POST /api/presigned-url", authMiddleware(http.HandlerFunc(h.GeneratePresignedURL)))
+}
+
+// presignRequest is the JSON body for presigned URL generation.
+type presignRequest struct {
+	Operation string `json:"operation"`  // "put" or "get"
+	Key       string `json:"key"`        // e.g. "user-123/file-id"
+	ExpiresIn int64  `json:"expires_in"` // seconds; default 3600; max 604800 (7 days)
+}
+
+// presignResponse is the JSON response for presigned URL generation.
+type presignResponse struct {
+	URL       string `json:"url"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+// GeneratePresignedURL generates a presigned URL for upload or download.
+//
+// Request: POST /api/presigned-url (JWT authenticated)
+// Body:
+//
+//	{
+//	  "operation": "put" | "get",
+//	  "key": "user-123/file-id",
+//	  "expires_in": 3600
+//	}
+//
+// Response: 200 OK with JSON body:
+//
+//	{
+//	  "url": "https://s3.rtc-agent.local/rtc-agent/user-123/file-id?...",
+//	  "expires_at": "2026-09-30T23:00:00Z"
+//	}
+func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.Request) {
+	userID, ok := contextx.GetUserID(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	// Limit request body size to 1MB
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
+	var req presignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writePresignError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	// Validate operation
+	if req.Operation != "put" && req.Operation != "get" {
+		writePresignError(w, http.StatusBadRequest, "operation must be 'put' or 'get'")
+		return
+	}
+
+	// Validate key
+	if req.Key == "" {
+		writePresignError(w, http.StatusBadRequest, "key is required")
+		return
+	}
+
+	// Default expiry: 1 hour
+	expiresIn := time.Duration(req.ExpiresIn) * time.Second
+	if expiresIn <= 0 {
+		expiresIn = time.Hour
+	}
+
+	url, expiresAt, err := h.oss3UC.GeneratePresignedURL(r.Context(), userID.String(), req.Operation, req.Key, expiresIn)
+	if err != nil {
+		// Check if it's a permission error
+		if isPermissionError(err) {
+			writePresignError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		logger.Error(r.Context(), "failed to generate presigned URL",
+			zap.String("user_id", userID.String()),
+			zap.String("operation", req.Operation),
+			zap.String("key", req.Key),
+			zap.Error(err),
+		)
+		writePresignError(w, http.StatusInternalServerError, "failed to generate presigned URL")
+		return
+	}
+
+	resp := presignResponse{
+		URL:       url,
+		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// isPermissionError checks if the error is a permission/validation error.
+func isPermissionError(err error) bool {
+	return errors.Is(err, usecase.ErrKeyPrefixViolation) ||
+		errors.Is(err, usecase.ErrUnsupportedPresignOperation) ||
+		errors.Is(err, usecase.ErrExpiryExceeded)
+}
+
+// writePresignError writes a JSON error response.
+func writePresignError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}

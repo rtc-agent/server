@@ -28,21 +28,25 @@ import (
 
 // Server HTTP + WebSocket server.
 type Server struct {
-	cfg              *config.Config
-	svcCtx           *svc.ServiceContext
-	rpcHandler       *rpchandler.Handler
-	httpHandler      *httphandler.Handler
-	oauth2Handler    *httphandler.OAuth2Handler
-	interruptHandler *httphandler.InterruptHandler
-	memoriesHandler  *httphandler.MemoriesHandler
-	httpServer       *http.Server
-	queueWorker      *rtcqueue.Worker // rtc-queue distributed worker
-	queue            *rtcqueue.Queue  // rtc-queue for publishing recovery work items
-	workerCancel     context.CancelFunc
-	asynqServer      *hibikenasynq.Server // asynq worker for loop tasks
-	asynqMux         *hibikenasynq.ServeMux
-	recoveryCancel   context.CancelFunc // cancels the recovery goroutine
-	goroutineCancel  func()             // cancels the goroutine metrics collector
+	cfg               *config.Config
+	svcCtx            *svc.ServiceContext
+	rpcHandler        *rpchandler.Handler
+	httpHandler       *httphandler.Handler
+	oauth2Handler     *httphandler.OAuth2Handler
+	interruptHandler  *httphandler.InterruptHandler
+	memoriesHandler   *httphandler.MemoriesHandler
+	oss3Handler       *httphandler.OSS3Handler
+	stsHandler        *httphandler.STSHandler
+	stsPresignHandler *httphandler.STSPresignHandler
+	httpServer        *http.Server
+	s3HTTPServer      *http.Server     // Independent S3 endpoint (port :9000)
+	queueWorker       *rtcqueue.Worker // rtc-queue distributed worker
+	queue             *rtcqueue.Queue  // rtc-queue for publishing recovery work items
+	workerCancel      context.CancelFunc
+	asynqServer       *hibikenasynq.Server // asynq worker for loop tasks
+	asynqMux          *hibikenasynq.ServeMux
+	recoveryCancel    context.CancelFunc // cancels the recovery goroutine
+	goroutineCancel   func()             // cancels the goroutine metrics collector
 
 	// Stale turn scanner
 	instanceID         string                       // unique ID for distributed scanner lock
@@ -177,7 +181,59 @@ func (s *Server) Start() error {
 	}
 
 	logger.Info(ctx, "HTTP server listening", zap.String("addr", addr))
+
+	// Start independent S3 server (port :9000) if OSS3 is enabled.
+	if s.oss3Handler != nil && s.cfg.Storage.S3Endpoint.Port > 0 {
+		if err := s.startS3Server(ctx); err != nil {
+			logger.Error(ctx, "Failed to start S3 server", zap.Error(err))
+			// Non-fatal: main server can still serve STS endpoints
+		}
+	}
+
 	return s.httpServer.ListenAndServe()
+}
+
+// startS3Server starts the independent S3 endpoint server on a separate port.
+// This separates S3 traffic from the main API, allowing independent scaling and configuration.
+func (s *Server) startS3Server(ctx context.Context) error {
+	s3Mux := http.NewServeMux()
+	s.registerOSS3Routes(s3Mux)
+
+	// Wrap with CORS middleware (outermost layer for S3 endpoint)
+	var handler http.Handler = s3Mux
+	origins := s.cfg.Storage.S3Endpoint.AllowedOrigins
+	if len(origins) == 0 {
+		// Fall back to main CORS config
+		origins = s.cfg.CORS.AllowOrigins
+	}
+	handler = httphandler.NewOSS3CORSMiddleware(origins)(handler)
+
+	s3Addr := fmt.Sprintf("%s:%d", s.cfg.Storage.S3Endpoint.Host, s.cfg.Storage.S3Endpoint.Port)
+	s.s3HTTPServer = &http.Server{
+		Addr:              s3Addr,
+		Handler:           handler,
+		ReadTimeout:       0,                // Stream uploads have no timeout
+		ReadHeaderTimeout: 10 * time.Second, // Slowloris protection
+		WriteTimeout:      10 * time.Minute, // Large file downloads
+		IdleTimeout:       120 * time.Second,
+	}
+
+	logger.Info(ctx, "S3 server listening", zap.String("addr", s3Addr))
+
+	go func() {
+		var err error
+		// Support TLS if configured
+		if s.cfg.Storage.S3Endpoint.TLSCert != "" && s.cfg.Storage.S3Endpoint.TLSKey != "" {
+			err = s.s3HTTPServer.ListenAndServeTLS(s.cfg.Storage.S3Endpoint.TLSCert, s.cfg.Storage.S3Endpoint.TLSKey)
+		} else {
+			err = s.s3HTTPServer.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
+			logger.Error(ctx, "S3 server error", zap.Error(err))
+		}
+	}()
+
+	return nil
 }
 
 // Stop stops the server.
@@ -237,7 +293,17 @@ func (s *Server) Stop() {
 		logger.Error(ctx, "broker close failed", zap.Error(err))
 	}
 
-	// Close HTTP Server.
+	// 1. Shutdown S3 server first (stop accepting new S3 requests)
+	if s.s3HTTPServer != nil {
+		if err := s.s3HTTPServer.Shutdown(ctx); err != nil {
+			logger.Error(ctx, "S3 server shutdown failed", zap.Error(err))
+		}
+		if logger.IsDebugMode() {
+			logger.Debug(ctx, "[Server] S3 server stopped")
+		}
+	}
+
+	// 2. Close main HTTP Server
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		logger.Error(ctx, "Server shutdown error", zap.Error(err))
 	}
@@ -273,6 +339,17 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Memories endpoints (Memory export).
 	isDevMemories := s.cfg.Server.Env == "development"
 	s.memoriesHandler.RegisterRoutes(mux, isDevMemories)
+
+	// STS endpoints (temporary credentials, presigned URLs) — on main API port.
+	if s.stsHandler != nil {
+		s.stsHandler.RegisterRoutes(mux)
+	}
+	if s.stsPresignHandler != nil {
+		s.stsPresignHandler.RegisterRoutes(mux)
+	}
+
+	// OSS3 S3-compatible endpoints are served on the independent S3 port (:9000).
+	// They are no longer registered on the main mux.
 
 	// Centrifuge WebSocket endpoint.
 	wsHandler := centrifuge.NewWebsocketHandler(s.svcCtx.CentrifugeNode, centrifuge.WebsocketConfig{
@@ -336,6 +413,38 @@ func (s *Server) registerDebugRoutes(mux *http.ServeMux) {
 	)
 }
 
+// registerOSS3Routes registers S3-compatible object storage routes.
+func (s *Server) registerOSS3Routes(mux *http.ServeMux) {
+	if s.oss3Handler == nil {
+		logger.Info(context.Background(), "OSS3 handler not initialized, S3 endpoints disabled")
+		return
+	}
+
+	// Get OSS3 usecase from handler
+	oss3UC := s.oss3Handler.OSS3Usecase()
+	if oss3UC == nil {
+		logger.Error(context.Background(), "OSS3 usecase not available")
+		return
+	}
+
+	// Build middleware chain manually (innermost to outermost)
+	// Handler -> Metrics -> SigV4 -> BusinessRestriction -> AccessLog
+	var handler http.Handler = s.oss3Handler
+	handler = httphandler.NewOSS3MetricsMiddleware()(handler)
+	handler = httphandler.NewSigV4Middleware(oss3UC, "us-east-1", handler)
+	handler = httphandler.NewBusinessRestrictionMiddleware(oss3UC, s.cfg.Storage.MinIO.Bucket, handler)
+	handler = httphandler.NewAccessLogMiddleware(oss3UC, handler)
+
+	// Register S3 path-style routes: /{bucket}/{key}
+	bucket := s.cfg.Storage.MinIO.Bucket
+	mux.Handle("/"+bucket+"/", handler)
+	mux.Handle("/"+bucket, handler)
+
+	logger.Info(context.Background(), "OSS3 S3 endpoints registered",
+		zap.String("bucket", bucket),
+	)
+}
+
 // NewWithDeps creates the server (Wire-compatible).
 // All dependencies are provided by the caller for Wire injection.
 func NewWithDeps(
@@ -346,6 +455,9 @@ func NewWithDeps(
 	oauth2Handler *httphandler.OAuth2Handler,
 	interruptHandler *httphandler.InterruptHandler,
 	memoriesHandler *httphandler.MemoriesHandler,
+	oss3Handler *httphandler.OSS3Handler,
+	stsHandler *httphandler.STSHandler,
+	stsPresignHandler *httphandler.STSPresignHandler,
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
 	asynqServer *hibikenasynq.Server,
@@ -355,20 +467,23 @@ func NewWithDeps(
 ) *Server {
 	instanceID := "server-" + uuid.Must(uuid.NewV7()).String()
 	return &Server{
-		cfg:              cfg,
-		svcCtx:           svcCtx,
-		rpcHandler:       rpcHandler,
-		httpHandler:      httpHandler,
-		oauth2Handler:    oauth2Handler,
-		interruptHandler: interruptHandler,
-		memoriesHandler:  memoriesHandler,
-		queueWorker:      queueWorker,
-		queue:            queue,
-		asynqServer:      asynqServer,
-		asynqMux:         asynqMux,
-		recoveryCancel:   recoveryCancel,
-		instanceID:       instanceID,
-		metrics:          metrics,
+		cfg:               cfg,
+		svcCtx:            svcCtx,
+		rpcHandler:        rpcHandler,
+		httpHandler:       httpHandler,
+		oauth2Handler:     oauth2Handler,
+		interruptHandler:  interruptHandler,
+		memoriesHandler:   memoriesHandler,
+		oss3Handler:       oss3Handler,
+		stsHandler:        stsHandler,
+		stsPresignHandler: stsPresignHandler,
+		queueWorker:       queueWorker,
+		queue:             queue,
+		asynqServer:       asynqServer,
+		asynqMux:          asynqMux,
+		recoveryCancel:    recoveryCancel,
+		instanceID:        instanceID,
+		metrics:           metrics,
 	}
 }
 
