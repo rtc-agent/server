@@ -142,8 +142,14 @@ func parseS3Path(path string) (bucket, key string, ok bool) {
 
 	// Reject path traversal attempts (defense in depth).
 	// net/http already decodes URL-encoded characters in r.URL.Path,
-	// so we only need to check for literal ".." sequences.
-	if strings.Contains(path, "..") {
+	// so we only need to check for literal ".." path segments.
+	// We reject "/../", "/.." at end, ".." at start, and bare ".." (entire path).
+	// This allows legitimate filenames containing ".." as a substring
+	// (e.g., "my..file.txt") while blocking actual traversal.
+	if path == ".." ||
+		strings.HasPrefix(path, "../") ||
+		strings.HasSuffix(path, "/..") ||
+		strings.Contains(path, "/../") {
 		return "", "", false
 	}
 
@@ -151,7 +157,7 @@ func parseS3Path(path string) (bucket, key string, ok bool) {
 	bucket = parts[0]
 	if len(parts) > 1 {
 		key = parts[1]
-		// Additional validation: reject suspicious patterns in key
+		// Reject suspicious patterns in key
 		if strings.Contains(key, "/..") || strings.HasSuffix(key, "/.") {
 			return "", "", false
 		}
@@ -452,13 +458,23 @@ func (h *OSS3Handler) handleGetObject(w http.ResponseWriter, r *http.Request, bu
 	defer func() {
 		// H5: Add timeout protection for Close() to prevent blocking on context cancellation.
 		// Use a separate context with 5s timeout since the original context may be cancelled.
+		//
+		// NOTE: The goroutine below may outlive the request context if Close() is slow.
+		// We use context.Background() for logging inside the goroutine for this reason.
+		// If Close() hangs permanently the goroutine leaks until the underlying TCP
+		// connection times out — this is an accepted trade-off to avoid blocking the
+		// response. The MinIO client's Transport timeouts (ResponseHeaderTimeout: 60s,
+		// IdleConnTimeout: 90s) bound the worst-case leak duration.
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer closeCancel()
 
 		closeDone := make(chan struct{})
 		go func() {
+			// Use Background context — r.Context() may be cancelled when the client
+			// disconnects, which would cause the logger to drop the Warn message.
+			bgCtx := context.Background()
 			if closeErr := obj.Close(); closeErr != nil {
-				logger.Warn(r.Context(), "failed to close object body",
+				logger.Warn(bgCtx, "failed to close object body",
 					zap.String("bucket", bucket),
 					zap.String("key", key),
 					zap.Error(closeErr))
@@ -470,8 +486,9 @@ func (h *OSS3Handler) handleGetObject(w http.ResponseWriter, r *http.Request, bu
 		case <-closeDone:
 			// Close completed normally
 		case <-closeCtx.Done():
-			// Close timed out — log warning but don't block response
-			logger.Warn(r.Context(), "object body close timed out after 5s",
+			// Close timed out — log warning but don't block response.
+			// The orphaned goroutine will finish when the underlying connection closes.
+			logger.Warn(context.Background(), "object body close timed out after 5s",
 				zap.String("bucket", bucket),
 				zap.String("key", key))
 		}
@@ -545,8 +562,7 @@ func (h *OSS3Handler) handleDeleteObject(
 			zap.Error(err))
 
 		// Retry up to 3 times with exponential backoff
-		retryDelays := []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
-		for i, delay := range retryDelays {
+		for i, delay := range dbRetryDelays {
 			// Respect context cancellation (client disconnect)
 			select {
 			case <-time.After(delay):
@@ -565,7 +581,7 @@ func (h *OSS3Handler) handleDeleteObject(
 					zap.String("key", key),
 					zap.Int("attempt", i+2))
 				break
-			} else if i == len(retryDelays)-1 {
+			} else if i == len(dbRetryDelays)-1 {
 				// All retries failed — log for manual intervention or async cleanup
 				logger.Error(r.Context(), "failed to delete file record after all retries, orphaned record",
 					zap.String("user_id", userID),
@@ -747,8 +763,7 @@ func (h *OSS3Handler) handleCopyObject(
 			zap.Error(err))
 
 		// Retry up to 3 times with exponential backoff
-		retryDelays := []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
-		for i, delay := range retryDelays {
+		for i, delay := range dbRetryDelays {
 			select {
 			case <-time.After(delay):
 			case <-r.Context().Done():
@@ -767,7 +782,7 @@ func (h *OSS3Handler) handleCopyObject(
 					zap.String("dst_key", dstKey),
 					zap.Int("attempt", i+2))
 				break
-			} else if i == len(retryDelays)-1 {
+			} else if i == len(dbRetryDelays)-1 {
 				// All retries failed — log for reconciliation
 				logger.Error(r.Context(), "failed to create file record after all retries, orphaned object",
 					zap.String("user_id", userID),
@@ -1126,8 +1141,18 @@ func writeListBucketResultV2XML(
 	_ = xml.NewEncoder(w).Encode(resp)
 }
 
-// parseRangeHeader parses HTTP Range header.
-// Format: "bytes=start-end"
+// parseRangeHeader parses HTTP Range header per RFC 7233.
+// Supported forms:
+//
+//	"bytes=START-END"   — closed range (both bounds inclusive)
+//	"bytes=START-"      — open-ended range (from START to end of file)
+//	"bytes=-SUFFIX"     — suffix range (last SUFFIX bytes)
+//
+// Returns an error for malformed or semantically invalid ranges such as:
+//   - wrong unit (anything other than "bytes=")
+//   - more than one dash (e.g. "bytes=1-2-3")
+//   - suffix length of 0 (e.g. "bytes=-0") — RFC 7233 §2.1 requires suffix-length >= 1
+//   - start > end when both are specified
 func parseRangeHeader(rangeHeader string) (start, end int64, hasRange bool, err error) {
 	if rangeHeader == "" {
 		return 0, 0, false, nil
@@ -1138,38 +1163,54 @@ func parseRangeHeader(rangeHeader string) (start, end int64, hasRange bool, err 
 	}
 
 	rangeSpec := strings.TrimPrefix(rangeHeader, "bytes=")
-	parts := strings.Split(rangeSpec, "-")
-	if len(parts) != 2 {
+	// Reject multiple dashes (e.g. "bytes=1-2-3"). A valid range spec contains
+	// exactly one '-' separator.
+	if strings.Count(rangeSpec, "-") != 1 {
 		return 0, 0, false, fmt.Errorf("invalid range format")
 	}
 
-	if parts[0] == "" {
-		// Suffix range: "-500" means last 500 bytes
-		suffixLen, err := strconv.ParseInt(parts[1], 10, 64)
+	dashIdx := strings.Index(rangeSpec, "-")
+	left := rangeSpec[:dashIdx]
+	right := rangeSpec[dashIdx+1:]
+
+	if left == "" {
+		// Suffix range: "-500" means last 500 bytes.
+		// RFC 7233 §2.1: suffix-length = 1*DIGIT (must be >= 1).
+		if right == "" {
+			// "bytes=-" is invalid (no suffix length).
+			return 0, 0, false, fmt.Errorf("invalid suffix range")
+		}
+		suffixLen, err := strconv.ParseInt(right, 10, 64)
 		if err != nil {
 			return 0, 0, false, err
 		}
-		// Negative offset from end — will be resolved in backend
+		if suffixLen <= 0 {
+			// Reject "-0" and negative values.
+			return 0, 0, false, fmt.Errorf("suffix length must be positive")
+		}
+		// Negative offset from end — resolved against file size in handleGetObject.
 		return -suffixLen, -1, true, nil
 	}
 
-	start, err = strconv.ParseInt(parts[0], 10, 64)
+	start, err = strconv.ParseInt(left, 10, 64)
 	if err != nil {
 		return 0, 0, false, err
 	}
+	if start < 0 {
+		return 0, 0, false, fmt.Errorf("invalid range values")
+	}
 
-	if parts[1] == "" {
-		// Open-ended range: "500-" means from byte 500 to end
+	if right == "" {
+		// Open-ended range: "500-" means from byte 500 to end of file.
 		end = -1
 	} else {
-		end, err = strconv.ParseInt(parts[1], 10, 64)
+		end, err = strconv.ParseInt(right, 10, 64)
 		if err != nil {
 			return 0, 0, false, err
 		}
-	}
-
-	if start < 0 || (end >= 0 && end < start) {
-		return 0, 0, false, fmt.Errorf("invalid range values")
+		if end < start {
+			return 0, 0, false, fmt.Errorf("invalid range values")
+		}
 	}
 
 	return start, end, true, nil
@@ -1182,6 +1223,11 @@ func parseRangeHeader(rangeHeader string) (start, end int64, hasRange bool, err 
 func isQuotaExceededError(err error) bool {
 	return errors.Is(err, rtcoss3.ErrQuotaExceeded)
 }
+
+// dbRetryDelays defines the exponential backoff schedule for compensating DB
+// operations (e.g., creating/deleting file records after backend success).
+// The total wait budget is ~2.6s; all delays respect context cancellation.
+var dbRetryDelays = []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
 
 // mapBackendError maps backend sentinel errors to S3-compatible error responses.
 //

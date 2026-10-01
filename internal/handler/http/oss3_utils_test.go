@@ -61,6 +61,27 @@ func TestParseS3Path(t *testing.T) {
 			wantKey:    "path with spaces/file%20name.txt",
 			wantOK:     true,
 		},
+		{
+			name:       "path traversal - parent directory",
+			path:       "/mybucket/../other/file.txt",
+			wantBucket: "",
+			wantKey:    "",
+			wantOK:     false,
+		},
+		{
+			name:       "path traversal - bare ..",
+			path:       "/mybucket/..",
+			wantBucket: "",
+			wantKey:    "",
+			wantOK:     false,
+		},
+		{
+			name:       "path traversal - leading ..",
+			path:       "/../mybucket/file.txt",
+			wantBucket: "",
+			wantKey:    "",
+			wantOK:     false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -143,6 +164,26 @@ func TestParseRangeHeader(t *testing.T) {
 		{
 			name:   "invalid format - non-numeric",
 			header: "bytes=abc-def",
+			wantOK: false,
+		},
+		{
+			name:   "invalid suffix range - zero length",
+			header: "bytes=-0",
+			wantOK: false,
+		},
+		{
+			name:   "invalid suffix range - empty suffix",
+			header: "bytes=-",
+			wantOK: false,
+		},
+		{
+			name:   "invalid range - end before start",
+			header: "bytes=500-100",
+			wantOK: false,
+		},
+		{
+			name:   "invalid range - negative start",
+			header: "bytes=-1-100",
 			wantOK: false,
 		},
 	}
