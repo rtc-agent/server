@@ -205,7 +205,11 @@ func (b *MinIOBackend) DeleteObjects(ctx context.Context, bucket string, keys []
 	go func() {
 		defer close(objectsCh)
 		for _, key := range keys {
-			objectsCh <- minio.ObjectInfo{Key: key}
+			select {
+			case objectsCh <- minio.ObjectInfo{Key: key}:
+			case <-ctx.Done():
+				return // Exit if context cancelled — prevents goroutine leak
+			}
 		}
 	}()
 

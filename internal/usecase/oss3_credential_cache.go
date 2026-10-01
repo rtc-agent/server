@@ -9,6 +9,8 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -45,8 +47,15 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 				// Decrypt SecretAccessKey
 				decryptedSecret, err := uc.decryptString(val.SecretAccessKey)
 				if err != nil {
-					// Decryption failed - fall through to DB
-					_ = uc.redis.Del(ctx, cacheKey).Err()
+					// Decryption failed - invalidate cache and fall through to DB
+					logger.Debug(ctx, "credential cache decryption failed, invalidating cache",
+						zap.String("access_key_id", accessKeyID),
+						zap.Error(err))
+					if delErr := uc.redis.Del(ctx, cacheKey).Err(); delErr != nil {
+						logger.Warn(ctx, "failed to invalidate corrupted credential cache",
+							zap.String("access_key_id", accessKeyID),
+							zap.Error(delErr))
+					}
 				} else {
 					val.SecretAccessKey = decryptedSecret
 					return &val, nil

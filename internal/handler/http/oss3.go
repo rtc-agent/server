@@ -28,9 +28,10 @@ const (
 	// Prevents blocking the response if Close() hangs.
 	objectCloseTimeout = 5 * time.Second
 
-	// maxDeleteBodySize is the maximum XML body size for batch delete requests.
-	// S3 spec allows up to 1000 keys per request; typical XML is ~50KB.
-	maxDeleteBodySize = 1 << 20 // 1 MB
+	// maxXMLRequestBodySize is the maximum XML body size for batch delete
+	// and complete multipart requests. S3 spec allows up to 1000 keys per request;
+	// typical XML is ~50KB. 1 MB provides ample headroom.
+	maxXMLRequestBodySize = 1 << 20 // 1 MB
 
 	// defaultMaxKeys is the default maximum number of keys returned by ListObjects.
 	defaultMaxKeys = 1000
@@ -743,35 +744,16 @@ func (h *OSS3Handler) handleCopyObject(
 			zap.String("dst_key", dstKey),
 			zap.Error(err))
 
-		// Retry up to 3 times with exponential backoff
-		for i, delay := range dbRetryDelays {
-			select {
-			case <-time.After(delay):
-			case <-r.Context().Done():
-				logger.Info(r.Context(), "retry cancelled due to context cancellation",
-					zap.String("user_id", userID),
-					zap.String("dst_key", dstKey),
-					zap.Int("completed_retries", i))
-				// Return success since data is in MinIO
-				writeCopyObjectResultXML(w, result.ETag, result.LastModified)
-				return
-			}
-
-			if retryErr := h.oss3UC.CreateFileRecord(r.Context(), file); retryErr == nil {
-				logger.Info(r.Context(), "file record created successfully after retry",
-					zap.String("user_id", userID),
-					zap.String("dst_key", dstKey),
-					zap.Int("attempt", i+2))
-				break
-			} else if i == len(dbRetryDelays)-1 {
-				// All retries failed — log for reconciliation
-				logger.Error(r.Context(), "failed to create file record after all retries, orphaned object",
-					zap.String("user_id", userID),
-					zap.String("dst_bucket", dstBucket),
-					zap.String("dst_key", dstKey),
-					zap.Error(retryErr))
-				RecordOrphanedRecord("copy_failed", userID)
-			}
+		if retryErr := retryWithBackoff(r.Context(), dbRetryDelays, userID, dstKey, func() error {
+			return h.oss3UC.CreateFileRecord(r.Context(), file)
+		}); retryErr != nil {
+			// All retries failed — log for reconciliation
+			logger.Error(r.Context(), "failed to create file record after all retries, orphaned object",
+				zap.String("user_id", userID),
+				zap.String("dst_bucket", dstBucket),
+				zap.String("dst_key", dstKey),
+				zap.Error(retryErr))
+			RecordOrphanedRecord("copy_failed", userID)
 		}
 	}
 
@@ -885,7 +867,7 @@ func (h *OSS3Handler) handleDeleteObjects(w http.ResponseWriter, r *http.Request
 
 	// Limit XML request body to prevent memory exhaustion.
 	// S3 spec allows up to 1000 keys per request; typical XML is ~50KB.
-	r.Body = http.MaxBytesReader(w, r.Body, maxDeleteBodySize)
+	r.Body = http.MaxBytesReader(w, r.Body, maxXMLRequestBodySize)
 
 	// Parse XML request body
 	type deleteRequest struct {
@@ -1204,6 +1186,34 @@ func isQuotaExceededError(err error) bool {
 // The total wait budget is ~2.6s; all delays respect context cancellation.
 var dbRetryDelays = []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
 
+// retryWithBackoff executes fn with exponential backoff, respecting context cancellation.
+// Returns nil on success, or the last error after all retries are exhausted.
+// The userID and key parameters are used for logging context.
+func retryWithBackoff(ctx context.Context, delays []time.Duration, userID, key string, fn func() error) error {
+	for i, delay := range delays {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			logger.Info(ctx, "retry cancelled due to context cancellation",
+				zap.String("user_id", userID),
+				zap.String("key", key),
+				zap.Int("completed_retries", i))
+			return ctx.Err()
+		}
+
+		if err := fn(); err == nil {
+			logger.Info(ctx, "operation succeeded after retry",
+				zap.String("user_id", userID),
+				zap.String("key", key),
+				zap.Int("attempt", i+2))
+			return nil
+		} else if i == len(delays)-1 {
+			return err
+		}
+	}
+	return nil
+}
+
 // deleteFileRecordWithRetry attempts to delete a file record from the DB with retry logic.
 // This compensates for transient DB failures after a successful backend operation.
 // If all retries fail, it logs an error and records an orphaned record for manual cleanup.
@@ -1217,33 +1227,15 @@ func (h *OSS3Handler) deleteFileRecordWithRetry(ctx context.Context, userID, key
 			zap.Error(err))
 	}
 
-	// Retry up to len(dbRetryDelays) times with exponential backoff
-	for i, delay := range dbRetryDelays {
-		// Respect context cancellation (client disconnect)
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			logger.Info(ctx, "retry cancelled due to context cancellation",
-				zap.String("user_id", userID),
-				zap.String("key", key),
-				zap.Int("completed_retries", i))
-			return
-		}
-
-		if retryErr := h.oss3UC.DeleteFileRecord(ctx, userID, key); retryErr == nil {
-			logger.Info(ctx, "file record deleted successfully after retry",
-				zap.String("user_id", userID),
-				zap.String("key", key),
-				zap.Int("attempt", i+2))
-			return
-		} else if i == len(dbRetryDelays)-1 {
-			// All retries failed — log for manual intervention or async cleanup
-			logger.Error(ctx, "failed to delete file record after all retries, orphaned record",
-				zap.String("user_id", userID),
-				zap.String("key", key),
-				zap.Error(retryErr))
-			RecordOrphanedRecord("delete_failed", userID)
-		}
+	if err := retryWithBackoff(ctx, dbRetryDelays, userID, key, func() error {
+		return h.oss3UC.DeleteFileRecord(ctx, userID, key)
+	}); err != nil {
+		// All retries failed — log for manual intervention or async cleanup
+		logger.Error(ctx, "failed to delete file record after all retries, orphaned record",
+			zap.String("user_id", userID),
+			zap.String("key", key),
+			zap.Error(err))
+		RecordOrphanedRecord("delete_failed", userID)
 	}
 }
 

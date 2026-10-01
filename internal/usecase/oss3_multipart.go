@@ -125,7 +125,7 @@ func (uc *OSS3Usecase) PutObjectWithComp(
 				zap.String("bucket", bucket),
 				zap.String("key", key),
 				zap.Error(compErr))
-			return fmt.Errorf("create file record failed (compensation also failed): %w", err)
+			return fmt.Errorf("create file record failed: %w; compensation also failed: %v", err, compErr)
 		}
 		return fmt.Errorf("create file record failed, backend object cleaned up: %w", err)
 	}

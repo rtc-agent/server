@@ -81,7 +81,14 @@ func (uc *OSS3Usecase) CommitQuota(ctx context.Context, userID, requestID string
 	).Int()
 	if err != nil {
 		// Quota commit Lua script failed — clean up the marker so a retry can succeed.
-		uc.redis.Del(ctx, markerKey)
+		// If cleanup itself fails, log at Error level so operators can investigate;
+		// the marker will expire via TTL (24h) but will block retries until then.
+		if delErr := uc.redis.Del(ctx, markerKey).Err(); delErr != nil {
+			logger.Error(ctx, "failed to cleanup quota commit marker after Lua failure",
+				zap.String("user_id", userID),
+				zap.String("request_id", requestID),
+				zap.Error(delErr))
+		}
 		return fmt.Errorf("quota commit: %w", err)
 	}
 	return nil
@@ -96,9 +103,11 @@ func (uc *OSS3Usecase) ReleaseQuota(ctx context.Context, userID, requestID strin
 
 	script := uc.scripts[cache.OSS3ScriptQuotaRollback]
 	result, err := script.Run(ctx, uc.redis, []string{pendingKey}).Int()
-	// LOW-17 fix: add structured logging for best-effort quota release
 	if err != nil {
-		logger.Debug(ctx, "quota release failed (best-effort, TTL will cleanup)",
+		// Log at Warn level so persistent Redis issues are visible in monitoring.
+		// The pending key will eventually expire via TTL, but operators should
+		// be aware of ongoing failures.
+		logger.Warn(ctx, "quota release failed (best-effort, TTL will cleanup)",
 			zap.String("user_id", userID),
 			zap.String("request_id", requestID),
 			zap.Error(err))

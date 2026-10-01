@@ -198,63 +198,71 @@ func NewOSS3MetricsMiddleware() func(http.Handler) http.Handler {
 	}
 }
 
-// RecordMultipartUploadStart records the start of a multipart upload.
+// RecordMultipartUploadStart increments the active multipart uploads gauge for the given user.
+// Called when a CreateMultipartUpload request succeeds.
 func RecordMultipartUploadStart(userID string) {
 	oss3MultipartUploadsActive.WithLabelValues(userID).Inc()
 }
 
-// RecordMultipartUploadEnd records the completion or abort of a multipart upload.
+// RecordMultipartUploadEnd decrements the active multipart uploads gauge for the given user.
+// Called when a multipart upload is completed or aborted.
 func RecordMultipartUploadEnd(userID string) {
 	oss3MultipartUploadsActive.WithLabelValues(userID).Dec()
 }
 
-// RecordBackendError records a backend error.
+// RecordBackendError increments the backend error counter for the given operation and error type.
+// Used for alerting on storage backend failures.
 func RecordBackendError(operation, errorType string) {
 	oss3BackendErrorsTotal.WithLabelValues(operation, errorType).Inc()
 }
 
-// RecordQuotaUsage updates the quota usage gauge for a user.
+// RecordQuotaUsage sets the current quota usage gauge for the given user.
+// Called after reconciliation to reflect the corrected quota value.
 func RecordQuotaUsage(userID string, bytes int64) {
 	oss3QuotaUsageBytes.WithLabelValues(userID).Set(float64(bytes))
 }
 
-// RecordInstantUpload records an instant upload hit.
-// Types: "db_hit", "minio_repair", "multipart".
+// RecordInstantUpload increments the instant upload hit counter for the given type.
+// Types: "db_hit" (both DB and MinIO confirm), "minio_repair" (MinIO hit, DB repaired),
+// "multipart" (multipart upload instant hit).
 func RecordInstantUpload(uploadType string) {
 	oss3InstantUploadTotal.WithLabelValues(uploadType).Inc()
 }
 
-// RecordInstantUploadRepairError records a DB repair failure during instant upload.
+// RecordInstantUploadRepairError increments the counter for DB repair failures
+// during instant upload. Called when MinIO has the file but the DB record repair fails.
 func RecordInstantUploadRepairError() {
 	oss3InstantUploadRepairErrorTotal.Inc()
 }
 
-// RecordConsistencyViolation records a DB/MinIO consistency violation.
-// Types: "db_has_minio_missing", "minio_has_db_missing".
+// RecordConsistencyViolation increments the consistency violation counter for the given type.
+// Types: "db_has_minio_missing" (DB record exists but MinIO file missing),
+// "minio_has_db_missing" (MinIO has file but DB record missing).
 func RecordConsistencyViolation(violationType string) {
 	oss3ConsistencyViolationTotal.WithLabelValues(violationType).Inc()
 }
 
-// RecordOrphanedRecord records an orphaned record that failed to delete.
-// LOW-18 fix: Called when backend delete succeeds but DB delete fails after all retries.
+// RecordOrphanedRecord increments the orphaned record counter for the given operation and user.
+// Called when backend delete succeeds but DB delete fails after all retries.
 func RecordOrphanedRecord(operation, userID string) {
 	oss3OrphanedRecordTotal.WithLabelValues(operation, userID).Inc()
 }
 
-// RecordOrphanedQuotaCommit records a quota commit that failed after all retries
-// while the upload succeeded. Reconciliation will eventually fix the drift.
+// RecordOrphanedQuotaCommit increments the orphaned quota commit counter for the given user.
+// Called when quota commit fails after all retries while the upload succeeded.
+// Reconciliation will eventually fix the drift.
 func RecordOrphanedQuotaCommit(userID string) {
 	oss3OrphanedQuotaCommitTotal.WithLabelValues(userID).Inc()
 }
 
-// RecordQuotaCommitRetry records a single quota commit retry attempt.
+// RecordQuotaCommitRetry increments the quota commit retry counter.
+// Called each time a transient Redis error triggers a retry during quota commit.
 func RecordQuotaCommitRetry() {
 	oss3QuotaCommitRetryTotal.Inc()
 }
 
-// RecordQuotaDrift records the absolute drift between Redis and DB quota values.
-// Should be called by the RunCleanup caller after each reconciliation cycle,
-// using ReconcileResult.TotalDriftBytes from the usecase layer.
+// RecordQuotaDrift sets the absolute drift between Redis quota counter and DB truth.
+// Called by the reconciliation loop after each cycle to track quota accuracy.
 func RecordQuotaDrift(driftBytes int64) {
 	oss3QuotaDriftBytes.Set(float64(driftBytes))
 }

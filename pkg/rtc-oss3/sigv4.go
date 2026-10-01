@@ -149,9 +149,13 @@ func ParseAuthorizationHeader(auth string) (*Credential, []string, string, error
 		return nil, nil, "", fmt.Errorf("invalid authorization header prefix")
 	}
 
-	parts := strings.Split(auth[17:], ", ")
+	parts := strings.Split(auth[17:], ",")
 	if len(parts) != 3 {
 		return nil, nil, "", fmt.Errorf("invalid authorization header format: expected 3 parts, got %d", len(parts))
+	}
+	// Trim whitespace from each part to handle varying whitespace (e.g., ", " vs "," vs ",\t")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
 	}
 
 	// Validate each part is non-empty, has the required '=' separator, and

@@ -258,8 +258,7 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 	// Limit XML request body to 1 MB to prevent memory exhaustion.
 	// A typical complete request with 10 000 parts is ~1 MB of XML;
 	// anything larger is either malformed or malicious.
-	const maxCompleteBodySize = 1 << 20 // 1 MB
-	r.Body = http.MaxBytesReader(w, r.Body, maxCompleteBodySize)
+	r.Body = http.MaxBytesReader(w, r.Body, maxXMLRequestBodySize)
 
 	// Parse XML request body
 	type completeRequest struct {
@@ -473,13 +472,53 @@ func (h *OSS3MultipartHandler) handleListParts(
 		return
 	}
 
-	// List parts from backend
-	parts, err := h.oss3UC.Backend().ListParts(r.Context(), bucket, key, uploadID)
+	// Parse pagination parameters
+	const maxPartsPerPage = 1000
+	partNumberMarker := 0
+	if marker := r.URL.Query().Get("part-number-marker"); marker != "" {
+		if parsed, err := strconv.Atoi(marker); err == nil && parsed >= 0 {
+			partNumberMarker = parsed
+		}
+	}
+	maxParts := maxPartsPerPage
+	if mp := r.URL.Query().Get("max-parts"); mp != "" {
+		if parsed, err := strconv.Atoi(mp); err == nil && parsed > 0 && parsed <= maxPartsPerPage {
+			maxParts = parsed
+		}
+	}
+
+	// List all parts from backend (backend handles its own pagination internally)
+	allParts, err := h.oss3UC.Backend().ListParts(r.Context(), bucket, key, uploadID)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		span.RecordError(err)
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
+	}
+
+	// Paginate: find parts after partNumberMarker
+	var paginatedParts []rtcoss3.PartInfo
+	for _, p := range allParts {
+		if p.PartNumber > partNumberMarker {
+			paginatedParts = append(paginatedParts, p)
+			if len(paginatedParts) >= maxParts {
+				break
+			}
+		}
+	}
+
+	isTruncated := false
+	nextPartNumberMarker := 0
+	if len(paginatedParts) > 0 {
+		lastPart := paginatedParts[len(paginatedParts)-1]
+		nextPartNumberMarker = lastPart.PartNumber
+		// Check if there are more parts after the last returned one
+		for _, p := range allParts {
+			if p.PartNumber > lastPart.PartNumber {
+				isTruncated = true
+				break
+			}
+		}
 	}
 
 	// Build XML response per S3 spec
@@ -498,18 +537,21 @@ func (h *OSS3MultipartHandler) handleListParts(
 		Parts                []xmlPart `xml:"Part"`
 		IsTruncated          bool      `xml:"IsTruncated"`
 		MaxParts             int       `xml:"MaxParts"`
+		PartNumberMarker     int       `xml:"PartNumberMarker"`
 		NextPartNumberMarker int       `xml:"NextPartNumberMarker"`
 	}
 
 	resp := xmlListPartsResult{
-		Bucket:      bucket,
-		Key:         key,
-		UploadID:    uploadID,
-		MaxParts:    1000,
-		IsTruncated: false,
+		Bucket:               bucket,
+		Key:                  key,
+		UploadID:             uploadID,
+		MaxParts:             maxParts,
+		PartNumberMarker:     partNumberMarker,
+		NextPartNumberMarker: nextPartNumberMarker,
+		IsTruncated:          isTruncated,
 	}
 
-	for _, p := range parts {
+	for _, p := range paginatedParts {
 		resp.Parts = append(resp.Parts, xmlPart{
 			PartNumber:   p.PartNumber,
 			LastModified: p.LastModified.UTC().Format(rtcoss3.S3TimeFormat),
