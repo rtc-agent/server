@@ -37,7 +37,7 @@ func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, 
 		return "", fmt.Errorf("quota reserve: %w", err)
 	}
 	if result == 0 {
-		return "", fmt.Errorf("user %s: %w", userID, rtcoss3.ErrQuotaExceeded)
+		return "", fmt.Errorf("check quota: %w", rtcoss3.ErrQuotaExceeded)
 	}
 	return requestID, nil
 }
@@ -121,7 +121,7 @@ func (uc *OSS3Usecase) AdjustQuota(ctx context.Context, userID string, deltaByte
 		return fmt.Errorf("quota adjust: %w", err)
 	}
 	if result == 0 {
-		return fmt.Errorf("quota adjust would go negative for user %s", userID)
+		return fmt.Errorf("quota adjust would go negative: %w", rtcoss3.ErrQuotaExceeded)
 	}
 	return nil
 }

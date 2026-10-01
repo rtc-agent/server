@@ -83,6 +83,9 @@ type Backend interface {
 	GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, ObjectMeta, error)
 	GetObjectRange(ctx context.Context, bucket, key string, start, end int64) (io.ReadCloser, ObjectMeta, error) // R9 H2: Range download
 	DeleteObject(ctx context.Context, bucket, key string) error
+	// DeleteObjects performs batch deletion of multiple objects.
+	// NOTE: This method is implemented but not yet exposed as an HTTP endpoint
+	// (POST /{bucket}?delete=). It is available for internal use and future API exposure.
 	DeleteObjects(ctx context.Context, bucket string, keys []string) ([]DeleteResult, error) // R9 H3: Batch delete — returns one result per key; success has Code==""
 	HeadObject(ctx context.Context, bucket, key string) (ObjectMeta, error)
 	ListObjects(ctx context.Context, bucket string, opts ListObjectsOptions) (*ListObjectsResult, error)

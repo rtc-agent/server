@@ -211,6 +211,12 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 		return
 	}
 
+	// Limit XML request body to 1 MB to prevent memory exhaustion.
+	// A typical complete request with 10 000 parts is ~1 MB of XML;
+	// anything larger is either malformed or malicious.
+	const maxCompleteBodySize = 1 << 20 // 1 MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxCompleteBodySize)
+
 	// Parse XML request body
 	type completeRequest struct {
 		XMLName xml.Name `xml:"CompleteMultipartUpload"`
@@ -463,15 +469,11 @@ func (h *OSS3MultipartHandler) handleListParts(
 // ServeHTTP routes multipart upload requests to the appropriate handler.
 func (h *OSS3MultipartHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract bucket and key from path
+	// NOTE: Bucket validation is skipped here because OSS3Handler.ServeHTTP
+	// already validated the bucket before delegating to this handler.
 	bucket, key, ok := parseS3Path(r.URL.Path)
 	if !ok {
 		WriteS3Error(w, rtcoss3.ErrInvalidURI, r.URL.Path, "")
-		return
-	}
-
-	// Validate bucket name
-	if bucket != h.bucket {
-		WriteS3Error(w, rtcoss3.ErrNoSuchBucket, r.URL.Path, "")
 		return
 	}
 

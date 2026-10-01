@@ -43,16 +43,9 @@ func (h *OSS3Handler) OSS3Usecase() *usecase.OSS3Usecase {
 
 // ServeHTTP routes S3 requests to the appropriate handler.
 func (h *OSS3Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Extract bucket and key from path: /{bucket}/{key}
-	bucket, key, ok := parseS3Path(r.URL.Path)
+	// Extract and validate bucket and key from path
+	bucket, key, ok := h.validateS3Request(w, r)
 	if !ok {
-		WriteS3Error(w, rtcoss3.ErrInvalidURI, r.URL.Path, "")
-		return
-	}
-
-	// Validate bucket name
-	if bucket != h.bucket {
-		WriteS3Error(w, rtcoss3.ErrNoSuchBucket, r.URL.Path, "")
 		return
 	}
 
@@ -94,6 +87,23 @@ func (h *OSS3Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		WriteS3Error(w, rtcoss3.ErrMethodNotAllowed, r.URL.Path, "")
 	}
+}
+
+// validateS3Request extracts bucket and key from the S3 path and validates the bucket.
+// Returns (bucket, key, true) on success, or writes an error and returns (..., false) on failure.
+func (h *OSS3Handler) validateS3Request(w http.ResponseWriter, r *http.Request) (bucket, key string, ok bool) {
+	bucket, key, ok = parseS3Path(r.URL.Path)
+	if !ok {
+		WriteS3Error(w, rtcoss3.ErrInvalidURI, r.URL.Path, "")
+		return "", "", false
+	}
+
+	if bucket != h.bucket {
+		WriteS3Error(w, rtcoss3.ErrNoSuchBucket, r.URL.Path, "")
+		return "", "", false
+	}
+
+	return bucket, key, true
 }
 
 // isMultipartRequest checks if the request is a multipart upload operation.
@@ -152,6 +162,11 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 		WriteS3Error(w, rtcoss3.ErrMissingContentLength, r.URL.Path, "")
 		return
 	}
+
+	// Limit request body to the declared Content-Length.
+	// This prevents a malicious client from sending more data than declared
+	// (and more than quota reserved), which would otherwise be buffered.
+	r.Body = http.MaxBytesReader(w, r.Body, contentLength)
 
 	userID := ExtractUserIDFromContext(r.Context())
 	if userID == "" {
@@ -240,14 +255,18 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	}
 	// MinIO also has no file, continue with normal upload flow
 
-	// Reserve quota; release on any subsequent failure.
+	// Reserve quota; release on any subsequent failure unless committed.
 	quotaRequestID, err := h.oss3UC.CheckAndReserveQuota(r.Context(), userID, contentLength)
 	if err != nil {
 		writeQuotaReserveError(w, err, r.URL.Path)
 		return
 	}
+	// quotaCommitted tracks whether quota has been charged to the user.
+	// If false at function exit, the defer releases the pending reservation.
+	// If true, the defer is a no-op — quota is already accounted for.
+	quotaCommitted := false
 	defer func() {
-		if err != nil {
+		if !quotaCommitted {
 			h.oss3UC.ReleaseQuota(r.Context(), userID, quotaRequestID)
 		}
 	}()
@@ -271,6 +290,8 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 			zap.String("user_id", userID),
 			zap.String("quota_request_id", quotaRequestID),
 			zap.Error(err))
+	} else {
+		quotaCommitted = true
 	}
 
 	// Create file record in DB with compensation
@@ -325,6 +346,25 @@ func (h *OSS3Handler) handleGetObject(w http.ResponseWriter, r *http.Request, bu
 	if err != nil {
 		WriteS3Error(w, rtcoss3.ErrInvalidRange, r.URL.Path, "")
 		return
+	}
+
+	// Resolve suffix range (e.g. "bytes=-500") to absolute byte positions.
+	// parseRangeHeader returns start < 0 for suffix ranges; we need the file
+	// size to convert to (fileSize - suffixLen, fileSize - 1).
+	if hasRange && start < 0 {
+		meta, headErr := h.oss3UC.Backend().HeadObject(r.Context(), bucket, key)
+		if headErr != nil {
+			WriteS3Error(w, mapBackendError(headErr), r.URL.Path, "")
+			return
+		}
+		suffixLen := -start
+		if suffixLen >= meta.Size {
+			// Suffix larger than file — return entire file per RFC 7233 §2.1
+			start = 0
+		} else {
+			start = meta.Size - suffixLen
+		}
+		end = meta.Size - 1
 	}
 
 	var obj io.ReadCloser
@@ -506,6 +546,13 @@ func (h *OSS3Handler) handleCopyObject(
 		return
 	}
 
+	// Validate source key belongs to the requesting user.
+	// Without this check, a user could reference another user's file via X-Amz-Copy-Source.
+	if err := rtcoss3.ValidateKey(srcKey, userID); err != nil {
+		WriteS3Error(w, err, r.URL.Path, "")
+		return
+	}
+
 	// Get source object size for quota check
 	srcMeta, err := h.oss3UC.Backend().HeadObject(r.Context(), srcBucket, srcKey)
 	if err != nil {
@@ -601,17 +648,25 @@ func (h *OSS3Handler) handleListObjects(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Parse query parameters
-	prefix := r.URL.Query().Get("prefix")
-	delimiter := r.URL.Query().Get("delimiter")
-	marker := r.URL.Query().Get("marker")
-	maxKeys := parseMaxKeys(r.URL.Query().Get("max-keys"))
+	// Parse query parameters — supports both V1 (marker) and V2 (list-type=2) semantics.
+	q := r.URL.Query()
+	prefix := q.Get("prefix")
+	delimiter := q.Get("delimiter")
+	maxKeys := parseMaxKeys(q.Get("max-keys"))
 
 	opts := rtcoss3.ListObjectsOptions{
 		Prefix:    prefix,
 		Delimiter: delimiter,
-		Marker:    marker,
 		MaxKeys:   maxKeys,
+	}
+
+	// V1: marker-based pagination
+	// V2: continuation-token-based pagination, activated by list-type=2
+	if q.Get("list-type") == "2" {
+		opts.ContinuationToken = q.Get("continuation-token")
+		opts.StartAfter = q.Get("start-after")
+	} else {
+		opts.Marker = q.Get("marker")
 	}
 
 	// List objects from backend
@@ -619,6 +674,13 @@ func (h *OSS3Handler) handleListObjects(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
+	}
+
+	// Use the marker (V1) or continuation-token (V2) for response rendering.
+	// writeListBucketResultXML uses "marker" as the canonical term for both.
+	marker := q.Get("marker")
+	if opts.ContinuationToken != "" {
+		marker = opts.ContinuationToken
 	}
 
 	writeListBucketResultXML(w, bucket, prefix, marker, maxKeys, result)

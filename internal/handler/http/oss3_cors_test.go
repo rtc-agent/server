@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -152,7 +153,7 @@ func TestIsOSS3OriginAllowed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isOSS3OriginAllowed(tt.origin, tt.allowed)
+			result := middleware.IsOriginAllowed(tt.origin, tt.allowed)
 			require.Equal(t, tt.expected, result)
 		})
 	}

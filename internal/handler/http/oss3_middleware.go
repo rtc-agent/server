@@ -9,7 +9,19 @@ import (
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 )
 
-// contextKey is a custom type for context keys to avoid collisions.
+// contextKey is a custom type for OSS3-specific context keys.
+//
+// NOTE: The project-wide convention (internal/infra/contextx) uses an unexported
+// struct type `contextKey{ name string }` for keys. OSS3 intentionally uses a
+// `string`-backed type here because:
+//   - OSS3's user_id is a string (from the session token), not a uuid.UUID like
+//     contextx's userIDKey. Mixing types would force lossy conversions.
+//   - OSS3 keys are exported (ContextKeyUserID, etc.) for cross-package access
+//     between the handler and middleware, whereas contextx keys are unexported
+//     and accessed via getter functions.
+//
+// Keeping them separate avoids coupling OSS3 to the contextx package and
+// preserves the distinct semantics of each key namespace.
 type contextKey string
 
 const (

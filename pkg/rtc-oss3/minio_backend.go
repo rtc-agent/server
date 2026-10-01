@@ -128,7 +128,7 @@ func (b *MinIOBackend) PutObject(ctx context.Context, bucket, key string, reader
 		ContentType: contentType,
 	})
 	if err != nil {
-		return "", mapMinIOError(err, "put_object")
+		return "", mapMinIOError(ctx, err, "put_object")
 	}
 	return info.ETag, nil
 }
@@ -137,13 +137,13 @@ func (b *MinIOBackend) PutObject(ctx context.Context, bucket, key string, reader
 func (b *MinIOBackend) GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, ObjectMeta, error) {
 	obj, err := b.client.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
 	if err != nil {
-		return nil, ObjectMeta{}, mapMinIOError(err, "get_object")
+		return nil, ObjectMeta{}, mapMinIOError(ctx, err, "get_object")
 	}
 
 	stat, err := obj.Stat()
 	if err != nil {
 		_ = obj.Close()
-		return nil, ObjectMeta{}, mapMinIOError(err, "get_object.stat")
+		return nil, ObjectMeta{}, mapMinIOError(ctx, err, "get_object.stat")
 	}
 
 	meta := ObjectMeta{
@@ -165,13 +165,13 @@ func (b *MinIOBackend) GetObjectRange(ctx context.Context, bucket, key string, s
 
 	obj, err := b.client.GetObject(ctx, bucket, key, opts)
 	if err != nil {
-		return nil, ObjectMeta{}, mapMinIOError(err, "get_object_range")
+		return nil, ObjectMeta{}, mapMinIOError(ctx, err, "get_object_range")
 	}
 
 	stat, err := obj.Stat()
 	if err != nil {
 		_ = obj.Close()
-		return nil, ObjectMeta{}, mapMinIOError(err, "get_object_range.stat")
+		return nil, ObjectMeta{}, mapMinIOError(ctx, err, "get_object_range.stat")
 	}
 
 	meta := ObjectMeta{
@@ -188,7 +188,7 @@ func (b *MinIOBackend) GetObjectRange(ctx context.Context, bucket, key string, s
 func (b *MinIOBackend) DeleteObject(ctx context.Context, bucket, key string) error {
 	err := b.client.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
 	if err != nil {
-		return mapMinIOError(err, "delete_object")
+		return mapMinIOError(ctx, err, "delete_object")
 	}
 	return nil
 }
@@ -236,7 +236,7 @@ func (b *MinIOBackend) DeleteObjects(ctx context.Context, bucket string, keys []
 func (b *MinIOBackend) HeadObject(ctx context.Context, bucket, key string) (ObjectMeta, error) {
 	stat, err := b.client.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
 	if err != nil {
-		return ObjectMeta{}, mapMinIOError(err, "head_object")
+		return ObjectMeta{}, mapMinIOError(ctx, err, "head_object")
 	}
 	return ObjectMeta{
 		Key:          stat.Key,
@@ -281,7 +281,7 @@ func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts List
 
 	for object := range b.client.ListObjects(ctx, bucket, listOpts) {
 		if object.Err != nil {
-			return nil, mapMinIOError(object.Err, "list_objects")
+			return nil, mapMinIOError(ctx, object.Err, "list_objects")
 		}
 
 		// If delimiter is set, keys ending with delimiter are common prefixes
@@ -315,7 +315,7 @@ func (b *MinIOBackend) CopyObject(ctx context.Context, srcBucket, srcKey, dstBuc
 
 	info, err := b.client.CopyObject(ctx, dst, src)
 	if err != nil {
-		return ObjectMeta{}, mapMinIOError(err, "copy_object")
+		return ObjectMeta{}, mapMinIOError(ctx, err, "copy_object")
 	}
 
 	return ObjectMeta{
@@ -332,7 +332,7 @@ func (b *MinIOBackend) CreateMultipartUpload(ctx context.Context, bucket, key, c
 		ContentType: contentType,
 	})
 	if err != nil {
-		return nil, mapMinIOError(err, "create_multipart_upload")
+		return nil, mapMinIOError(ctx, err, "create_multipart_upload")
 	}
 	return &MultipartUploadResult{UploadID: uploadID}, nil
 }
@@ -341,7 +341,7 @@ func (b *MinIOBackend) CreateMultipartUpload(ctx context.Context, bucket, key, c
 func (b *MinIOBackend) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int, reader io.Reader, size int64) (string, error) {
 	part, err := b.core.PutObjectPart(ctx, bucket, key, uploadID, partNumber, reader, size, minio.PutObjectPartOptions{})
 	if err != nil {
-		return "", mapMinIOError(err, "upload_part")
+		return "", mapMinIOError(ctx, err, "upload_part")
 	}
 	return part.ETag, nil
 }
@@ -357,7 +357,7 @@ func (b *MinIOBackend) CompleteMultipartUpload(ctx context.Context, bucket, key,
 	}
 	info, err := b.core.CompleteMultipartUpload(ctx, bucket, key, uploadID, coreParts, minio.PutObjectOptions{})
 	if err != nil {
-		return "", mapMinIOError(err, "complete_multipart_upload")
+		return "", mapMinIOError(ctx, err, "complete_multipart_upload")
 	}
 	return info.ETag, nil
 }
@@ -366,7 +366,7 @@ func (b *MinIOBackend) CompleteMultipartUpload(ctx context.Context, bucket, key,
 func (b *MinIOBackend) AbortMultipartUpload(ctx context.Context, bucket, key, uploadID string) error {
 	err := b.core.AbortMultipartUpload(ctx, bucket, key, uploadID)
 	if err != nil {
-		return mapMinIOError(err, "abort_multipart_upload")
+		return mapMinIOError(ctx, err, "abort_multipart_upload")
 	}
 	return nil
 }
@@ -381,7 +381,7 @@ func (b *MinIOBackend) ListParts(ctx context.Context, bucket, key, uploadID stri
 	for {
 		result, err := b.core.ListObjectParts(ctx, bucket, key, uploadID, partNumberMarker, maxPartsPerPage)
 		if err != nil {
-			return nil, mapMinIOError(err, "list_parts")
+			return nil, mapMinIOError(ctx, err, "list_parts")
 		}
 
 		for _, p := range result.ObjectParts {
@@ -459,72 +459,93 @@ func (b *MinIOBackend) HealthCheck(ctx context.Context) error {
 // The returned errors are wrapped with the operation name and the underlying
 // cause, so callers can detect them with errors.Is(). The handler layer is
 // responsible for mapping these sentinels to S3-compatible error responses.
-func mapMinIOError(err error, operation string) error {
+//
+// ctx is used for debug logging so trace context propagates correctly; if ctx
+// is nil, context.Background() is used as a fallback.
+func mapMinIOError(ctx context.Context, err error, operation string) error {
 	if err == nil {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	// Try typed error detection first (preferred for MinIO SDK errors)
 	var errResp minio.ErrorResponse
 	if errors.As(err, &errResp) {
-		switch errResp.Code {
-		case "NoSuchKey":
-			logger.Debug(context.Background(), "MinIO error mapped: NoSuchKey",
-				zap.String("operation", operation))
-			return fmt.Errorf("minio %s: %w", operation, ErrBackendKeyNotFound)
-		case "AccessDenied":
-			logger.Debug(context.Background(), "MinIO error mapped: AccessDenied",
-				zap.String("operation", operation))
-			return fmt.Errorf("minio %s: %w", operation, ErrBackendAccessDenied)
-		case "NoSuchBucket":
-			logger.Debug(context.Background(), "MinIO error mapped: NoSuchBucket",
-				zap.String("operation", operation))
-			return fmt.Errorf("minio %s: %w", operation, ErrBackendBucketNotFound)
-		case "InsufficientStorage":
-			logger.Debug(context.Background(), "MinIO error mapped: InsufficientStorage",
-				zap.String("operation", operation))
-			return fmt.Errorf("minio %s: %w", operation, ErrInsufficientStorage)
+		if sentinel, ok := mapTypedMinIOError(ctx, errResp.Code, operation); ok {
+			return sentinel
 		}
 	}
 
 	// Fallback to string matching for network-level errors
+	return mapStringMinIOError(err, operation)
+}
+
+// mapTypedMinIOError maps MinIO error response codes to sentinel errors.
+func mapTypedMinIOError(ctx context.Context, code, operation string) (error, bool) {
+	var sentinel error
+	switch code {
+	case "NoSuchKey":
+		sentinel = ErrBackendKeyNotFound
+	case "AccessDenied":
+		sentinel = ErrBackendAccessDenied
+	case "NoSuchBucket":
+		sentinel = ErrBackendBucketNotFound
+	case "InsufficientStorage":
+		sentinel = ErrInsufficientStorage
+	default:
+		return nil, false
+	}
+	logger.Debug(ctx, "MinIO error mapped",
+		zap.String("operation", operation),
+		zap.String("code", code))
+	return fmt.Errorf("minio %s: %w", operation, sentinel), true
+}
+
+// mapStringMinIOError maps MinIO errors by string matching on the error message.
+func mapStringMinIOError(err error, operation string) error {
 	errStr := err.Error()
 
-	// Disk full / quota — map to ErrInsufficientStorage
-	if strings.Contains(errStr, "no space left on device") ||
-		strings.Contains(errStr, "disk full") ||
-		strings.Contains(errStr, "disk quota exceeded") {
+	diskFullPatterns := []string{"no space left on device", "disk full", "disk quota exceeded"}
+	if containsAny(errStr, diskFullPatterns) {
 		return fmt.Errorf("minio %s: %w", operation, ErrInsufficientStorage)
 	}
 
-	// Key not found — 404-style errors from MinIO.
-	if strings.Contains(errStr, "object does not exist") ||
-		strings.Contains(errStr, "The specified key does not exist") ||
-		strings.Contains(errStr, "resource not found") {
+	keyNotFoundPatterns := []string{"object does not exist", "The specified key does not exist", "resource not found"}
+	if containsAny(errStr, keyNotFoundPatterns) {
 		return fmt.Errorf("minio %s: %w", operation, ErrBackendKeyNotFound)
 	}
 
-	// Access denied — permission errors from MinIO.
-	if strings.Contains(errStr, "Access Denied") ||
-		strings.Contains(errStr, "access denied") {
+	accessDeniedPatterns := []string{"Access Denied", "access denied"}
+	if containsAny(errStr, accessDeniedPatterns) {
 		return fmt.Errorf("minio %s: %w", operation, ErrBackendAccessDenied)
 	}
 
-	// Bucket not found.
-	if strings.Contains(errStr, "bucket does not exist") ||
-		strings.Contains(errStr, "The specified bucket does not exist") {
+	bucketNotFoundPatterns := []string{"bucket does not exist", "The specified bucket does not exist"}
+	if containsAny(errStr, bucketNotFoundPatterns) {
 		return fmt.Errorf("minio %s: %w", operation, ErrBackendBucketNotFound)
 	}
 
-	if strings.Contains(errStr, "connection refused") ||
-		strings.Contains(errStr, "no such host") {
+	networkPatterns := []string{"connection refused", "no such host"}
+	if containsAny(errStr, networkPatterns) {
 		return fmt.Errorf("minio %s: %w", operation, err)
 	}
 
-	if strings.Contains(errStr, "i/o timeout") ||
-		strings.Contains(errStr, "context deadline exceeded") {
+	timeoutPatterns := []string{"i/o timeout", "context deadline exceeded"}
+	if containsAny(errStr, timeoutPatterns) {
 		return fmt.Errorf("minio %s timeout: %w", operation, err)
 	}
 
 	return fmt.Errorf("minio %s: %w", operation, err)
+}
+
+// containsAny returns true if s contains any of the given substrings.
+func containsAny(s string, substrs []string) bool {
+	for _, sub := range substrs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }

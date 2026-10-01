@@ -15,9 +15,10 @@ import (
 //
 // Flow:
 // 1. Complete multipart upload in backend (MinIO)
-// 2. Create file record in DB
-// 3. Delete multipart upload record from DB
-// 4. If step 2 or 3 fails, attempt to delete the backend object (compensation)
+// 2. HeadObject to get actual size (may differ from parts sum due to compression/dedup)
+// 3. Create file record in DB
+// 4. Delete multipart upload record from DB
+// 5. If step 3 or 4 fails, attempt to delete the backend object (compensation)
 func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 	ctx context.Context,
 	userID, bucket, key, uploadID string,
@@ -29,8 +30,23 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 		return "", fmt.Errorf("complete multipart upload in backend: %w", err)
 	}
 
-	// Step 2 & 3: DB operations
-	dbErr := uc.completeMultipartUploadDBOps(ctx, userID, bucket, key, uploadID, etag)
+	// Step 2: Get actual object size from backend
+	// The size may differ from the sum of parts due to backend compression or deduplication
+	meta, err := uc.backend.HeadObject(ctx, bucket, key)
+	if err != nil {
+		// Compensation: try to delete the backend object
+		if compErr := uc.backend.DeleteObject(ctx, bucket, key); compErr != nil {
+			logger.Warn(ctx, "CompleteMultipartUpload HeadObject failed, compensation also failed",
+				zap.String("bucket", bucket),
+				zap.String("key", key),
+				zap.Error(compErr))
+			return "", fmt.Errorf("head object after complete (compensation also failed): %w", err)
+		}
+		return "", fmt.Errorf("head object after complete, backend object cleaned up: %w", err)
+	}
+
+	// Step 3 & 4: DB operations
+	dbErr := uc.completeMultipartUploadDBOps(ctx, userID, bucket, key, uploadID, etag, meta.Size)
 	if dbErr != nil {
 		// Compensation: try to delete the backend object
 		if compErr := uc.backend.DeleteObject(ctx, bucket, key); compErr != nil {
@@ -53,30 +69,14 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 func (uc *OSS3Usecase) completeMultipartUploadDBOps(
 	ctx context.Context,
 	userID, bucket, key, uploadID, etag string,
+	size int64,
 ) error {
-	// Get upload record to determine total size
-	upload, err := uc.uploadRepo.GetByUploadID(ctx, uploadID)
-	if err != nil {
-		return fmt.Errorf("get upload record: %w", err)
-	}
-
-	// List parts to calculate total size
-	dbParts, err := uc.uploadRepo.ListParts(ctx, upload.ID)
-	if err != nil {
-		return fmt.Errorf("list parts: %w", err)
-	}
-
-	var totalSize int64
-	for _, p := range dbParts {
-		totalSize += p.Size
-	}
-
-	// Create file record
+	// Create file record with actual size from backend (not calculated from parts)
 	file := &model.File{
 		UserID: userID,
 		Bucket: bucket,
 		Key:    key,
-		Size:   totalSize,
+		Size:   size,
 		ETag:   etag,
 	}
 	if err := uc.fileRepo.Create(ctx, file); err != nil {

@@ -143,10 +143,18 @@ func ParseAuthorizationHeader(auth string) (*Credential, []string, string, error
 		return nil, nil, "", fmt.Errorf("invalid authorization header format: expected 3 parts, got %d", len(parts))
 	}
 
-	// Validate each part has correct format (contains '=')
+	// Validate each part is non-empty, has the required '=' separator, and
+	// contains no leading/trailing commas. This rejects malformed headers
+	// with extra commas (e.g. ",, ") which could allow signature bypass.
 	for i, part := range parts {
+		if part == "" {
+			return nil, nil, "", fmt.Errorf("invalid authorization header format: part %d is empty", i)
+		}
 		if !strings.Contains(part, "=") {
 			return nil, nil, "", fmt.Errorf("invalid authorization header format: part %d missing '='", i)
+		}
+		if strings.HasSuffix(part, ",") || strings.HasPrefix(part, ",") {
+			return nil, nil, "", fmt.Errorf("invalid authorization header format: part %d has stray comma", i)
 		}
 	}
 

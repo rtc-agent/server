@@ -3,8 +3,8 @@ package httphandler
 import (
 	"context"
 	"net/http"
-	"strings"
 
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -39,7 +39,7 @@ func NewOSS3CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 			allowOrigin := ""
 			if containsOSS3Wildcard(origins) {
 				allowOrigin = "*"
-			} else if isOSS3OriginAllowed(origin, origins) {
+			} else if middleware.IsOriginAllowed(origin, origins) {
 				allowOrigin = origin
 			} else {
 				w.WriteHeader(http.StatusForbidden)
@@ -69,16 +69,6 @@ func NewOSS3CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 func containsOSS3Wildcard(origins []string) bool {
 	for _, o := range origins {
 		if o == "*" {
-			return true
-		}
-	}
-	return false
-}
-
-// isOSS3OriginAllowed checks if the origin is in the allowed list.
-func isOSS3OriginAllowed(origin string, allowed []string) bool {
-	for _, a := range allowed {
-		if strings.EqualFold(a, "*") || strings.EqualFold(a, origin) {
 			return true
 		}
 	}

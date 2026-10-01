@@ -28,11 +28,17 @@ func (uc *OSS3Usecase) CleanupExpiredUploads(ctx context.Context) (int, error) {
 
 	cleaned := 0
 	for _, upload := range expired {
-		// Abort in storage backend (best-effort)
+		// Abort in storage backend (best-effort).
+		// Backend may have already cleaned up the upload, so errors are logged
+		// at Debug level only — they do not indicate a real problem.
 		if uc.backend != nil {
 			// LOW-09 fix: use configured bucket instead of hardcoded value
-			_ = uc.backend.AbortMultipartUpload(ctx, uc.cfg.MinIO.Bucket, upload.Key, upload.UploadID)
-			// Ignore error — backend may have already cleaned up
+			if abortErr := uc.backend.AbortMultipartUpload(ctx, uc.cfg.MinIO.Bucket, upload.Key, upload.UploadID); abortErr != nil {
+				logger.Debug(ctx, "cleanup: backend abort returned error (may already be cleaned up)",
+					zap.String("key", upload.Key),
+					zap.String("upload_id", upload.UploadID),
+					zap.Error(abortErr))
+			}
 		}
 
 		// Delete parts from DB
@@ -117,7 +123,7 @@ func (uc *OSS3Usecase) CheckConcurrentUploadLimit(ctx context.Context, userID st
 		return fmt.Errorf("count active uploads: %w", err)
 	}
 	if count >= int64(maxUploads) {
-		return fmt.Errorf("user %s: %w", userID, rtcoss3.ErrMaxUploadsExceeded)
+		return fmt.Errorf("check concurrent uploads: %w", rtcoss3.ErrMaxUploadsExceeded)
 	}
 	return nil
 }

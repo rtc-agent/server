@@ -22,7 +22,7 @@ func CORS(allowedOrigins []string, isDevelopment bool) func(http.Handler) http.H
 					w.Header().Set("Access-Control-Allow-Origin", "*")
 				}
 				// Production + empty allow_origins: no CORS headers (reject cross-origin).
-			} else if isOriginAllowed(origin, allowedOrigins) {
+			} else if IsOriginAllowed(origin, allowedOrigins) {
 				originAllowed = true
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
@@ -47,7 +47,9 @@ func CORS(allowedOrigins []string, isDevelopment bool) func(http.Handler) http.H
 	}
 }
 
-func isOriginAllowed(origin string, allowed []string) bool {
+// IsOriginAllowed checks if the origin is in the allowed list.
+// Exported for reuse by other CORS implementations (e.g., OSS3).
+func IsOriginAllowed(origin string, allowed []string) bool {
 	for _, a := range allowed {
 		if strings.EqualFold(a, "*") || strings.EqualFold(a, origin) {
 			return true

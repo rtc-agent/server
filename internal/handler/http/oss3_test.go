@@ -105,8 +105,32 @@ func (m *mockBackend) GetObject(ctx context.Context, bucket, key string) (io.Rea
 }
 
 func (m *mockBackend) GetObjectRange(ctx context.Context, bucket, key string, start, end int64) (io.ReadCloser, rtcoss3.ObjectMeta, error) {
-	// Simplified implementation
-	return m.GetObject(ctx, bucket, key)
+	fullKey := bucket + "/" + key
+	data, ok := m.objects[fullKey]
+	if !ok {
+		return nil, rtcoss3.ObjectMeta{}, rtcoss3.ErrKeyNotFound
+	}
+
+	// Handle range request
+	if start < 0 {
+		// Suffix range: return last |start| bytes
+		start = int64(len(data)) + start
+		if start < 0 {
+			start = 0
+		}
+		end = int64(len(data)) - 1
+	}
+	if end >= int64(len(data)) {
+		end = int64(len(data)) - 1
+	}
+	if start > end || start >= int64(len(data)) {
+		return io.NopCloser(bytes.NewReader(nil)), m.meta[fullKey], nil
+	}
+
+	rangeData := data[start : end+1]
+	meta := m.meta[fullKey]
+	meta.Size = int64(len(rangeData))
+	return io.NopCloser(bytes.NewReader(rangeData)), meta, nil
 }
 
 func (m *mockBackend) DeleteObject(ctx context.Context, bucket, key string) error {
@@ -126,13 +150,57 @@ func (m *mockBackend) HeadObject(ctx context.Context, bucket, key string) (rtcos
 }
 
 func (m *mockBackend) ListObjects(ctx context.Context, bucket string, opts rtcoss3.ListObjectsOptions) (*rtcoss3.ListObjectsResult, error) {
-	// Simplified implementation
-	return &rtcoss3.ListObjectsResult{}, nil
+	result := &rtcoss3.ListObjectsResult{}
+
+	seenPrefixes := make(map[string]bool)
+	for fullKey, meta := range m.meta {
+		if len(fullKey) <= len(bucket) || fullKey[:len(bucket)+1] != bucket+"/" {
+			continue
+		}
+		key := fullKey[len(bucket)+1:]
+		if len(key) < len(opts.Prefix) || key[:len(opts.Prefix)] != opts.Prefix {
+			continue
+		}
+
+		// Handle delimiter (common prefixes)
+		if opts.Delimiter != "" {
+			rest := key[len(opts.Prefix):]
+			idx := bytes.Index([]byte(rest), []byte(opts.Delimiter))
+			if idx >= 0 {
+				commonPrefix := opts.Prefix + rest[:idx+len(opts.Delimiter)]
+				if !seenPrefixes[commonPrefix] {
+					seenPrefixes[commonPrefix] = true
+					result.CommonPrefixes = append(result.CommonPrefixes, commonPrefix)
+				}
+				continue
+			}
+		}
+
+		result.Objects = append(result.Objects, meta)
+		if opts.MaxKeys > 0 && len(result.Objects) >= opts.MaxKeys {
+			result.IsTruncated = true
+			break
+		}
+	}
+
+	return result, nil
 }
 
 func (m *mockBackend) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) (rtcoss3.ObjectMeta, error) {
-	// Simplified implementation
-	return rtcoss3.ObjectMeta{}, nil
+	srcFullKey := srcBucket + "/" + srcKey
+	data, ok := m.objects[srcFullKey]
+	if !ok {
+		return rtcoss3.ObjectMeta{}, rtcoss3.ErrKeyNotFound
+	}
+
+	dstFullKey := dstBucket + "/" + dstKey
+	m.objects[dstFullKey] = data
+	meta := m.meta[srcFullKey]
+	meta.Key = dstKey
+	meta.LastModified = time.Now()
+	m.meta[dstFullKey] = meta
+
+	return meta, nil
 }
 
 func (m *mockBackend) CreateMultipartUpload(ctx context.Context, bucket, key, contentType string) (*rtcoss3.MultipartUploadResult, error) {

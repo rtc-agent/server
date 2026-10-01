@@ -171,10 +171,9 @@ func TestParseAuthorizationHeader_EdgeCases(t *testing.T) {
 		{"WrongPrefix", "Basic dXNlcjpwYXNz", true},
 		{"MissingCredential", "AWS4-HMAC-SHA256 SignedHeaders=host, Signature=abc", true},
 		{"OnlyPrefix", "AWS4-HMAC-SHA256 ", true},
-		// NOTE: BUG — ExtraCommas parses successfully (len=3 after split on ", ").
-		// The trailing comma in credential "aws4_request," is not validated,
-		// which could allow signature bypass with malformed credentials.
-		{"ExtraCommas", "AWS4-HMAC-SHA256 Credential=AKID/20260930/us-east-1/s3/aws4_request,, SignedHeaders=host, Signature=abc", false},
+		// ExtraCommas: ",, " produces an empty part between the two commas.
+		// After fix: the empty-part check rejects this with wantErr=true.
+		{"ExtraCommas", "AWS4-HMAC-SHA256 Credential=AKID/20260930/us-east-1/s3/aws4_request,, SignedHeaders=host, Signature=abc", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

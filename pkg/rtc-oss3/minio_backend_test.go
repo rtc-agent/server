@@ -239,7 +239,7 @@ func TestMinIOBackendIntegration(t *testing.T) {
 // TestMinIOBackendUnit tests MinIO backend error mapping without real MinIO.
 func TestMinIOBackendUnit(t *testing.T) {
 	t.Run("mapMinIOError_Nil", func(t *testing.T) {
-		err := mapMinIOError(nil, "test")
+		err := mapMinIOError(context.Background(), nil, "test")
 		if err != nil {
 			t.Errorf("mapMinIOError(nil): expected nil, got %v", err)
 		}
@@ -248,7 +248,7 @@ func TestMinIOBackendUnit(t *testing.T) {
 	t.Run("ErrInsufficientStorage_Detection", func(t *testing.T) {
 		// Verify disk-full errors map to ErrInsufficientStorage
 		diskFullErr := fmt.Errorf("write: no space left on device")
-		mapped := mapMinIOError(diskFullErr, "put_object")
+		mapped := mapMinIOError(context.Background(), diskFullErr, "put_object")
 		if !errors.Is(mapped, ErrInsufficientStorage) {
 			t.Errorf("expected ErrInsufficientStorage, got %v", mapped)
 		}
