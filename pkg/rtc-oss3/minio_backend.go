@@ -252,6 +252,8 @@ func (b *MinIOBackend) HeadObject(ctx context.Context, bucket, key string) (Obje
 // common prefix extraction server-side. Objects whose keys end with the delimiter
 // are common prefixes (directories); others are regular objects.
 // LOW-05 fix: Support pagination via Marker, ContinuationToken, and StartAfter.
+// Pagination fix: Use MaxKeys+1 strategy to accurately detect truncation.
+// CommonPrefixes count towards the MaxKeys quota (totalKeys tracks both Objects and CommonPrefixes).
 func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts ListObjectsOptions) (*ListObjectsResult, error) {
 	result := &ListObjectsResult{}
 
@@ -263,14 +265,18 @@ func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts List
 	listOpts := minio.ListObjectsOptions{
 		Prefix:    opts.Prefix,
 		Recursive: opts.Delimiter == "",
-		MaxKeys:   maxKeys,
+		MaxKeys:   maxKeys + 1, // fetch one extra to detect truncation accurately
 	}
 
-	// LOW-05 fix: Support pagination parameters
+	// Determine pagination start point
 	// Priority: ContinuationToken (V2) > StartAfter (V2) > Marker (V1)
 	if opts.ContinuationToken != "" {
-		// V2: ContinuationToken is the key to start after (from previous NextContinuationToken)
-		listOpts.StartAfter = opts.ContinuationToken
+		// V2: ContinuationToken is opaque (base64-encoded), decode it first
+		decoded, err := DecodeContinuationToken(opts.ContinuationToken)
+		if err != nil {
+			return nil, fmt.Errorf("invalid continuation token: %w", err)
+		}
+		listOpts.StartAfter = decoded
 	} else if opts.StartAfter != "" {
 		// V2: StartAfter is the key to start after (first request only)
 		listOpts.StartAfter = opts.StartAfter
@@ -279,15 +285,33 @@ func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts List
 		listOpts.StartAfter = opts.Marker
 	}
 
+	totalKeys := 0
+	var lastKey string
+	truncated := false
+
 	for object := range b.client.ListObjects(ctx, bucket, listOpts) {
 		if object.Err != nil {
 			return nil, mapMinIOError(ctx, object.Err, "list_objects")
 		}
 
+		lastKey = object.Key
+
 		// If delimiter is set, keys ending with delimiter are common prefixes
 		if opts.Delimiter != "" && strings.HasSuffix(object.Key, opts.Delimiter) {
+			// CommonPrefixes count towards MaxKeys quota
+			totalKeys++
+			if totalKeys > maxKeys {
+				truncated = true
+				break
+			}
 			result.CommonPrefixes = append(result.CommonPrefixes, object.Key)
 			continue
+		}
+
+		// Regular object - check if we've reached the quota
+		if totalKeys >= maxKeys {
+			truncated = true
+			break
 		}
 
 		result.Objects = append(result.Objects, ObjectMeta{
@@ -297,13 +321,15 @@ func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts List
 			ETag:         object.ETag,
 			LastModified: object.LastModified,
 		})
-		if len(result.Objects) >= maxKeys {
-			result.IsTruncated = true
-			result.NextMarker = object.Key
-			result.NextContinuationToken = object.Key
-			break
-		}
+		totalKeys++
 	}
+
+	result.IsTruncated = truncated
+	if truncated && lastKey != "" {
+		result.NextMarker = lastKey
+		result.NextContinuationToken = EncodeContinuationToken(lastKey)
+	}
+	result.KeyCount = len(result.Objects) + len(result.CommonPrefixes)
 
 	return result, nil
 }

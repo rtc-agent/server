@@ -32,6 +32,9 @@ var (
 	ErrUnsupportedPresignOperation = errors.New("unsupported operation")
 	// ErrExpiryExceeded indicates the requested expiry exceeds the maximum allowed.
 	ErrExpiryExceeded = errors.New("expires_in must not exceed maximum")
+	// ErrUploadNotFound is returned when a multipart upload does not exist
+	// or does not belong to the requesting user.
+	ErrUploadNotFound = errors.New("multipart upload not found")
 )
 
 // OSS3Usecase encapsulates all OSS3 business logic.
@@ -283,6 +286,24 @@ func (uc *OSS3Usecase) CreateMultipartUploadRecord(ctx context.Context, userID, 
 	return uc.uploadRepo.Create(ctx, upload)
 }
 
+// ValidateUploadOwnership verifies that the given upload exists and belongs to the
+// requesting user. Returns ErrUploadNotFound if the upload does not exist or does
+// not belong to userID (the same error is returned in both cases to avoid leaking
+// information about other users' uploads).
+func (uc *OSS3Usecase) ValidateUploadOwnership(ctx context.Context, userID, uploadID string) (*model.MultipartUpload, error) {
+	upload, err := uc.uploadRepo.GetByUploadID(ctx, uploadID)
+	if err != nil {
+		return nil, fmt.Errorf("validate upload ownership: %w", err)
+	}
+	if upload == nil {
+		return nil, ErrUploadNotFound
+	}
+	if upload.UserID != userID {
+		return nil, ErrUploadNotFound
+	}
+	return upload, nil
+}
+
 // GeneratePresignedURL generates a presigned URL for the given operation.
 // Users can only generate presigned URLs for keys under their own prefix (user-{userID}/).
 func (uc *OSS3Usecase) GeneratePresignedURL(ctx context.Context, userID, operation, key string, expiresIn time.Duration) (string, time.Time, error) {
@@ -328,6 +349,10 @@ func (uc *OSS3Usecase) DeleteMultipartUploadRecord(ctx context.Context, uploadID
 	upload, err := uc.uploadRepo.GetByUploadID(ctx, uploadID)
 	if err != nil {
 		return err
+	}
+	if upload == nil {
+		// Record already gone — nothing to delete
+		return nil
 	}
 
 	// Wrap DeleteParts + Delete in a transaction for atomicity

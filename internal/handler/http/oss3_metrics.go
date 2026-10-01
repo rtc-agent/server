@@ -118,6 +118,33 @@ var (
 		},
 		[]string{"operation", "user_id"}, // operation: "delete_failed"
 	)
+
+	// oss3OrphanedQuotaCommitTotal tracks quota commits that failed after all retries
+	// while the upload succeeded. These require reconciliation to sync Redis with DB.
+	oss3OrphanedQuotaCommitTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rtc_oss3_orphaned_quota_commits_total",
+			Help: "Total quota commits that failed after retries (upload succeeded, reconciliation needed)",
+		},
+		[]string{"user_id"},
+	)
+
+	// oss3QuotaDriftBytes tracks the absolute drift between Redis quota counter
+	// and DB truth, updated by ReconcileQuota.
+	oss3QuotaDriftBytes = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "rtc_oss3_quota_drift_bytes",
+			Help: "Absolute drift between Redis quota counter and DB truth (latest reconciliation)",
+		},
+	)
+
+	// oss3QuotaCommitRetryTotal tracks the number of quota commit retries.
+	oss3QuotaCommitRetryTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "rtc_oss3_quota_commit_retry_total",
+			Help: "Total quota commit retries (transient Redis errors)",
+		},
+	)
 )
 
 // NewOSS3MetricsMiddleware creates a Prometheus metrics middleware for OSS3.
@@ -212,4 +239,21 @@ func RecordConsistencyViolation(violationType string) {
 // LOW-18 fix: Called when backend delete succeeds but DB delete fails after all retries.
 func RecordOrphanedRecord(operation, userID string) {
 	oss3OrphanedRecordTotal.WithLabelValues(operation, userID).Inc()
+}
+
+// RecordOrphanedQuotaCommit records a quota commit that failed after all retries
+// while the upload succeeded. Reconciliation will eventually fix the drift.
+func RecordOrphanedQuotaCommit(userID string) {
+	oss3OrphanedQuotaCommitTotal.WithLabelValues(userID).Inc()
+}
+
+// RecordQuotaCommitRetry records a single quota commit retry attempt.
+func RecordQuotaCommitRetry() {
+	oss3QuotaCommitRetryTotal.Inc()
+}
+
+// RecordQuotaDrift records the absolute drift between Redis and DB quota values.
+// Called by ReconcileQuota after each reconciliation cycle.
+func RecordQuotaDrift(driftBytes int64) {
+	oss3QuotaDriftBytes.Set(float64(driftBytes))
 }

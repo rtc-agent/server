@@ -41,6 +41,7 @@ type ListObjectsResult struct {
 	NextMarker            string // V1 semantics
 	NextContinuationToken string // V2 semantics (R9 H4)
 	IsTruncated           bool
+	KeyCount              int // V2 semantics: number of keys returned (Objects + CommonPrefixes)
 }
 
 // ListObjectsOptions holds options for ListObjects.

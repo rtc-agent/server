@@ -2,6 +2,7 @@ package httphandler
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -28,6 +29,23 @@ func NewOSS3MultipartHandler(oss3UC *usecase.OSS3Usecase, bucket string) *OSS3Mu
 		oss3UC: oss3UC,
 		bucket: bucket,
 	}
+}
+
+// validateUploadOwnership verifies that the multipart upload exists and belongs to the
+// requesting user. Writes an S3 error response and returns false if validation fails.
+func (h *OSS3MultipartHandler) validateUploadOwnership(
+	w http.ResponseWriter, r *http.Request, userID, uploadID string,
+) bool {
+	_, err := h.oss3UC.ValidateUploadOwnership(r.Context(), userID, uploadID)
+	if err != nil {
+		if errors.Is(err, usecase.ErrUploadNotFound) {
+			WriteS3Error(w, rtcoss3.ErrUploadNotFound, r.URL.Path, "")
+		} else {
+			WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
+		}
+		return false
+	}
+	return true
 }
 
 // handleCreateMultipartUpload handles POST /{bucket}/{key}?uploads
@@ -129,6 +147,11 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 		return
 	}
 
+	// Verify upload exists and belongs to this user
+	if !h.validateUploadOwnership(w, r, userID, uploadID) {
+		return
+	}
+
 	// Parse part number
 	partNumberStr := r.URL.Query().Get("partNumber")
 	partNumber, err := strconv.Atoi(partNumberStr)
@@ -209,6 +232,11 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 	// Check rate limit
 	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
 		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
+		return
+	}
+
+	// Verify upload exists and belongs to this user
+	if !h.validateUploadOwnership(w, r, userID, uploadID) {
 		return
 	}
 
@@ -373,6 +401,11 @@ func (h *OSS3MultipartHandler) handleAbortMultipartUpload(
 		return
 	}
 
+	// Verify upload exists and belongs to this user
+	if !h.validateUploadOwnership(w, r, userID, uploadID) {
+		return
+	}
+
 	// Abort multipart upload in backend
 	if err := h.oss3UC.Backend().AbortMultipartUpload(r.Context(), bucket, key, uploadID); err != nil {
 		span.SetStatus(codes.Error, err.Error())
@@ -413,6 +446,11 @@ func (h *OSS3MultipartHandler) handleListParts(
 	// Check rate limit
 	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
 		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
+		return
+	}
+
+	// Verify upload exists and belongs to this user
+	if !h.validateUploadOwnership(w, r, userID, uploadID) {
 		return
 	}
 

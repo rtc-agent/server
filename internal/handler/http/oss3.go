@@ -1,6 +1,7 @@
 package httphandler
 
 import (
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -279,12 +280,14 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 		writeQuotaReserveError(w, err, r.URL.Path)
 		return
 	}
-	// quotaCommitted tracks whether quota has been charged to the user.
+	// uploadSucceeded tracks whether data reached MinIO.
 	// If false at function exit, the defer releases the pending reservation.
-	// If true, the defer is a no-op — quota is already accounted for.
-	quotaCommitted := false
+	// If true, quota is either committed or will be reconciled later — we must
+	// NOT call ReleaseQuota because the pending key has already been consumed
+	// by the (failed) commit attempt and the data lives in MinIO.
+	uploadSucceeded := false
 	defer func() {
-		if !quotaCommitted {
+		if !uploadSucceeded {
 			h.oss3UC.ReleaseQuota(r.Context(), userID, quotaRequestID)
 		}
 	}()
@@ -298,18 +301,21 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 		span.RecordError(err)
 		RecordBackendError("PutObject", err.Error())
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
-		return
+		return // uploadSucceeded=false -> defer releases quota
 	}
+	uploadSucceeded = true
 
-	// Commit quota
-	if err = h.oss3UC.CommitQuota(r.Context(), userID, quotaRequestID, contentLength); err != nil {
-		// Quota commit failed but upload succeeded — log and continue
-		logger.Warn(r.Context(), "failed to commit quota after successful upload",
+	// Commit quota with retry (idempotent via SETNX marker)
+	if err = h.commitQuotaWithRetry(r.Context(), userID, quotaRequestID, contentLength); err != nil {
+		// Commit failed after all retries but upload succeeded — data lives in MinIO.
+		// Do NOT call ReleaseQuota: the pending key will expire via TTL naturally.
+		// Reconciliation will eventually sync the Redis counter with DB truth.
+		logger.Error(r.Context(), "quota commit failed after retries; reconciliation will sync",
 			zap.String("user_id", userID),
 			zap.String("quota_request_id", quotaRequestID),
+			zap.Int64("amount", contentLength),
 			zap.Error(err))
-	} else {
-		quotaCommitted = true
+		RecordOrphanedQuotaCommit(userID)
 	}
 
 	// Create file record in DB with compensation
@@ -324,6 +330,49 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 
 	w.Header().Set("ETag", etag)
 	w.WriteHeader(http.StatusOK)
+}
+
+// commitQuotaWithRetry retries CommitQuota on transient Redis errors.
+// The idempotency marker inside CommitQuota (SETNX) prevents double-charging.
+// Retry policy: 3 attempts, linear backoff 50ms/100ms/200ms.
+func (h *OSS3Handler) commitQuotaWithRetry(
+	ctx context.Context, userID, quotaRequestID string, amount int64,
+) error {
+	const maxAttempts = 3
+	delays := []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond}
+
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err := h.oss3UC.CommitQuota(ctx, userID, quotaRequestID, amount); err != nil {
+			lastErr = err
+			if !isTransientRedisError(err) {
+				return err
+			}
+			RecordQuotaCommitRetry()
+			if attempt < maxAttempts-1 {
+				select {
+				case <-time.After(delays[attempt]):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
+
+// isTransientRedisError reports whether the error is a transient Redis failure
+// that is safe to retry (connection reset, I/O timeout, NOSCRIPT).
+func isTransientRedisError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "NOSCRIPT")
 }
 
 // writeQuotaReserveError writes the appropriate S3 error response for a
@@ -620,8 +669,12 @@ func (h *OSS3Handler) handleCopyObject(
 		writeQuotaReserveError(w, err, r.URL.Path)
 		return
 	}
+	// uploadSucceeded tracks whether data reached MinIO.
+	// If false at function exit, the defer releases the pending reservation.
+	// If true, quota is either committed or will be reconciled later.
+	uploadSucceeded := false
 	defer func() {
-		if err != nil {
+		if !uploadSucceeded {
 			h.oss3UC.ReleaseQuota(r.Context(), userID, quotaRequestID)
 		}
 	}()
@@ -630,15 +683,18 @@ func (h *OSS3Handler) handleCopyObject(
 	result, err := h.oss3UC.Backend().CopyObject(r.Context(), srcBucket, srcKey, dstBucket, dstKey)
 	if err != nil {
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
-		return
+		return // uploadSucceeded=false -> defer releases quota
 	}
+	uploadSucceeded = true
 
-	// Commit quota after successful copy
-	if commitErr := h.oss3UC.CommitQuota(r.Context(), userID, quotaRequestID, srcMeta.Size); commitErr != nil {
-		logger.Warn(r.Context(), "failed to commit quota after successful copy",
+	// Commit quota with retry (idempotent via SETNX marker)
+	if commitErr := h.commitQuotaWithRetry(r.Context(), userID, quotaRequestID, srcMeta.Size); commitErr != nil {
+		logger.Error(r.Context(), "quota commit failed after retries; reconciliation will sync",
 			zap.String("user_id", userID),
 			zap.String("quota_request_id", quotaRequestID),
+			zap.Int64("amount", srcMeta.Size),
 			zap.Error(commitErr))
+		RecordOrphanedQuotaCommit(userID)
 	}
 
 	// Create file record for destination
@@ -715,9 +771,11 @@ func (h *OSS3Handler) handleListObjects(w http.ResponseWriter, r *http.Request, 
 		MaxKeys:   maxKeys,
 	}
 
+	isV2 := q.Get("list-type") == "2"
+
 	// V1: marker-based pagination
 	// V2: continuation-token-based pagination, activated by list-type=2
-	if q.Get("list-type") == "2" {
+	if isV2 {
 		opts.ContinuationToken = q.Get("continuation-token")
 		opts.StartAfter = q.Get("start-after")
 	} else {
@@ -727,18 +785,21 @@ func (h *OSS3Handler) handleListObjects(w http.ResponseWriter, r *http.Request, 
 	// List objects from backend
 	result, err := h.oss3UC.Backend().ListObjects(r.Context(), bucket, opts)
 	if err != nil {
+		// Check if this is a continuation token decode error (InvalidArgument)
+		if isV2 && opts.ContinuationToken != "" && strings.Contains(err.Error(), "invalid continuation token") {
+			WriteS3Error(w, rtcoss3.ErrInvalidArgument, r.URL.Path, "")
+			return
+		}
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
 	}
 
-	// Use the marker (V1) or continuation-token (V2) for response rendering.
-	// writeListBucketResultXML uses "marker" as the canonical term for both.
-	marker := q.Get("marker")
-	if opts.ContinuationToken != "" {
-		marker = opts.ContinuationToken
+	// Branch on V1 vs V2 for response serialization
+	if isV2 {
+		writeListBucketResultV2XML(w, bucket, prefix, q.Get("start-after"), q.Get("continuation-token"), maxKeys, delimiter, result)
+	} else {
+		writeListBucketResultV1XML(w, bucket, prefix, q.Get("marker"), maxKeys, delimiter, result)
 	}
-
-	writeListBucketResultXML(w, bucket, prefix, marker, maxKeys, result)
 }
 
 // parseMaxKeys parses the "max-keys" query parameter, clamping to [1, 1000].
@@ -754,8 +815,9 @@ func parseMaxKeys(raw string) int {
 	return defaultMaxKeys
 }
 
-// xmlContent, xmlCommonPrefix, and xmlListBucketResult are the XML response
-// types for the ListBucketResult S3 response envelope.
+// xmlContent, xmlCommonPrefix, xmlListBucketResultV1, and xmlListBucketResultV2
+// are the XML response types for the ListBucketResult S3 response envelope.
+// V1 and V2 have different fields per the S3 specification.
 type xmlListContent struct {
 	XMLName      xml.Name `xml:"Contents"`
 	Key          string   `xml:"Key"`
@@ -770,30 +832,92 @@ type xmlListCommonPrefix struct {
 	Prefix  string   `xml:"Prefix"`
 }
 
-type xmlListBucketResult struct {
+// V1 response: uses Marker/NextMarker for pagination
+type xmlListBucketResultV1 struct {
 	XMLName        xml.Name              `xml:"ListBucketResult"`
 	Name           string                `xml:"Name"`
 	Prefix         string                `xml:"Prefix"`
 	Marker         string                `xml:"Marker"`
+	NextMarker     string                `xml:"NextMarker,omitempty"`
 	MaxKeys        int                   `xml:"MaxKeys"`
+	Delimiter      string                `xml:"Delimiter,omitempty"`
 	IsTruncated    bool                  `xml:"IsTruncated"`
 	Contents       []xmlListContent      `xml:"Contents"`
 	CommonPrefixes []xmlListCommonPrefix `xml:"CommonPrefixes"`
 }
 
-// writeListBucketResultXML serialises a ListBucketResult XML response.
-func writeListBucketResultXML(
+// V2 response: uses ContinuationToken/NextContinuationToken and KeyCount
+type xmlListBucketResultV2 struct {
+	XMLName               xml.Name              `xml:"ListBucketResult"`
+	Name                  string                `xml:"Name"`
+	Prefix                string                `xml:"Prefix"`
+	StartAfter            string                `xml:"StartAfter,omitempty"`
+	ContinuationToken     string                `xml:"ContinuationToken,omitempty"`
+	NextContinuationToken string                `xml:"NextContinuationToken,omitempty"`
+	KeyCount              int                   `xml:"KeyCount"`
+	MaxKeys               int                   `xml:"MaxKeys"`
+	Delimiter             string                `xml:"Delimiter,omitempty"`
+	IsTruncated           bool                  `xml:"IsTruncated"`
+	Contents              []xmlListContent      `xml:"Contents"`
+	CommonPrefixes        []xmlListCommonPrefix `xml:"CommonPrefixes"`
+}
+
+// writeListBucketResultV1XML serialises a V1 ListBucketResult XML response.
+func writeListBucketResultV1XML(
 	w http.ResponseWriter,
 	bucket, prefix, marker string,
 	maxKeys int,
+	delimiter string,
 	result *rtcoss3.ListObjectsResult,
 ) {
-	resp := xmlListBucketResult{
+	resp := xmlListBucketResultV1{
 		Name:        bucket,
 		Prefix:      prefix,
 		Marker:      marker,
+		NextMarker:  result.NextMarker,
 		MaxKeys:     maxKeys,
+		Delimiter:   delimiter,
 		IsTruncated: result.IsTruncated,
+	}
+	for _, obj := range result.Objects {
+		resp.Contents = append(resp.Contents, xmlListContent{
+			Key:          obj.Key,
+			LastModified: obj.LastModified.UTC().Format(rtcoss3.S3TimeFormat),
+			ETag:         obj.ETag,
+			Size:         obj.Size,
+			StorageClass: "STANDARD",
+		})
+	}
+	for _, cp := range result.CommonPrefixes {
+		resp.CommonPrefixes = append(resp.CommonPrefixes, xmlListCommonPrefix{
+			Prefix: cp,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprint(w, xml.Header)
+	_ = xml.NewEncoder(w).Encode(resp)
+}
+
+// writeListBucketResultV2XML serialises a V2 ListBucketResult XML response.
+func writeListBucketResultV2XML(
+	w http.ResponseWriter,
+	bucket, prefix, startAfter, continuationToken string,
+	maxKeys int,
+	delimiter string,
+	result *rtcoss3.ListObjectsResult,
+) {
+	resp := xmlListBucketResultV2{
+		Name:                  bucket,
+		Prefix:                prefix,
+		StartAfter:            startAfter,
+		ContinuationToken:     continuationToken,
+		NextContinuationToken: result.NextContinuationToken,
+		KeyCount:              result.KeyCount,
+		MaxKeys:               maxKeys,
+		Delimiter:             delimiter,
+		IsTruncated:           result.IsTruncated,
 	}
 	for _, obj := range result.Objects {
 		resp.Contents = append(resp.Contents, xmlListContent{
