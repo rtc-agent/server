@@ -97,9 +97,10 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 	}
 
 	val := &credentialCacheValue{
-		UserID:       cred.UserID,
-		SessionToken: cred.SessionToken,
-		ExpiresAt:    cred.ExpiresAt,
+		UserID:          cred.UserID,
+		SessionToken:    cred.SessionToken,
+		ExpiresAt:       cred.ExpiresAt,
+		SecretAccessKey: cred.SecretAccessKey, // Return original (unencrypted) secret key
 	}
 
 	// Encrypt SecretAccessKey before caching
@@ -107,9 +108,14 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt secret key: %w", err)
 	}
-	val.SecretAccessKey = encryptedSecret
+	cacheVal := &credentialCacheValue{
+		UserID:          cred.UserID,
+		SessionToken:    cred.SessionToken,
+		ExpiresAt:       cred.ExpiresAt,
+		SecretAccessKey: encryptedSecret,
+	}
 
-	data, err := json.Marshal(val)
+	data, err := json.Marshal(cacheVal)
 	if err == nil {
 		_ = uc.redis.Set(ctx, cacheKey, data, ttl).Err()
 		// best-effort; cache miss on next read will repopulate

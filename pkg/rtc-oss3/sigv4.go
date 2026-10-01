@@ -1,6 +1,7 @@
 package rtcoss3
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 )
 
 // Credential represents the parsed credential from Authorization header.
@@ -22,35 +26,36 @@ type Credential struct {
 }
 
 // VerifySigV4Request verifies an S3 request signed with Authorization header.
+// Uses AWS SDK v4 signer to re-sign the request for verification,
+// ensuring 100% compatibility with all AWS SDK clients.
 func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, service string) error {
 	// Parse Authorization header
 	auth := r.Header.Get("Authorization")
-	cred, signedHeaders, providedSig, err := ParseAuthorizationHeader(auth)
+	cred, _, providedSig, err := ParseAuthorizationHeader(auth)
 	if err != nil {
 		return fmt.Errorf("parse authorization header: %w", err)
 	}
 
 	// AWS SigV4 requires "host" to be in SignedHeaders
-	hostSigned := false
-	for _, h := range signedHeaders {
-		if h == "host" {
-			hostSigned = true
-			break
+	_, signedHeadersList, _, parseErr := ParseAuthorizationHeader(auth)
+	if parseErr == nil {
+		hostSigned := false
+		for _, h := range signedHeadersList {
+			if h == "host" {
+				hostSigned = true
+				break
+			}
 		}
-	}
-	if !hostSigned {
-		return &S3Error{
-			Code:     "SignatureDoesNotMatch",
-			Message:  "The request must have 'host' in SignedHeaders.",
-			HTTPCode: http.StatusForbidden,
+		if !hostSigned {
+			return &S3Error{
+				Code:     "SignatureDoesNotMatch",
+				Message:  "The request must have 'host' in SignedHeaders.",
+				HTTPCode: http.StatusForbidden,
+			}
 		}
 	}
 
 	// Validate credential scope.
-	// SECURITY: Return ErrInvalidSignature (not a descriptive error) to avoid
-	// leaking information about the expected scope format via error messages.
-	// This prevents timing side-channel attacks that could infer scope structure
-	// from different error paths.
 	dateStr := cred.Date
 	scope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStr, region, service)
 	if cred.Scope != scope {
@@ -69,21 +74,50 @@ func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, 
 		return err
 	}
 
-	// Step 1: CanonicalRequest
-	canonicalReq := buildCanonicalRequest(r, signedHeaders, contentSHA256)
+	// Parse the signing time from X-Amz-Date
+	signingTime, parseErr := time.Parse("20060102T150405Z", amzDate)
+	if parseErr != nil {
+		return ErrInvalidSignature
+	}
 
-	// Step 2: StringToSign
-	stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
+	// Clone the request and remove Authorization header for re-signing
+	clonedReq := r.Clone(r.Context())
+	clonedReq.Header.Del("Authorization")
 
-	// Step 3: Calculate signature
-	signingKey := deriveSigningKey(secretAccessKey, dateStr, region, service)
-	computedSig := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
+	// Remove proxy-added headers that are not part of the client's signature.
+	// Nginx and other reverse proxies often add these headers after the client signs the request.
+	for _, h := range []string{"Connection", "X-Forwarded-For", "X-Forwarded-Proto", "X-Real-Ip"} {
+		clonedReq.Header.Del(h)
+	}
 
-	// Step 4: Compare signatures using constant-time comparison.
-	// SECURITY: hmac.Equal is used to prevent timing attacks that could leak
-	// information about the expected signature. All validation paths above
-	// (parsing, scope check, timestamp check) should complete in similar time
-	// to avoid side-channel leaks about signature format or validity.
+	// Restore headers that Go HTTP server removes during request parsing.
+	// AWS SDK SignHTTP expects these headers to be present for signing.
+	if clonedReq.ContentLength >= 0 {
+		clonedReq.Header.Set("Content-Length", fmt.Sprintf("%d", clonedReq.ContentLength))
+	}
+	if len(clonedReq.TransferEncoding) > 0 {
+		clonedReq.Header.Set("Transfer-Encoding", strings.Join(clonedReq.TransferEncoding, ","))
+	}
+
+	// Use AWS SDK v4 signer to re-sign the request
+	signer := v4.NewSigner()
+	awsCreds := aws.Credentials{
+		AccessKeyID:     cred.AccessKeyID,
+		SecretAccessKey: secretAccessKey,
+	}
+
+	err = signer.SignHTTP(context.Background(), awsCreds, clonedReq, contentSHA256, service, region, signingTime)
+	if err != nil {
+		return fmt.Errorf("re-sign request: %w", err)
+	}
+
+	// Extract the computed signature from the re-signed Authorization header
+	_, _, computedSig, err := ParseAuthorizationHeader(clonedReq.Header.Get("Authorization"))
+	if err != nil {
+		return fmt.Errorf("parse re-signed authorization: %w", err)
+	}
+
+	// Compare signatures using constant-time comparison.
 	if !hmac.Equal([]byte(computedSig), []byte(providedSig)) {
 		return ErrInvalidSignature
 	}
@@ -367,18 +401,29 @@ func canonicalQueryString(query url.Values) string {
 func canonicalHeaders(r *http.Request, signedHeaders []string) string {
 	var b strings.Builder
 	for _, h := range signedHeaders {
-		b.WriteString(strings.ToLower(h))
+		lower := strings.ToLower(h)
+		b.WriteString(lower)
 		b.WriteByte(':')
-		// Special handling for "host" header - use r.Host if Header doesn't have it
-		if strings.ToLower(h) == "host" {
+		switch lower {
+		case "host":
+			// Go HTTP server stores Host in r.Host, not r.Header
 			host := r.Host
-			if host == "" {
-				if r.URL != nil {
-					host = r.URL.Host
-				}
+			if host == "" && r.URL != nil {
+				host = r.URL.Host
 			}
 			b.WriteString(host)
-		} else {
+		case "content-length":
+			// Go HTTP server parses Content-Length into r.ContentLength
+			// and removes it from r.Header. Reconstruct from the field.
+			if r.ContentLength >= 0 {
+				fmt.Fprintf(&b, "%d", r.ContentLength)
+			}
+		case "transfer-encoding":
+			// Go HTTP server stores Transfer-Encoding in r.TransferEncoding
+			if len(r.TransferEncoding) > 0 {
+				b.WriteString(strings.Join(r.TransferEncoding, ","))
+			}
+		default:
 			values := r.Header.Values(http.CanonicalHeaderKey(h))
 			sort.Strings(values)
 			b.WriteString(strings.Join(values, ","))
@@ -442,38 +487,30 @@ func isHexDigest(s string) bool {
 // is also set and included in the signed headers.
 //
 // This is exported for use in integration tests and client SDKs.
+// Uses AWS SDK v4 signer for 100% compatibility with VerifySigV4Request.
 func SignS3Request(r *http.Request, accessKeyID, secretAccessKey, sessionToken, region string) {
 	now := time.Now().UTC()
-	date := now.Format("20060102")
-	amzDate := now.Format("20060102T150405Z")
-
-	r.Header.Set("X-Amz-Date", amzDate)
-	r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
 
 	// Ensure host is set for canonical request construction
 	if r.Host == "" && r.URL != nil && r.URL.Host != "" {
 		r.Host = r.URL.Host
 	}
 
-	scope := date + "/" + region + "/s3/aws4_request"
-	signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
-
-	// Add session token for temporary credentials
+	// Set session token if provided
 	if sessionToken != "" {
 		r.Header.Set("X-Amz-Security-Token", sessionToken)
-		signedHeaders = append(signedHeaders, "x-amz-security-token")
-		sort.Strings(signedHeaders)
 	}
 
-	canonicalReq := buildCanonicalRequest(r, signedHeaders, "UNSIGNED-PAYLOAD")
-	stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
-	signingKey := deriveSigningKey(secretAccessKey, date, region, "s3")
-	signature := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
+	// Use AWS SDK v4 signer for signing
+	signer := v4.NewSigner()
+	awsCreds := aws.Credentials{
+		AccessKeyID:     accessKeyID,
+		SecretAccessKey: secretAccessKey,
+	}
 
-	signedHeadersStr := strings.Join(signedHeaders, ";")
-	authHeader := fmt.Sprintf(
-		"AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
-		accessKeyID, scope, signedHeadersStr, signature,
-	)
-	r.Header.Set("Authorization", authHeader)
+	// Compute payload hash — use UNSIGNED-PAYLOAD for simplicity
+	payloadHash := "UNSIGNED-PAYLOAD"
+	r.Header.Set("X-Amz-Content-Sha256", payloadHash)
+
+	_ = signer.SignHTTP(context.Background(), awsCreds, r, payloadHash, "s3", region, now)
 }

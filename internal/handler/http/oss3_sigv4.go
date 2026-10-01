@@ -2,7 +2,6 @@ package httphandler
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"github.com/rtc-agent/server/internal/usecase"
@@ -74,12 +73,7 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logger.Error(r.Context(), "SigV4: signature verification failed",
 			zap.String("access_key_id", cred.AccessKeyID),
 			zap.Error(err))
-		var s3err *rtcoss3.S3Error
-		if errors.As(err, &s3err) {
-			WriteS3Error(w, s3err, r.URL.Path, "")
-		} else {
-			WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
-		}
+		WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
 	}
 
