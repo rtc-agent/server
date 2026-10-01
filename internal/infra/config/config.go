@@ -599,7 +599,13 @@ func (c *StorageConfig) IsEnabled() bool {
 // MinIOConfig holds MinIO backend connection configuration.
 type MinIOConfig struct {
 	// Endpoint is the MinIO server endpoint (e.g., "http://localhost:9000").
+	// Used for server-to-MinIO communication (internal network).
 	Endpoint string `mapstructure:"endpoint"`
+
+	// PublicURL is the public-facing S3 endpoint URL (e.g., "http://localhost:29000").
+	// Used for generating presigned URLs that clients will access (public network).
+	// When empty, falls back to Endpoint.
+	PublicURL string `mapstructure:"public_url"`
 
 	// AccessKey is the MinIO access key (aligned with docker-compose MINIO_ROOT_USER).
 	AccessKey string `mapstructure:"access_key"`

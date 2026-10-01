@@ -206,15 +206,9 @@ services:
     environment:
       DEBUG: true
       LLM__API_KEY: "${LLM__API_KEY}"
-      STORAGE__BACKEND: "${STORAGE_BACKEND:-}"
-      STORAGE__MINIO__ENDPOINT: "http://minio:9000"
-      STORAGE__MINIO__ACCESS_KEY: "${MINIO_ACCESS_KEY:-minioadmin}"
-      STORAGE__MINIO__SECRET_KEY: "${MINIO_SECRET_KEY:-minioadmin}"
-      STORAGE__MINIO__BUCKET: "rtc-agent"
       STORAGE__ENCRYPTION__SESSION_TOKEN_KEY: "${OSS3_SESSION_TOKEN_KEY:-}"
     expose:
       - "8888"
-      - "9000"  # S3 endpoint
     volumes:
       - ./etc/config.docker.yaml:/app/etc/config.yaml:ro
     depends_on:
@@ -240,15 +234,9 @@ services:
     environment:
       DEBUG: true
       LLM__API_KEY: "${LLM__API_KEY}"
-      STORAGE__BACKEND: "${STORAGE_BACKEND:-}"
-      STORAGE__MINIO__ENDPOINT: "http://minio:9000"
-      STORAGE__MINIO__ACCESS_KEY: "${MINIO_ACCESS_KEY:-minioadmin}"
-      STORAGE__MINIO__SECRET_KEY: "${MINIO_SECRET_KEY:-minioadmin}"
-      STORAGE__MINIO__BUCKET: "rtc-agent"
       STORAGE__ENCRYPTION__SESSION_TOKEN_KEY: "${OSS3_SESSION_TOKEN_KEY:-}"
     expose:
       - "8888"
-      - "9000"  # S3 endpoint
     volumes:
       - ./etc/config.docker.yaml:/app/etc/config.yaml:ro
     depends_on:

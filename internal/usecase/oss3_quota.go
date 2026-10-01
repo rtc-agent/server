@@ -34,7 +34,7 @@ func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, 
 		return "", fmt.Errorf("quota reserve: %w", err)
 	}
 	if result == 0 {
-		return "", rtcoss3.ErrRequestQuotaExceeded
+		return "", fmt.Errorf("user %s: %w", userID, rtcoss3.ErrQuotaExceeded)
 	}
 	return requestID, nil
 }
@@ -68,4 +68,47 @@ func (uc *OSS3Usecase) ReleaseQuota(ctx context.Context, userID, requestID strin
 	script := uc.scripts[cache.OSS3ScriptQuotaRollback]
 	_, _ = script.Run(ctx, uc.redis, []string{pendingKey}).Int()
 	// best-effort; TTL guarantees eventual cleanup even on crash
+}
+
+// AdjustQuota adjusts the committed quota counter by a delta.
+// Positive delta adds to usage; negative delta subtracts.
+// Used to release quota when instant upload detects duplicate content in multipart uploads.
+//
+// Flow: Lua script OSS3QuotaAdjust atomically adds delta to quota counter.
+// Returns error if the adjustment would make quota negative.
+func (uc *OSS3Usecase) AdjustQuota(ctx context.Context, userID string, deltaBytes int64) error {
+	quotaKey := cache.OSS3Quota(userID)
+
+	script := uc.scripts[cache.OSS3ScriptQuotaAdjust]
+	result, err := script.Run(ctx, uc.redis,
+		[]string{quotaKey},
+		deltaBytes,
+	).Int()
+	if err != nil {
+		return fmt.Errorf("quota adjust: %w", err)
+	}
+	if result == 0 {
+		return fmt.Errorf("quota adjust would go negative for user %s", userID)
+	}
+	return nil
+}
+
+// GetMultipartUploadTotalSize calculates the total size of all parts for a multipart upload.
+// Used by instant upload path to release quota committed during UploadPart.
+func (uc *OSS3Usecase) GetMultipartUploadTotalSize(ctx context.Context, uploadID string) (int64, error) {
+	upload, err := uc.uploadRepo.GetByUploadID(ctx, uploadID)
+	if err != nil {
+		return 0, fmt.Errorf("get upload record: %w", err)
+	}
+
+	parts, err := uc.uploadRepo.ListParts(ctx, upload.ID)
+	if err != nil {
+		return 0, fmt.Errorf("list parts: %w", err)
+	}
+
+	var totalSize int64
+	for _, p := range parts {
+		totalSize += p.Size
+	}
+	return totalSize, nil
 }

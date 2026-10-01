@@ -11,6 +11,7 @@ import (
 type MultipartUpload struct {
 	ID            uuid.UUID  `gorm:"type:uuid;primary_key" json:"id"`
 	UserID        string     `gorm:"type:varchar(255);not null;index:idx_multipart_uploads_user_id" json:"user_id"`
+	Bucket        string     `gorm:"type:varchar(255);not null;index:idx_multipart_uploads_bucket" json:"bucket"`
 	Key           string     `gorm:"type:varchar(1024);not null" json:"key"`
 	UploadID      string     `gorm:"type:varchar(255);not null;uniqueIndex:idx_multipart_uploads_upload_id" json:"upload_id"` // Storage backend upload ID
 	Status        string     `gorm:"type:varchar(50);not null" json:"status"`                                                 // "uploading", "completed", "aborted"
@@ -53,7 +54,7 @@ type MultipartUploadPart struct {
 
 // TableName specifies the table name for MultipartUploadPart model.
 func (MultipartUploadPart) TableName() string {
-	return "multipart_upload_parts"
+	return "upload_parts"
 }
 
 // BeforeCreate sets default values before creating a MultipartUploadPart record.

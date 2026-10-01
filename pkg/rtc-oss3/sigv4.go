@@ -330,9 +330,20 @@ func canonicalHeaders(r *http.Request, signedHeaders []string) string {
 	for _, h := range signedHeaders {
 		b.WriteString(strings.ToLower(h))
 		b.WriteByte(':')
-		values := r.Header.Values(http.CanonicalHeaderKey(h))
-		sort.Strings(values)
-		b.WriteString(strings.Join(values, ","))
+		// Special handling for "host" header - use r.Host if Header doesn't have it
+		if strings.ToLower(h) == "host" {
+			host := r.Host
+			if host == "" {
+				if r.URL != nil {
+					host = r.URL.Host
+				}
+			}
+			b.WriteString(host)
+		} else {
+			values := r.Header.Values(http.CanonicalHeaderKey(h))
+			sort.Strings(values)
+			b.WriteString(strings.Join(values, ","))
+		}
 		b.WriteByte('\n')
 	}
 	return b.String()

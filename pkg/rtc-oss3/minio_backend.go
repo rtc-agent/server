@@ -14,13 +14,16 @@ import (
 
 // MinIOBackend uses both minio.Client (basic ops) and minio.Core (multipart ops).
 type MinIOBackend struct {
-	client *minio.Client
-	core   *minio.Core
-	bucket string
+	client       *minio.Client
+	core         *minio.Core
+	publicClient *minio.Client // Client with public endpoint for presigned URLs (nil if publicURL is empty)
+	bucket       string
+	publicURL    string // Public-facing URL for presigned URLs (empty = use client endpoint)
 }
 
 // NewMinIOBackend creates a MinIO backend.
-func NewMinIOBackend(endpoint, accessKey, secretKey, bucket string, useSSL bool, maxIdleConns, maxIdleConnsPerHost int, idleConnTimeout time.Duration) (*MinIOBackend, error) {
+// publicURL is the public-facing S3 endpoint for presigned URLs (empty = use endpoint).
+func NewMinIOBackend(endpoint, accessKey, secretKey, bucket, publicURL string, useSSL bool, maxIdleConns, maxIdleConnsPerHost int, idleConnTimeout time.Duration) (*MinIOBackend, error) {
 	transport := &http.Transport{
 		MaxIdleConns:        maxIdleConns,
 		MaxIdleConnsPerHost: maxIdleConnsPerHost,
@@ -56,7 +59,33 @@ func NewMinIOBackend(endpoint, accessKey, secretKey, bucket string, useSSL bool,
 		}
 	}
 
-	return &MinIOBackend{client: client, core: core, bucket: bucket}, nil
+	// Create public client for presigned URLs if publicURL is configured
+	var publicClient *minio.Client
+	if publicURL != "" {
+		// Extract host from publicURL (e.g., "http://localhost:29000" -> "localhost:29000")
+		publicHost := strings.TrimPrefix(publicURL, "http://")
+		publicHost = strings.TrimPrefix(publicHost, "https://")
+		publicHost = strings.TrimSuffix(publicHost, "/")
+
+		publicUseSSL := strings.HasPrefix(publicURL, "https://")
+		publicClient, err = minio.New(publicHost, &minio.Options{
+			Creds:     credentials.NewStaticV4(accessKey, secretKey, ""),
+			Secure:    publicUseSSL,
+			Transport: transport,
+			Region:    "us-east-1", // Set region to avoid GetBucketLocation call
+		})
+		if err != nil {
+			return nil, fmt.Errorf("init public minio client: %w", err)
+		}
+	}
+
+	return &MinIOBackend{
+		client:       client,
+		core:         core,
+		publicClient: publicClient,
+		bucket:       bucket,
+		publicURL:    publicURL,
+	}, nil
 }
 
 // PutObject uploads an object.
@@ -305,8 +334,13 @@ func (b *MinIOBackend) ListParts(ctx context.Context, bucket, key, uploadID stri
 }
 
 // PresignGet generates a presigned GET URL.
+// If publicClient is configured, uses it to generate URL with correct public endpoint.
 func (b *MinIOBackend) PresignGet(ctx context.Context, bucket, key string, expiry time.Duration) (string, error) {
-	u, err := b.client.PresignedGetObject(ctx, bucket, key, expiry, nil)
+	client := b.client
+	if b.publicClient != nil {
+		client = b.publicClient
+	}
+	u, err := client.PresignedGetObject(ctx, bucket, key, expiry, nil)
 	if err != nil {
 		return "", fmt.Errorf("presign get: %w", err)
 	}
@@ -314,8 +348,13 @@ func (b *MinIOBackend) PresignGet(ctx context.Context, bucket, key string, expir
 }
 
 // PresignPut generates a presigned PUT URL.
+// If publicClient is configured, uses it to generate URL with correct public endpoint.
 func (b *MinIOBackend) PresignPut(ctx context.Context, bucket, key string, expiry time.Duration) (string, error) {
-	u, err := b.client.PresignedPutObject(ctx, bucket, key, expiry)
+	client := b.client
+	if b.publicClient != nil {
+		client = b.publicClient
+	}
+	u, err := client.PresignedPutObject(ctx, bucket, key, expiry)
 	if err != nil {
 		return "", fmt.Errorf("presign put: %w", err)
 	}
@@ -339,17 +378,45 @@ func (b *MinIOBackend) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// mapMinIOError translates MinIO SDK errors into S3-compatible errors.
+// mapMinIOError translates MinIO SDK errors into backend sentinel errors.
+//
+// The returned errors are wrapped with the operation name and the underlying
+// cause, so callers can detect them with errors.Is(). The handler layer is
+// responsible for mapping these sentinels to S3-compatible error responses.
 func mapMinIOError(err error, operation string) error {
 	if err == nil {
 		return nil
 	}
 	errStr := err.Error()
 
+	// Disk full / quota — map to ErrInsufficientStorage (an S3Error, used
+	// directly because it already implements the error interface).
 	if strings.Contains(errStr, "no space left on device") ||
 		strings.Contains(errStr, "disk full") ||
 		strings.Contains(errStr, "disk quota exceeded") {
-		return ErrInsufficientStorage
+		return fmt.Errorf("minio %s: %w", operation, ErrInsufficientStorage)
+	}
+
+	// Key not found — 404-style errors from MinIO.
+	if strings.Contains(errStr, "object does not exist") ||
+		strings.Contains(errStr, "The specified key does not exist") ||
+		strings.Contains(errStr, "NoSuchKey") ||
+		strings.Contains(errStr, "resource not found") {
+		return fmt.Errorf("minio %s: %w", operation, ErrBackendKeyNotFound)
+	}
+
+	// Access denied — permission errors from MinIO.
+	if strings.Contains(errStr, "Access Denied") ||
+		strings.Contains(errStr, "access denied") ||
+		strings.Contains(errStr, "AccessDenied") {
+		return fmt.Errorf("minio %s: %w", operation, ErrBackendAccessDenied)
+	}
+
+	// Bucket not found.
+	if strings.Contains(errStr, "bucket does not exist") ||
+		strings.Contains(errStr, "NoSuchBucket") ||
+		strings.Contains(errStr, "The specified bucket does not exist") {
+		return fmt.Errorf("minio %s: %w", operation, ErrBackendBucketNotFound)
 	}
 
 	if strings.Contains(errStr, "connection refused") ||

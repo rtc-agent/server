@@ -7,7 +7,13 @@ import (
 	"strconv"
 
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/pkg/logger"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 )
 
 // OSS3MultipartHandler handles S3-compatible multipart upload operations.
@@ -25,8 +31,20 @@ func NewOSS3MultipartHandler(oss3UC *usecase.OSS3Usecase, bucket string) *OSS3Mu
 }
 
 // handleCreateMultipartUpload handles POST /{bucket}/{key}?uploads
-func (h *OSS3MultipartHandler) handleCreateMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	// TODO: Extract user_id from context (set by SigV4 middleware)
+func (h *OSS3MultipartHandler) handleCreateMultipartUpload(
+	w http.ResponseWriter, r *http.Request, bucket, key string,
+) {
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(
+		r.Context(), "oss3.CreateMultipartUpload",
+		trace.WithAttributes(
+			attribute.String("bucket", bucket),
+			attribute.String("key", key),
+			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+		),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	userID := ExtractUserIDFromContext(r.Context())
 
 	// Check rate limit
@@ -44,15 +62,22 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(w http.ResponseWriter
 	// Create multipart upload in backend
 	result, err := h.oss3UC.Backend().CreateMultipartUpload(r.Context(), bucket, key, contentType)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
 	}
 
 	// Create upload record in DB for tracking
-	if err = h.oss3UC.CreateMultipartUploadRecord(r.Context(), userID, bucket, key, result.UploadID); err != nil {
+	err = h.oss3UC.CreateMultipartUploadRecord(
+		r.Context(), userID, bucket, key, result.UploadID)
+	if err != nil {
 		// DB failed but backend upload created — orphaned upload
-		// TODO: integrate with structured logging
-		_ = err
+		logger.Warn(r.Context(), "failed to create multipart upload record",
+			zap.String("user_id", userID),
+			zap.String("key", key),
+			zap.String("upload_id", result.UploadID),
+			zap.Error(err))
 	}
 
 	// Return XML response per S3 spec
@@ -75,8 +100,21 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(w http.ResponseWriter
 }
 
 // handleUploadPart handles PUT /{bucket}/{key}?partNumber={n}&uploadId={id}
-func (h *OSS3MultipartHandler) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	// TODO: Extract user_id from context
+func (h *OSS3MultipartHandler) handleUploadPart(
+	w http.ResponseWriter, r *http.Request,
+	bucket, key, uploadID string,
+) {
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.UploadPart",
+		trace.WithAttributes(
+			attribute.String("bucket", bucket),
+			attribute.String("key", key),
+			attribute.String("upload_id", uploadID),
+			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+		),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	userID := ExtractUserIDFromContext(r.Context())
 
 	// Parse part number
@@ -112,8 +150,11 @@ func (h *OSS3MultipartHandler) handleUploadPart(w http.ResponseWriter, r *http.R
 	}()
 
 	// Upload part to backend
-	etag, err := h.oss3UC.Backend().UploadPart(r.Context(), bucket, key, uploadID, partNumber, r.Body, contentLength)
+	etag, err := h.oss3UC.Backend().UploadPart(
+		r.Context(), bucket, key, uploadID, partNumber, r.Body, contentLength)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
 	}
@@ -121,8 +162,11 @@ func (h *OSS3MultipartHandler) handleUploadPart(w http.ResponseWriter, r *http.R
 	// Commit quota
 	if err = h.oss3UC.CommitQuota(r.Context(), userID, quotaRequestID, contentLength); err != nil {
 		// Quota commit failed but upload succeeded
-		// TODO: integrate with structured logging
-		_ = err
+		logger.Warn(r.Context(), "failed to commit quota after successful part upload",
+			zap.String("user_id", userID),
+			zap.String("upload_id", uploadID),
+			zap.Int("part_number", partNumber),
+			zap.Error(err))
 	}
 
 	w.Header().Set("ETag", etag)
@@ -130,8 +174,22 @@ func (h *OSS3MultipartHandler) handleUploadPart(w http.ResponseWriter, r *http.R
 }
 
 // handleCompleteMultipartUpload handles POST /{bucket}/{key}?uploadId={id}
-func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	// TODO: Extract user_id from context
+func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
+	w http.ResponseWriter, r *http.Request,
+	bucket, key, uploadID string,
+) {
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(
+		r.Context(), "oss3.CompleteMultipartUpload",
+		trace.WithAttributes(
+			attribute.String("bucket", bucket),
+			attribute.String("key", key),
+			attribute.String("upload_id", uploadID),
+			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+		),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	userID := ExtractUserIDFromContext(r.Context())
 	requestID := ExtractRequestIDFromContext(r.Context())
 
@@ -165,14 +223,92 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(w http.ResponseWrit
 		}
 	}
 
-	// Complete multipart upload with compensation
-	etag, err := h.oss3UC.CompleteMultipartUploadWithComp(r.Context(), userID, bucket, key, uploadID, parts)
+	// Instant upload check: Since the key contains MD5, if the file already exists
+	// in both DB and MinIO, the upload has already completed successfully.
+	// For multipart uploads, return success directly and clean up the multipart record.
+	existingFile, err := h.oss3UC.GetFileRecord(ctx, userID, key)
 	if err != nil {
+		// Database error — fail fast
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
+		return
+	}
+
+	if existingFile != nil {
+		// DB record exists, verify MinIO file still exists
+		existingMeta, headErr := h.oss3UC.Backend().HeadObject(ctx, bucket, key)
+		if headErr == nil && existingMeta.Key != "" {
+			// Both DB and MinIO confirm file exists (instant upload hit)
+			span.SetAttributes(attribute.String("instant_upload", "multipart"))
+			logger.Info(ctx, "instant upload: multipart hit",
+				zap.String("user_id", userID),
+				zap.String("key", key),
+				zap.String("upload_id", uploadID))
+			RecordInstantUpload("multipart")
+
+			// Release quota committed during UploadPart (parts are discarded, not committed to a file)
+			partsTotalSize, sizeErr := h.oss3UC.GetMultipartUploadTotalSize(ctx, uploadID)
+			if sizeErr != nil {
+				logger.Warn(ctx, "instant upload: failed to get parts total size for quota release",
+					zap.String("user_id", userID),
+					zap.String("upload_id", uploadID),
+					zap.Error(sizeErr))
+			} else if partsTotalSize > 0 {
+				if adjustErr := h.oss3UC.AdjustQuota(ctx, userID, -partsTotalSize); adjustErr != nil {
+					logger.Warn(ctx, "instant upload: failed to release quota",
+						zap.String("user_id", userID),
+						zap.Int64("parts_total_size", partsTotalSize),
+						zap.Error(adjustErr))
+				}
+			}
+
+			// Abort the multipart upload to clean up
+			if abortErr := h.oss3UC.Backend().AbortMultipartUpload(ctx, bucket, key, uploadID); abortErr != nil {
+				span.RecordError(abortErr)
+				logger.Warn(ctx, "instant upload: failed to abort multipart upload",
+					zap.String("user_id", userID),
+					zap.String("upload_id", uploadID),
+					zap.Error(abortErr))
+			}
+			// Delete multipart upload record from DB
+			if deleteErr := h.oss3UC.DeleteMultipartUploadRecord(ctx, uploadID); deleteErr != nil {
+				span.RecordError(deleteErr)
+				logger.Warn(ctx, "instant upload: failed to delete multipart upload record",
+					zap.String("user_id", userID),
+					zap.String("upload_id", uploadID),
+					zap.Error(deleteErr))
+			}
+
+			// Return success with existing file's ETag
+			writeCompleteMultipartResult(w, bucket, key, existingMeta.ETag)
+			return
+		}
+		// DB has record but MinIO file missing — consistency violation, fall through
+		span.SetAttributes(attribute.Bool("db_consistency_violation", true))
+		RecordConsistencyViolation("db_has_minio_missing")
+		logger.Warn(ctx, "instant upload: DB record exists but MinIO file missing, completing multipart upload",
+			zap.String("user_id", userID),
+			zap.String("key", key))
+	}
+
+	// Complete multipart upload with compensation
+	etag, err := h.oss3UC.CompleteMultipartUploadWithComp(
+		r.Context(), userID, bucket, key, uploadID, parts)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
 	}
 
 	// Return XML response per S3 spec
+	writeCompleteMultipartResult(w, bucket, key, etag)
+}
+
+// writeCompleteMultipartResult writes the CompleteMultipartUpload XML response.
+// Shared by the normal completion path and the instant upload path.
+func writeCompleteMultipartResult(w http.ResponseWriter, bucket, key, etag string) {
 	type completeResult struct {
 		XMLName  xml.Name `xml:"CompleteMultipartUploadResult"`
 		Location string   `xml:"Location"`
@@ -186,7 +322,6 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(w http.ResponseWrit
 		Key:      key,
 		ETag:     etag,
 	}
-
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprint(w, xml.Header)
@@ -194,8 +329,22 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(w http.ResponseWrit
 }
 
 // handleAbortMultipartUpload handles DELETE /{bucket}/{key}?uploadId={id}
-func (h *OSS3MultipartHandler) handleAbortMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	// TODO: Extract user_id from context
+func (h *OSS3MultipartHandler) handleAbortMultipartUpload(
+	w http.ResponseWriter, r *http.Request,
+	bucket, key, uploadID string,
+) {
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(
+		r.Context(), "oss3.AbortMultipartUpload",
+		trace.WithAttributes(
+			attribute.String("bucket", bucket),
+			attribute.String("key", key),
+			attribute.String("upload_id", uploadID),
+			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+		),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	userID := ExtractUserIDFromContext(r.Context())
 	requestID := ExtractRequestIDFromContext(r.Context())
 
@@ -207,22 +356,38 @@ func (h *OSS3MultipartHandler) handleAbortMultipartUpload(w http.ResponseWriter,
 
 	// Abort multipart upload in backend
 	if err := h.oss3UC.Backend().AbortMultipartUpload(r.Context(), bucket, key, uploadID); err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
 	}
 
 	// Delete multipart upload record from DB
 	if err := h.oss3UC.DeleteMultipartUploadRecord(r.Context(), uploadID); err != nil {
-		// TODO: integrate with structured logging
-		_ = err
+		logger.Warn(r.Context(), "failed to delete multipart upload record after abort",
+			zap.String("upload_id", uploadID),
+			zap.Error(err))
 	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleListParts handles GET /{bucket}/{key}?uploadId={id}
-func (h *OSS3MultipartHandler) handleListParts(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	// TODO: Extract user_id from context
+func (h *OSS3MultipartHandler) handleListParts(
+	w http.ResponseWriter, r *http.Request,
+	bucket, key, uploadID string,
+) {
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.ListParts",
+		trace.WithAttributes(
+			attribute.String("bucket", bucket),
+			attribute.String("key", key),
+			attribute.String("upload_id", uploadID),
+			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+		),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	userID := ExtractUserIDFromContext(r.Context())
 	requestID := ExtractRequestIDFromContext(r.Context())
 
@@ -235,6 +400,8 @@ func (h *OSS3MultipartHandler) handleListParts(w http.ResponseWriter, r *http.Re
 	// List parts from backend
 	parts, err := h.oss3UC.Backend().ListParts(r.Context(), bucket, key, uploadID)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
 	}

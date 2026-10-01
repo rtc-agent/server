@@ -39,7 +39,6 @@ type Server struct {
 	stsHandler        *httphandler.STSHandler
 	stsPresignHandler *httphandler.STSPresignHandler
 	httpServer        *http.Server
-	s3HTTPServer      *http.Server     // Independent S3 endpoint (port :9000)
 	queueWorker       *rtcqueue.Worker // rtc-queue distributed worker
 	queue             *rtcqueue.Queue  // rtc-queue for publishing recovery work items
 	workerCancel      context.CancelFunc
@@ -182,58 +181,7 @@ func (s *Server) Start() error {
 
 	logger.Info(ctx, "HTTP server listening", zap.String("addr", addr))
 
-	// Start independent S3 server (port :9000) if OSS3 is enabled.
-	if s.oss3Handler != nil && s.cfg.Storage.S3Endpoint.Port > 0 {
-		if err := s.startS3Server(ctx); err != nil {
-			logger.Error(ctx, "Failed to start S3 server", zap.Error(err))
-			// Non-fatal: main server can still serve STS endpoints
-		}
-	}
-
 	return s.httpServer.ListenAndServe()
-}
-
-// startS3Server starts the independent S3 endpoint server on a separate port.
-// This separates S3 traffic from the main API, allowing independent scaling and configuration.
-func (s *Server) startS3Server(ctx context.Context) error {
-	s3Mux := http.NewServeMux()
-	s.registerOSS3Routes(s3Mux)
-
-	// Wrap with CORS middleware (outermost layer for S3 endpoint)
-	var handler http.Handler = s3Mux
-	origins := s.cfg.Storage.S3Endpoint.AllowedOrigins
-	if len(origins) == 0 {
-		// Fall back to main CORS config
-		origins = s.cfg.CORS.AllowOrigins
-	}
-	handler = httphandler.NewOSS3CORSMiddleware(origins)(handler)
-
-	s3Addr := fmt.Sprintf("%s:%d", s.cfg.Storage.S3Endpoint.Host, s.cfg.Storage.S3Endpoint.Port)
-	s.s3HTTPServer = &http.Server{
-		Addr:              s3Addr,
-		Handler:           handler,
-		ReadTimeout:       0,                // Stream uploads have no timeout
-		ReadHeaderTimeout: 10 * time.Second, // Slowloris protection
-		WriteTimeout:      10 * time.Minute, // Large file downloads
-		IdleTimeout:       120 * time.Second,
-	}
-
-	logger.Info(ctx, "S3 server listening", zap.String("addr", s3Addr))
-
-	go func() {
-		var err error
-		// Support TLS if configured
-		if s.cfg.Storage.S3Endpoint.TLSCert != "" && s.cfg.Storage.S3Endpoint.TLSKey != "" {
-			err = s.s3HTTPServer.ListenAndServeTLS(s.cfg.Storage.S3Endpoint.TLSCert, s.cfg.Storage.S3Endpoint.TLSKey)
-		} else {
-			err = s.s3HTTPServer.ListenAndServe()
-		}
-		if err != nil && err != http.ErrServerClosed {
-			logger.Error(ctx, "S3 server error", zap.Error(err))
-		}
-	}()
-
-	return nil
 }
 
 // Stop stops the server.
@@ -293,17 +241,7 @@ func (s *Server) Stop() {
 		logger.Error(ctx, "broker close failed", zap.Error(err))
 	}
 
-	// 1. Shutdown S3 server first (stop accepting new S3 requests)
-	if s.s3HTTPServer != nil {
-		if err := s.s3HTTPServer.Shutdown(ctx); err != nil {
-			logger.Error(ctx, "S3 server shutdown failed", zap.Error(err))
-		}
-		if logger.IsDebugMode() {
-			logger.Debug(ctx, "[Server] S3 server stopped")
-		}
-	}
-
-	// 2. Close main HTTP Server
+	// Close main HTTP Server
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		logger.Error(ctx, "Server shutdown error", zap.Error(err))
 	}
@@ -348,8 +286,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		s.stsPresignHandler.RegisterRoutes(mux)
 	}
 
-	// OSS3 S3-compatible endpoints are served on the independent S3 port (:9000).
-	// They are no longer registered on the main mux.
+	// OSS3 S3-compatible endpoints — integrated into main server with /s3 prefix.
+	// Routes: /s3/{bucket}/{key}
+	s.registerOSS3Routes(mux)
 
 	// Centrifuge WebSocket endpoint.
 	wsHandler := centrifuge.NewWebsocketHandler(s.svcCtx.CentrifugeNode, centrifuge.WebsocketConfig{
@@ -414,6 +353,7 @@ func (s *Server) registerDebugRoutes(mux *http.ServeMux) {
 }
 
 // registerOSS3Routes registers S3-compatible object storage routes.
+// Routes are registered under /s3 prefix: /s3/{bucket}/{key}
 func (s *Server) registerOSS3Routes(mux *http.ServeMux) {
 	if s.oss3Handler == nil {
 		logger.Info(context.Background(), "OSS3 handler not initialized, S3 endpoints disabled")
@@ -427,21 +367,23 @@ func (s *Server) registerOSS3Routes(mux *http.ServeMux) {
 		return
 	}
 
-	// Build middleware chain manually (innermost to outermost)
-	// Handler -> Metrics -> SigV4 -> BusinessRestriction -> AccessLog
+	// Build middleware chain (wrap from innermost to outermost)
+	// Request flow: AccessLog -> SigV4 -> BusinessRestriction -> Metrics -> Handler
+	// We build from handler outward (last wrapped = outermost = first to execute):
 	var handler http.Handler = s.oss3Handler
 	handler = httphandler.NewOSS3MetricsMiddleware()(handler)
-	handler = httphandler.NewSigV4Middleware(oss3UC, "us-east-1", handler)
 	handler = httphandler.NewBusinessRestrictionMiddleware(oss3UC, s.cfg.Storage.MinIO.Bucket, handler)
+	handler = httphandler.NewSigV4Middleware(oss3UC, "us-east-1", handler)
 	handler = httphandler.NewAccessLogMiddleware(oss3UC, handler)
 
-	// Register S3 path-style routes: /{bucket}/{key}
+	// Register S3 path-style routes under /s3 prefix: /s3/{bucket}/{key}
 	bucket := s.cfg.Storage.MinIO.Bucket
-	mux.Handle("/"+bucket+"/", handler)
-	mux.Handle("/"+bucket, handler)
+	mux.Handle("/s3/"+bucket+"/", handler)
+	mux.Handle("/s3/"+bucket, handler)
 
 	logger.Info(context.Background(), "OSS3 S3 endpoints registered",
 		zap.String("bucket", bucket),
+		zap.String("prefix", "/s3"),
 	)
 }
 

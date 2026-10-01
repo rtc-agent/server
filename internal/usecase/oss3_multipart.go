@@ -5,7 +5,9 @@ import (
 	"fmt"
 
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/pkg/logger"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
+	"go.uber.org/zap"
 )
 
 // CompleteMultipartUploadWithComp completes a multipart upload with transaction boundary and compensation.
@@ -33,8 +35,10 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 		// Compensation: try to delete the backend object
 		if compErr := uc.backend.DeleteObject(ctx, bucket, key); compErr != nil {
 			// Both DB and compensation failed — log and return DB error
-			// TODO: integrate with structured logging
-			_ = compErr
+			logger.Warn(ctx, "CompleteMultipartUpload compensation failed",
+				zap.String("bucket", bucket),
+				zap.String("key", key),
+				zap.Error(compErr))
 			return "", fmt.Errorf("DB operations failed (compensation also failed): %w", dbErr)
 		}
 		return "", fmt.Errorf("DB operations failed, backend object cleaned up: %w", dbErr)
@@ -114,8 +118,10 @@ func (uc *OSS3Usecase) PutObjectWithComp(
 		// Compensation: try to delete the backend object
 		if compErr := uc.backend.DeleteObject(ctx, bucket, key); compErr != nil {
 			// Both DB and compensation failed
-			// TODO: integrate with structured logging
-			_ = compErr
+			logger.Warn(ctx, "PutObject compensation failed",
+				zap.String("bucket", bucket),
+				zap.String("key", key),
+				zap.Error(compErr))
 			return fmt.Errorf("create file record failed (compensation also failed): %w", err)
 		}
 		return fmt.Errorf("create file record failed, backend object cleaned up: %w", err)

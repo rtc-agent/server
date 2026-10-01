@@ -10,8 +10,34 @@ package rtcoss3
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
+)
+
+// Backend sentinel errors.
+//
+// These errors are returned by Backend implementations (e.g. MinIO) and
+// wrapped with %w so that callers can use errors.Is() for detection.
+// The handler layer maps them to the corresponding S3Error responses.
+var (
+	// ErrBackendKeyNotFound indicates the requested key does not exist in the backend.
+	ErrBackendKeyNotFound = errors.New("key not found")
+
+	// ErrBackendAccessDenied indicates the backend rejected the request due to
+	// insufficient permissions.
+	ErrBackendAccessDenied = errors.New("access denied")
+
+	// ErrBackendBucketNotFound indicates the requested bucket does not exist in the
+	// backend.
+	ErrBackendBucketNotFound = errors.New("bucket not found")
+
+	// ErrQuotaExceeded indicates the user has exceeded their storage quota.
+	// This is a domain-level sentinel; the S3-facing error is ErrRequestQuotaExceeded.
+	ErrQuotaExceeded = errors.New("quota exceeded")
+
+	// ErrKeyPrefixViolation indicates the key does not start with the required user prefix.
+	ErrKeyPrefixViolation = errors.New("key prefix violation")
 )
 
 // S3Error represents an S3-compatible error.
@@ -91,6 +117,7 @@ var (
 	ErrInvalidRange         = &S3Error{"InvalidRange", "The requested range is not satisfiable", http.StatusRequestedRangeNotSatisfiable}
 	ErrInvalidCopySource    = &S3Error{"InvalidCopySource", "The specified copy source is not valid", http.StatusBadRequest}
 	ErrRateLimitExceeded    = &S3Error{"RateLimitExceeded", "You have exceeded your request rate limit", http.StatusTooManyRequests}
+	ErrInvalidKeyFormat     = &S3Error{"InvalidKeyFormat", "The specified key does not match the required format", http.StatusBadRequest}
 
 	// Additional errors for 1E-4 multipart operations
 	ErrInvalidPartNumber = &S3Error{"InvalidPartNumber", "The specified part number is not valid", http.StatusBadRequest}

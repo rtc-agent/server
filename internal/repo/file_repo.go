@@ -2,10 +2,12 @@ package repo
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // FileRepo provides file metadata persistence operations.
@@ -38,15 +40,35 @@ func NewFileRepo(db *gorm.DB) FileRepo {
 }
 
 func (r *fileRepo) Create(ctx context.Context, file *model.File) error {
-	return r.db.WithContext(ctx).Create(file).Error
+	// Use upsert to handle the case where a soft-deleted record with the same
+	// key exists. This restores the record by clearing deleted_at
+	// and updating other fields.
+	// Explicit column list avoids overwriting immutable fields (id, created_at,
+	// user_id, key) which UpdateAll: true would inadvertently update.
+	return DBFromContext(ctx, r.db).WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "key"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"bucket", "size", "content_type", "e_tag", "updated_at", "deleted_at",
+			}),
+		}).
+		Create(file).Error
 }
 
+// GetByUserAndKey looks up a file by user_id and key.
+// Returns (nil, nil) when the record is not found — this deviates from the
+// typical repo pattern of returning a sentinel error, because the instant
+// upload path needs to distinguish "not found" from "database error" without
+// calling errors.Is on every call site.
 func (r *fileRepo) GetByUserAndKey(ctx context.Context, userID string, key string) (*model.File, error) {
 	var file model.File
-	err := r.db.WithContext(ctx).
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("user_id = ? AND key = ?", userID, key).
 		First(&file).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil // not found is not an error — see method doc
+		}
 		return nil, err
 	}
 	return &file, nil

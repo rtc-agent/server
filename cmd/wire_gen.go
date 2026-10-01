@@ -19,6 +19,7 @@ import (
 	"github.com/rtc-agent/server/internal/handler/http"
 	"github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/loop"
 	"github.com/rtc-agent/server/internal/oauth"
@@ -30,8 +31,9 @@ import (
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/circuitbreaker"
-	"github.com/rtc-agent/server/pkg/proxy"
 	"github.com/rtc-agent/server/pkg/logger"
+	"github.com/rtc-agent/server/pkg/proxy"
+	"github.com/rtc-agent/server/pkg/rtc-oss3"
 	"github.com/rtc-agent/server/pkg/rtc-queue"
 	"github.com/rtc-agent/server/pkg/turn-agent"
 	"github.com/rtc-agent/server/pkg/webfetch"
@@ -124,6 +126,24 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	oAuth2Handler := provideOAuth2Handler(serviceContext, jwtSigner, redisStore, client, cfg)
 	interruptHandler := provideInterruptHandler(universalClient, cfg, serviceContext, jwtSigner)
 	memoriesHandler := provideMemoriesHandler(serviceContext, jwtSigner)
+	backend, err := provideOSS3Backend(cfg)
+	if err != nil {
+		return nil, err
+	}
+	fileRepo := repo.NewFileRepo(db)
+	multipartUploadRepo := repo.NewMultipartUploadRepo(db)
+	temporaryCredentialRepo := repo.NewTemporaryCredentialRepo(db)
+	v, err := provideOSS3LuaScripts(rdb)
+	if err != nil {
+		return nil, err
+	}
+	oss3Usecase, err := provideOSS3Usecase(backend, fileRepo, multipartUploadRepo, temporaryCredentialRepo, rdb, v, cfg)
+	if err != nil {
+		return nil, err
+	}
+	oss3Handler := provideOSS3Handler(oss3Usecase, cfg)
+	stsHandler := provideSTSHandler(oss3Usecase, jwtSigner, cfg)
+	stsPresignHandler := provideSTSPresignHandler(oss3Usecase, jwtSigner, cfg)
 	agent, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics)
 	if err != nil {
 		return nil, err
@@ -133,14 +153,14 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	asynqServer := provideAsynqServer(cfg)
 	serveMux := provideAsynqMux(queue, loopRepo, dependencies)
 	cancelFunc := provideRecoveryCancel(cfg, loopRepo, taskScheduler)
-	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, memoriesHandler, worker, queue, streamStore, asynqServer, serveMux, cancelFunc, prometheusMetrics)
+	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, memoriesHandler, oss3Handler, stsHandler, stsPresignHandler, worker, queue, streamStore, asynqServer, serveMux, cancelFunc, prometheusMetrics)
 	return serverServer, nil
 }
 
 // wire.go:
 
 // RepositorySet provides all repository implementations.
-var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewGoalRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo, repo.NewScriptExecutionRepo, repo.NewMemoryRepo, repo.NewLoopRepo)
+var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewGoalRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo, repo.NewScriptExecutionRepo, repo.NewMemoryRepo, repo.NewLoopRepo, repo.NewFileRepo, repo.NewMultipartUploadRepo, repo.NewTemporaryCredentialRepo)
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
 var ServiceSet = wire.NewSet(
@@ -159,6 +179,9 @@ var UsecaseSet = wire.NewSet(
 	provideWebSearchManager,
 	provideWebFetchManager,
 	provideUsecaseDependencies,
+	provideOSS3Backend,
+	provideOSS3LuaScripts,
+	provideOSS3Usecase,
 )
 
 // AsynqSet provides asynq components for loop task scheduling.
@@ -186,6 +209,9 @@ var HandlerSet = wire.NewSet(
 	provideOAuth2Handler,
 	provideInterruptHandler,
 	provideMemoriesHandler,
+	provideOSS3Handler,
+	provideSTSHandler,
+	provideSTSPresignHandler,
 )
 
 // ServerSet provides the main Server.
@@ -289,24 +315,24 @@ func provideUsecaseDependencies(
 	webFetchManager *webfetch.WebFetchManager,
 ) *usecase.Dependencies {
 	deps := &usecase.Dependencies{
-		DB:                svcCtx.DB,
-		Redis:             svcCtx.Redis,
-		SessionRepo:       svcCtx.SessionRepo,
-		MessageRepo:       svcCtx.MessageRepo,
-		TurnRepo:          svcCtx.TurnRepo,
-		RtcRepo:           svcCtx.RtcRepo,
-		GoalRepo:          svcCtx.GoalRepo,
-		LoopRepo:          svcCtx.LoopRepo,
-		MemoryRepo:        svcCtx.MemoryRepo,
-		UpdatePublisher:   svcCtx.UpdatePublisher,
-		ChatModel:         chatModelResult2.model,
-		LLMConfig:         cfg.LLM,
-		SystemPrompt:      cfg.Worker.SystemPrompt,
-		WorkerConfig:      cfg.Worker,
-		CommandRegistry:   command.NewCommandRegistry(),
-		TaskScheduler:     taskScheduler,
-		WebSearchManager:  webSearchManager,
-		WebFetchManager:   webFetchManager,
+		DB:               svcCtx.DB,
+		Redis:            svcCtx.Redis,
+		SessionRepo:      svcCtx.SessionRepo,
+		MessageRepo:      svcCtx.MessageRepo,
+		TurnRepo:         svcCtx.TurnRepo,
+		RtcRepo:          svcCtx.RtcRepo,
+		GoalRepo:         svcCtx.GoalRepo,
+		LoopRepo:         svcCtx.LoopRepo,
+		MemoryRepo:       svcCtx.MemoryRepo,
+		UpdatePublisher:  svcCtx.UpdatePublisher,
+		ChatModel:        chatModelResult2.model,
+		LLMConfig:        cfg.LLM,
+		SystemPrompt:     cfg.Worker.SystemPrompt,
+		WorkerConfig:     cfg.Worker,
+		CommandRegistry:  command.NewCommandRegistry(),
+		TaskScheduler:    taskScheduler,
+		WebSearchManager: webSearchManager,
+		WebFetchManager:  webFetchManager,
 	}
 
 	if webFetchManager != nil && chatModelResult2 != nil && chatModelResult2.model != nil {
@@ -696,6 +722,65 @@ func provideMemoriesHandler(
 	return httphandler.NewMemoriesHandler(svcCtx, jwtSigner)
 }
 
+func provideOSS3Backend(cfg *config.Config) (rtcoss3.Backend, error) {
+	if cfg.Storage.Backend == "" {
+		return nil, nil
+	}
+	return rtcoss3.NewMinIOBackend(
+		cfg.Storage.MinIO.Endpoint,
+		cfg.Storage.MinIO.AccessKey,
+		cfg.Storage.MinIO.SecretKey,
+		cfg.Storage.MinIO.Bucket,
+		cfg.Storage.MinIO.PublicURL,
+		cfg.Storage.MinIO.UseSSL,
+		100,
+		10,
+		90*time.Second,
+	)
+}
+
+func provideOSS3LuaScripts(redisClient *redis.Client) (map[string]*redis.Script, error) {
+	return cache.RegisterOSS3Scripts(redisClient), nil
+}
+
+func provideOSS3Usecase(
+	backend rtcoss3.Backend,
+	fileRepo repo.FileRepo,
+	uploadRepo repo.MultipartUploadRepo,
+	credRepo repo.TemporaryCredentialRepo,
+	redisClient *redis.Client,
+	scripts map[string]*redis.Script,
+	cfg *config.Config,
+) (*usecase.OSS3Usecase, error) {
+	if backend == nil {
+		return nil, nil
+	}
+	return usecase.NewOSS3Usecase(backend, fileRepo, uploadRepo, credRepo, redisClient, scripts, cfg.Storage)
+}
+
+func provideOSS3Handler(oss3UC *usecase.OSS3Usecase, cfg *config.Config) *httphandler.OSS3Handler {
+	if oss3UC == nil {
+		return nil
+	}
+	return httphandler.NewOSS3Handler(oss3UC, cfg.Storage.MinIO.Bucket)
+}
+
+func provideSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config) *httphandler.STSHandler {
+	if oss3UC == nil {
+		return nil
+	}
+	isDev := cfg.Server.Env == "development"
+	return httphandler.NewSTSHandler(oss3UC, signer, isDev)
+}
+
+func provideSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config) *httphandler.STSPresignHandler {
+	if oss3UC == nil {
+		return nil
+	}
+	isDev := cfg.Server.Env == "development"
+	return httphandler.NewSTSPresignHandler(oss3UC, signer, isDev)
+}
+
 func provideServer(
 	cfg *config.Config,
 	svcCtx *svc.ServiceContext,
@@ -704,6 +789,9 @@ func provideServer(
 	oauth2Handler *httphandler.OAuth2Handler,
 	interruptHandler *httphandler.InterruptHandler,
 	memoriesHandler *httphandler.MemoriesHandler,
+	oss3Handler *httphandler.OSS3Handler,
+	stsHandler *httphandler.STSHandler,
+	stsPresignHandler *httphandler.STSPresignHandler,
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
 	streamStore *agent.StreamStore,
@@ -723,6 +811,9 @@ func provideServer(
 		oauth2Handler,
 		interruptHandler,
 		memoriesHandler,
+		oss3Handler,
+		stsHandler,
+		stsPresignHandler,
 		queueWorker,
 		queue,
 		asynqServer,

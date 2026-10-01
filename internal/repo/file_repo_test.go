@@ -80,9 +80,12 @@ func TestFileRepo(t *testing.T) {
 			t.Fatalf("Delete: %v", err)
 		}
 
-		_, err := repo.GetByUserAndKey(ctx, "user-3", "test/delete.txt")
-		if err == nil {
-			t.Error("GetByUserAndKey after delete: expected error, got nil")
+		file, err := repo.GetByUserAndKey(ctx, "user-3", "test/delete.txt")
+		if err != nil {
+			t.Errorf("GetByUserAndKey after delete: unexpected error: %v", err)
+		}
+		if file != nil {
+			t.Error("GetByUserAndKey after delete: expected nil, got record")
 		}
 	})
 
@@ -101,9 +104,12 @@ func TestFileRepo(t *testing.T) {
 			t.Fatalf("DeleteByUserAndKey: %v", err)
 		}
 
-		_, err := repo.GetByUserAndKey(ctx, "user-4", "test/delete-by-key.txt")
-		if err == nil {
-			t.Error("GetByUserAndKey after DeleteByUserAndKey: expected error, got nil")
+		file, err := repo.GetByUserAndKey(ctx, "user-4", "test/delete-by-key.txt")
+		if err != nil {
+			t.Errorf("GetByUserAndKey after DeleteByUserAndKey: unexpected error: %v", err)
+		}
+		if file != nil {
+			t.Error("GetByUserAndKey after DeleteByUserAndKey: expected nil, got record")
 		}
 	})
 

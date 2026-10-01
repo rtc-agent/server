@@ -24,6 +24,7 @@ import (
 	httphandler "github.com/rtc-agent/server/internal/handler/http"
 	rpchandler "github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/loop"
 	"github.com/rtc-agent/server/internal/oauth"
@@ -36,6 +37,7 @@ import (
 	"github.com/rtc-agent/server/pkg/circuitbreaker"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/proxy"
+	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"github.com/rtc-agent/server/pkg/webfetch"
@@ -59,6 +61,9 @@ var RepositorySet = wire.NewSet(
 	repo.NewScriptExecutionRepo,
 	repo.NewMemoryRepo,
 	repo.NewLoopRepo,
+	repo.NewFileRepo,
+	repo.NewMultipartUploadRepo,
+	repo.NewTemporaryCredentialRepo,
 )
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
@@ -78,6 +83,9 @@ var UsecaseSet = wire.NewSet(
 	provideWebSearchManager,
 	provideWebFetchManager,
 	provideUsecaseDependencies,
+	provideOSS3Backend,
+	provideOSS3LuaScripts,
+	provideOSS3Usecase,
 )
 
 // AsynqSet provides asynq components for loop task scheduling.
@@ -105,6 +113,9 @@ var HandlerSet = wire.NewSet(
 	provideOAuth2Handler,
 	provideInterruptHandler,
 	provideMemoriesHandler,
+	provideOSS3Handler,
+	provideSTSHandler,
+	provideSTSPresignHandler,
 )
 
 // ServerSet provides the main Server.
@@ -642,6 +653,65 @@ func provideMemoriesHandler(
 	return httphandler.NewMemoriesHandler(svcCtx, jwtSigner)
 }
 
+func provideOSS3Backend(cfg *config.Config) (rtcoss3.Backend, error) {
+	if cfg.Storage.Backend == "" {
+		return nil, nil
+	}
+	return rtcoss3.NewMinIOBackend(
+		cfg.Storage.MinIO.Endpoint,
+		cfg.Storage.MinIO.AccessKey,
+		cfg.Storage.MinIO.SecretKey,
+		cfg.Storage.MinIO.Bucket,
+		cfg.Storage.MinIO.PublicURL, // Public URL for presigned URLs
+		cfg.Storage.MinIO.UseSSL,
+		100,              // maxIdleConns
+		10,               // maxIdleConnsPerHost
+		90*time.Second,   // idleConnTimeout
+	)
+}
+
+func provideOSS3LuaScripts(redisClient *redis.Client) (map[string]*redis.Script, error) {
+	return cache.RegisterOSS3Scripts(redisClient), nil
+}
+
+func provideOSS3Usecase(
+	backend rtcoss3.Backend,
+	fileRepo repo.FileRepo,
+	uploadRepo repo.MultipartUploadRepo,
+	credRepo repo.TemporaryCredentialRepo,
+	redisClient *redis.Client,
+	scripts map[string]*redis.Script,
+	cfg *config.Config,
+) (*usecase.OSS3Usecase, error) {
+	if backend == nil {
+		return nil, nil
+	}
+	return usecase.NewOSS3Usecase(backend, fileRepo, uploadRepo, credRepo, redisClient, scripts, cfg.Storage)
+}
+
+func provideOSS3Handler(oss3UC *usecase.OSS3Usecase, cfg *config.Config) *httphandler.OSS3Handler {
+	if oss3UC == nil {
+		return nil
+	}
+	return httphandler.NewOSS3Handler(oss3UC, cfg.Storage.MinIO.Bucket)
+}
+
+func provideSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config) *httphandler.STSHandler {
+	if oss3UC == nil {
+		return nil
+	}
+	isDev := cfg.Server.Env == "development"
+	return httphandler.NewSTSHandler(oss3UC, signer, isDev)
+}
+
+func provideSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config) *httphandler.STSPresignHandler {
+	if oss3UC == nil {
+		return nil
+	}
+	isDev := cfg.Server.Env == "development"
+	return httphandler.NewSTSPresignHandler(oss3UC, signer, isDev)
+}
+
 func provideServer(
 	cfg *config.Config,
 	svcCtx *svc.ServiceContext,
@@ -650,6 +720,9 @@ func provideServer(
 	oauth2Handler *httphandler.OAuth2Handler,
 	interruptHandler *httphandler.InterruptHandler,
 	memoriesHandler *httphandler.MemoriesHandler,
+	oss3Handler *httphandler.OSS3Handler,
+	stsHandler *httphandler.STSHandler,
+	stsPresignHandler *httphandler.STSPresignHandler,
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
 	streamStore *agent.StreamStore,
@@ -669,6 +742,9 @@ func provideServer(
 		oauth2Handler,
 		interruptHandler,
 		memoriesHandler,
+		oss3Handler,
+		stsHandler,
+		stsPresignHandler,
 		queueWorker,
 		queue,
 		asynqServer,

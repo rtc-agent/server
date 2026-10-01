@@ -6,7 +6,9 @@ import (
 	"net/http"
 
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/pkg/logger"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
+	"go.uber.org/zap"
 )
 
 // SigV4Middleware wraps an HTTP handler with SigV4 signature verification.
@@ -27,6 +29,11 @@ func NewSigV4Middleware(oss3UC *usecase.OSS3Usecase, region string, next http.Ha
 
 // ServeHTTP implements the http.Handler interface.
 func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	logger.Info(r.Context(), "SigV4 middleware: request received",
+		zap.String("method", r.Method),
+		zap.String("path", r.URL.Path),
+		zap.String("auth_header", r.Header.Get("Authorization")[:min(20, len(r.Header.Get("Authorization")))]))
+
 	// Skip signature verification for OPTIONS requests (CORS preflight)
 	if r.Method == http.MethodOptions {
 		m.next.ServeHTTP(w, r)
@@ -50,12 +57,20 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Lookup credential from cache or DB
 	credValue, err := m.oss3UC.LookupCredential(r.Context(), cred.AccessKeyID)
 	if err != nil || credValue == nil {
+		if err != nil {
+			logger.Error(r.Context(), "SigV4: credential lookup failed",
+				zap.String("access_key_id", cred.AccessKeyID),
+				zap.Error(err))
+		}
 		WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
 	}
 
 	// Verify signature
 	if err := rtcoss3.VerifySigV4Request(r, credValue.SecretAccessKey, m.region, "s3"); err != nil {
+		logger.Error(r.Context(), "SigV4: signature verification failed",
+			zap.String("access_key_id", cred.AccessKeyID),
+			zap.Error(err))
 		var s3err *rtcoss3.S3Error
 		if errors.As(err, &s3err) {
 			WriteS3Error(w, s3err, r.URL.Path, "")
@@ -68,6 +83,9 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Decrypt SessionToken to extract user_id
 	payload, err := m.oss3UC.DecryptSessionToken(credValue.SessionToken)
 	if err != nil {
+		logger.Error(r.Context(), "SigV4: session token decryption failed",
+			zap.String("access_key_id", cred.AccessKeyID),
+			zap.Error(err))
 		WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
 	}

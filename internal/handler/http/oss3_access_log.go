@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // AccessLogMiddleware logs S3 requests with structured fields.
@@ -64,29 +66,18 @@ func (m *AccessLogMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	duration := time.Since(start)
 
 	// Log structured access log
-	// TODO: integrate with structured logging (e.g., zap, zerolog)
-	// For now, just log to stdout
-	// Example log format (when logging is integrated):
-	// logger.Info("S3 access",
-	//   "user_id", userID,
-	//   "request_id", requestID,
-	//   "bucket", bucket,
-	//   "key", key,
-	//   "operation", operation,
-	//   "method", r.Method,
-	//   "status", rw.statusCode,
-	//   "duration_ms", duration.Milliseconds(),
-	//   "response_size", rw.responseSize,
-	//   "user_agent", r.UserAgent(),
-	// )
-	_ = userID
-	_ = requestID
-	_ = bucket
-	_ = key
-	_ = operation
-	_ = duration
-	_ = rw.statusCode
-	_ = rw.responseSize
+	logger.Info(r.Context(), "[oss3.HTTP] request completed",
+		zap.String("user_id", userID),
+		zap.String("request_id", requestID),
+		zap.String("bucket", bucket),
+		zap.String("key", key),
+		zap.String("operation", operation),
+		zap.String("method", r.Method),
+		zap.Int("status", rw.statusCode),
+		zap.Int64("duration_ms", duration.Milliseconds()),
+		zap.Int("response_size", rw.responseSize),
+		zap.String("user_agent", r.UserAgent()),
+	)
 }
 
 // extractOperation extracts the S3 operation name from the request.

@@ -2,6 +2,7 @@ package httphandler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -226,25 +227,56 @@ func TestMapBackendError(t *testing.T) {
 		wantCode string
 	}{
 		{
-			name:     "not found error",
-			err:      rtcoss3.ErrKeyNotFound,
+			name:     "key not found error",
+			err:      rtcoss3.ErrBackendKeyNotFound,
+			wantCode: "NoSuchKey",
+		},
+		{
+			name:     "wrapped key not found error",
+			err:      fmt.Errorf("minio get_object: %w", rtcoss3.ErrBackendKeyNotFound),
 			wantCode: "NoSuchKey",
 		},
 		{
 			name:     "access denied error",
-			err:      rtcoss3.ErrAccessDenied,
+			err:      rtcoss3.ErrBackendAccessDenied,
 			wantCode: "AccessDenied",
+		},
+		{
+			name:     "wrapped access denied error",
+			err:      fmt.Errorf("minio put_object: %w", rtcoss3.ErrBackendAccessDenied),
+			wantCode: "AccessDenied",
+		},
+		{
+			name:     "bucket not found error",
+			err:      rtcoss3.ErrBackendBucketNotFound,
+			wantCode: "NoSuchBucket",
+		},
+		{
+			name:     "insufficient storage error",
+			err:      rtcoss3.ErrInsufficientStorage,
+			wantCode: "InsufficientStorage",
 		},
 		{
 			name:     "generic error",
 			err:      rtcoss3.ErrInternalError,
 			wantCode: "InternalError",
 		},
+		{
+			name:     "nil error",
+			err:      nil,
+			wantCode: "",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := mapBackendError(tt.err)
+			if tt.err == nil {
+				if got != nil {
+					t.Errorf("mapBackendError(nil) = %v, want nil", got)
+				}
+				return
+			}
 			if got.Code != tt.wantCode {
 				t.Errorf("mapBackendError() code = %v, want %v", got.Code, tt.wantCode)
 			}

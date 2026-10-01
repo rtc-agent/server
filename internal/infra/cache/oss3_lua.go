@@ -7,6 +7,7 @@ const (
 	OSS3ScriptQuotaReserve  = "oss3:quota_reserve"
 	OSS3ScriptQuotaCommit   = "oss3:quota_commit"
 	OSS3ScriptQuotaRollback = "oss3:quota_rollback"
+	OSS3ScriptQuotaAdjust   = "oss3:quota_adjust"
 	OSS3ScriptRateLimit     = "oss3:rate_limit_check"
 	OSS3ScriptLockAcquire   = "oss3:lock_acquire"
 	OSS3ScriptLockExtend    = "oss3:lock_extend"
@@ -64,6 +65,24 @@ return 1
 	// Returns: 1 if deleted, 0 if already gone
 	luaQuotaRollback = `
 return redis.call('DEL', KEYS[1])
+`
+
+	// luaQuotaAdjust adjusts the committed quota counter by a delta (positive or negative).
+	// Used to release quota when instant upload detects duplicate content in multipart uploads.
+	// KEYS[1] = oss3:quota:{user_id}
+	// ARGV[1] = delta (positive = add, negative = subtract)
+	// Returns: 1 on success, 0 if would go negative
+	luaQuotaAdjust = `
+local delta = tonumber(ARGV[1])
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local newVal = current + delta
+
+if newVal < 0 then
+    return 0
+end
+
+redis.call('SET', KEYS[1], newVal)
+return 1
 `
 
 	// luaRateLimitCheck atomically checks and records a request in the sliding window.
@@ -152,6 +171,7 @@ func RegisterOSS3Scripts(rdb *redis.Client) map[string]*redis.Script {
 		OSS3ScriptQuotaReserve:  redis.NewScript(luaQuotaReserve),
 		OSS3ScriptQuotaCommit:   redis.NewScript(luaQuotaCommit),
 		OSS3ScriptQuotaRollback: redis.NewScript(luaQuotaRollback),
+		OSS3ScriptQuotaAdjust:   redis.NewScript(luaQuotaAdjust),
 		OSS3ScriptRateLimit:     redis.NewScript(luaRateLimitCheck),
 		OSS3ScriptLockAcquire:   redis.NewScript(luaLockAcquire),
 		OSS3ScriptLockExtend:    redis.NewScript(luaLockExtend),

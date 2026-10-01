@@ -36,6 +36,11 @@ func AutoMigrate(db *gorm.DB) error {
 		return err
 	}
 
+	// Drop legacy composite unique index on files (user_id, key) if it exists.
+	// The unique constraint is now on (key) only — content-addressed storage
+	// guarantees key uniqueness per content hash. See oss3-phase3 review Task 4.
+	_ = db.Exec("DROP INDEX IF EXISTS idx_files_user_key").Error
+
 	// Add composite index on memory_links to optimise queries by from_id + relation.
 	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_memory_links_from_relation ON memory_links(from_id, relation)").Error; err != nil {
 		return fmt.Errorf("create index idx_memory_links_from_relation: %w", err)

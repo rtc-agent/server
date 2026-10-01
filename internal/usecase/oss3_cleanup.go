@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // CleanupExpiredUploads finds and cleans up expired multipart uploads.
@@ -72,8 +74,8 @@ func (uc *OSS3Usecase) RunCleanup(ctx context.Context) error {
 		return fmt.Errorf("cleanup uploads: %w", err)
 	}
 	if uploadCount > 0 {
-		// Log cleanup count
-		_ = uploadCount // TODO: integrate with logging
+		logger.Info(ctx, "cleanup: expired uploads removed",
+			zap.Int("count", uploadCount))
 	}
 
 	// Cleanup expired credentials
@@ -82,8 +84,8 @@ func (uc *OSS3Usecase) RunCleanup(ctx context.Context) error {
 		return fmt.Errorf("cleanup credentials: %w", err)
 	}
 	if credCount > 0 {
-		// Log cleanup count
-		_ = credCount // TODO: integrate with logging
+		logger.Info(ctx, "cleanup: expired credentials removed",
+			zap.Int("count", credCount))
 	}
 
 	return nil

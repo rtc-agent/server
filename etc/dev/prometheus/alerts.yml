@@ -287,3 +287,76 @@ groups:
         annotations:
           summary: "MinIO bucket 使用量超过 10GB"
           description: "Bucket {{ $labels.bucket }} 使用量: {{ $value | humanize1024 }}iB"
+
+  - name: oss3-alerts
+    rules:
+      # OSS3 服务不可用
+      - alert: OSS3EndpointDown
+        expr: up{job="rtc-agent-server"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "OSS3 S3 端点不可达"
+          description: "Server 实例 {{ $labels.instance }} 已持续 30s 无法采集"
+
+      # 上传错误率
+      - alert: OSS3HighUploadErrorRate
+        expr: |
+          (
+            sum(rate(rtc_oss3_requests_total{operation="PutObject",status=~"5.."}[5m]))
+            / sum(rate(rtc_oss3_requests_total{operation="PutObject"}[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OSS3 上传错误率 > 5%"
+          description: "当前 5xx 比率: {{ $value | humanizePercentage }}"
+
+      # 下载延迟过高
+      - alert: OSS3HighDownloadLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(rtc_oss3_request_duration_seconds_bucket{operation="GetObject"}[5m])
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OSS3 下载 p95 延迟 > 5s"
+          description: "当前 p95: {{ $value | humanizeDuration }}"
+
+      # 配额使用率过高
+      # 1073741824 = 1 GiB in bytes (1024^3). Matches the default MaxUserQuotaBytes
+      # configured in the server. Update when the quota default changes.
+      - alert: OSS3QuotaNearLimit
+        expr: |
+          (rtc_oss3_quota_usage_bytes / 1073741824) > 0.9  # 1 GiB default limit (1024^3 bytes)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "用户配额使用率 > 90%"
+          description: "用户 {{ $labels.user_id }} 配额使用: {{ $value | humanizePercentage }}"
+
+      # 分片上传堆积
+      - alert: OSS3MultipartUploadBacklog
+        expr: sum(rtc_oss3_multipart_uploads_active) > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "活跃分片上传数量 > 1000"
+          description: "当前活跃上传: {{ $value }}"
+
+      # MinIO 后端错误
+      - alert: OSS3BackendError
+        expr: |
+          sum(rate(rtc_oss3_backend_errors_total[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OSS3 后端错误率异常"
+          description: "后端错误速率: {{ $value | humanize }}/s"

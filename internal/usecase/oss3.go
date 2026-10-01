@@ -8,7 +8,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -17,6 +19,17 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
+)
+
+// Sentinel errors for presigned URL validation.
+// Handlers use errors.Is() to detect these instead of fragile string matching.
+var (
+	// ErrKeyPrefixViolation indicates the requested key is outside the user's allowed prefix.
+	ErrKeyPrefixViolation = errors.New("key must start with user prefix")
+	// ErrUnsupportedPresignOperation indicates an operation other than "put" or "get".
+	ErrUnsupportedPresignOperation = errors.New("unsupported operation")
+	// ErrExpiryExceeded indicates the requested expiry exceeds the maximum allowed.
+	ErrExpiryExceeded = errors.New("expires_in must not exceed maximum")
 )
 
 // OSS3Usecase encapsulates all OSS3 business logic.
@@ -187,16 +200,74 @@ func (uc *OSS3Usecase) DeleteFileRecord(ctx context.Context, userID, key string)
 	return uc.fileRepo.DeleteByUserAndKey(ctx, userID, key)
 }
 
+// GetFileRecord looks up a file metadata record by user_id and key.
+// Returns nil and no error if the file does not exist.
+func (uc *OSS3Usecase) GetFileRecord(ctx context.Context, userID, key string) (*FileRecord, error) {
+	file, err := uc.fileRepo.GetByUserAndKey(ctx, userID, key)
+	if err != nil {
+		return nil, fmt.Errorf("get file record: %w", err)
+	}
+	if file == nil {
+		return nil, nil
+	}
+	return &FileRecord{
+		UserID:      file.UserID,
+		Bucket:      file.Bucket,
+		Key:         file.Key,
+		Size:        file.Size,
+		ContentType: file.ContentType,
+		ETag:        file.ETag,
+	}, nil
+}
+
 // CreateMultipartUploadRecord creates a multipart upload tracking record in the database.
 func (uc *OSS3Usecase) CreateMultipartUploadRecord(ctx context.Context, userID, bucket, key, uploadID string) error {
 	upload := &model.MultipartUpload{
 		UserID:    userID,
+		Bucket:    bucket,
 		Key:       key,
 		UploadID:  uploadID,
 		Status:    "uploading",
 		ExpiresAt: time.Now().Add(24 * time.Hour), // 24h expiry
 	}
 	return uc.uploadRepo.Create(ctx, upload)
+}
+
+// GeneratePresignedURL generates a presigned URL for the given operation.
+// Users can only generate presigned URLs for keys under their own prefix (user-{userID}/).
+func (uc *OSS3Usecase) GeneratePresignedURL(ctx context.Context, userID, operation, key string, expiresIn time.Duration) (string, time.Time, error) {
+	// Validate key prefix — user can only access their own prefix
+	expectedPrefix := "user-" + userID + "/"
+	if !strings.HasPrefix(key, expectedPrefix) {
+		return "", time.Time{}, fmt.Errorf("%w: key must start with %q", ErrKeyPrefixViolation, expectedPrefix)
+	}
+
+	// Validate expiry
+	maxExpiry := 7 * 24 * time.Hour // 7 days
+	if expiresIn <= 0 {
+		expiresIn = time.Hour // default 1h
+	}
+	if expiresIn > maxExpiry {
+		return "", time.Time{}, fmt.Errorf("%w: expires_in must not exceed %v", ErrExpiryExceeded, maxExpiry)
+	}
+
+	bucket := uc.cfg.MinIO.Bucket
+	var url string
+	var err error
+	switch operation {
+	case "put":
+		url, err = uc.backend.PresignPut(ctx, bucket, key, expiresIn)
+	case "get":
+		url, err = uc.backend.PresignGet(ctx, bucket, key, expiresIn)
+	default:
+		return "", time.Time{}, fmt.Errorf("%w: %q (must be 'put' or 'get')", ErrUnsupportedPresignOperation, operation)
+	}
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("presign %s: %w", operation, err)
+	}
+
+	expiresAt := time.Now().Add(expiresIn)
+	return url, expiresAt, nil
 }
 
 // DeleteMultipartUploadRecord deletes a multipart upload tracking record from the database.
