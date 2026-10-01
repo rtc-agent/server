@@ -147,63 +147,48 @@ func (c *contextCapturer) Value(key interface{}) interface{} {
 }
 
 // extractOperation extracts the S3 operation name from the request.
-// MEDIUM-21 fix: Caches the result in request context to avoid repeated parsing
-// when called by both AccessLog and Metrics middlewares.
+// This is a pure function — no side effects on the request.
+// The operation name is computed on each call; the cost is negligible
+// (a few string comparisons) and avoids the complexity of context caching.
 func extractOperation(r *http.Request) string {
-	// Check cache first
-	if cached, ok := r.Context().Value(ContextKeyOperation).(string); ok {
-		return cached
-	}
-
 	_, key, _ := parseS3Path(r.URL.Path)
 	q := r.URL.Query()
 
-	var op string
 	// Multipart operations
 	if q.Has("uploads") && r.Method == http.MethodPost {
-		op = "CreateMultipartUpload"
-	} else if q.Has("uploadId") {
+		return "CreateMultipartUpload"
+	}
+	if q.Has("uploadId") {
 		switch r.Method {
 		case http.MethodPut:
-			op = "UploadPart"
+			return "UploadPart"
 		case http.MethodPost:
-			op = "CompleteMultipartUpload"
+			return "CompleteMultipartUpload"
 		case http.MethodDelete:
-			op = "AbortMultipartUpload"
+			return "AbortMultipartUpload"
 		case http.MethodGet:
-			op = "ListParts"
+			return "ListParts"
 		}
 	}
 
 	// Basic operations
-	if op == "" {
-		if key == "" {
-			if r.Method == http.MethodGet {
-				op = "ListObjects"
-			}
-		}
+	if key == "" && r.Method == http.MethodGet {
+		return "ListObjects"
 	}
 
-	if op == "" {
-		switch r.Method {
-		case http.MethodPut:
-			if r.Header.Get("X-Amz-Copy-Source") != "" {
-				op = "CopyObject"
-			} else {
-				op = "PutObject"
-			}
-		case http.MethodGet:
-			op = "GetObject"
-		case http.MethodDelete:
-			op = "DeleteObject"
-		case http.MethodHead:
-			op = "HeadObject"
-		default:
-			op = "Unknown"
+	switch r.Method {
+	case http.MethodPut:
+		if r.Header.Get("X-Amz-Copy-Source") != "" {
+			return "CopyObject"
 		}
+		return "PutObject"
+	case http.MethodGet:
+		return "GetObject"
+	case http.MethodDelete:
+		return "DeleteObject"
+	case http.MethodHead:
+		return "HeadObject"
+	default:
+		return "Unknown"
 	}
-
-	// Cache in context for subsequent calls
-	*r = *r.WithContext(context.WithValue(r.Context(), ContextKeyOperation, op))
-	return op
 }

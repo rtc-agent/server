@@ -30,8 +30,6 @@ const (
 	ContextKeyUserID contextKey = "user_id"
 	// ContextKeyRequestID is the context key for request ID.
 	ContextKeyRequestID contextKey = "request_id"
-	// ContextKeyOperation is the context key for cached S3 operation name.
-	ContextKeyOperation contextKey = "operation"
 )
 
 // RequestIDMiddleware generates and injects a request ID into the context.

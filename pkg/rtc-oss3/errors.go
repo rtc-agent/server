@@ -49,9 +49,6 @@ var (
 	// ErrQuotaExceeded indicates the user has exceeded their storage quota.
 	// This is a domain-level sentinel; the S3-facing error is ErrRequestQuotaExceeded.
 	ErrQuotaExceeded = errors.New("quota exceeded")
-
-	// ErrKeyPrefixViolation indicates the key does not start with the required user prefix.
-	ErrKeyPrefixViolation = errors.New("key prefix violation")
 )
 
 // S3Error represents an S3-compatible error.
@@ -125,7 +122,6 @@ var (
 
 	// Additional errors for 1E-3 basic operations
 	ErrInvalidURI           = &S3Error{"InvalidURI", "The specified URI is invalid", http.StatusBadRequest}
-	ErrNoSuchBucket         = &S3Error{"NoSuchBucket", "The specified bucket does not exist", http.StatusNotFound}
 	ErrNotImplemented       = &S3Error{"NotImplemented", "A parameter you provided is not yet implemented", http.StatusNotImplemented}
 	ErrMissingContentLength = &S3Error{"MissingContentLength", "You must provide the Content-Length HTTP header", http.StatusLengthRequired}
 	ErrInvalidRange         = &S3Error{"InvalidRange", "The requested range is not satisfiable", http.StatusRequestedRangeNotSatisfiable}

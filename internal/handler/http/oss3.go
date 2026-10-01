@@ -107,7 +107,7 @@ func (h *OSS3Handler) validateS3Request(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if bucket != h.bucket {
-		WriteS3Error(w, rtcoss3.ErrNoSuchBucket, r.URL.Path, "")
+		WriteS3Error(w, rtcoss3.ErrBucketNotFound, r.URL.Path, "")
 		return "", "", false
 	}
 
@@ -650,7 +650,7 @@ func (h *OSS3Handler) handleCopyObject(
 
 	// Validate source bucket
 	if srcBucket != h.bucket {
-		WriteS3Error(w, rtcoss3.ErrNoSuchBucket, r.URL.Path, "")
+		WriteS3Error(w, rtcoss3.ErrBucketNotFound, r.URL.Path, "")
 		return
 	}
 

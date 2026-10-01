@@ -74,6 +74,9 @@ func (uc *OSS3Usecase) ValidateCredential(ctx context.Context, accessKeyID, sess
 	if err != nil {
 		return nil, fmt.Errorf("get credential: %w", err)
 	}
+	if cred == nil {
+		return nil, rtcoss3.ErrInvalidSignature
+	}
 
 	if cred.IsExpired() {
 		return nil, rtcoss3.ErrExpiredToken
@@ -97,6 +100,10 @@ func (uc *OSS3Usecase) RevokeCredential(ctx context.Context, accessKeyID string)
 	cred, err := uc.credRepo.GetByAccessKeyID(ctx, accessKeyID)
 	if err != nil {
 		return fmt.Errorf("get credential: %w", err)
+	}
+	if cred == nil {
+		// Credential already gone — nothing to revoke
+		return nil
 	}
 
 	// Hard-delete the credential
