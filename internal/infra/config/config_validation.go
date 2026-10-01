@@ -52,6 +52,32 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	// Validate storage encryption configuration.
+	if err := c.Storage.Encryption.Validate(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Validate checks EncryptionConfig fields.
+// SessionTokenKey must be a secure random value, not empty or the default test value.
+func (c *EncryptionConfig) Validate() error {
+	if c.SessionTokenKey == "" {
+		return fmt.Errorf("storage.encryption.session_token_key is required: set it via STORAGE__ENCRYPTION__SESSION_TOKEN_KEY environment variable")
+	}
+
+	// Check for the default test value from config.docker.yaml
+	const defaultTestKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if c.SessionTokenKey == defaultTestKey {
+		return fmt.Errorf("storage.encryption.session_token_key must not use the default test value in production: generate a secure random 64-character hex string")
+	}
+
+	// Validate length (64 hex chars = 32 bytes for AES-256)
+	if len(c.SessionTokenKey) != 64 {
+		return fmt.Errorf("storage.encryption.session_token_key must be 64 hex characters (32 bytes), got %d characters", len(c.SessionTokenKey))
+	}
+
 	return nil
 }
 

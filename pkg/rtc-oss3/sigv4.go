@@ -140,11 +140,21 @@ func ParseAuthorizationHeader(auth string) (*Credential, []string, string, error
 
 	parts := strings.Split(auth[17:], ", ")
 	if len(parts) != 3 {
-		return nil, nil, "", fmt.Errorf("invalid authorization header format")
+		return nil, nil, "", fmt.Errorf("invalid authorization header format: expected 3 parts, got %d", len(parts))
+	}
+
+	// Validate each part has correct format (contains '=')
+	for i, part := range parts {
+		if !strings.Contains(part, "=") {
+			return nil, nil, "", fmt.Errorf("invalid authorization header format: part %d missing '='", i)
+		}
 	}
 
 	// Parse Credential
 	credPart := strings.TrimPrefix(parts[0], "Credential=")
+	if credPart == parts[0] {
+		return nil, nil, "", fmt.Errorf("invalid authorization header format: missing Credential= prefix")
+	}
 	cred, err := parseCredential(credPart)
 	if err != nil {
 		return nil, nil, "", err
@@ -152,11 +162,17 @@ func ParseAuthorizationHeader(auth string) (*Credential, []string, string, error
 
 	// Parse SignedHeaders
 	signedHeadersPart := strings.TrimPrefix(parts[1], "SignedHeaders=")
+	if signedHeadersPart == parts[1] {
+		return nil, nil, "", fmt.Errorf("invalid authorization header format: missing SignedHeaders= prefix")
+	}
 	signedHeaders := strings.Split(signedHeadersPart, ";")
 	sort.Strings(signedHeaders)
 
 	// Parse Signature
 	signature := strings.TrimPrefix(parts[2], "Signature=")
+	if signature == parts[2] {
+		return nil, nil, "", fmt.Errorf("invalid authorization header format: missing Signature= prefix")
+	}
 
 	return cred, signedHeaders, signature, nil
 }

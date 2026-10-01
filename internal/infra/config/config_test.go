@@ -138,3 +138,99 @@ func TestConfig_Validate_WithInvalidWorkerConfig(t *testing.T) {
 		t.Errorf("error = %q, want to contain 'context_tokens_limit'", err.Error())
 	}
 }
+
+func TestEncryptionConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name            string
+		key             string
+		wantErr         bool
+		wantErrContains string
+	}{
+		{
+			name:            "empty key",
+			key:             "",
+			wantErr:         true,
+			wantErrContains: "session_token_key is required",
+		},
+		{
+			name:            "default test key",
+			key:             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			wantErr:         true,
+			wantErrContains: "must not use the default test value",
+		},
+		{
+			name:            "wrong length - too short",
+			key:             "0123456789abcdef",
+			wantErr:         true,
+			wantErrContains: "must be 64 hex characters",
+		},
+		{
+			name:            "wrong length - too long",
+			key:             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef00",
+			wantErr:         true,
+			wantErrContains: "must be 64 hex characters",
+		},
+		{
+			name:    "valid key",
+			key:     "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &EncryptionConfig{
+				SessionTokenKey: tt.key,
+			}
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error for invalid config, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Errorf("error = %q, want to contain %q", err.Error(), tt.wantErrContains)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("valid config should not return error, got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_EncryptionConfig(t *testing.T) {
+	// Test that Config.Validate calls EncryptionConfig.Validate
+	cfg := &Config{
+		Database: DatabaseConfig{
+			DSN: "postgres://test",
+		},
+		Server: ServerConfig{
+			Port: 8080,
+		},
+		LLM: LLMConfig{
+			APIKey: "test-key",
+		},
+		Providers: ProvidersConfig{
+			Mock: MockProviderConfig{
+				Enabled: true,
+			},
+		},
+		Auth: AuthConfig{
+			JWTSecret:             "test-secret",
+			AccessTokenTTLSeconds: 3600,
+		},
+		Storage: StorageConfig{
+			Encryption: EncryptionConfig{
+				SessionTokenKey: "", // Invalid: empty
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error from Config.Validate with invalid EncryptionConfig, got nil")
+	}
+	if !strings.Contains(err.Error(), "session_token_key") {
+		t.Errorf("error = %q, want to contain 'session_token_key'", err.Error())
+	}
+}
