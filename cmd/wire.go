@@ -658,17 +658,17 @@ func provideOSS3Backend(cfg *config.Config) (rtcoss3.Backend, error) {
 		return nil, nil
 	}
 	minioCfg := cfg.Storage.MinIO
-	return rtcoss3.NewMinIOBackend(
-		minioCfg.Endpoint,
-		minioCfg.AccessKey,
-		minioCfg.SecretKey,
-		minioCfg.Bucket,
-		minioCfg.PublicURL, // Public URL for presigned URLs
-		minioCfg.UseSSL,
-		minioCfg.MaxIdleConns,
-		minioCfg.MaxIdleConnsPerHost,
-		minioCfg.IdleConnTimeout,
-	)
+	return rtcoss3.NewMinIOBackend(rtcoss3.MinIOOptions{
+		Endpoint:            minioCfg.Endpoint,
+		AccessKey:           minioCfg.AccessKey,
+		SecretKey:           minioCfg.SecretKey,
+		Bucket:              minioCfg.Bucket,
+		PublicURL:           minioCfg.PublicURL,
+		UseSSL:              minioCfg.UseSSL,
+		MaxIdleConns:        minioCfg.MaxIdleConns,
+		MaxIdleConnsPerHost: minioCfg.MaxIdleConnsPerHost,
+		IdleConnTimeout:     minioCfg.IdleConnTimeout,
+	})
 }
 
 func provideOSS3LuaScripts(redisClient *redis.Client) (map[string]*redis.Script, error) {

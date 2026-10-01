@@ -60,6 +60,9 @@ func (m *BusinessRestrictionMiddleware) ServeHTTP(w http.ResponseWriter, r *http
 
 // hasPathPermission checks if the user has permission to access the given key.
 // Users can only access paths under user-{user_id}/.
+// NOTE: Currently only used in tests; production path validation is done via
+// rtcoss3.ValidateKey in the handler layer. Retained for test coverage and
+// as a standalone utility for future middleware use.
 func hasPathPermission(userID, key string) bool {
 	expectedPrefix := "user-" + userID + "/"
 	return strings.HasPrefix(key, expectedPrefix) || key == ""

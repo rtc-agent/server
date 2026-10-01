@@ -29,10 +29,9 @@ func NewSigV4Middleware(oss3UC *usecase.OSS3Usecase, region string, next http.Ha
 
 // ServeHTTP implements the http.Handler interface.
 func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	logger.Info(r.Context(), "SigV4 middleware: request received",
+	logger.Debug(r.Context(), "SigV4 middleware: request received",
 		zap.String("method", r.Method),
-		zap.String("path", r.URL.Path),
-		zap.String("auth_header", r.Header.Get("Authorization")[:min(20, len(r.Header.Get("Authorization")))]))
+		zap.String("path", r.URL.Path))
 
 	// Skip signature verification for OPTIONS requests (CORS preflight)
 	if r.Method == http.MethodOptions {
@@ -57,7 +56,7 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Lookup credential from cache or DB
 	credValue, err := m.oss3UC.LookupCredential(r.Context(), cred.AccessKeyID)
 	if err != nil {
-		// DB error - return 500
+		// Actual DB/cache error — return 500 (not 403) so the client can retry
 		logger.Error(r.Context(), "SigV4: credential lookup failed",
 			zap.String("access_key_id", cred.AccessKeyID),
 			zap.Error(err))
@@ -65,7 +64,7 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if credValue == nil {
-		// Credential not found - return 403
+		// Credential not found — return 403
 		WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
 	}

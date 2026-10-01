@@ -3,11 +3,13 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/model"
+	"gorm.io/gorm"
 )
 
 // credentialCacheValue is the JSON structure stored in Redis cache.
@@ -60,8 +62,13 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 		return uc.credRepo.GetByAccessKeyID(ctx, accessKeyID)
 	})
 	if err != nil {
-		// Credential not found — return nil, nil (caller treats as invalid)
-		return nil, nil
+		// Distinguish "not found" from actual DB errors.
+		// gorm.ErrRecordNotFound means the credential does not exist — return nil, nil.
+		// Any other error is a DB failure — propagate to caller for 500 response.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("lookup credential %q: %w", accessKeyID, err)
 	}
 	cred, ok := result.(*model.TemporaryCredential)
 	if !ok || cred == nil {

@@ -34,7 +34,17 @@ func TestMinIOBackendIntegration(t *testing.T) {
 	}
 	bucket := "test-rtc-oss3"
 
-	backend, err := NewMinIOBackend(endpoint, accessKey, secretKey, bucket, "", false, 100, 10, 90*time.Second)
+	backend, err := NewMinIOBackend(MinIOOptions{
+		Endpoint:            endpoint,
+		AccessKey:           accessKey,
+		SecretKey:           secretKey,
+		Bucket:              bucket,
+		PublicURL:           "",
+		UseSSL:              false,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	})
 	if err != nil {
 		t.Fatalf("NewMinIOBackend: %v", err)
 	}

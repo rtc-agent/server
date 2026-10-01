@@ -24,20 +24,32 @@ type MinIOBackend struct {
 	publicURL    string // Public-facing URL for presigned URLs (empty = use client endpoint)
 }
 
+// MinIOOptions holds configuration for NewMinIOBackend.
+type MinIOOptions struct {
+	Endpoint            string
+	AccessKey           string
+	SecretKey           string
+	Bucket              string
+	PublicURL           string // Public-facing S3 endpoint for presigned URLs (empty = use Endpoint)
+	UseSSL              bool
+	MaxIdleConns        int
+	MaxIdleConnsPerHost int
+	IdleConnTimeout     time.Duration
+}
+
 // NewMinIOBackend creates a MinIO backend.
-// publicURL is the public-facing S3 endpoint for presigned URLs (empty = use endpoint).
-func NewMinIOBackend(endpoint, accessKey, secretKey, bucket, publicURL string, useSSL bool, maxIdleConns, maxIdleConnsPerHost int, idleConnTimeout time.Duration) (*MinIOBackend, error) {
+func NewMinIOBackend(opts MinIOOptions) (*MinIOBackend, error) {
 	transport := &http.Transport{
-		MaxIdleConns:          maxIdleConns,
-		MaxIdleConnsPerHost:   maxIdleConnsPerHost,
-		IdleConnTimeout:       idleConnTimeout,
+		MaxIdleConns:          opts.MaxIdleConns,
+		MaxIdleConnsPerHost:   opts.MaxIdleConnsPerHost,
+		IdleConnTimeout:       opts.IdleConnTimeout,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 60 * time.Second,
 	}
 
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:     credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure:    useSSL,
+	client, err := minio.New(opts.Endpoint, &minio.Options{
+		Creds:     credentials.NewStaticV4(opts.AccessKey, opts.SecretKey, ""),
+		Secure:    opts.UseSSL,
 		Transport: transport,
 	})
 	if err != nil {
@@ -47,9 +59,9 @@ func NewMinIOBackend(endpoint, accessKey, secretKey, bucket, publicURL string, u
 	// LOW-06 fix: Set application info for better observability in MinIO logs
 	client.SetAppInfo("rtc-agent", "1.0.0")
 
-	core, err := minio.NewCore(endpoint, &minio.Options{
-		Creds:     credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure:    useSSL,
+	core, err := minio.NewCore(opts.Endpoint, &minio.Options{
+		Creds:     credentials.NewStaticV4(opts.AccessKey, opts.SecretKey, ""),
+		Secure:    opts.UseSSL,
 		Transport: transport,
 	})
 	if err != nil {
@@ -59,39 +71,39 @@ func NewMinIOBackend(endpoint, accessKey, secretKey, bucket, publicURL string, u
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	exists, err := client.BucketExists(ctx, bucket)
+	exists, err := client.BucketExists(ctx, opts.Bucket)
 	if err != nil {
 		return nil, fmt.Errorf("check bucket: %w", err)
 	}
 	if !exists {
 		logger.Info(ctx, "creating MinIO bucket",
-			zap.String("bucket", bucket))
-		if err := client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil {
+			zap.String("bucket", opts.Bucket))
+		if err := client.MakeBucket(ctx, opts.Bucket, minio.MakeBucketOptions{}); err != nil {
 			// Ignore BucketAlreadyOwnedByYou error (concurrent startup)
 			var errResp minio.ErrorResponse
 			if errors.As(err, &errResp) && errResp.Code == "BucketAlreadyOwnedByYou" {
 				logger.Info(ctx, "MinIO bucket already exists (concurrent creation)",
-					zap.String("bucket", bucket))
+					zap.String("bucket", opts.Bucket))
 			} else {
 				return nil, fmt.Errorf("create bucket: %w", err)
 			}
 		} else {
 			logger.Info(ctx, "MinIO bucket created successfully",
-				zap.String("bucket", bucket))
+				zap.String("bucket", opts.Bucket))
 		}
 	}
 
 	// Create public client for presigned URLs if publicURL is configured
 	var publicClient *minio.Client
-	if publicURL != "" {
+	if opts.PublicURL != "" {
 		// Extract host from publicURL (e.g., "http://localhost:29000" -> "localhost:29000")
-		publicHost := strings.TrimPrefix(publicURL, "http://")
+		publicHost := strings.TrimPrefix(opts.PublicURL, "http://")
 		publicHost = strings.TrimPrefix(publicHost, "https://")
 		publicHost = strings.TrimSuffix(publicHost, "/")
 
-		publicUseSSL := strings.HasPrefix(publicURL, "https://")
+		publicUseSSL := strings.HasPrefix(opts.PublicURL, "https://")
 		publicClient, err = minio.New(publicHost, &minio.Options{
-			Creds:     credentials.NewStaticV4(accessKey, secretKey, ""),
+			Creds:     credentials.NewStaticV4(opts.AccessKey, opts.SecretKey, ""),
 			Secure:    publicUseSSL,
 			Transport: transport,
 			Region:    "us-east-1", // Set region to avoid GetBucketLocation call
@@ -105,8 +117,8 @@ func NewMinIOBackend(endpoint, accessKey, secretKey, bucket, publicURL string, u
 		client:       client,
 		core:         core,
 		publicClient: publicClient,
-		bucket:       bucket,
-		publicURL:    publicURL,
+		bucket:       opts.Bucket,
+		publicURL:    opts.PublicURL,
 	}, nil
 }
 
