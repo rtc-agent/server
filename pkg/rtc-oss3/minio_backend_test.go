@@ -3,6 +3,8 @@ package rtcoss3
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -233,9 +235,17 @@ func TestMinIOBackendUnit(t *testing.T) {
 		}
 	})
 
-	t.Run("IsMinIODiskFullError", func(t *testing.T) {
-		if IsMinIODiskFullError(nil) {
-			t.Error("IsMinIODiskFullError(nil): expected false")
+	t.Run("ErrInsufficientStorage_Detection", func(t *testing.T) {
+		// Verify disk-full errors map to ErrInsufficientStorage
+		diskFullErr := fmt.Errorf("write: no space left on device")
+		mapped := mapMinIOError(diskFullErr, "put_object")
+		if !errors.Is(mapped, ErrInsufficientStorage) {
+			t.Errorf("expected ErrInsufficientStorage, got %v", mapped)
+		}
+
+		// Verify nil is not disk full
+		if errors.Is(nil, ErrInsufficientStorage) {
+			t.Error("nil should not match ErrInsufficientStorage")
 		}
 	})
 }

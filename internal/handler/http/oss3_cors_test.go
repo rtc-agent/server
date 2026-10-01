@@ -82,15 +82,15 @@ func TestNewOSS3CORSMiddleware_EmptyOrigins(t *testing.T) {
 
 	handler := NewOSS3CORSMiddleware(nil)(inner)
 
-	t.Run("empty origins defaults to wildcard", func(t *testing.T) {
+	t.Run("empty origins denies all CORS requests", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/rtc-agent/test", nil)
 		req.Header.Set("Origin", "http://any-origin.com")
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, req)
 
-		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.Equal(t, "", rec.Header().Get("Access-Control-Allow-Origin"))
 	})
 }
 
