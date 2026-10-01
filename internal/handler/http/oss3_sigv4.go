@@ -93,9 +93,12 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Inject user_id and request_id into context for downstream handlers
+	// Inject user_id into context for downstream handlers.
+	// NOTE: RequestID is intentionally NOT set here — RequestIDMiddleware already
+	// handles it (generating a UUID if the client didn't provide one). Overwriting
+	// it here with r.Header.Get("X-Amz-Request-Id") would replace the UUID with
+	// an empty string when the client omits the header.
 	ctx := context.WithValue(r.Context(), ContextKeyUserID, payload.UserID)
-	ctx = context.WithValue(ctx, ContextKeyRequestID, r.Header.Get("X-Amz-Request-Id"))
 
 	// Signature valid, call next handler with enriched context
 	m.next.ServeHTTP(w, r.WithContext(ctx))

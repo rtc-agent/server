@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/usecase"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 )
@@ -32,6 +33,27 @@ const (
 	// ContextKeyOperation is the context key for cached S3 operation name.
 	ContextKeyOperation contextKey = "operation"
 )
+
+// RequestIDMiddleware generates and injects a request ID into the context.
+// M5: Ensures all S3 requests have a unique ID for tracing and error reporting.
+// If X-Amz-Request-Id header is present, uses it; otherwise generates a new UUID.
+func RequestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := r.Header.Get("X-Amz-Request-Id")
+		if requestID == "" {
+			requestID = uuid.New().String()
+		}
+
+		// Inject request ID into context
+		ctx := context.WithValue(r.Context(), ContextKeyRequestID, requestID)
+		r = r.WithContext(ctx)
+
+		// Also set response header for client correlation
+		w.Header().Set("X-Amz-Request-Id", requestID)
+
+		next.ServeHTTP(w, r)
+	})
+}
 
 // BusinessRestrictionMiddleware enforces business rules on S3 requests.
 type BusinessRestrictionMiddleware struct {

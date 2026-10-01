@@ -2,6 +2,8 @@ package repo
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,34 +36,48 @@ func NewTemporaryCredentialRepo(db *gorm.DB) TemporaryCredentialRepo {
 }
 
 func (r *temporaryCredentialRepo) Create(ctx context.Context, cred *model.TemporaryCredential) error {
-	return r.db.WithContext(ctx).Create(cred).Error
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(cred).Error; err != nil {
+		return fmt.Errorf("create temporary credential %s: %w", cred.ID, err)
+	}
+	return nil
 }
 
 func (r *temporaryCredentialRepo) GetByAccessKeyID(ctx context.Context, accessKeyID string) (*model.TemporaryCredential, error) {
 	var cred model.TemporaryCredential
-	err := r.db.WithContext(ctx).Where("access_key_id = ?", accessKeyID).First(&cred).Error
+	err := DBFromContext(ctx, r.db).WithContext(ctx).Where("access_key_id = ?", accessKeyID).First(&cred).Error
 	if err != nil {
-		return nil, err
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get temporary credential by access_key_id %s: %w", accessKeyID, err)
 	}
 	return &cred, nil
 }
 
 func (r *temporaryCredentialRepo) FindExpired(ctx context.Context, before time.Time) ([]*model.TemporaryCredential, error) {
 	var creds []*model.TemporaryCredential
-	err := r.db.WithContext(ctx).
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("expires_at < ?", before).
-		Find(&creds).Error
-	return creds, err
+		Find(&creds).Error; err != nil {
+		return nil, fmt.Errorf("find expired temporary credentials before %v: %w", before, err)
+	}
+	return creds, nil
 }
 
 func (r *temporaryCredentialRepo) Delete(ctx context.Context, id uuid.UUID) error {
-	return r.db.WithContext(ctx).
-		Delete(&model.TemporaryCredential{}, "id = ?", id).Error
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Delete(&model.TemporaryCredential{}, "id = ?", id).Error; err != nil {
+		return fmt.Errorf("delete temporary credential %s: %w", id, err)
+	}
+	return nil
 }
 
 func (r *temporaryCredentialRepo) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
-	result := r.db.WithContext(ctx).
+	result := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("expires_at < ?", before).
 		Delete(&model.TemporaryCredential{})
-	return result.RowsAffected, result.Error
+	if result.Error != nil {
+		return 0, fmt.Errorf("delete expired temporary credentials before %v: %w", before, result.Error)
+	}
+	return result.RowsAffected, nil
 }

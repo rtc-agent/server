@@ -188,6 +188,7 @@ func (uc *OSS3Usecase) decryptString(encoded string) (string, error) {
 // generateRandomString generates a cryptographically secure random string
 // of the given length using rejection sampling to avoid modulo bias.
 // LOW-02 fix: Read bytes in batches to reduce system calls.
+// H3 optimization: Use larger batch sizes for better efficiency with long strings.
 func generateRandomString(length int) (string, error) {
 	if length == 0 {
 		return "", nil
@@ -197,8 +198,9 @@ func generateRandomString(length int) (string, error) {
 	const maxByte = byte(255 - 255%len(charset)) // 252 for charset len 36
 
 	b := make([]byte, length)
-	// Read in batches of 32 bytes for efficiency
-	const batchSize = 32
+	// Read in batches of 256 bytes for efficiency (reduced system calls)
+	// H3: Increased from 32 to 256 for better performance with large lengths
+	const batchSize = 256
 	buf := make([]byte, batchSize)
 
 	for i := 0; i < length; {

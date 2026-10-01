@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -594,6 +595,40 @@ type StorageConfig struct {
 //   - Cleanup goroutine is not started
 func (c *StorageConfig) IsEnabled() bool {
 	return c.Backend != ""
+}
+
+// Validate checks if the storage configuration is valid.
+// M3: Added validation to prevent runtime panics from missing required fields.
+func (c *StorageConfig) Validate() error {
+	if !c.IsEnabled() {
+		return nil // OSS3 disabled, no validation needed
+	}
+
+	// Validate backend type
+	if c.Backend != "minio" {
+		return fmt.Errorf("unsupported storage backend: %q (only 'minio' is supported)", c.Backend)
+	}
+
+	// Validate MinIO configuration
+	if c.MinIO.Endpoint == "" {
+		return fmt.Errorf("minio.endpoint is required when backend is 'minio'")
+	}
+	if c.MinIO.AccessKey == "" {
+		return fmt.Errorf("minio.access_key is required when backend is 'minio'")
+	}
+	if c.MinIO.SecretKey == "" {
+		return fmt.Errorf("minio.secret_key is required when backend is 'minio'")
+	}
+	if c.MinIO.Bucket == "" {
+		return fmt.Errorf("minio.bucket is required when backend is 'minio'")
+	}
+
+	// Validate encryption configuration
+	if len(c.Encryption.SessionTokenKey) != 64 {
+		return fmt.Errorf("encryption.session_token_key must be 64 hex characters (32 bytes), got %d", len(c.Encryption.SessionTokenKey))
+	}
+
+	return nil
 }
 
 // MinIOConfig holds MinIO backend connection configuration.

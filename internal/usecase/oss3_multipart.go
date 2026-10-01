@@ -132,3 +132,69 @@ func (uc *OSS3Usecase) PutObjectWithComp(
 
 	return nil
 }
+
+// InstantUploadResult represents the result of an instant upload check.
+type InstantUploadResult struct {
+	// Hit indicates whether this is an instant upload hit (file already exists)
+	Hit bool
+	// FileMeta contains the file metadata if hit
+	FileMeta *FileRecord
+	// ConsistencyViolation indicates DB and MinIO are out of sync
+	ConsistencyViolation bool
+	// ViolationType describes the type of consistency violation
+	ViolationType string // "db_has_minio_missing" or "minio_has_db_missing"
+}
+
+// CheckInstantUpload checks if a file upload can be satisfied by existing data.
+// M2: Extracted from handler to reduce cognitive complexity.
+//
+// Returns 4 possible states:
+//  1. Both DB and MinIO have the file → instant upload hit
+//  2. DB has record but MinIO missing → consistency violation (re-upload needed)
+//  3. MinIO has file but DB missing → consistency repair (return success, repair DB)
+//  4. Neither has file → normal upload flow
+func (uc *OSS3Usecase) CheckInstantUpload(ctx context.Context, userID, bucket, key string) (*InstantUploadResult, error) {
+	result := &InstantUploadResult{}
+
+	// Check DB first
+	existingFile, err := uc.GetFileRecord(ctx, userID, key)
+	if err != nil {
+		return nil, fmt.Errorf("get file record: %w", err)
+	}
+
+	if existingFile != nil {
+		// DB record exists, verify MinIO file still exists
+		meta, headErr := uc.backend.HeadObject(ctx, bucket, key)
+		if headErr == nil && meta.Key != "" {
+			// Both DB and MinIO have the file → instant upload hit
+			result.Hit = true
+			result.FileMeta = existingFile
+			return result, nil
+		}
+		// DB has record but MinIO missing → consistency violation
+		result.ConsistencyViolation = true
+		result.ViolationType = "db_has_minio_missing"
+		return result, nil
+	}
+
+	// DB has no record, check if MinIO has the file
+	existingMeta, err := uc.backend.HeadObject(ctx, bucket, key)
+	if err == nil && existingMeta.Key != "" {
+		// MinIO has file but DB missing → consistency repair
+		result.Hit = true
+		result.ConsistencyViolation = true
+		result.ViolationType = "minio_has_db_missing"
+		result.FileMeta = &FileRecord{
+			UserID:      userID,
+			Bucket:      bucket,
+			Key:         key,
+			Size:        existingMeta.Size,
+			ContentType: existingMeta.ContentType,
+			ETag:        existingMeta.ETag,
+		}
+		return result, nil
+	}
+
+	// Neither has file → normal upload flow
+	return result, nil
+}

@@ -19,8 +19,13 @@ import (
 // Flow: Lua script OSS3QuotaReserve checks (current + pending + amount <= maxQuota),
 // creates a pending key with TTL, all in one atomic call.
 func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, additionalBytes int64) (requestID string, err error) {
-	if additionalBytes <= 0 {
-		return "", fmt.Errorf("additionalBytes must be positive, got %d", additionalBytes)
+	if additionalBytes < 0 {
+		return "", fmt.Errorf("additionalBytes must be non-negative, got %d", additionalBytes)
+	}
+	// Zero-byte uploads (e.g., empty files) are allowed but skip quota reservation.
+	// They consume no storage, so there is nothing to reserve or commit.
+	if additionalBytes == 0 {
+		return "", nil
 	}
 	requestID = uuid.New().String()
 	quotaKey := cache.OSS3Quota(userID)

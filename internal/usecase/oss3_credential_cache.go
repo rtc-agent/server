@@ -88,9 +88,9 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 	}
 
 	val := &credentialCacheValue{
-		UserID:          cred.UserID,
-		SessionToken:    cred.SessionToken,
-		ExpiresAt:       cred.ExpiresAt,
+		UserID:       cred.UserID,
+		SessionToken: cred.SessionToken,
+		ExpiresAt:    cred.ExpiresAt,
 	}
 
 	// Encrypt SecretAccessKey before caching

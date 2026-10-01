@@ -368,13 +368,15 @@ func (s *Server) registerOSS3Routes(mux *http.ServeMux) {
 	}
 
 	// Build middleware chain (wrap from innermost to outermost)
-	// Request flow: AccessLog -> SigV4 -> BusinessRestriction -> Metrics -> Handler
+	// Request flow: AccessLog -> SigV4 -> BusinessRestriction -> Metrics -> RequestID -> Handler
 	// MEDIUM-13 fix: Metrics placed outside SigV4 to count auth-rejected requests.
+	// M5: RequestID middleware added to inject request ID for tracing.
 	// We build from handler outward (last wrapped = outermost = first to execute):
 	var handler http.Handler = s.oss3Handler
 	handler = httphandler.NewBusinessRestrictionMiddleware(oss3UC, s.cfg.Storage.MinIO.Bucket, handler)
 	handler = httphandler.NewSigV4Middleware(oss3UC, s.cfg.Storage.S3Endpoint.Region, handler)
 	handler = httphandler.NewOSS3MetricsMiddleware()(handler)
+	handler = httphandler.RequestIDMiddleware(handler)
 	handler = httphandler.NewAccessLogMiddleware(oss3UC, handler)
 
 	// Register S3 path-style routes under /s3 prefix: /s3/{bucket}/{key}

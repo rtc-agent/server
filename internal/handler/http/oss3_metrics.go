@@ -253,7 +253,8 @@ func RecordQuotaCommitRetry() {
 }
 
 // RecordQuotaDrift records the absolute drift between Redis and DB quota values.
-// Called by ReconcileQuota after each reconciliation cycle.
+// Should be called by the RunCleanup caller after each reconciliation cycle,
+// using ReconcileResult.TotalDriftBytes from the usecase layer.
 func RecordQuotaDrift(driftBytes int64) {
 	oss3QuotaDriftBytes.Set(float64(driftBytes))
 }

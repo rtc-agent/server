@@ -104,6 +104,8 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(
 			zap.Error(err))
 	}
 
+	RecordMultipartUploadStart(userID)
+
 	// Return XML response per S3 spec
 	type initiateResult struct {
 		XMLName  xml.Name `xml:"InitiateMultipartUploadResult"`
@@ -166,11 +168,16 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 		return
 	}
 
-	// Check quota for this part
-	quotaRequestID, err := h.oss3UC.CheckAndReserveQuota(r.Context(), userID, contentLength)
-	if err != nil {
-		writeQuotaReserveError(w, err, r.URL.Path)
-		return
+	// Check quota for this part.
+	// Zero-byte parts skip quota reservation — they consume no storage.
+	var quotaRequestID string
+	if contentLength > 0 {
+		qrid, err := h.oss3UC.CheckAndReserveQuota(r.Context(), userID, contentLength)
+		if err != nil {
+			writeQuotaReserveError(w, err, r.URL.Path)
+			return
+		}
+		quotaRequestID = qrid
 	}
 
 	// Ensure quota is released on failure unless committed.
@@ -178,7 +185,7 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 	// If false at function exit, the defer releases the pending reservation.
 	quotaCommitted := false
 	defer func() {
-		if !quotaCommitted {
+		if !quotaCommitted && quotaRequestID != "" {
 			h.oss3UC.ReleaseQuota(r.Context(), userID, quotaRequestID)
 		}
 	}()
@@ -193,14 +200,19 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 		return
 	}
 
-	// Commit quota after successful upload
-	if err = h.oss3UC.CommitQuota(r.Context(), userID, quotaRequestID, contentLength); err != nil {
-		// Quota commit failed but upload succeeded
-		logger.Warn(r.Context(), "failed to commit quota after successful part upload",
-			zap.String("user_id", userID),
-			zap.String("upload_id", uploadID),
-			zap.Int("part_number", partNumber),
-			zap.Error(err))
+	// Commit quota after successful upload.
+	// Skip for zero-byte parts — no quota was reserved.
+	if quotaRequestID != "" {
+		if err = h.oss3UC.CommitQuota(r.Context(), userID, quotaRequestID, contentLength); err != nil {
+			// Quota commit failed but upload succeeded
+			logger.Warn(r.Context(), "failed to commit quota after successful part upload",
+				zap.String("user_id", userID),
+				zap.String("upload_id", uploadID),
+				zap.Int("part_number", partNumber),
+				zap.Error(err))
+		} else {
+			quotaCommitted = true
+		}
 	} else {
 		quotaCommitted = true
 	}
@@ -351,6 +363,8 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 
 	// Return XML response per S3 spec
 	writeCompleteMultipartResult(w, bucket, key, etag)
+
+	RecordMultipartUploadEnd(userID)
 }
 
 // writeCompleteMultipartResult writes the CompleteMultipartUpload XML response.
@@ -420,6 +434,8 @@ func (h *OSS3MultipartHandler) handleAbortMultipartUpload(
 			zap.String("upload_id", uploadID),
 			zap.Error(err))
 	}
+
+	RecordMultipartUploadEnd(userID)
 
 	w.WriteHeader(http.StatusNoContent)
 }

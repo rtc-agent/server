@@ -46,11 +46,15 @@ func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, 
 		}
 	}
 
-	// Validate credential scope
+	// Validate credential scope.
+	// SECURITY: Return ErrInvalidSignature (not a descriptive error) to avoid
+	// leaking information about the expected scope format via error messages.
+	// This prevents timing side-channel attacks that could infer scope structure
+	// from different error paths.
 	dateStr := cred.Date
 	scope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStr, region, service)
 	if cred.Scope != scope {
-		return fmt.Errorf("credential scope mismatch: got %s, want %s", cred.Scope, scope)
+		return ErrInvalidSignature
 	}
 
 	// Check x-amz-content-sha256 header
@@ -109,11 +113,12 @@ func VerifySigV4Presigned(r *http.Request, secretAccessKey string, region string
 		return err
 	}
 
-	// Validate scope
+	// Validate scope.
+	// SECURITY: Return ErrInvalidSignature to avoid leaking scope format information.
 	dateStr := cred.Date
 	scope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStr, region, service)
 	if cred.Scope != scope {
-		return fmt.Errorf("credential scope mismatch")
+		return ErrInvalidSignature
 	}
 
 	// For presigned URLs, payload is always UNSIGNED-PAYLOAD

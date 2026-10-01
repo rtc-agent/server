@@ -254,6 +254,14 @@ func (b *MinIOBackend) HeadObject(ctx context.Context, bucket, key string) (Obje
 // LOW-05 fix: Support pagination via Marker, ContinuationToken, and StartAfter.
 // Pagination fix: Use MaxKeys+1 strategy to accurately detect truncation.
 // CommonPrefixes count towards the MaxKeys quota (totalKeys tracks both Objects and CommonPrefixes).
+//
+// Boundary condition handling (H2):
+//   - We request maxKeys+1 items from MinIO to detect if there are more items
+//   - Both Objects and CommonPrefixes count towards maxKeys limit (per S3 spec)
+//   - If we receive maxKeys+1 items, we return maxKeys and set IsTruncated=true
+//   - If we receive <= maxKeys items, we return all and set IsTruncated=false
+//   - Edge case: if the (maxKeys+1)th item is a CommonPrefix, we correctly detect
+//     truncation but don't include it in results (client fetches next page)
 func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts ListObjectsOptions) (*ListObjectsResult, error) {
 	result := &ListObjectsResult{}
 
@@ -488,6 +496,12 @@ func (b *MinIOBackend) HealthCheck(ctx context.Context) error {
 //
 // ctx is used for debug logging so trace context propagates correctly; if ctx
 // is nil, context.Background() is used as a fallback.
+//
+// M1: Error detection strategy:
+//  1. Typed error detection (errors.As) — preferred, stable across SDK versions
+//  2. String matching fallback — may break on SDK upgrades; patterns below are
+//     based on minio-go v7.0.x (2026-09). If SDK is upgraded, verify these patterns
+//     still match the new error messages.
 func mapMinIOError(ctx context.Context, err error, operation string) error {
 	if err == nil {
 		return nil

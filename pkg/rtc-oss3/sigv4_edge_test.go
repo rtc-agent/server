@@ -1,6 +1,7 @@
 package rtcoss3
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -327,6 +328,8 @@ func TestVerifySigV4Request_MissingContentSHA256(t *testing.T) {
 }
 
 // TestVerifySigV4Request_ScopeMismatch tests credential scope mismatch.
+// C3 fix: Scope mismatch now returns ErrInvalidSignature to prevent timing
+// side-channel attacks that could leak information about the expected scope format.
 func TestVerifySigV4Request_ScopeMismatch(t *testing.T) {
 	req, _ := http.NewRequest("GET", "http://example.com/test", nil)
 	now := time.Now().UTC().Format("20060102T150405Z")
@@ -342,8 +345,10 @@ func TestVerifySigV4Request_ScopeMismatch(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for scope mismatch")
 	}
-	if !strings.Contains(err.Error(), "scope mismatch") {
-		t.Errorf("Expected scope mismatch error, got: %v", err)
+	// C3 fix: Should return ErrInvalidSignature (not a descriptive error)
+	// to prevent information leakage through error messages
+	if !errors.Is(err, ErrInvalidSignature) {
+		t.Errorf("Expected ErrInvalidSignature, got: %v", err)
 	}
 }
 

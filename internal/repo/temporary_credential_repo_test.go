@@ -99,9 +99,12 @@ func TestTemporaryCredentialRepo(t *testing.T) {
 			t.Fatalf("Delete: %v", err)
 		}
 
-		_, err := repo.GetByAccessKeyID(ctx, "AKIAIOSFODNN7DELETE")
-		if err == nil {
-			t.Error("GetByAccessKeyID after delete: expected error, got nil")
+		cred, err := repo.GetByAccessKeyID(ctx, "AKIAIOSFODNN7DELETE")
+		if err != nil {
+			t.Errorf("GetByAccessKeyID after delete: unexpected error: %v", err)
+		}
+		if cred != nil {
+			t.Error("GetByAccessKeyID after delete: expected nil, got non-nil credential")
 		}
 	})
 

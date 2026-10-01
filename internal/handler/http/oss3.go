@@ -85,6 +85,13 @@ func (h *OSS3Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleDeleteObject(w, r, bucket, key)
 	case http.MethodHead:
 		h.handleHeadObject(w, r, bucket, key)
+	case http.MethodPost:
+		// POST /{bucket}?delete= — batch delete objects (H4)
+		if r.URL.Query().Has("delete") && key == "" {
+			h.handleDeleteObjects(w, r, bucket)
+		} else {
+			WriteS3Error(w, rtcoss3.ErrMethodNotAllowed, r.URL.Path, "")
+		}
 	default:
 		WriteS3Error(w, rtcoss3.ErrMethodNotAllowed, r.URL.Path, "")
 	}
@@ -119,6 +126,10 @@ func isMultipartRequest(r *http.Request) bool {
 // Security: Rejects path traversal attempts (e.g., "../" sequences) to prevent
 // escaping the user's namespace. This is a defense-in-depth measure; the key
 // validation layer (rtcoss3.ValidateKey) also enforces strict format.
+//
+// Note: net/http automatically URL-decodes r.URL.Path before passing to handlers,
+// so "%2e%2e" becomes ".." by the time we see it. We only need to check for
+// literal ".." here.
 func parseS3Path(path string) (bucket, key string, ok bool) {
 	// Remove /s3 prefix
 	path = strings.TrimPrefix(path, "/s3")
@@ -128,7 +139,9 @@ func parseS3Path(path string) (bucket, key string, ok bool) {
 		return "", "", false
 	}
 
-	// Reject path traversal attempts (defense in depth)
+	// Reject path traversal attempts (defense in depth).
+	// net/http already decodes URL-encoded characters in r.URL.Path,
+	// so we only need to check for literal ".." sequences.
 	if strings.Contains(path, "..") {
 		return "", "", false
 	}
@@ -200,16 +213,13 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	}
 
 	// Instant upload check: Since the key contains MD5 (format: user-{userID}/{md5-hash}.{ext}),
-	// the same key implies the same content. Check DB and MinIO consistency:
-	// 1. Both DB and MinIO have the file -> instant upload hit, return success
-	// 2. DB has record but MinIO missing -> consistency violation, log warning and re-upload
-	// 3. MinIO has file but DB missing -> repair DB record, return success
-	// 4. Neither has file -> normal upload flow
+	// the same key implies the same content. Check DB and MinIO consistency.
+	// M2: Refactored to use CheckInstantUpload from usecase layer.
 	//
 	// Note: Concurrent uploads of the same key are safe due to content-addressing.
 	// The upsert in Create() ensures eventual consistency. Race conditions only waste
 	// bandwidth but don't corrupt data.
-	existingFile, err := h.oss3UC.GetFileRecord(ctx, userID, key)
+	instantResult, err := h.oss3UC.CheckInstantUpload(ctx, userID, bucket, key)
 	if err != nil {
 		// Database error — fail fast
 		span.SetStatus(codes.Error, err.Error())
@@ -218,67 +228,58 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 		return
 	}
 
-	if existingFile != nil {
-		// DB record exists, verify MinIO file still exists
-		meta, headErr := h.oss3UC.Backend().HeadObject(ctx, bucket, key)
-		if headErr == nil && meta.Key != "" {
-			// Both DB and MinIO confirm file exists (instant upload hit)
+	if instantResult.Hit {
+		if instantResult.ConsistencyViolation {
+			// MinIO has file but DB missing → consistency repair
+			span.SetAttributes(attribute.String("instant_upload", "minio_repair"))
+			RecordConsistencyViolation(instantResult.ViolationType)
+			logger.Info(ctx, "instant upload: MinIO hit, repairing DB record",
+				zap.String("user_id", userID),
+				zap.String("key", key),
+				zap.Int64("size", instantResult.FileMeta.Size))
+			RecordInstantUpload("minio_repair")
+			if repairErr := h.oss3UC.CreateFileRecord(ctx, instantResult.FileMeta); repairErr != nil {
+				// Repair failed, log but continue (MinIO file exists)
+				span.RecordError(repairErr)
+				RecordInstantUploadRepairError()
+				logger.Warn(ctx, "instant upload: DB repair failed",
+					zap.String("user_id", userID),
+					zap.String("key", key),
+					zap.Error(repairErr))
+			}
+		} else {
+			// Both DB and MinIO have the file → instant upload hit
 			span.SetAttributes(attribute.String("instant_upload", "db_hit"))
 			logger.Info(ctx, "instant upload: DB and MinIO hit",
 				zap.String("user_id", userID),
 				zap.String("key", key),
-				zap.Int64("size", existingFile.Size))
+				zap.Int64("size", instantResult.FileMeta.Size))
 			RecordInstantUpload("db_hit")
-			w.Header().Set("ETag", existingFile.ETag)
-			w.WriteHeader(http.StatusOK)
-			return
 		}
-		// DB has record but MinIO file missing — consistency violation, fall through to normal upload
+		w.Header().Set("ETag", instantResult.FileMeta.ETag)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if instantResult.ConsistencyViolation {
+		// DB has record but MinIO missing → consistency violation, fall through to normal upload
 		span.SetAttributes(attribute.Bool("db_consistency_violation", true))
-		RecordConsistencyViolation("db_has_minio_missing")
+		RecordConsistencyViolation(instantResult.ViolationType)
 		logger.Warn(ctx, "instant upload: DB record exists but MinIO file missing, re-uploading",
 			zap.String("user_id", userID),
 			zap.String("key", key))
 	}
 
-	// DB has no record (or consistency violation), check if MinIO has the file (consistency repair)
-	existingMeta, err := h.oss3UC.Backend().HeadObject(ctx, bucket, key)
-	if err == nil && existingMeta.Key != "" {
-		// MinIO has file but DB missing — repair DB record (instant upload + consistency repair)
-		span.SetAttributes(attribute.String("instant_upload", "minio_repair"))
-		RecordConsistencyViolation("minio_has_db_missing")
-		logger.Info(ctx, "instant upload: MinIO hit, repairing DB record",
-			zap.String("user_id", userID),
-			zap.String("key", key),
-			zap.Int64("size", existingMeta.Size))
-		RecordInstantUpload("minio_repair")
-		if repairErr := h.oss3UC.CreateFileRecord(ctx, &usecase.FileRecord{
-			UserID:      userID,
-			Bucket:      bucket,
-			Key:         key,
-			Size:        existingMeta.Size,
-			ContentType: existingMeta.ContentType,
-			ETag:        existingMeta.ETag,
-		}); repairErr != nil {
-			// Repair failed, log but continue (MinIO file exists)
-			span.RecordError(repairErr)
-			RecordInstantUploadRepairError()
-			logger.Warn(ctx, "instant upload: DB repair failed",
-				zap.String("user_id", userID),
-				zap.String("key", key),
-				zap.Error(repairErr))
-		}
-		w.Header().Set("ETag", existingMeta.ETag)
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	// MinIO also has no file, continue with normal upload flow
-
 	// Reserve quota; release on any subsequent failure unless committed.
-	quotaRequestID, err := h.oss3UC.CheckAndReserveQuota(r.Context(), userID, contentLength)
-	if err != nil {
-		writeQuotaReserveError(w, err, r.URL.Path)
-		return
+	// Zero-byte uploads skip quota reservation — they consume no storage.
+	var quotaRequestID string
+	if contentLength > 0 {
+		qrid, err := h.oss3UC.CheckAndReserveQuota(r.Context(), userID, contentLength)
+		if err != nil {
+			writeQuotaReserveError(w, err, r.URL.Path)
+			return
+		}
+		quotaRequestID = qrid
 	}
 	// uploadSucceeded tracks whether data reached MinIO.
 	// If false at function exit, the defer releases the pending reservation.
@@ -287,7 +288,7 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	// by the (failed) commit attempt and the data lives in MinIO.
 	uploadSucceeded := false
 	defer func() {
-		if !uploadSucceeded {
+		if !uploadSucceeded && quotaRequestID != "" {
 			h.oss3UC.ReleaseQuota(r.Context(), userID, quotaRequestID)
 		}
 	}()
@@ -305,17 +306,20 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	}
 	uploadSucceeded = true
 
-	// Commit quota with retry (idempotent via SETNX marker)
-	if err = h.commitQuotaWithRetry(r.Context(), userID, quotaRequestID, contentLength); err != nil {
-		// Commit failed after all retries but upload succeeded — data lives in MinIO.
-		// Do NOT call ReleaseQuota: the pending key will expire via TTL naturally.
-		// Reconciliation will eventually sync the Redis counter with DB truth.
-		logger.Error(r.Context(), "quota commit failed after retries; reconciliation will sync",
-			zap.String("user_id", userID),
-			zap.String("quota_request_id", quotaRequestID),
-			zap.Int64("amount", contentLength),
-			zap.Error(err))
-		RecordOrphanedQuotaCommit(userID)
+	// Commit quota with retry (idempotent via SETNX marker).
+	// Skip for zero-byte uploads — no quota was reserved.
+	if quotaRequestID != "" {
+		if err = h.commitQuotaWithRetry(r.Context(), userID, quotaRequestID, contentLength); err != nil {
+			// Commit failed after all retries but upload succeeded — data lives in MinIO.
+			// Do NOT call ReleaseQuota: the pending key will expire via TTL naturally.
+			// Reconciliation will eventually sync the Redis counter with DB truth.
+			logger.Error(r.Context(), "quota commit failed after retries; reconciliation will sync",
+				zap.String("user_id", userID),
+				zap.String("quota_request_id", quotaRequestID),
+				zap.Int64("amount", contentLength),
+				zap.Error(err))
+			RecordOrphanedQuotaCommit(userID)
+		}
 	}
 
 	// Create file record in DB with compensation
@@ -447,11 +451,30 @@ func (h *OSS3Handler) handleGetObject(w http.ResponseWriter, r *http.Request, bu
 		return
 	}
 	defer func() {
-		if closeErr := obj.Close(); closeErr != nil {
-			logger.Warn(r.Context(), "failed to close object body",
+		// H5: Add timeout protection for Close() to prevent blocking on context cancellation.
+		// Use a separate context with 5s timeout since the original context may be cancelled.
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+
+		closeDone := make(chan struct{})
+		go func() {
+			if closeErr := obj.Close(); closeErr != nil {
+				logger.Warn(r.Context(), "failed to close object body",
+					zap.String("bucket", bucket),
+					zap.String("key", key),
+					zap.Error(closeErr))
+			}
+			close(closeDone)
+		}()
+
+		select {
+		case <-closeDone:
+			// Close completed normally
+		case <-closeCtx.Done():
+			// Close timed out — log warning but don't block response
+			logger.Warn(r.Context(), "object body close timed out after 5s",
 				zap.String("bucket", bucket),
-				zap.String("key", key),
-				zap.Error(closeErr))
+				zap.String("key", key))
 		}
 	}()
 
@@ -663,18 +686,23 @@ func (h *OSS3Handler) handleCopyObject(
 		return
 	}
 
-	// Check and reserve quota for the copy destination (prevents quota bypass via copy)
-	quotaRequestID, err := h.oss3UC.CheckAndReserveQuota(r.Context(), userID, srcMeta.Size)
-	if err != nil {
-		writeQuotaReserveError(w, err, r.URL.Path)
-		return
+	// Check and reserve quota for the copy destination (prevents quota bypass via copy).
+	// Zero-byte copies skip quota reservation — they consume no storage.
+	var quotaRequestID string
+	if srcMeta.Size > 0 {
+		qrid, err := h.oss3UC.CheckAndReserveQuota(r.Context(), userID, srcMeta.Size)
+		if err != nil {
+			writeQuotaReserveError(w, err, r.URL.Path)
+			return
+		}
+		quotaRequestID = qrid
 	}
 	// uploadSucceeded tracks whether data reached MinIO.
 	// If false at function exit, the defer releases the pending reservation.
 	// If true, quota is either committed or will be reconciled later.
 	uploadSucceeded := false
 	defer func() {
-		if !uploadSucceeded {
+		if !uploadSucceeded && quotaRequestID != "" {
 			h.oss3UC.ReleaseQuota(r.Context(), userID, quotaRequestID)
 		}
 	}()
@@ -687,17 +715,23 @@ func (h *OSS3Handler) handleCopyObject(
 	}
 	uploadSucceeded = true
 
-	// Commit quota with retry (idempotent via SETNX marker)
-	if commitErr := h.commitQuotaWithRetry(r.Context(), userID, quotaRequestID, srcMeta.Size); commitErr != nil {
-		logger.Error(r.Context(), "quota commit failed after retries; reconciliation will sync",
-			zap.String("user_id", userID),
-			zap.String("quota_request_id", quotaRequestID),
-			zap.Int64("amount", srcMeta.Size),
-			zap.Error(commitErr))
-		RecordOrphanedQuotaCommit(userID)
+	// Commit quota with retry (idempotent via SETNX marker).
+	// Skip for zero-byte copies — no quota was reserved.
+	if quotaRequestID != "" {
+		if commitErr := h.commitQuotaWithRetry(r.Context(), userID, quotaRequestID, srcMeta.Size); commitErr != nil {
+			logger.Error(r.Context(), "quota commit failed after retries; reconciliation will sync",
+				zap.String("user_id", userID),
+				zap.String("quota_request_id", quotaRequestID),
+				zap.Int64("amount", srcMeta.Size),
+				zap.Error(commitErr))
+			RecordOrphanedQuotaCommit(userID)
+		}
 	}
 
-	// Create file record for destination
+	// Create file record for destination with retry logic for idempotency.
+	// The underlying file_repo.Create uses upsert (OnConflict), so retries are safe.
+	// If all retries fail, log error but return success since data is in MinIO
+	// and quota is committed — reconciliation will clean up orphaned objects.
 	file := &usecase.FileRecord{
 		UserID:      userID,
 		Bucket:      dstBucket,
@@ -707,12 +741,43 @@ func (h *OSS3Handler) handleCopyObject(
 		ETag:        result.ETag,
 	}
 	if err = h.oss3UC.CreateFileRecord(r.Context(), file); err != nil {
-		// DB failed but copy succeeded — orphaned object
-		logger.Warn(r.Context(), "failed to create file record after successful copy",
+		logger.Warn(r.Context(), "failed to create file record after successful copy, retrying",
 			zap.String("user_id", userID),
 			zap.String("dst_bucket", dstBucket),
 			zap.String("dst_key", dstKey),
 			zap.Error(err))
+
+		// Retry up to 3 times with exponential backoff
+		retryDelays := []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
+		for i, delay := range retryDelays {
+			select {
+			case <-time.After(delay):
+			case <-r.Context().Done():
+				logger.Info(r.Context(), "retry cancelled due to context cancellation",
+					zap.String("user_id", userID),
+					zap.String("dst_key", dstKey),
+					zap.Int("completed_retries", i))
+				// Return success since data is in MinIO
+				writeCopyObjectResultXML(w, result.ETag, result.LastModified)
+				return
+			}
+
+			if retryErr := h.oss3UC.CreateFileRecord(r.Context(), file); retryErr == nil {
+				logger.Info(r.Context(), "file record created successfully after retry",
+					zap.String("user_id", userID),
+					zap.String("dst_key", dstKey),
+					zap.Int("attempt", i+2))
+				break
+			} else if i == len(retryDelays)-1 {
+				// All retries failed — log for reconciliation
+				logger.Error(r.Context(), "failed to create file record after all retries, orphaned object",
+					zap.String("user_id", userID),
+					zap.String("dst_bucket", dstBucket),
+					zap.String("dst_key", dstKey),
+					zap.Error(retryErr))
+				RecordOrphanedRecord("copy_failed", userID)
+			}
+		}
 	}
 
 	// Return XML response per S3 spec
@@ -800,6 +865,128 @@ func (h *OSS3Handler) handleListObjects(w http.ResponseWriter, r *http.Request, 
 	} else {
 		writeListBucketResultV1XML(w, bucket, prefix, q.Get("marker"), maxKeys, delimiter, result)
 	}
+}
+
+// handleDeleteObjects handles POST /{bucket}?delete= — batch delete objects (H4).
+// S3 spec: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+func (h *OSS3Handler) handleDeleteObjects(w http.ResponseWriter, r *http.Request, bucket string) {
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.DeleteObjects",
+		trace.WithAttributes(
+			attribute.String("bucket", bucket),
+			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+		),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
+	userID := ExtractUserIDFromContext(r.Context())
+	requestID := ExtractRequestIDFromContext(r.Context())
+
+	// Check rate limit
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
+		return
+	}
+
+	// Limit XML request body to 1 MB to prevent memory exhaustion.
+	// S3 spec allows up to 1000 keys per request; typical XML is ~50KB.
+	const maxDeleteBodySize = 1 << 20 // 1 MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxDeleteBodySize)
+
+	// Parse XML request body
+	type deleteRequest struct {
+		XMLName xml.Name `xml:"Delete"`
+		Quiet   bool     `xml:"Quiet"`
+		Objects []struct {
+			Key string `xml:"Key"`
+		} `xml:"Object"`
+	}
+
+	var req deleteRequest
+	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteS3Error(w, rtcoss3.ErrMalformedXML, r.URL.Path, "")
+		return
+	}
+
+	// Validate request
+	if len(req.Objects) == 0 {
+		WriteS3Error(w, rtcoss3.ErrInvalidRequest, r.URL.Path, "")
+		return
+	}
+	if len(req.Objects) > 1000 {
+		WriteS3Error(w, rtcoss3.ErrInvalidRequest, r.URL.Path, "")
+		return
+	}
+
+	// Validate all keys belong to this user and extract key list
+	keys := make([]string, 0, len(req.Objects))
+	for _, obj := range req.Objects {
+		if err := rtcoss3.ValidateKey(obj.Key, userID); err != nil {
+			WriteS3Error(w, err, r.URL.Path, "")
+			return
+		}
+		keys = append(keys, obj.Key)
+	}
+
+	// Batch delete from backend
+	results, err := h.oss3UC.Backend().DeleteObjects(r.Context(), bucket, keys)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
+		return
+	}
+
+	// Delete file records from DB (best-effort, log failures)
+	for i, result := range results {
+		if result.Code == "" {
+			// Successful deletion — delete DB record
+			if err := h.oss3UC.DeleteFileRecord(r.Context(), userID, keys[i]); err != nil {
+				logger.Warn(r.Context(), "failed to delete file record after successful backend delete",
+					zap.String("user_id", userID),
+					zap.String("key", keys[i]),
+					zap.Error(err))
+			}
+		}
+	}
+
+	// Build XML response
+	type xmlDeletedObject struct {
+		Key       string `xml:"Key"`
+		VersionId string `xml:"VersionId,omitempty"`
+	}
+	type xmlError struct {
+		Key     string `xml:"Key"`
+		Code    string `xml:"Code"`
+		Message string `xml:"Message"`
+	}
+	type deleteResult struct {
+		XMLName xml.Name           `xml:"DeleteResult"`
+		Deleted []xmlDeletedObject `xml:"Deleted"`
+		Errors  []xmlError         `xml:"Error"`
+	}
+
+	resp := deleteResult{}
+	for i, result := range results {
+		if result.Code == "" {
+			// Successful deletion
+			if !req.Quiet {
+				resp.Deleted = append(resp.Deleted, xmlDeletedObject{Key: keys[i]})
+			}
+		} else {
+			// Failed deletion
+			resp.Errors = append(resp.Errors, xmlError{
+				Key:     keys[i],
+				Code:    result.Code,
+				Message: result.Message,
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprint(w, xml.Header)
+	_ = xml.NewEncoder(w).Encode(resp)
 }
 
 // parseMaxKeys parses the "max-keys" query parameter, clamping to [1, 1000].
