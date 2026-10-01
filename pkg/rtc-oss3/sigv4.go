@@ -496,9 +496,10 @@ func SignS3Request(r *http.Request, accessKeyID, secretAccessKey, sessionToken, 
 		r.Host = r.URL.Host
 	}
 
-	// Set session token if provided
-	if sessionToken != "" {
-		r.Header.Set("X-Amz-Security-Token", sessionToken)
+	// Set Accept-Encoding to match what Go HTTP client will send automatically.
+	// This ensures the signature includes this header, matching server expectations.
+	if r.Header.Get("Accept-Encoding") == "" {
+		r.Header.Set("Accept-Encoding", "gzip")
 	}
 
 	// Use AWS SDK v4 signer for signing
@@ -506,6 +507,7 @@ func SignS3Request(r *http.Request, accessKeyID, secretAccessKey, sessionToken, 
 	awsCreds := aws.Credentials{
 		AccessKeyID:     accessKeyID,
 		SecretAccessKey: secretAccessKey,
+		SessionToken:    sessionToken,
 	}
 
 	// Compute payload hash — use UNSIGNED-PAYLOAD for simplicity

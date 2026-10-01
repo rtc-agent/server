@@ -3,7 +3,6 @@ package httphandler
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"encoding/xml"
 	"fmt"
@@ -261,6 +260,7 @@ func marshalDeleteXML(t *testing.T, objects []typesObject) []byte {
 }
 
 // signAWSRequest signs an HTTP request using AWS SigV4 with the provided credentials.
+// Uses UNSIGNED-PAYLOAD to avoid reading large request bodies.
 func signAWSRequest(t *testing.T, req *http.Request, creds *s3Creds) {
 	t.Helper()
 
@@ -269,25 +269,20 @@ func signAWSRequest(t *testing.T, req *http.Request, creds *s3Creds) {
 		req.Host = req.URL.Host
 	}
 
-	// Compute SHA256 of body for SigV4
-	var bodyBytes []byte
-	if req.Body != nil {
-		var err error
-		bodyBytes, err = io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatalf("read body for signing: %v", err)
-		}
-		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	// Normalize query string: AWS SDK will add "=" to bare query params
+	if req.URL.RawQuery != "" && !strings.Contains(req.URL.RawQuery, "=") {
+		req.URL.RawQuery = req.URL.RawQuery + "="
 	}
 
-	hash := sha256.Sum256(bodyBytes)
-	payloadHash := fmt.Sprintf("%x", hash)
+	// Set Accept-Encoding to match what Go HTTP client will send automatically.
+	// This ensures the signature includes this header, matching server expectations.
+	if req.Header.Get("Accept-Encoding") == "" {
+		req.Header.Set("Accept-Encoding", "gzip")
+	}
+
+	// Use UNSIGNED-PAYLOAD to avoid reading large request bodies
+	payloadHash := "UNSIGNED-PAYLOAD"
 	req.Header.Set("X-Amz-Content-Sha256", payloadHash)
-
-	// Set Content-Length explicitly for signing
-	if req.ContentLength >= 0 {
-		req.Header.Set("Content-Length", fmt.Sprintf("%d", req.ContentLength))
-	}
 
 	signer := v4.NewSigner()
 	awsCreds := aws.Credentials{

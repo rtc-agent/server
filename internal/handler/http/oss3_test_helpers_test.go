@@ -166,9 +166,14 @@ func newSignedS3Request(t *testing.T, method, path string, body io.Reader, creds
 		req.Host = parsedURL.Host
 	}
 
-	// Sign with SigV4 (pass empty session token — server verifies via stored credential,
-	// not via X-Amz-Security-Token header, so including it in signed headers causes mismatch)
-	rtcoss3.SignS3Request(req, creds.AccessKeyID, creds.SecretAccessKey, "", "us-east-1")
+	// Set Content-Type if not already set to avoid signature mismatch.
+	// Go HTTP server may add Content-Type automatically for POST/PUT requests.
+	if req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/octet-stream")
+	}
+
+	// Sign with SigV4 using session token for proper signature verification
+	rtcoss3.SignS3Request(req, creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken, "us-east-1")
 
 	return req
 }
