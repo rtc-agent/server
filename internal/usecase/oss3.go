@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
+	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
@@ -35,6 +37,7 @@ var (
 // OSS3Usecase encapsulates all OSS3 business logic.
 type OSS3Usecase struct {
 	backend    rtcoss3.Backend
+	db         *gorm.DB // Direct DB access for transactional operations
 	fileRepo   repo.FileRepo
 	uploadRepo repo.MultipartUploadRepo
 	credRepo   repo.TemporaryCredentialRepo
@@ -42,12 +45,14 @@ type OSS3Usecase struct {
 	cfg        config.StorageConfig
 	scripts    map[string]*redis.Script // OSS3 Lua scripts from 1A-9
 	aesGCM     cipher.AEAD              // AES-256-GCM for SessionToken encryption
+	credFlight singleflight.Group       // Deduplicates concurrent credential cache misses
 }
 
 // NewOSS3Usecase creates the OSS3 usecase and initializes AES-GCM.
 // Returns error if the encryption key is not 32 bytes.
 func NewOSS3Usecase(
 	backend rtcoss3.Backend,
+	db *gorm.DB,
 	fileRepo repo.FileRepo,
 	uploadRepo repo.MultipartUploadRepo,
 	credRepo repo.TemporaryCredentialRepo,
@@ -76,6 +81,7 @@ func NewOSS3Usecase(
 
 	return &OSS3Usecase{
 		backend:    backend,
+		db:         db,
 		fileRepo:   fileRepo,
 		uploadRepo: uploadRepo,
 		credRepo:   credRepo,
@@ -303,16 +309,24 @@ func (uc *OSS3Usecase) GeneratePresignedURL(ctx context.Context, userID, operati
 }
 
 // DeleteMultipartUploadRecord deletes a multipart upload tracking record from the database.
+// Parts and upload record are deleted atomically within a transaction to prevent
+// orphaned parts records if the second delete fails.
 func (uc *OSS3Usecase) DeleteMultipartUploadRecord(ctx context.Context, uploadID string) error {
-	// First get the upload by uploadID to get the UUID
+	// First get the upload by uploadID to get the UUID (outside transaction is fine)
 	upload, err := uc.uploadRepo.GetByUploadID(ctx, uploadID)
 	if err != nil {
 		return err
 	}
-	// Delete parts first
-	if err := uc.uploadRepo.DeleteParts(ctx, upload.ID); err != nil {
-		return err
-	}
-	// Then delete the upload record
-	return uc.uploadRepo.Delete(ctx, upload.ID)
+
+	// Wrap DeleteParts + Delete in a transaction for atomicity
+	return uc.db.Transaction(func(tx *gorm.DB) error {
+		txCtx := repo.WithTx(ctx, tx)
+		if err := uc.uploadRepo.DeleteParts(txCtx, upload.ID); err != nil {
+			return fmt.Errorf("delete parts: %w", err)
+		}
+		if err := uc.uploadRepo.Delete(txCtx, upload.ID); err != nil {
+			return fmt.Errorf("delete upload record: %w", err)
+		}
+		return nil
+	})
 }

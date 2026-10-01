@@ -32,6 +32,10 @@ var (
 	// backend.
 	ErrBackendBucketNotFound = errors.New("bucket not found")
 
+	// ErrBackendInsufficientStorage indicates the backend has insufficient storage
+	// space (disk full, quota exceeded, etc.).
+	ErrBackendInsufficientStorage = errors.New("insufficient storage")
+
 	// ErrQuotaExceeded indicates the user has exceeded their storage quota.
 	// This is a domain-level sentinel; the S3-facing error is ErrRequestQuotaExceeded.
 	ErrQuotaExceeded = errors.New("quota exceeded")

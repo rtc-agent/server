@@ -657,6 +657,9 @@ type S3EndpointConfig struct {
 
 	// AllowedOrigins is the CORS whitelist (default ["*"]).
 	AllowedOrigins []string `mapstructure:"allowed_origins"`
+
+	// Region is the S3 region for SigV4 signing (default "us-east-1").
+	Region string `mapstructure:"region"`
 }
 
 // QuotaConfig holds storage quota configuration.
@@ -853,7 +856,8 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("storage.s3_endpoint.port", 9000)
 	v.SetDefault("storage.s3_endpoint.tls_cert", "")
 	v.SetDefault("storage.s3_endpoint.tls_key", "")
-	v.SetDefault("storage.s3_endpoint.allowed_origins", []string{})    // Empty by default for security
+	v.SetDefault("storage.s3_endpoint.allowed_origins", []string{}) // Empty by default for security
+	v.SetDefault("storage.s3_endpoint.region", "us-east-1")
 	v.SetDefault("storage.quota.max_file_size_bytes", 100*1024*1024)   // 100MB
 	v.SetDefault("storage.quota.max_user_quota_bytes", 1024*1024*1024) // 1GB
 	v.SetDefault("storage.quota.max_concurrent_uploads", 10)
@@ -895,3 +899,14 @@ func Load(cfgFile string) (*Config, error) {
 
 	return &cfg, nil
 }
+
+// TODO(MEDIUM-24): Config hot reload
+// To enable runtime config updates for OSS3 settings (rate limits, quotas, cleanup intervals):
+// 1. Add `viper *viper.Viper` field to Config struct (json:"-" to exclude from serialization)
+// 2. Store viper instance in Load(): cfg.viper = v
+// 3. Implement EnableHotReload(cfg, onUpdate func(*Config)):
+//    - cfg.viper.WatchConfig()
+//    - cfg.viper.OnConfigChange(func(e fsnotify.Event) { re-unmarshal and call onUpdate })
+// 4. In server startup, call EnableHotReload with callback that updates rate limiters, etc.
+// 5. Ensure thread-safe access to config values (use sync.RWMutex or atomic.Value)
+// See: https://github.com/spf13/viper#watching-changes-in-configuration-files

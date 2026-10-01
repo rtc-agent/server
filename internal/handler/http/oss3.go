@@ -485,11 +485,38 @@ func (h *OSS3Handler) handleCopyObject(
 		return
 	}
 
+	// Get source object size for quota check
+	srcMeta, err := h.oss3UC.Backend().HeadObject(r.Context(), srcBucket, srcKey)
+	if err != nil {
+		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
+		return
+	}
+
+	// Check and reserve quota for the copy destination (prevents quota bypass via copy)
+	quotaRequestID, err := h.oss3UC.CheckAndReserveQuota(r.Context(), userID, srcMeta.Size)
+	if err != nil {
+		writeQuotaReserveError(w, err, r.URL.Path)
+		return
+	}
+	defer func() {
+		if err != nil {
+			h.oss3UC.ReleaseQuota(r.Context(), userID, quotaRequestID)
+		}
+	}()
+
 	// Copy object in backend
 	result, err := h.oss3UC.Backend().CopyObject(r.Context(), srcBucket, srcKey, dstBucket, dstKey)
 	if err != nil {
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
+	}
+
+	// Commit quota after successful copy
+	if commitErr := h.oss3UC.CommitQuota(r.Context(), userID, quotaRequestID, srcMeta.Size); commitErr != nil {
+		logger.Warn(r.Context(), "failed to commit quota after successful copy",
+			zap.String("user_id", userID),
+			zap.String("quota_request_id", quotaRequestID),
+			zap.Error(commitErr))
 	}
 
 	// Create file record for destination

@@ -208,6 +208,12 @@ const (
 	// Full key: oss3:lock:{resource_name}  (e.g. oss3:lock:cleanup)
 	// Value: holderUUID (string); TTL: seconds (configurable per lock).
 	PrefixOSS3Lock = "oss3:lock:"
+
+	// PrefixOSS3QuotaCommitMarker is an idempotency marker for quota commits.
+	// Full key: oss3:quota_commit:{user_id}:{request_id}
+	// Value: "1"; TTL: 24h (covers retry window).
+	// SETNX before commit prevents duplicate quota increments on network retries.
+	PrefixOSS3QuotaCommitMarker = "oss3:quota_commit:"
 )
 
 // ========== Constructor functions ==========
@@ -371,3 +377,8 @@ func OSS3CredentialCache(accessKeyID string) string { return PrefixOSS3Credentia
 
 // OSS3Lock returns the Redis key for generic distributed lock.
 func OSS3Lock(resource string) string { return PrefixOSS3Lock + resource }
+
+// OSS3QuotaCommitMarker returns the Redis key for quota commit idempotency marker.
+func OSS3QuotaCommitMarker(userID, requestID string) string {
+	return PrefixOSS3QuotaCommitMarker + userID + ":" + requestID
+}

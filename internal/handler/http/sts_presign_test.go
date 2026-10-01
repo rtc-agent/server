@@ -50,7 +50,7 @@ func newTestPresignHandler(t *testing.T) *STSPresignHandler {
 		},
 	}
 
-	uc, err := usecase.NewOSS3Usecase(backend, nil, nil, nil, nil, nil, cfg)
+	uc, err := usecase.NewOSS3Usecase(backend, nil, nil, nil, nil, nil, nil, cfg)
 	require.NoError(t, err)
 
 	return NewSTSPresignHandler(uc, nil, false)

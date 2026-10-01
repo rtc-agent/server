@@ -55,6 +55,9 @@ type ListObjectsOptions struct {
 }
 
 // DeleteResult holds the result of a single DeleteObjects entry.
+// One DeleteResult is returned per requested key. A successful deletion has
+// Code == "" and Message == ""; a failed deletion has a non-empty Code
+// (e.g. "InternalError") and a descriptive Message.
 type DeleteResult struct {
 	Key          string
 	Code         string // empty on success, S3 error code on failure
@@ -63,6 +66,16 @@ type DeleteResult struct {
 }
 
 // Backend is the storage backend interface.
+//
+// # Bucket Parameter Design
+//
+// Most methods accept a `bucket` parameter per call, allowing callers to
+// address different buckets on the same backend instance (multi-bucket
+// support). The `bucket` field stored on the implementation (set via the
+// constructor) is reserved for lifecycle operations — specifically
+// HealthCheck — which performs a simple readiness probe against the
+// primary bucket the backend was configured with.
+//
 // Implementations must be safe for concurrent use.
 type Backend interface {
 	// Basic object operations
@@ -70,7 +83,7 @@ type Backend interface {
 	GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, ObjectMeta, error)
 	GetObjectRange(ctx context.Context, bucket, key string, start, end int64) (io.ReadCloser, ObjectMeta, error) // R9 H2: Range download
 	DeleteObject(ctx context.Context, bucket, key string) error
-	DeleteObjects(ctx context.Context, bucket string, keys []string) ([]DeleteResult, error) // R9 H3: Batch delete
+	DeleteObjects(ctx context.Context, bucket string, keys []string) ([]DeleteResult, error) // R9 H3: Batch delete — returns one result per key; success has Code==""
 	HeadObject(ctx context.Context, bucket, key string) (ObjectMeta, error)
 	ListObjects(ctx context.Context, bucket string, opts ListObjectsOptions) (*ListObjectsResult, error)
 	CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) (ObjectMeta, error)
@@ -87,6 +100,11 @@ type Backend interface {
 	PresignPut(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
 
 	// Lifecycle
+
+	// Close releases any resources held by the backend (connections, caches,
+	// etc.). The MinIO implementation is currently a no-op, but the method
+	// exists so future backends (e.g. S3 with persistent HTTP clients) can
+	// clean up gracefully without changing the interface.
 	Close() error
 
 	// HealthCheck verifies the storage backend is reachable.

@@ -54,6 +54,12 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(
 		return
 	}
 
+	// Check concurrent upload limit
+	if err := h.oss3UC.CheckConcurrentUploadLimit(r.Context(), userID); err != nil {
+		WriteS3Error(w, rtcoss3.ErrMaxUploadsExceeded, r.URL.Path, "")
+		return
+	}
+
 	contentType := r.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/octet-stream"

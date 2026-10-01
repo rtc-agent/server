@@ -28,10 +28,11 @@ type MinIOBackend struct {
 // publicURL is the public-facing S3 endpoint for presigned URLs (empty = use endpoint).
 func NewMinIOBackend(endpoint, accessKey, secretKey, bucket, publicURL string, useSSL bool, maxIdleConns, maxIdleConnsPerHost int, idleConnTimeout time.Duration) (*MinIOBackend, error) {
 	transport := &http.Transport{
-		MaxIdleConns:        maxIdleConns,
-		MaxIdleConnsPerHost: maxIdleConnsPerHost,
-		IdleConnTimeout:     idleConnTimeout,
-		TLSHandshakeTimeout: 10 * time.Second,
+		MaxIdleConns:          maxIdleConns,
+		MaxIdleConnsPerHost:   maxIdleConnsPerHost,
+		IdleConnTimeout:       idleConnTimeout,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
 	}
 
 	client, err := minio.New(endpoint, &minio.Options{
@@ -52,24 +53,27 @@ func NewMinIOBackend(endpoint, accessKey, secretKey, bucket, publicURL string, u
 		return nil, fmt.Errorf("init minio core: %w", err)
 	}
 
-	exists, err := client.BucketExists(context.Background(), bucket)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	exists, err := client.BucketExists(ctx, bucket)
 	if err != nil {
 		return nil, fmt.Errorf("check bucket: %w", err)
 	}
 	if !exists {
-		logger.Info(context.Background(), "creating MinIO bucket",
+		logger.Info(ctx, "creating MinIO bucket",
 			zap.String("bucket", bucket))
-		if err := client.MakeBucket(context.Background(), bucket, minio.MakeBucketOptions{}); err != nil {
+		if err := client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil {
 			// Ignore BucketAlreadyOwnedByYou error (concurrent startup)
 			var errResp minio.ErrorResponse
 			if errors.As(err, &errResp) && errResp.Code == "BucketAlreadyOwnedByYou" {
-				logger.Info(context.Background(), "MinIO bucket already exists (concurrent creation)",
+				logger.Info(ctx, "MinIO bucket already exists (concurrent creation)",
 					zap.String("bucket", bucket))
 			} else {
 				return nil, fmt.Errorf("create bucket: %w", err)
 			}
 		} else {
-			logger.Info(context.Background(), "MinIO bucket created successfully",
+			logger.Info(ctx, "MinIO bucket created successfully",
 				zap.String("bucket", bucket))
 		}
 	}
@@ -175,7 +179,13 @@ func (b *MinIOBackend) DeleteObject(ctx context.Context, bucket, key string) err
 }
 
 // DeleteObjects batch deletes objects.
+// Returns one DeleteResult per input key. A successful deletion has Code=="";
+// a failed deletion has Code="InternalError" and a descriptive Message.
 func (b *MinIOBackend) DeleteObjects(ctx context.Context, bucket string, keys []string) ([]DeleteResult, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+
 	objectsCh := make(chan minio.ObjectInfo, len(keys))
 	go func() {
 		defer close(objectsCh)
@@ -184,13 +194,25 @@ func (b *MinIOBackend) DeleteObjects(ctx context.Context, bucket string, keys []
 		}
 	}()
 
-	results := make([]DeleteResult, 0, len(keys))
+	// Collect failures keyed by object name.
+	failures := make(map[string]string, len(keys))
 	for err := range b.client.RemoveObjects(ctx, bucket, objectsCh, minio.RemoveObjectsOptions{}) {
-		results = append(results, DeleteResult{
-			Key:     err.ObjectName,
-			Code:    "InternalError",
-			Message: err.Err.Error(),
-		})
+		failures[err.ObjectName] = err.Err.Error()
+	}
+
+	// Build a result for every requested key so callers can distinguish
+	// "all succeeded" from "no-op".
+	results := make([]DeleteResult, len(keys))
+	for i, key := range keys {
+		if msg, failed := failures[key]; failed {
+			results[i] = DeleteResult{
+				Key:     key,
+				Code:    "InternalError",
+				Message: msg,
+			}
+		} else {
+			results[i] = DeleteResult{Key: key} // Code == "" => success
+		}
 	}
 	return results, nil
 }
@@ -211,6 +233,9 @@ func (b *MinIOBackend) HeadObject(ctx context.Context, bucket, key string) (Obje
 }
 
 // ListObjects lists objects.
+// MEDIUM-22 fix: When delimiter is set and Recursive=false, the MinIO SDK handles
+// common prefix extraction server-side. Objects whose keys end with the delimiter
+// are common prefixes (directories); others are regular objects.
 func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts ListObjectsOptions) (*ListObjectsResult, error) {
 	result := &ListObjectsResult{}
 
@@ -225,28 +250,15 @@ func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts List
 		MaxKeys:   maxKeys,
 	}
 
-	// Track common prefixes to avoid duplicates
-	commonPrefixes := make(map[string]bool)
-
 	for object := range b.client.ListObjects(ctx, bucket, listOpts) {
 		if object.Err != nil {
 			return nil, mapMinIOError(object.Err, "list_objects")
 		}
 
-		// If delimiter is set, check if this key represents a "directory"
-		if opts.Delimiter != "" && !listOpts.Recursive {
-			// Extract the part after the prefix
-			keyWithoutPrefix := strings.TrimPrefix(object.Key, opts.Prefix)
-			// Check if the key contains the delimiter
-			if idx := strings.Index(keyWithoutPrefix, opts.Delimiter); idx >= 0 {
-				// This is a common prefix (like a directory)
-				commonPrefix := opts.Prefix + keyWithoutPrefix[:idx+len(opts.Delimiter)]
-				if !commonPrefixes[commonPrefix] {
-					commonPrefixes[commonPrefix] = true
-					result.CommonPrefixes = append(result.CommonPrefixes, commonPrefix)
-				}
-				continue
-			}
+		// If delimiter is set, keys ending with delimiter are common prefixes
+		if opts.Delimiter != "" && strings.HasSuffix(object.Key, opts.Delimiter) {
+			result.CommonPrefixes = append(result.CommonPrefixes, object.Key)
+			continue
 		}
 
 		result.Objects = append(result.Objects, ObjectMeta{
@@ -331,21 +343,36 @@ func (b *MinIOBackend) AbortMultipartUpload(ctx context.Context, bucket, key, up
 }
 
 // ListParts lists uploaded parts.
+// Paginates through all parts using partNumberMarker until IsTruncated is false.
 func (b *MinIOBackend) ListParts(ctx context.Context, bucket, key, uploadID string) ([]PartInfo, error) {
-	result, err := b.core.ListObjectParts(ctx, bucket, key, uploadID, 0, 10000)
-	if err != nil {
-		return nil, mapMinIOError(err, "list_parts")
-	}
-	parts := make([]PartInfo, len(result.ObjectParts))
-	for i, p := range result.ObjectParts {
-		parts[i] = PartInfo{
-			PartNumber:   p.PartNumber,
-			Size:         p.Size,
-			ETag:         p.ETag,
-			LastModified: p.LastModified,
+	const maxPartsPerPage = 1000
+	var allParts []PartInfo
+	partNumberMarker := 0
+
+	for {
+		result, err := b.core.ListObjectParts(ctx, bucket, key, uploadID, partNumberMarker, maxPartsPerPage)
+		if err != nil {
+			return nil, mapMinIOError(err, "list_parts")
 		}
+
+		for _, p := range result.ObjectParts {
+			allParts = append(allParts, PartInfo{
+				PartNumber:   p.PartNumber,
+				Size:         p.Size,
+				ETag:         p.ETag,
+				LastModified: p.LastModified,
+			})
+		}
+
+		if !result.IsTruncated {
+			break
+		}
+		// NextPartNumberMarker points to the last part returned; the next
+		// call should start *after* it.
+		partNumberMarker = result.NextPartNumberMarker
 	}
-	return parts, nil
+
+	return allParts, nil
 }
 
 // PresignGet generates a presigned GET URL.
@@ -471,16 +498,4 @@ func mapMinIOError(err error, operation string) error {
 	}
 
 	return fmt.Errorf("minio %s: %w", operation, err)
-}
-
-// IsMinIODiskFullError checks if an error is a disk full condition.
-func IsMinIODiskFullError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "no space left on device") ||
-		strings.Contains(errStr, "disk full") ||
-		strings.Contains(errStr, "disk quota exceeded") ||
-		strings.Contains(errStr, "InsufficientStorage")
 }

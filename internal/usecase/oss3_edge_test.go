@@ -27,7 +27,7 @@ func newTestUsecase(t *testing.T) *OSS3Usecase {
 		Encryption: config.EncryptionConfig{SessionTokenKey: keyHex},
 		Credential: config.CredentialConfig{SessionTokenTTL: 1 * time.Hour},
 	}
-	uc, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, cfg)
+	uc, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, nil, cfg)
 	if err != nil {
 		t.Fatalf("NewOSS3Usecase: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestNewOSS3Usecase_InvalidHexKey(t *testing.T) {
 	cfg := config.StorageConfig{
 		Encryption: config.EncryptionConfig{SessionTokenKey: invalidKey},
 	}
-	_, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, cfg)
+	_, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, nil, cfg)
 	if err == nil {
 		t.Error("Expected error for invalid hex key")
 	}
@@ -235,7 +235,7 @@ func TestNewOSS3Usecase_EmptyKey(t *testing.T) {
 	cfg := config.StorageConfig{
 		Encryption: config.EncryptionConfig{SessionTokenKey: ""},
 	}
-	_, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, cfg)
+	_, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, nil, cfg)
 	if err == nil {
 		t.Error("Expected error for empty key")
 	}
@@ -248,7 +248,7 @@ func TestNewOSS3Usecase_KeyTooLong(t *testing.T) {
 	cfg := config.StorageConfig{
 		Encryption: config.EncryptionConfig{SessionTokenKey: longKey},
 	}
-	_, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, cfg)
+	_, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, nil, cfg)
 	if err == nil {
 		t.Error("Expected error for key too long")
 	}

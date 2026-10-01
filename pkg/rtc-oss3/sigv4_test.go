@@ -1,6 +1,7 @@
 package rtcoss3
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -56,6 +57,126 @@ func TestIsHexDigest(t *testing.T) {
 			t.Errorf("isHexDigest(%q) = %v, want %v", tt.input, got, tt.expected)
 		}
 	}
+}
+
+// TestE2ESignatureVerification tests end-to-end signature verification:
+// construct a valid signed request -> verify passes, tamper -> verify fails.
+// MEDIUM-25 fix.
+func TestE2ESignatureVerification(t *testing.T) {
+	secretKey := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	accessKey := "AKIAIOSFODNN7EXAMPLE"
+	region := "us-east-1"
+	service := "s3"
+	now := time.Now().UTC()
+	date := now.Format("20060102")
+	amzDate := now.Format("20060102T150405Z")
+
+	t.Run("ValidSignature_Passes", func(t *testing.T) {
+		// Build a simple GET request
+		req, _ := http.NewRequest("GET", "/rtc-agent/user-123/test.txt", nil)
+		req.Host = "localhost:9000"
+		req.Header.Set("X-Amz-Date", amzDate)
+		req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+
+		// Compute signature manually
+		scope := date + "/" + region + "/" + service + "/aws4_request"
+		signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
+
+		canonicalReq := buildCanonicalRequest(req, signedHeaders, "UNSIGNED-PAYLOAD")
+		stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
+		signingKey := deriveSigningKey(secretKey, date, region, service)
+		signature := fmt.Sprintf("%x", hmacSHA256(signingKey, []byte(stringToSign)))
+
+		authHeader := fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+			accessKey, scope, "host;x-amz-content-sha256;x-amz-date", signature)
+		req.Header.Set("Authorization", authHeader)
+
+		// Verify should pass
+		err := VerifySigV4Request(req, secretKey, region, service)
+		if err != nil {
+			t.Errorf("Valid signature should pass, got: %v", err)
+		}
+	})
+
+	t.Run("TamperedSignature_Fails", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/rtc-agent/user-123/test.txt", nil)
+		req.Host = "localhost:9000"
+		req.Header.Set("X-Amz-Date", amzDate)
+		req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+
+		scope := date + "/" + region + "/" + service + "/aws4_request"
+		signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
+
+		canonicalReq := buildCanonicalRequest(req, signedHeaders, "UNSIGNED-PAYLOAD")
+		stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
+		signingKey := deriveSigningKey(secretKey, date, region, service)
+		signature := fmt.Sprintf("%x", hmacSHA256(signingKey, []byte(stringToSign)))
+
+		authHeader := fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+			accessKey, scope, "host;x-amz-content-sha256;x-amz-date", signature)
+		req.Header.Set("Authorization", authHeader)
+
+		// Tamper: change the path after signing
+		req.URL.Path = "/rtc-agent/user-123/other.txt"
+
+		err := VerifySigV4Request(req, secretKey, region, service)
+		if err == nil {
+			t.Error("Tampered request should fail verification")
+		}
+	})
+
+	t.Run("TamperedHeader_Fails", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/rtc-agent/user-123/test.txt", nil)
+		req.Host = "localhost:9000"
+		req.Header.Set("X-Amz-Date", amzDate)
+		req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+
+		scope := date + "/" + region + "/" + service + "/aws4_request"
+		signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
+
+		canonicalReq := buildCanonicalRequest(req, signedHeaders, "UNSIGNED-PAYLOAD")
+		stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
+		signingKey := deriveSigningKey(secretKey, date, region, service)
+		signature := fmt.Sprintf("%x", hmacSHA256(signingKey, []byte(stringToSign)))
+
+		authHeader := fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+			accessKey, scope, "host;x-amz-content-sha256;x-amz-date", signature)
+		req.Header.Set("Authorization", authHeader)
+
+		// Tamper: change a signed header after signing
+		req.Header.Set("X-Amz-Date", "20200101T000000Z")
+
+		err := VerifySigV4Request(req, secretKey, region, service)
+		if err == nil {
+			t.Error("Tampered header should fail verification")
+		}
+	})
+
+	t.Run("WrongSecretKey_Fails", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/rtc-agent/user-123/test.txt", nil)
+		req.Host = "localhost:9000"
+		req.Header.Set("X-Amz-Date", amzDate)
+		req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+
+		scope := date + "/" + region + "/" + service + "/aws4_request"
+		signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
+
+		canonicalReq := buildCanonicalRequest(req, signedHeaders, "UNSIGNED-PAYLOAD")
+		stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
+		// Sign with wrong key
+		signingKey := deriveSigningKey("wrongkey", date, region, service)
+		signature := fmt.Sprintf("%x", hmacSHA256(signingKey, []byte(stringToSign)))
+
+		authHeader := fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+			accessKey, scope, "host;x-amz-content-sha256;x-amz-date", signature)
+		req.Header.Set("Authorization", authHeader)
+
+		// Verify with correct key should fail
+		err := VerifySigV4Request(req, secretKey, region, service)
+		if err == nil {
+			t.Error("Wrong secret key should fail verification")
+		}
+	})
 }
 
 // TestParseCredential tests credential parsing.

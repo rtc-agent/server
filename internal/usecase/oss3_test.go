@@ -25,7 +25,7 @@ func TestOSS3Usecase_Init(t *testing.T) {
 			},
 		}
 
-		uc, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, cfg)
+		uc, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, nil, cfg)
 		if err != nil {
 			t.Fatalf("NewOSS3Usecase: %v", err)
 		}
@@ -44,7 +44,7 @@ func TestOSS3Usecase_Init(t *testing.T) {
 			},
 		}
 
-		_, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, cfg)
+		_, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, nil, cfg)
 		if err == nil {
 			t.Fatal("Expected error for invalid key length")
 		}
@@ -65,7 +65,7 @@ func TestEncryptDecryptSessionToken(t *testing.T) {
 		},
 	}
 
-	uc, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, cfg)
+	uc, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, nil, cfg)
 	if err != nil {
 		t.Fatalf("NewOSS3Usecase: %v", err)
 	}

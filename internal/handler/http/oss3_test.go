@@ -18,6 +18,12 @@ import (
 )
 
 // TestOSS3Integration tests the complete S3 protocol flow.
+// MEDIUM-23: This test requires Redis and MinIO. To run:
+//  1. Start dependencies: docker compose up -d redis minio
+//  2. Set env vars: INTEGRATION_TEST=1, REDIS_URL, MINIO_ENDPOINT, etc.
+//  3. Run: go test -tags=integration -run TestOSS3Integration ./internal/handler/http/...
+//
+// For CI, consider using testcontainers-go to provide Redis + MinIO automatically.
 func TestOSS3Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

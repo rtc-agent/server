@@ -46,12 +46,12 @@ func NewMultipartUploadRepo(db *gorm.DB) MultipartUploadRepo {
 }
 
 func (r *multipartUploadRepo) Create(ctx context.Context, upload *model.MultipartUpload) error {
-	return r.db.WithContext(ctx).Create(upload).Error
+	return DBFromContext(ctx, r.db).WithContext(ctx).Create(upload).Error
 }
 
 func (r *multipartUploadRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.MultipartUpload, error) {
 	var upload model.MultipartUpload
-	err := r.db.WithContext(ctx).Where("id = ?", id).First(&upload).Error
+	err := DBFromContext(ctx, r.db).WithContext(ctx).Where("id = ?", id).First(&upload).Error
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (r *multipartUploadRepo) GetByID(ctx context.Context, id uuid.UUID) (*model
 
 func (r *multipartUploadRepo) GetByUploadID(ctx context.Context, uploadID string) (*model.MultipartUpload, error) {
 	var upload model.MultipartUpload
-	err := r.db.WithContext(ctx).Where("upload_id = ?", uploadID).First(&upload).Error
+	err := DBFromContext(ctx, r.db).WithContext(ctx).Where("upload_id = ?", uploadID).First(&upload).Error
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func (r *multipartUploadRepo) GetByUploadID(ctx context.Context, uploadID string
 }
 
 func (r *multipartUploadRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string, uploadedParts int) error {
-	return r.db.WithContext(ctx).
+	return DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.MultipartUpload{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
@@ -79,20 +79,20 @@ func (r *multipartUploadRepo) UpdateStatus(ctx context.Context, id uuid.UUID, st
 
 func (r *multipartUploadRepo) FindExpired(ctx context.Context, before time.Time) ([]*model.MultipartUpload, error) {
 	var uploads []*model.MultipartUpload
-	err := r.db.WithContext(ctx).
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("status = ? AND expires_at < ?", "uploading", before).
 		Find(&uploads).Error
 	return uploads, err
 }
 
 func (r *multipartUploadRepo) Delete(ctx context.Context, id uuid.UUID) error {
-	return r.db.WithContext(ctx).
+	return DBFromContext(ctx, r.db).WithContext(ctx).
 		Delete(&model.MultipartUpload{}, "id = ?", id).Error
 }
 
 func (r *multipartUploadRepo) CountActiveByUser(ctx context.Context, userID string) (int64, error) {
 	var count int64
-	err := r.db.WithContext(ctx).
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.MultipartUpload{}).
 		Where("user_id = ? AND status = ?", userID, "uploading").
 		Count(&count).Error
@@ -102,12 +102,12 @@ func (r *multipartUploadRepo) CountActiveByUser(ctx context.Context, userID stri
 // Part operations
 
 func (r *multipartUploadRepo) CreatePart(ctx context.Context, part *model.MultipartUploadPart) error {
-	return r.db.WithContext(ctx).Create(part).Error
+	return DBFromContext(ctx, r.db).WithContext(ctx).Create(part).Error
 }
 
 func (r *multipartUploadRepo) ListParts(ctx context.Context, uploadID uuid.UUID) ([]*model.MultipartUploadPart, error) {
 	var parts []*model.MultipartUploadPart
-	err := r.db.WithContext(ctx).
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("upload_id = ?", uploadID).
 		Order("part_number ASC").
 		Find(&parts).Error
@@ -115,7 +115,7 @@ func (r *multipartUploadRepo) ListParts(ctx context.Context, uploadID uuid.UUID)
 }
 
 func (r *multipartUploadRepo) DeleteParts(ctx context.Context, uploadID uuid.UUID) error {
-	return r.db.WithContext(ctx).
+	return DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("upload_id = ?", uploadID).
 		Delete(&model.MultipartUploadPart{}).Error
 }

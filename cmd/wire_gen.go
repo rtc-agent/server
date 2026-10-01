@@ -137,7 +137,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	oss3Usecase, err := provideOSS3Usecase(backend, fileRepo, multipartUploadRepo, temporaryCredentialRepo, rdb, v, cfg)
+	oss3Usecase, err := provideOSS3Usecase(backend, db, fileRepo, multipartUploadRepo, temporaryCredentialRepo, rdb, v, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -745,6 +745,7 @@ func provideOSS3LuaScripts(redisClient *redis.Client) (map[string]*redis.Script,
 
 func provideOSS3Usecase(
 	backend rtcoss3.Backend,
+	db *gorm.DB,
 	fileRepo repo.FileRepo,
 	uploadRepo repo.MultipartUploadRepo,
 	credRepo repo.TemporaryCredentialRepo,
@@ -755,7 +756,7 @@ func provideOSS3Usecase(
 	if backend == nil {
 		return nil, nil
 	}
-	return usecase.NewOSS3Usecase(backend, fileRepo, uploadRepo, credRepo, redisClient, scripts, cfg.Storage)
+	return usecase.NewOSS3Usecase(backend, db, fileRepo, uploadRepo, credRepo, redisClient, scripts, cfg.Storage)
 }
 
 func provideOSS3Handler(oss3UC *usecase.OSS3Usecase, cfg *config.Config) *httphandler.OSS3Handler {

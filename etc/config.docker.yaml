@@ -218,4 +218,4 @@ storage:
     multipart_expiry: 24h
     credential_expiry: 24h
   encryption:
-    session_token_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"  # 32 bytes hex (64 chars) — CHANGE IN PRODUCTION
+    session_token_key: "${STORAGE__ENCRYPTION__SESSION_TOKEN_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"  # 32 bytes hex (64 chars) — Set via env var in production

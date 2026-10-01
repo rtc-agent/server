@@ -114,6 +114,12 @@ func (m *AccessLogMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		zap.Int64("duration_ms", duration.Milliseconds()),
 		zap.Int("response_size", rw.responseSize),
 		zap.String("user_agent", r.UserAgent()),
+		zap.Int64("content_length", r.ContentLength),
+		zap.String("remote_addr", r.RemoteAddr),
+		zap.String("referer", r.Referer()),
+		zap.String("range", r.Header.Get("Range")),
+		zap.String("copy_source", r.Header.Get("X-Amz-Copy-Source")),
+		zap.String("etag", rw.Header().Get("ETag")),
 	)
 }
 
@@ -141,47 +147,63 @@ func (c *contextCapturer) Value(key interface{}) interface{} {
 }
 
 // extractOperation extracts the S3 operation name from the request.
+// MEDIUM-21 fix: Caches the result in request context to avoid repeated parsing
+// when called by both AccessLog and Metrics middlewares.
 func extractOperation(r *http.Request) string {
+	// Check cache first
+	if cached, ok := r.Context().Value(ContextKeyOperation).(string); ok {
+		return cached
+	}
+
 	_, key, _ := parseS3Path(r.URL.Path)
 	q := r.URL.Query()
 
+	var op string
 	// Multipart operations
 	if q.Has("uploads") && r.Method == http.MethodPost {
-		return "CreateMultipartUpload"
-	}
-	if q.Has("uploadId") {
+		op = "CreateMultipartUpload"
+	} else if q.Has("uploadId") {
 		switch r.Method {
 		case http.MethodPut:
-			return "UploadPart"
+			op = "UploadPart"
 		case http.MethodPost:
-			return "CompleteMultipartUpload"
+			op = "CompleteMultipartUpload"
 		case http.MethodDelete:
-			return "AbortMultipartUpload"
+			op = "AbortMultipartUpload"
 		case http.MethodGet:
-			return "ListParts"
+			op = "ListParts"
 		}
 	}
 
 	// Basic operations
-	if key == "" {
-		if r.Method == http.MethodGet {
-			return "ListObjects"
+	if op == "" {
+		if key == "" {
+			if r.Method == http.MethodGet {
+				op = "ListObjects"
+			}
 		}
 	}
 
-	switch r.Method {
-	case http.MethodPut:
-		if r.Header.Get("X-Amz-Copy-Source") != "" {
-			return "CopyObject"
+	if op == "" {
+		switch r.Method {
+		case http.MethodPut:
+			if r.Header.Get("X-Amz-Copy-Source") != "" {
+				op = "CopyObject"
+			} else {
+				op = "PutObject"
+			}
+		case http.MethodGet:
+			op = "GetObject"
+		case http.MethodDelete:
+			op = "DeleteObject"
+		case http.MethodHead:
+			op = "HeadObject"
+		default:
+			op = "Unknown"
 		}
-		return "PutObject"
-	case http.MethodGet:
-		return "GetObject"
-	case http.MethodDelete:
-		return "DeleteObject"
-	case http.MethodHead:
-		return "HeadObject"
 	}
 
-	return "Unknown"
+	// Cache in context for subsequent calls
+	*r = *r.WithContext(context.WithValue(r.Context(), ContextKeyOperation, op))
+	return op
 }

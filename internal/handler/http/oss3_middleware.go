@@ -17,6 +17,8 @@ const (
 	ContextKeyUserID contextKey = "user_id"
 	// ContextKeyRequestID is the context key for request ID.
 	ContextKeyRequestID contextKey = "request_id"
+	// ContextKeyOperation is the context key for cached S3 operation name.
+	ContextKeyOperation contextKey = "operation"
 )
 
 // BusinessRestrictionMiddleware enforces business rules on S3 requests.
@@ -36,20 +38,10 @@ func NewBusinessRestrictionMiddleware(oss3UC *usecase.OSS3Usecase, bucket string
 }
 
 // ServeHTTP implements the http.Handler interface.
+// MEDIUM-14/19 fix: Removed duplicate path parsing, bucket validation, and path
+// permission checks — the handler (ServeHTTP in oss3.go) already performs these.
+// This middleware now only verifies that the user ID was set by SigV4.
 func (m *BusinessRestrictionMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Extract bucket and key from path
-	bucket, key, ok := parseS3Path(r.URL.Path)
-	if !ok {
-		WriteS3Error(w, rtcoss3.ErrInvalidURI, r.URL.Path, "")
-		return
-	}
-
-	// Validate bucket
-	if bucket != m.bucket {
-		WriteS3Error(w, rtcoss3.ErrNoSuchBucket, r.URL.Path, "")
-		return
-	}
-
 	// Extract user ID from context (set by SigV4 middleware)
 	userID := r.Context().Value(ContextKeyUserID)
 	if userID == nil {
@@ -58,12 +50,6 @@ func (m *BusinessRestrictionMiddleware) ServeHTTP(w http.ResponseWriter, r *http
 	}
 	userIDStr, ok := userID.(string)
 	if !ok || userIDStr == "" {
-		WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
-		return
-	}
-
-	// Check path permission: user can only access user-{user_id}/* paths
-	if !hasPathPermission(userIDStr, key) {
 		WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
 		return
 	}

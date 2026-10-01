@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -42,17 +43,36 @@ func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, 
 // CommitQuota finalizes a previously reserved quota.
 // Called after PutObject/UploadPart succeeds (data actually written to storage).
 //
-// Flow: Lua script OSS3QuotaCommit atomically adds pending amount to quota and deletes pending key.
+// Idempotency: Uses Redis SETNX to create a commit marker before the quota update.
+// If the marker already exists (duplicate call from network retry), the commit is skipped.
+// The marker has a 24h TTL to cover the retry window.
+//
+// Flow: SETNX commit marker -> Lua script OSS3QuotaCommit atomically adds pending
+// amount to quota and deletes pending key.
 func (uc *OSS3Usecase) CommitQuota(ctx context.Context, userID, requestID string, amount int64) error {
+	// Idempotency guard: SETNX a commit marker to prevent duplicate commits.
+	// If the marker already exists, this commit has already been processed.
+	markerKey := cache.OSS3QuotaCommitMarker(userID, requestID)
+	ok, err := uc.redis.SetNX(ctx, markerKey, 1, 24*time.Hour).Result()
+	if err != nil {
+		return fmt.Errorf("quota commit marker: %w", err)
+	}
+	if !ok {
+		// Marker already exists — this commit was already processed (duplicate call).
+		return nil
+	}
+
 	quotaKey := cache.OSS3Quota(userID)
 	pendingKey := cache.OSS3QuotaPending(userID, requestID)
 
 	script := uc.scripts[cache.OSS3ScriptQuotaCommit]
-	_, err := script.Run(ctx, uc.redis,
+	_, err = script.Run(ctx, uc.redis,
 		[]string{quotaKey, pendingKey},
 		amount,
 	).Int()
 	if err != nil {
+		// Quota commit Lua script failed — clean up the marker so a retry can succeed.
+		uc.redis.Del(ctx, markerKey)
 		return fmt.Errorf("quota commit: %w", err)
 	}
 	return nil

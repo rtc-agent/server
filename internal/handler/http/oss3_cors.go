@@ -48,7 +48,7 @@ func NewOSS3CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 
 			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, DELETE, HEAD, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-amz-*, x-amz-acl, x-amz-date, x-amz-content-sha256")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-amz-acl, x-amz-content-sha256, x-amz-copy-source, x-amz-date, x-amz-credential, x-amz-expires, x-amz-signature, x-amz-signedheaders")
 			w.Header().Set("Access-Control-Expose-Headers", "ETag, x-amz-request-id, x-amz-id-2, x-amz-version-id")
 			w.Header().Set("Access-Control-Max-Age", "3600")
 			if allowOrigin != "*" {

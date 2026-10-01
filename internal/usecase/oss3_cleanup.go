@@ -7,6 +7,7 @@ import (
 
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
+	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	"go.uber.org/zap"
 )
 
@@ -100,6 +101,24 @@ func (uc *OSS3Usecase) GetQuotaUsage(ctx context.Context, userID string) (int64,
 // GetActiveUploadCount returns the number of active uploads for a user.
 func (uc *OSS3Usecase) GetActiveUploadCount(ctx context.Context, userID string) (int64, error) {
 	return uc.uploadRepo.CountActiveByUser(ctx, userID)
+}
+
+// CheckConcurrentUploadLimit returns an error if the user has reached the maximum
+// number of concurrent multipart uploads.
+func (uc *OSS3Usecase) CheckConcurrentUploadLimit(ctx context.Context, userID string) error {
+	maxUploads := uc.cfg.Quota.MaxConcurrentUploads
+	if maxUploads <= 0 {
+		return nil // no limit configured
+	}
+
+	count, err := uc.uploadRepo.CountActiveByUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("count active uploads: %w", err)
+	}
+	if count >= int64(maxUploads) {
+		return fmt.Errorf("user %s: %w", userID, rtcoss3.ErrMaxUploadsExceeded)
+	}
+	return nil
 }
 
 // GetCredentialByAccessKeyID retrieves a credential by AccessKeyID.

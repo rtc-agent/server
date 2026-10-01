@@ -28,7 +28,8 @@ func TestNewOSS3CORSMiddleware_WildcardOrigin(t *testing.T) {
 		assert.Contains(t, rec.Header().Get("Access-Control-Allow-Methods"), "PUT")
 		assert.Contains(t, rec.Header().Get("Access-Control-Allow-Methods"), "GET")
 		assert.Contains(t, rec.Header().Get("Access-Control-Allow-Headers"), "Authorization")
-		assert.Contains(t, rec.Header().Get("Access-Control-Allow-Headers"), "x-amz-*")
+		assert.Contains(t, rec.Header().Get("Access-Control-Allow-Headers"), "x-amz-content-sha256")
+		assert.Contains(t, rec.Header().Get("Access-Control-Allow-Headers"), "x-amz-date")
 		assert.Contains(t, rec.Header().Get("Access-Control-Expose-Headers"), "ETag")
 	})
 

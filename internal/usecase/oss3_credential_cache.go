@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rtc-agent/server/internal/infra/cache"
+	"github.com/rtc-agent/server/internal/model"
 )
 
 // credentialCacheValue is the JSON structure stored in Redis cache.
@@ -23,9 +24,9 @@ type credentialCacheValue struct {
 const maxCredentialCacheTTL = 5 * time.Minute
 
 // LookupCredential retrieves a credential by AccessKeyID.
-// Cache-aside pattern:
+// Cache-aside pattern with singleflight dedup:
 //  1. Check Redis cache (oss3:cred_cache:{accessKeyID})
-//  2. On miss: query DB, populate cache with TTL = min(remaining, 5m)
+//  2. On miss: use singleflight to deduplicate concurrent DB queries
 //  3. On hit: verify not expired (defensive; Redis TTL should handle this)
 //
 // Returns nil, nil if credential not found (caller treats as invalid signature).
@@ -52,12 +53,18 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 			// Cached but expired or decryption failed — fall through to DB
 		}
 	}
-	// Redis error or cache miss — fall through to DB
+	// Redis error or cache miss — fall through to DB with singleflight dedup
 
-	// Step 2: Query DB
-	cred, err := uc.credRepo.GetByAccessKeyID(ctx, accessKeyID)
+	// Step 2: Query DB (deduplicated via singleflight to prevent cache stampede)
+	result, err, _ := uc.credFlight.Do(accessKeyID, func() (interface{}, error) {
+		return uc.credRepo.GetByAccessKeyID(ctx, accessKeyID)
+	})
 	if err != nil {
 		// Credential not found — return nil, nil (caller treats as invalid)
+		return nil, nil
+	}
+	cred, ok := result.(*model.TemporaryCredential)
+	if !ok || cred == nil {
 		return nil, nil
 	}
 
