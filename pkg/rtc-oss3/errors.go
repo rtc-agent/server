@@ -15,6 +15,11 @@ import (
 	"net/http"
 )
 
+// S3TimeFormat is the canonical time format used in S3 responses.
+// S3 uses ISO 8601 with millisecond precision (e.g., "2026-01-02T15:04:05.000Z").
+// This is different from RFC3339 (no milliseconds) and http.TimeFormat (RFC1123).
+const S3TimeFormat = "2006-01-02T15:04:05.000Z"
+
 // Backend sentinel errors.
 //
 // These errors are returned by Backend implementations (e.g. MinIO) and

@@ -114,6 +114,10 @@ func isMultipartRequest(r *http.Request) bool {
 
 // parseS3Path extracts bucket and key from S3 path-style URL.
 // Format: /s3/{bucket}/{key} or /s3/{bucket}
+//
+// Security: Rejects path traversal attempts (e.g., "../" sequences) to prevent
+// escaping the user's namespace. This is a defense-in-depth measure; the key
+// validation layer (rtcoss3.ValidateKey) also enforces strict format.
 func parseS3Path(path string) (bucket, key string, ok bool) {
 	// Remove /s3 prefix
 	path = strings.TrimPrefix(path, "/s3")
@@ -123,10 +127,19 @@ func parseS3Path(path string) (bucket, key string, ok bool) {
 		return "", "", false
 	}
 
+	// Reject path traversal attempts (defense in depth)
+	if strings.Contains(path, "..") {
+		return "", "", false
+	}
+
 	parts := strings.SplitN(path, "/", 2)
 	bucket = parts[0]
 	if len(parts) > 1 {
 		key = parts[1]
+		// Additional validation: reject suspicious patterns in key
+		if strings.Contains(key, "/..") || strings.HasSuffix(key, "/.") {
+			return "", "", false
+		}
 	}
 	return bucket, key, true
 }
@@ -151,6 +164,11 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	// Check if this is a copy operation (x-amz-copy-source header)
 	copySource := r.Header.Get("X-Amz-Copy-Source")
 	if copySource != "" {
+		// Validate copy source length (S3 spec: max 1024 chars)
+		if len(copySource) > 1024 {
+			WriteS3Error(w, rtcoss3.ErrInvalidCopySource, r.URL.Path, "")
+			return
+		}
 		h.handleCopyObject(w, r, bucket, key, copySource)
 		return
 	}
@@ -401,12 +419,19 @@ func (h *OSS3Handler) handleGetObject(w http.ResponseWriter, r *http.Request, bu
 		w.WriteHeader(http.StatusOK)
 	}
 
-	// Stream object body
+	// Stream object body with context awareness
 	if _, err := io.Copy(w, obj); err != nil {
-		logger.Warn(r.Context(), "failed to stream object body to client",
-			zap.String("bucket", bucket),
-			zap.String("key", key),
-			zap.Error(err))
+		// Check if context was cancelled (client disconnected)
+		if r.Context().Err() != nil {
+			logger.Info(r.Context(), "client disconnected during download",
+				zap.String("bucket", bucket),
+				zap.String("key", key))
+		} else {
+			logger.Warn(r.Context(), "failed to stream object body to client",
+				zap.String("bucket", bucket),
+				zap.String("key", key),
+				zap.Error(err))
+		}
 	}
 }
 
@@ -451,7 +476,18 @@ func (h *OSS3Handler) handleDeleteObject(
 		// Retry up to 3 times with exponential backoff
 		retryDelays := []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
 		for i, delay := range retryDelays {
-			time.Sleep(delay)
+			// Respect context cancellation (client disconnect)
+			select {
+			case <-time.After(delay):
+			case <-r.Context().Done():
+				logger.Info(r.Context(), "retry cancelled due to context cancellation",
+					zap.String("user_id", userID),
+					zap.String("key", key),
+					zap.Int("completed_retries", i))
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
 			if retryErr := h.oss3UC.DeleteFileRecord(r.Context(), userID, key); retryErr == nil {
 				logger.Info(r.Context(), "file record deleted successfully after retry",
 					zap.String("user_id", userID),
@@ -546,17 +582,35 @@ func (h *OSS3Handler) handleCopyObject(
 		return
 	}
 
-	// Validate source key belongs to the requesting user.
-	// Without this check, a user could reference another user's file via X-Amz-Copy-Source.
+	// Validate source key format and user ownership (defense in depth).
+	// The key format includes the user ID (user-{uuid}/{md5}.{ext}), so this
+	// check ensures the source key belongs to the requesting user.
 	if err := rtcoss3.ValidateKey(srcKey, userID); err != nil {
 		WriteS3Error(w, err, r.URL.Path, "")
 		return
 	}
 
-	// Get source object size for quota check
+	// Get source object size for quota check.
+	// HeadObject also serves as an existence check — if the source doesn't exist,
+	// we fail here before reserving quota or attempting the copy.
 	srcMeta, err := h.oss3UC.Backend().HeadObject(r.Context(), srcBucket, srcKey)
 	if err != nil {
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
+		return
+	}
+
+	// Verify source file record exists in DB for this user (TOCTOU protection).
+	// This ensures the source is not just present in MinIO but also properly
+	// registered to this user in the database. Without this check, a race
+	// condition could allow copying a file that was just deleted by its owner.
+	srcFile, err := h.oss3UC.GetFileRecord(r.Context(), userID, srcKey)
+	if err != nil {
+		WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
+		return
+	}
+	if srcFile == nil {
+		// Source file record doesn't exist for this user — access denied.
+		WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
 		return
 	}
 
@@ -617,10 +671,11 @@ type xmlCopyResult struct {
 }
 
 // writeCopyObjectResultXML serialises a CopyObjectResult XML response.
+// Uses S3TimeFormat for consistency with other S3 responses.
 func writeCopyObjectResultXML(w http.ResponseWriter, etag string, lastModified time.Time) {
 	resp := xmlCopyResult{
 		ETag:         etag,
-		LastModified: lastModified.UTC().Format(time.RFC3339),
+		LastModified: lastModified.UTC().Format(rtcoss3.S3TimeFormat),
 	}
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
@@ -743,7 +798,7 @@ func writeListBucketResultXML(
 	for _, obj := range result.Objects {
 		resp.Contents = append(resp.Contents, xmlListContent{
 			Key:          obj.Key,
-			LastModified: obj.LastModified.UTC().Format(time.RFC3339),
+			LastModified: obj.LastModified.UTC().Format(rtcoss3.S3TimeFormat),
 			ETag:         obj.ETag,
 			Size:         obj.Size,
 			StorageClass: "STANDARD",

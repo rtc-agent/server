@@ -27,11 +27,13 @@ func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, 
 	pendingKey := cache.OSS3QuotaPending(userID, requestID)
 
 	script := uc.scripts[cache.OSS3ScriptQuotaReserve]
+	// Lua script expects TTL in seconds (e.g., 300 for 5 minutes)
+	pendingTTLSeconds := int(uc.cfg.Quota.PendingTTL.Seconds())
 	result, err := script.Run(ctx, uc.redis,
 		[]string{quotaKey, pendingKey},
 		additionalBytes,
 		uc.cfg.Quota.MaxUserQuotaBytes,
-		int(uc.cfg.Quota.PendingTTL.Seconds()), // e.g. 300
+		pendingTTLSeconds,
 	).Int()
 	if err != nil {
 		return "", fmt.Errorf("quota reserve: %w", err)

@@ -146,17 +146,16 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 	// Check quota for this part
 	quotaRequestID, err := h.oss3UC.CheckAndReserveQuota(r.Context(), userID, contentLength)
 	if err != nil {
-		if isQuotaExceededError(err) {
-			WriteS3Error(w, rtcoss3.ErrRequestQuotaExceeded, r.URL.Path, "")
-		} else {
-			WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
-		}
+		writeQuotaReserveError(w, err, r.URL.Path)
 		return
 	}
 
-	// Ensure quota is released on failure
+	// Ensure quota is released on failure unless committed.
+	// quotaCommitted tracks whether quota has been charged to the user.
+	// If false at function exit, the defer releases the pending reservation.
+	quotaCommitted := false
 	defer func() {
-		if err != nil {
+		if !quotaCommitted {
 			h.oss3UC.ReleaseQuota(r.Context(), userID, quotaRequestID)
 		}
 	}()
@@ -171,7 +170,7 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 		return
 	}
 
-	// Commit quota
+	// Commit quota after successful upload
 	if err = h.oss3UC.CommitQuota(r.Context(), userID, quotaRequestID, contentLength); err != nil {
 		// Quota commit failed but upload succeeded
 		logger.Warn(r.Context(), "failed to commit quota after successful part upload",
@@ -179,6 +178,8 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 			zap.String("upload_id", uploadID),
 			zap.Int("part_number", partNumber),
 			zap.Error(err))
+	} else {
+		quotaCommitted = true
 	}
 
 	w.Header().Set("ETag", etag)
@@ -454,7 +455,7 @@ func (h *OSS3MultipartHandler) handleListParts(
 	for _, p := range parts {
 		resp.Parts = append(resp.Parts, xmlPart{
 			PartNumber:   p.PartNumber,
-			LastModified: p.LastModified.UTC().Format("2006-01-02T15:04:05.000Z"),
+			LastModified: p.LastModified.UTC().Format(rtcoss3.S3TimeFormat),
 			ETag:         p.ETag,
 			Size:         p.Size,
 		})
@@ -467,10 +468,14 @@ func (h *OSS3MultipartHandler) handleListParts(
 }
 
 // ServeHTTP routes multipart upload requests to the appropriate handler.
+//
+// NOTE: Bucket validation is intentionally delegated to the parent OSS3Handler.
+// This handler is only called from OSS3Handler.ServeHTTP after bucket validation.
+// If this handler is ever exposed directly (e.g., for testing), bucket validation
+// must be added here.
 func (h *OSS3MultipartHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract bucket and key from path
-	// NOTE: Bucket validation is skipped here because OSS3Handler.ServeHTTP
-	// already validated the bucket before delegating to this handler.
+	// Bucket validation is performed by the parent handler (OSS3Handler.ServeHTTP)
 	bucket, key, ok := parseS3Path(r.URL.Path)
 	if !ok {
 		WriteS3Error(w, rtcoss3.ErrInvalidURI, r.URL.Path, "")

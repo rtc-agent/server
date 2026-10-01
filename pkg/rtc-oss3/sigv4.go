@@ -75,7 +75,11 @@ func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, 
 	signingKey := deriveSigningKey(secretAccessKey, dateStr, region, service)
 	computedSig := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
 
-	// Step 4: Compare
+	// Step 4: Compare signatures using constant-time comparison.
+	// SECURITY: hmac.Equal is used to prevent timing attacks that could leak
+	// information about the expected signature. All validation paths above
+	// (parsing, scope check, timestamp check) should complete in similar time
+	// to avoid side-channel leaks about signature format or validity.
 	if !hmac.Equal([]byte(computedSig), []byte(providedSig)) {
 		return ErrInvalidSignature
 	}
@@ -122,6 +126,8 @@ func VerifySigV4Presigned(r *http.Request, secretAccessKey string, region string
 	computedSig := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
 
 	providedSig := q.Get("X-Amz-Signature")
+	// SECURITY: Use constant-time comparison to prevent timing attacks.
+	// See VerifySigV4Request for full security considerations.
 	if !hmac.Equal([]byte(computedSig), []byte(providedSig)) {
 		return ErrInvalidSignature
 	}

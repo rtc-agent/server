@@ -40,7 +40,8 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 				zap.String("bucket", bucket),
 				zap.String("key", key),
 				zap.Error(compErr))
-			return "", fmt.Errorf("head object after complete (compensation also failed): %w", err)
+			// Include both errors for full context
+			return "", fmt.Errorf("head object after complete: %w; compensation also failed: %v", err, compErr)
 		}
 		return "", fmt.Errorf("head object after complete, backend object cleaned up: %w", err)
 	}
@@ -50,12 +51,12 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 	if dbErr != nil {
 		// Compensation: try to delete the backend object
 		if compErr := uc.backend.DeleteObject(ctx, bucket, key); compErr != nil {
-			// Both DB and compensation failed — log and return DB error
+			// Both DB and compensation failed — log and return combined error
 			logger.Warn(ctx, "CompleteMultipartUpload compensation failed",
 				zap.String("bucket", bucket),
 				zap.String("key", key),
 				zap.Error(compErr))
-			return "", fmt.Errorf("DB operations failed (compensation also failed): %w", dbErr)
+			return "", fmt.Errorf("DB operations failed: %w; compensation also failed: %v", dbErr, compErr)
 		}
 		return "", fmt.Errorf("DB operations failed, backend object cleaned up: %w", dbErr)
 	}
