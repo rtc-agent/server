@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"testing"
 	"time"
 
@@ -299,5 +300,18 @@ func TestGenerateRandomString_StatisticalDistribution(t *testing.T) {
 		if count < 1000 || count > 5000 {
 			t.Logf("Character %c appeared %d times (expected ~2778) -- may indicate modulo bias", c, count)
 		}
+	}
+}
+
+// LOW-16 fix: Benchmark to verify generateRandomString efficiency improvement
+// (batch reading vs single-byte reading)
+func BenchmarkGenerateRandomString(b *testing.B) {
+	lengths := []int{16, 40, 100, 1000}
+	for _, length := range lengths {
+		b.Run(fmt.Sprintf("length_%d", length), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				_, _ = generateRandomString(length)
+			}
+		})
 	}
 }

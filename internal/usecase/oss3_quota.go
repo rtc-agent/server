@@ -8,7 +8,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/rtc-agent/server/internal/infra/cache"
+	"github.com/rtc-agent/server/pkg/logger"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
+	"go.uber.org/zap"
 )
 
 // CheckAndReserveQuota atomically reserves quota for an upload.
@@ -86,8 +88,19 @@ func (uc *OSS3Usecase) ReleaseQuota(ctx context.Context, userID, requestID strin
 	pendingKey := cache.OSS3QuotaPending(userID, requestID)
 
 	script := uc.scripts[cache.OSS3ScriptQuotaRollback]
-	_, _ = script.Run(ctx, uc.redis, []string{pendingKey}).Int()
-	// best-effort; TTL guarantees eventual cleanup even on crash
+	result, err := script.Run(ctx, uc.redis, []string{pendingKey}).Int()
+	// LOW-17 fix: add structured logging for best-effort quota release
+	if err != nil {
+		logger.Debug(ctx, "quota release failed (best-effort, TTL will cleanup)",
+			zap.String("user_id", userID),
+			zap.String("request_id", requestID),
+			zap.Error(err))
+	} else {
+		logger.Debug(ctx, "quota released",
+			zap.String("user_id", userID),
+			zap.String("request_id", requestID),
+			zap.Int("result", result))
+	}
 }
 
 // AdjustQuota adjusts the committed quota counter by a delta.

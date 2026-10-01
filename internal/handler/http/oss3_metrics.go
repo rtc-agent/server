@@ -108,6 +108,16 @@ var (
 		},
 		[]string{"type"}, // "db_has_minio_missing", "minio_has_db_missing"
 	)
+
+	// LOW-18 fix: oss3OrphanedRecordTotal tracks orphaned records that failed to delete.
+	// Incremented when backend delete succeeds but DB delete fails after all retries.
+	oss3OrphanedRecordTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rtc_oss3_orphaned_record_total",
+			Help: "Total orphaned records (backend deleted, DB delete failed)",
+		},
+		[]string{"operation", "user_id"}, // operation: "delete_failed"
+	)
 )
 
 // NewOSS3MetricsMiddleware creates a Prometheus metrics middleware for OSS3.
@@ -196,4 +206,10 @@ func RecordInstantUploadRepairError() {
 // Types: "db_has_minio_missing", "minio_has_db_missing".
 func RecordConsistencyViolation(violationType string) {
 	oss3ConsistencyViolationTotal.WithLabelValues(violationType).Inc()
+}
+
+// RecordOrphanedRecord records an orphaned record that failed to delete.
+// LOW-18 fix: Called when backend delete succeeds but DB delete fails after all retries.
+func RecordOrphanedRecord(operation, userID string) {
+	oss3OrphanedRecordTotal.WithLabelValues(operation, userID).Inc()
 }

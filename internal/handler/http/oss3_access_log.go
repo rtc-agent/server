@@ -111,7 +111,7 @@ func (m *AccessLogMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		zap.String("operation", operation),
 		zap.String("method", r.Method),
 		zap.Int("status", rw.statusCode),
-		zap.Int64("duration_ms", duration.Milliseconds()),
+		zap.String("duration", duration.String()), // LOW-08 fix: use string format instead of integer ms
 		zap.Int("response_size", rw.responseSize),
 		zap.String("user_agent", r.UserAgent()),
 		zap.Int64("content_length", r.ContentLength),

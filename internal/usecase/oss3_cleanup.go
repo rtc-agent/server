@@ -30,7 +30,8 @@ func (uc *OSS3Usecase) CleanupExpiredUploads(ctx context.Context) (int, error) {
 	for _, upload := range expired {
 		// Abort in storage backend (best-effort)
 		if uc.backend != nil {
-			_ = uc.backend.AbortMultipartUpload(ctx, "rtc-agent", upload.Key, upload.UploadID)
+			// LOW-09 fix: use configured bucket instead of hardcoded value
+			_ = uc.backend.AbortMultipartUpload(ctx, uc.cfg.MinIO.Bucket, upload.Key, upload.UploadID)
 			// Ignore error — backend may have already cleaned up
 		}
 

@@ -184,20 +184,32 @@ func (uc *OSS3Usecase) decryptString(encoded string) (string, error) {
 
 // generateRandomString generates a cryptographically secure random string
 // of the given length using rejection sampling to avoid modulo bias.
+// LOW-02 fix: Read bytes in batches to reduce system calls.
 func generateRandomString(length int) (string, error) {
+	if length == 0 {
+		return "", nil
+	}
+
 	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	const maxByte = byte(255 - 255%len(charset)) // 252 for charset len 36
 
 	b := make([]byte, length)
-	buf := make([]byte, 1)
-	for i := range b {
-		for {
-			if _, err := rand.Read(buf); err != nil {
-				return "", fmt.Errorf("generate random string: %w", err)
-			}
-			if buf[0] < maxByte {
-				b[i] = charset[buf[0]%byte(len(charset))]
-				break
+	// Read in batches of 32 bytes for efficiency
+	const batchSize = 32
+	buf := make([]byte, batchSize)
+
+	for i := 0; i < length; {
+		// Read a batch of random bytes
+		n, err := rand.Read(buf)
+		if err != nil {
+			return "", fmt.Errorf("generate random string: %w", err)
+		}
+
+		// Process the batch
+		for j := 0; j < n && i < length; j++ {
+			if buf[j] < maxByte {
+				b[i] = charset[buf[j]%byte(len(charset))]
+				i++
 			}
 		}
 	}

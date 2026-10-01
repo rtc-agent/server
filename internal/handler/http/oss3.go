@@ -399,13 +399,34 @@ func (h *OSS3Handler) handleDeleteObject(
 		return
 	}
 
-	// Delete file record from DB
+	// Delete file record from DB with retry logic for compensation
 	if err := h.oss3UC.DeleteFileRecord(r.Context(), userID, key); err != nil {
-		// DB failed but backend delete succeeded — orphaned record
-		logger.Warn(r.Context(), "failed to delete file record after successful backend delete",
+		// LOW-18 fix: DB failed but backend delete succeeded — orphaned record
+		// Implement simple retry with exponential backoff
+		logger.Warn(r.Context(), "failed to delete file record after successful backend delete, retrying",
 			zap.String("user_id", userID),
 			zap.String("key", key),
 			zap.Error(err))
+
+		// Retry up to 3 times with exponential backoff
+		retryDelays := []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
+		for i, delay := range retryDelays {
+			time.Sleep(delay)
+			if retryErr := h.oss3UC.DeleteFileRecord(r.Context(), userID, key); retryErr == nil {
+				logger.Info(r.Context(), "file record deleted successfully after retry",
+					zap.String("user_id", userID),
+					zap.String("key", key),
+					zap.Int("attempt", i+2))
+				break
+			} else if i == len(retryDelays)-1 {
+				// All retries failed — log for manual intervention or async cleanup
+				logger.Error(r.Context(), "failed to delete file record after all retries, orphaned record",
+					zap.String("user_id", userID),
+					zap.String("key", key),
+					zap.Error(retryErr))
+				RecordOrphanedRecord("delete_failed", userID)
+			}
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)

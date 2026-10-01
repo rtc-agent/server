@@ -44,6 +44,9 @@ func NewMinIOBackend(endpoint, accessKey, secretKey, bucket, publicURL string, u
 		return nil, fmt.Errorf("init minio client: %w", err)
 	}
 
+	// LOW-06 fix: Set application info for better observability in MinIO logs
+	client.SetAppInfo("rtc-agent", "1.0.0")
+
 	core, err := minio.NewCore(endpoint, &minio.Options{
 		Creds:     credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure:    useSSL,
@@ -236,6 +239,7 @@ func (b *MinIOBackend) HeadObject(ctx context.Context, bucket, key string) (Obje
 // MEDIUM-22 fix: When delimiter is set and Recursive=false, the MinIO SDK handles
 // common prefix extraction server-side. Objects whose keys end with the delimiter
 // are common prefixes (directories); others are regular objects.
+// LOW-05 fix: Support pagination via Marker, ContinuationToken, and StartAfter.
 func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts ListObjectsOptions) (*ListObjectsResult, error) {
 	result := &ListObjectsResult{}
 
@@ -248,6 +252,19 @@ func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts List
 		Prefix:    opts.Prefix,
 		Recursive: opts.Delimiter == "",
 		MaxKeys:   maxKeys,
+	}
+
+	// LOW-05 fix: Support pagination parameters
+	// Priority: ContinuationToken (V2) > StartAfter (V2) > Marker (V1)
+	if opts.ContinuationToken != "" {
+		// V2: ContinuationToken is the key to start after (from previous NextContinuationToken)
+		listOpts.StartAfter = opts.ContinuationToken
+	} else if opts.StartAfter != "" {
+		// V2: StartAfter is the key to start after (first request only)
+		listOpts.StartAfter = opts.StartAfter
+	} else if opts.Marker != "" {
+		// V1: Marker is the key to start after
+		listOpts.StartAfter = opts.Marker
 	}
 
 	for object := range b.client.ListObjects(ctx, bucket, listOpts) {
