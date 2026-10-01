@@ -200,19 +200,22 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 		return
 	}
 
-	// Commit quota after successful upload.
+	// Commit quota with retry after successful upload.
 	// Skip for zero-byte parts — no quota was reserved.
 	if quotaRequestID != "" {
-		if err = h.oss3UC.CommitQuota(r.Context(), userID, quotaRequestID, contentLength); err != nil {
-			// Quota commit failed but upload succeeded
-			logger.Warn(r.Context(), "failed to commit quota after successful part upload",
+		if err = commitQuotaWithRetry(r.Context(), h.oss3UC, userID, quotaRequestID, contentLength); err != nil {
+			// Commit failed after all retries but upload succeeded — data lives in MinIO.
+			// Do NOT call ReleaseQuota: the pending key will expire via TTL naturally.
+			// Reconciliation will eventually sync the Redis counter with DB truth.
+			logger.Error(r.Context(), "quota commit failed after retries; reconciliation will sync",
 				zap.String("user_id", userID),
 				zap.String("upload_id", uploadID),
 				zap.Int("part_number", partNumber),
+				zap.Int64("amount", contentLength),
 				zap.Error(err))
-		} else {
-			quotaCommitted = true
+			RecordOrphanedQuotaCommit(userID)
 		}
+		quotaCommitted = true // Mark as committed regardless of success — avoid double-release
 	} else {
 		quotaCommitted = true
 	}

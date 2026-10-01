@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff/v5"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
@@ -309,7 +310,7 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	// Commit quota with retry (idempotent via SETNX marker).
 	// Skip for zero-byte uploads — no quota was reserved.
 	if quotaRequestID != "" {
-		if err = h.commitQuotaWithRetry(r.Context(), userID, quotaRequestID, contentLength); err != nil {
+		if err = commitQuotaWithRetry(r.Context(), h.oss3UC, userID, quotaRequestID, contentLength); err != nil {
 			// Commit failed after all retries but upload succeeded — data lives in MinIO.
 			// Do NOT call ReleaseQuota: the pending key will expire via TTL naturally.
 			// Reconciliation will eventually sync the Redis counter with DB truth.
@@ -338,33 +339,31 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 
 // commitQuotaWithRetry retries CommitQuota on transient Redis errors.
 // The idempotency marker inside CommitQuota (SETNX) prevents double-charging.
-// Retry policy: 3 attempts, linear backoff 50ms/100ms/200ms.
-func (h *OSS3Handler) commitQuotaWithRetry(
-	ctx context.Context, userID, quotaRequestID string, amount int64,
+// Uses cenkalti/backoff for exponential backoff with jitter.
+func commitQuotaWithRetry(
+	ctx context.Context,
+	oss3UC *usecase.OSS3Usecase,
+	userID, quotaRequestID string,
+	amount int64,
 ) error {
-	const maxAttempts = 3
-	delays := []time.Duration{50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond}
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = 50 * time.Millisecond
+	bo.MaxInterval = 200 * time.Millisecond
 
-	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if err := h.oss3UC.CommitQuota(ctx, userID, quotaRequestID, amount); err != nil {
-			lastErr = err
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+		if err := oss3UC.CommitQuota(ctx, userID, quotaRequestID, amount); err != nil {
 			if !isTransientRedisError(err) {
-				return err
+				return struct{}{}, backoff.Permanent(err)
 			}
 			RecordQuotaCommitRetry()
-			if attempt < maxAttempts-1 {
-				select {
-				case <-time.After(delays[attempt]):
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}
-			continue
+			return struct{}{}, err
 		}
-		return nil
-	}
-	return lastErr
+		return struct{}{}, nil
+	},
+		backoff.WithBackOff(bo),
+		backoff.WithMaxTries(3),
+	)
+	return err
 }
 
 // isTransientRedisError reports whether the error is a transient Redis failure
@@ -718,7 +717,7 @@ func (h *OSS3Handler) handleCopyObject(
 	// Commit quota with retry (idempotent via SETNX marker).
 	// Skip for zero-byte copies — no quota was reserved.
 	if quotaRequestID != "" {
-		if commitErr := h.commitQuotaWithRetry(r.Context(), userID, quotaRequestID, srcMeta.Size); commitErr != nil {
+		if commitErr := commitQuotaWithRetry(r.Context(), h.oss3UC, userID, quotaRequestID, srcMeta.Size); commitErr != nil {
 			logger.Error(r.Context(), "quota commit failed after retries; reconciliation will sync",
 				zap.String("user_id", userID),
 				zap.String("quota_request_id", quotaRequestID),
