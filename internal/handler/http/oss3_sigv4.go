@@ -56,12 +56,16 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Lookup credential from cache or DB
 	credValue, err := m.oss3UC.LookupCredential(r.Context(), cred.AccessKeyID)
-	if err != nil || credValue == nil {
-		if err != nil {
-			logger.Error(r.Context(), "SigV4: credential lookup failed",
-				zap.String("access_key_id", cred.AccessKeyID),
-				zap.Error(err))
-		}
+	if err != nil {
+		// DB error - return 500
+		logger.Error(r.Context(), "SigV4: credential lookup failed",
+			zap.String("access_key_id", cred.AccessKeyID),
+			zap.Error(err))
+		WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
+		return
+	}
+	if credValue == nil {
+		// Credential not found - return 403
 		WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
 	}

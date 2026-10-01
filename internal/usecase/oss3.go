@@ -144,6 +144,38 @@ func (uc *OSS3Usecase) DecryptSessionToken(token string) (*SessionTokenPayload, 
 	return uc.decryptSessionToken(token)
 }
 
+// encryptString encrypts a plain string using AES-256-GCM.
+// Returns base64-encoded string: nonce(12) + ciphertext + tag(16)
+func (uc *OSS3Usecase) encryptString(plaintext string) (string, error) {
+	nonce := make([]byte, 12) // 96-bit nonce
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("generate nonce: %w", err)
+	}
+
+	sealed := uc.aesGCM.Seal(nonce, nonce, []byte(plaintext), nil)
+	return base64.URLEncoding.EncodeToString(sealed), nil
+}
+
+// decryptString decrypts a base64-encoded AES-256-GCM encrypted string.
+func (uc *OSS3Usecase) decryptString(encoded string) (string, error) {
+	sealed, err := base64.URLEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", fmt.Errorf("decode string: %w", err)
+	}
+
+	if len(sealed) < 12 {
+		return "", fmt.Errorf("invalid encrypted string: too short")
+	}
+
+	nonce, ciphertext := sealed[:12], sealed[12:]
+	plaintext, err := uc.aesGCM.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", fmt.Errorf("decrypt string: %w", err)
+	}
+
+	return string(plaintext), nil
+}
+
 // generateRandomString generates a cryptographically secure random string
 // of the given length using rejection sampling to avoid modulo bias.
 func generateRandomString(length int) (string, error) {

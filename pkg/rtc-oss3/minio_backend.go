@@ -2,6 +2,7 @@ package rtcoss3
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // MinIOBackend uses both minio.Client (basic ops) and minio.Core (multipart ops).
@@ -54,8 +57,20 @@ func NewMinIOBackend(endpoint, accessKey, secretKey, bucket, publicURL string, u
 		return nil, fmt.Errorf("check bucket: %w", err)
 	}
 	if !exists {
+		logger.Info(context.Background(), "creating MinIO bucket",
+			zap.String("bucket", bucket))
 		if err := client.MakeBucket(context.Background(), bucket, minio.MakeBucketOptions{}); err != nil {
-			return nil, fmt.Errorf("create bucket: %w", err)
+			// Ignore BucketAlreadyOwnedByYou error (concurrent startup)
+			var errResp minio.ErrorResponse
+			if errors.As(err, &errResp) && errResp.Code == "BucketAlreadyOwnedByYou" {
+				logger.Info(context.Background(), "MinIO bucket already exists (concurrent creation)",
+					zap.String("bucket", bucket))
+			} else {
+				return nil, fmt.Errorf("create bucket: %w", err)
+			}
+		} else {
+			logger.Info(context.Background(), "MinIO bucket created successfully",
+				zap.String("bucket", bucket))
 		}
 	}
 
@@ -370,9 +385,14 @@ func (b *MinIOBackend) Close() error {
 func (b *MinIOBackend) HealthCheck(ctx context.Context) error {
 	exists, err := b.client.BucketExists(ctx, b.bucket)
 	if err != nil {
+		logger.Warn(ctx, "MinIO health check failed",
+			zap.String("bucket", b.bucket),
+			zap.Error(err))
 		return fmt.Errorf("minio health check: %w", err)
 	}
 	if !exists {
+		logger.Warn(ctx, "MinIO health check: bucket does not exist",
+			zap.String("bucket", b.bucket))
 		return fmt.Errorf("minio health check: bucket %q does not exist", b.bucket)
 	}
 	return nil
@@ -387,10 +407,34 @@ func mapMinIOError(err error, operation string) error {
 	if err == nil {
 		return nil
 	}
+
+	// Try typed error detection first (preferred for MinIO SDK errors)
+	var errResp minio.ErrorResponse
+	if errors.As(err, &errResp) {
+		switch errResp.Code {
+		case "NoSuchKey":
+			logger.Debug(context.Background(), "MinIO error mapped: NoSuchKey",
+				zap.String("operation", operation))
+			return fmt.Errorf("minio %s: %w", operation, ErrBackendKeyNotFound)
+		case "AccessDenied":
+			logger.Debug(context.Background(), "MinIO error mapped: AccessDenied",
+				zap.String("operation", operation))
+			return fmt.Errorf("minio %s: %w", operation, ErrBackendAccessDenied)
+		case "NoSuchBucket":
+			logger.Debug(context.Background(), "MinIO error mapped: NoSuchBucket",
+				zap.String("operation", operation))
+			return fmt.Errorf("minio %s: %w", operation, ErrBackendBucketNotFound)
+		case "InsufficientStorage":
+			logger.Debug(context.Background(), "MinIO error mapped: InsufficientStorage",
+				zap.String("operation", operation))
+			return fmt.Errorf("minio %s: %w", operation, ErrInsufficientStorage)
+		}
+	}
+
+	// Fallback to string matching for network-level errors
 	errStr := err.Error()
 
-	// Disk full / quota — map to ErrInsufficientStorage (an S3Error, used
-	// directly because it already implements the error interface).
+	// Disk full / quota — map to ErrInsufficientStorage
 	if strings.Contains(errStr, "no space left on device") ||
 		strings.Contains(errStr, "disk full") ||
 		strings.Contains(errStr, "disk quota exceeded") {
@@ -400,21 +444,18 @@ func mapMinIOError(err error, operation string) error {
 	// Key not found — 404-style errors from MinIO.
 	if strings.Contains(errStr, "object does not exist") ||
 		strings.Contains(errStr, "The specified key does not exist") ||
-		strings.Contains(errStr, "NoSuchKey") ||
 		strings.Contains(errStr, "resource not found") {
 		return fmt.Errorf("minio %s: %w", operation, ErrBackendKeyNotFound)
 	}
 
 	// Access denied — permission errors from MinIO.
 	if strings.Contains(errStr, "Access Denied") ||
-		strings.Contains(errStr, "access denied") ||
-		strings.Contains(errStr, "AccessDenied") {
+		strings.Contains(errStr, "access denied") {
 		return fmt.Errorf("minio %s: %w", operation, ErrBackendAccessDenied)
 	}
 
 	// Bucket not found.
 	if strings.Contains(errStr, "bucket does not exist") ||
-		strings.Contains(errStr, "NoSuchBucket") ||
 		strings.Contains(errStr, "The specified bucket does not exist") {
 		return fmt.Errorf("minio %s: %w", operation, ErrBackendBucketNotFound)
 	}

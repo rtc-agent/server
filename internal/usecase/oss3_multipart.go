@@ -48,6 +48,8 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 }
 
 // completeMultipartUploadDBOps performs DB operations for completing a multipart upload.
+// Note: These operations are not wrapped in a transaction due to repository layer limitations.
+// If step 2 or 3 fails after step 1 succeeds, compensation will clean up the backend object.
 func (uc *OSS3Usecase) completeMultipartUploadDBOps(
 	ctx context.Context,
 	userID, bucket, key, uploadID, etag string,
@@ -81,7 +83,7 @@ func (uc *OSS3Usecase) completeMultipartUploadDBOps(
 		return fmt.Errorf("create file record: %w", err)
 	}
 
-	// Delete multipart upload record
+	// Delete multipart upload record (this should also delete parts via cascade)
 	if err := uc.DeleteMultipartUploadRecord(ctx, uploadID); err != nil {
 		return fmt.Errorf("delete upload record: %w", err)
 	}

@@ -117,6 +117,12 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 
 	userID := ExtractUserIDFromContext(r.Context())
 
+	// Check rate limit before proceeding
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, ExtractRequestIDFromContext(r.Context())); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
+		return
+	}
+
 	// Parse part number
 	partNumberStr := r.URL.Query().Get("partNumber")
 	partNumber, err := strconv.Atoi(partNumberStr)

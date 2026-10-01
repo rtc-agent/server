@@ -853,7 +853,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("storage.s3_endpoint.port", 9000)
 	v.SetDefault("storage.s3_endpoint.tls_cert", "")
 	v.SetDefault("storage.s3_endpoint.tls_key", "")
-	v.SetDefault("storage.s3_endpoint.allowed_origins", []string{"*"})
+	v.SetDefault("storage.s3_endpoint.allowed_origins", []string{})    // Empty by default for security
 	v.SetDefault("storage.quota.max_file_size_bytes", 100*1024*1024)   // 100MB
 	v.SetDefault("storage.quota.max_user_quota_bytes", 1024*1024*1024) // 1GB
 	v.SetDefault("storage.quota.max_concurrent_uploads", 10)

@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/rtc-agent/server/internal/infra/cache"
@@ -38,9 +39,17 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 		if json.Unmarshal([]byte(cached), &val) == nil {
 			// Defensive expiry check
 			if val.ExpiresAt.After(time.Now()) {
-				return &val, nil
+				// Decrypt SecretAccessKey
+				decryptedSecret, err := uc.decryptString(val.SecretAccessKey)
+				if err != nil {
+					// Decryption failed - fall through to DB
+					_ = uc.redis.Del(ctx, cacheKey).Err()
+				} else {
+					val.SecretAccessKey = decryptedSecret
+					return &val, nil
+				}
 			}
-			// Cached but expired — fall through to DB
+			// Cached but expired or decryption failed — fall through to DB
 		}
 	}
 	// Redis error or cache miss — fall through to DB
@@ -66,10 +75,16 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 
 	val := &credentialCacheValue{
 		UserID:          cred.UserID,
-		SecretAccessKey: cred.SecretAccessKey,
 		SessionToken:    cred.SessionToken,
 		ExpiresAt:       cred.ExpiresAt,
 	}
+
+	// Encrypt SecretAccessKey before caching
+	encryptedSecret, err := uc.encryptString(cred.SecretAccessKey)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt secret key: %w", err)
+	}
+	val.SecretAccessKey = encryptedSecret
 
 	data, err := json.Marshal(val)
 	if err == nil {

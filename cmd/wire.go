@@ -657,16 +657,17 @@ func provideOSS3Backend(cfg *config.Config) (rtcoss3.Backend, error) {
 	if cfg.Storage.Backend == "" {
 		return nil, nil
 	}
+	minioCfg := cfg.Storage.MinIO
 	return rtcoss3.NewMinIOBackend(
-		cfg.Storage.MinIO.Endpoint,
-		cfg.Storage.MinIO.AccessKey,
-		cfg.Storage.MinIO.SecretKey,
-		cfg.Storage.MinIO.Bucket,
-		cfg.Storage.MinIO.PublicURL, // Public URL for presigned URLs
-		cfg.Storage.MinIO.UseSSL,
-		100,              // maxIdleConns
-		10,               // maxIdleConnsPerHost
-		90*time.Second,   // idleConnTimeout
+		minioCfg.Endpoint,
+		minioCfg.AccessKey,
+		minioCfg.SecretKey,
+		minioCfg.Bucket,
+		minioCfg.PublicURL, // Public URL for presigned URLs
+		minioCfg.UseSSL,
+		minioCfg.MaxIdleConns,
+		minioCfg.MaxIdleConnsPerHost,
+		minioCfg.IdleConnTimeout,
 	)
 }
 

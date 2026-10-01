@@ -1,6 +1,10 @@
 package httphandler
 
 import (
+	"bufio"
+	"context"
+	"errors"
+	"net"
 	"net/http"
 	"time"
 
@@ -41,9 +45,35 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Flush implements http.Flusher for SSE and streaming support.
+func (rw *responseWriter) Flush() {
+	if flusher, ok := rw.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Hijack implements http.Hijacker for WebSocket support.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hijacker, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return hijacker.Hijack()
+	}
+	return nil, nil, errors.New("underlying ResponseWriter does not support hijacking")
+}
+
+// contextEnricher is a mutable container to capture context values set by downstream handlers.
+// This is needed because Go's http.Request is immutable, and when SigV4 middleware calls
+// r.WithContext(ctx), it creates a new request that AccessLog cannot access directly.
+type contextEnricher struct {
+	userID    string
+	requestID string
+}
+
 // ServeHTTP implements the http.Handler interface.
 func (m *AccessLogMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+
+	// Create a mutable container to capture context values from downstream handlers
+	enricher := &contextEnricher{}
 
 	// Wrap response writer to capture status and size
 	rw := &responseWriter{
@@ -51,22 +81,29 @@ func (m *AccessLogMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		statusCode:     http.StatusOK,
 	}
 
-	// Extract context fields
-	userID := ExtractUserIDFromContext(r.Context())
-	requestID := ExtractRequestIDFromContext(r.Context())
-
-	// Extract S3-specific fields
+	// Extract S3-specific fields (these don't change)
 	bucket, key, _ := parseS3Path(r.URL.Path)
 	operation := extractOperation(r)
 
+	// Wrap the request to capture context enrichment from SigV4 middleware
+	originalContext := r.Context()
+	wrappedReq := r.WithContext(&contextCapturer{
+		Context:  originalContext,
+		enricher: enricher,
+	})
+
 	// Call next handler
-	m.next.ServeHTTP(rw, r)
+	m.next.ServeHTTP(rw, wrappedReq)
 
 	// Calculate duration
 	duration := time.Since(start)
 
+	// Use captured user_id if available, otherwise fall back to empty string
+	userID := enricher.userID
+	requestID := enricher.requestID
+
 	// Log structured access log
-	logger.Info(r.Context(), "[oss3.HTTP] request completed",
+	logger.Info(originalContext, "[oss3.HTTP] request completed",
 		zap.String("user_id", userID),
 		zap.String("request_id", requestID),
 		zap.String("bucket", bucket),
@@ -78,6 +115,29 @@ func (m *AccessLogMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		zap.Int("response_size", rw.responseSize),
 		zap.String("user_agent", r.UserAgent()),
 	)
+}
+
+// contextCapturer wraps a context and captures specific values set by downstream handlers.
+type contextCapturer struct {
+	context.Context
+	enricher *contextEnricher
+}
+
+// Value intercepts context.Value calls and captures user_id and request_id.
+func (c *contextCapturer) Value(key interface{}) interface{} {
+	val := c.Context.Value(key)
+	// Capture specific keys when they are set by downstream handlers
+	switch key {
+	case ContextKeyUserID:
+		if userID, ok := val.(string); ok {
+			c.enricher.userID = userID
+		}
+	case ContextKeyRequestID:
+		if requestID, ok := val.(string); ok {
+			c.enricher.requestID = requestID
+		}
+	}
+	return val
 }
 
 // extractOperation extracts the S3 operation name from the request.

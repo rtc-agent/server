@@ -159,6 +159,12 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 		return
 	}
 
+	// Check rate limit before proceeding
+	if err := h.oss3UC.CheckRateLimitOrReject(r.Context(), userID, ExtractRequestIDFromContext(r.Context())); err != nil {
+		WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
+		return
+	}
+
 	// Instant upload check: Since the key contains MD5 (format: user-{userID}/{md5-hash}.{ext}),
 	// the same key implies the same content. Check DB and MinIO consistency:
 	// 1. Both DB and MinIO have the file -> instant upload hit, return success

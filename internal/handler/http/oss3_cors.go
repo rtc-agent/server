@@ -1,8 +1,12 @@
 package httphandler
 
 import (
+	"context"
 	"net/http"
 	"strings"
+
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // NewOSS3CORSMiddleware creates a CORS middleware for the OSS3 S3 endpoint.
@@ -13,18 +17,33 @@ import (
 //   - Exposes S3-specific response headers (ETag, x-amz-request-id)
 //   - Handles OPTIONS preflight for presigned URL uploads from browsers
 //
-// When origins is empty or contains "*", all origins are allowed.
+// When origins is empty, all origins are denied (secure default).
+// When origins contains "*", all origins are allowed (with warning log).
 func NewOSS3CORSMiddleware(origins []string) func(http.Handler) http.Handler {
+	// Log warning if wildcard is used
+	if containsOSS3Wildcard(origins) {
+		logger.Warn(context.Background(), "CORS allows all origins - this is insecure for production",
+			zap.Strings("allowed_origins", origins))
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			allowOrigin := "*"
-			if len(origins) > 0 && !containsOSS3Wildcard(origins) {
-				if !isOSS3OriginAllowed(origin, origins) {
-					w.WriteHeader(http.StatusForbidden)
-					return
-				}
+
+			// Empty origins list means deny all CORS requests
+			if len(origins) == 0 {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+
+			allowOrigin := ""
+			if containsOSS3Wildcard(origins) {
+				allowOrigin = "*"
+			} else if isOSS3OriginAllowed(origin, origins) {
 				allowOrigin = origin
+			} else {
+				w.WriteHeader(http.StatusForbidden)
+				return
 			}
 
 			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
