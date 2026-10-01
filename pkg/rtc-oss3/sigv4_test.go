@@ -3,6 +3,7 @@ package rtcoss3
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -175,6 +176,81 @@ func TestE2ESignatureVerification(t *testing.T) {
 		err := VerifySigV4Request(req, secretKey, region, service)
 		if err == nil {
 			t.Error("Wrong secret key should fail verification")
+		}
+	})
+}
+
+// TestSignS3Request tests the exported SignS3Request helper.
+// It signs a request and then verifies it with VerifySigV4Request.
+func TestSignS3Request(t *testing.T) {
+	secretKey := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	accessKey := "AKIAIOSFODNN7EXAMPLE"
+	region := "us-east-1"
+
+	t.Run("GET request", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/rtc-agent/user-123/test.txt", nil)
+		req.Host = "localhost:9000"
+
+		SignS3Request(req, accessKey, secretKey, "", region)
+
+		// Verify the signed request
+		err := VerifySigV4Request(req, secretKey, region, "s3")
+		if err != nil {
+			t.Errorf("SignS3Request produced invalid signature: %v", err)
+		}
+
+		// Verify Authorization header is set
+		auth := req.Header.Get("Authorization")
+		if auth == "" {
+			t.Error("Authorization header not set")
+		}
+		if !strings.HasPrefix(auth, "AWS4-HMAC-SHA256") {
+			t.Errorf("Authorization header should start with AWS4-HMAC-SHA256, got: %s", auth)
+		}
+
+		// Verify required headers are set
+		if req.Header.Get("X-Amz-Date") == "" {
+			t.Error("X-Amz-Date header not set")
+		}
+		if req.Header.Get("X-Amz-Content-Sha256") != "UNSIGNED-PAYLOAD" {
+			t.Errorf("X-Amz-Content-Sha256 should be UNSIGNED-PAYLOAD, got: %s", req.Header.Get("X-Amz-Content-Sha256"))
+		}
+	})
+
+	t.Run("PUT request with body", func(t *testing.T) {
+		req, _ := http.NewRequest("PUT", "/rtc-agent/user-123/test.txt", strings.NewReader("hello world"))
+		req.Host = "localhost:9000"
+
+		SignS3Request(req, accessKey, secretKey, "", region)
+
+		err := VerifySigV4Request(req, secretKey, region, "s3")
+		if err != nil {
+			t.Errorf("SignS3Request produced invalid signature for PUT: %v", err)
+		}
+	})
+
+	t.Run("POST with query params", func(t *testing.T) {
+		req, _ := http.NewRequest("POST", "/rtc-agent?delete", nil)
+		req.Host = "localhost:9000"
+
+		SignS3Request(req, accessKey, secretKey, "", region)
+
+		err := VerifySigV4Request(req, secretKey, region, "s3")
+		if err != nil {
+			t.Errorf("SignS3Request produced invalid signature for POST with query: %v", err)
+		}
+	})
+
+	t.Run("wrong secret key fails verification", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/rtc-agent/user-123/test.txt", nil)
+		req.Host = "localhost:9000"
+
+		SignS3Request(req, accessKey, secretKey, "", region)
+
+		// Verify with wrong secret key should fail
+		err := VerifySigV4Request(req, "wrong-secret-key", region, "s3")
+		if err == nil {
+			t.Error("Verification with wrong secret key should fail")
 		}
 	})
 }

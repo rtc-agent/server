@@ -100,7 +100,7 @@ var (
 	ErrAccessDenied         = &S3Error{"AccessDenied", "Access Denied", http.StatusForbidden}
 	ErrBucketNotFound       = &S3Error{"NoSuchBucket", "The specified bucket does not exist", http.StatusNotFound}
 	ErrKeyNotFound          = &S3Error{"NoSuchKey", "The specified key does not exist", http.StatusNotFound}
-	ErrEntityTooLarge       = &S3Error{"EntityTooLarge", "Your proposed upload exceeds the maximum allowed size", http.StatusBadRequest}
+	ErrEntityTooLarge       = &S3Error{"EntityTooLarge", "Your proposed upload exceeds the maximum allowed size", http.StatusRequestEntityTooLarge}
 	ErrEntityTooSmall       = &S3Error{"EntityTooSmall", "Your proposed upload is smaller than the minimum allowed size", http.StatusBadRequest}
 	ErrRequestQuotaExceeded = &S3Error{"RequestQuotaExceeded", "You have exceeded your storage quota", http.StatusForbidden}
 	ErrSlowDown             = &S3Error{"SlowDown", "Please reduce your request rate", http.StatusTooManyRequests}
@@ -131,5 +131,6 @@ var (
 
 	// Additional errors for 1E-4 multipart operations
 	ErrInvalidPartNumber = &S3Error{"InvalidPartNumber", "The specified part number is not valid", http.StatusBadRequest}
+	ErrInvalidPart       = &S3Error{"InvalidPart", "One or more of the specified parts could not be found. The part may not have been uploaded, or the specified entity tag may not match the part's entity tag", http.StatusBadRequest}
 	ErrMalformedXML      = &S3Error{"MalformedXML", "The XML you provided was not well-formed or did not validate against our published schema", http.StatusBadRequest}
 )

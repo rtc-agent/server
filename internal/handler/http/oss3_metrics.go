@@ -15,22 +15,22 @@ import (
 // These metrics are separate from the main HTTP metrics (http_requests_total, etc.)
 // to allow OSS3-specific alerting and dashboarding.
 var (
-	// oss3UploadBytesTotal tracks total bytes uploaded per user/bucket.
+	// oss3UploadBytesTotal tracks total bytes uploaded per bucket.
 	oss3UploadBytesTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "rtc_oss3_upload_bytes_total",
 			Help: "Total bytes uploaded to OSS3",
 		},
-		[]string{"user_id", "bucket"},
+		[]string{"bucket"},
 	)
 
-	// oss3DownloadBytesTotal tracks total bytes downloaded per user/bucket.
+	// oss3DownloadBytesTotal tracks total bytes downloaded per bucket.
 	oss3DownloadBytesTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "rtc_oss3_download_bytes_total",
 			Help: "Total bytes downloaded from OSS3",
 		},
-		[]string{"user_id", "bucket"},
+		[]string{"bucket"},
 	)
 
 	// oss3RequestsTotal tracks total S3 requests by operation and status.
@@ -52,22 +52,22 @@ var (
 		[]string{"operation"},
 	)
 
-	// oss3MultipartUploadsActive tracks active multipart uploads per user.
+	// oss3MultipartUploadsActive tracks active multipart uploads.
 	oss3MultipartUploadsActive = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "rtc_oss3_multipart_uploads_active",
 			Help: "Active multipart uploads",
 		},
-		[]string{"user_id"},
+		[]string{},
 	)
 
-	// oss3QuotaUsageBytes tracks current quota usage per user.
+	// oss3QuotaUsageBytes tracks current quota usage.
 	oss3QuotaUsageBytes = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "rtc_oss3_quota_usage_bytes",
-			Help: "Current quota usage per user in bytes",
+			Help: "Current quota usage in bytes",
 		},
-		[]string{"user_id"},
+		[]string{},
 	)
 
 	// oss3BackendErrorsTotal tracks backend errors by operation and error type.
@@ -116,7 +116,7 @@ var (
 			Name: "rtc_oss3_orphaned_record_total",
 			Help: "Total orphaned records (backend deleted, DB delete failed)",
 		},
-		[]string{"operation", "user_id"}, // operation: "delete_failed"
+		[]string{"operation"}, // operation: "delete_failed", "copy_failed"
 	)
 
 	// oss3OrphanedQuotaCommitTotal tracks quota commits that failed after all retries
@@ -126,7 +126,7 @@ var (
 			Name: "rtc_oss3_orphaned_quota_commits_total",
 			Help: "Total quota commits that failed after retries (upload succeeded, reconciliation needed)",
 		},
-		[]string{"user_id"},
+		[]string{},
 	)
 
 	// oss3QuotaDriftBytes tracks the absolute drift between Redis quota counter
@@ -155,8 +155,8 @@ var (
 // Captured metrics:
 //   - rtc_oss3_requests_total          request count (grouped by operation/status)
 //   - rtc_oss3_request_duration_seconds request latency distribution
-//   - rtc_oss3_upload_bytes_total       upload bytes per user/bucket
-//   - rtc_oss3_download_bytes_total     download bytes per user/bucket
+//   - rtc_oss3_upload_bytes_total       upload bytes per bucket
+//   - rtc_oss3_download_bytes_total     download bytes per bucket
 func NewOSS3MetricsMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -181,33 +181,32 @@ func NewOSS3MetricsMiddleware() func(http.Handler) http.Handler {
 			oss3RequestDuration.WithLabelValues(operation).Observe(duration)
 
 			// Record upload/download bytes
-			userID := ExtractUserIDFromContext(r.Context())
 			bucket, _, _ := parseS3Path(r.URL.Path)
 
 			if r.Method == http.MethodPut && wrapped.Code >= 200 && wrapped.Code < 300 {
-				if userID != "" && bucket != "" {
-					oss3UploadBytesTotal.WithLabelValues(userID, bucket).Add(float64(wrapped.Written))
+				if bucket != "" {
+					oss3UploadBytesTotal.WithLabelValues(bucket).Add(float64(wrapped.Written))
 				}
 			}
 			if r.Method == http.MethodGet && wrapped.Code >= 200 && wrapped.Code < 300 {
-				if userID != "" && bucket != "" {
-					oss3DownloadBytesTotal.WithLabelValues(userID, bucket).Add(float64(wrapped.Written))
+				if bucket != "" {
+					oss3DownloadBytesTotal.WithLabelValues(bucket).Add(float64(wrapped.Written))
 				}
 			}
 		})
 	}
 }
 
-// RecordMultipartUploadStart increments the active multipart uploads gauge for the given user.
+// RecordMultipartUploadStart increments the active multipart uploads gauge.
 // Called when a CreateMultipartUpload request succeeds.
-func RecordMultipartUploadStart(userID string) {
-	oss3MultipartUploadsActive.WithLabelValues(userID).Inc()
+func RecordMultipartUploadStart() {
+	oss3MultipartUploadsActive.WithLabelValues().Inc()
 }
 
-// RecordMultipartUploadEnd decrements the active multipart uploads gauge for the given user.
+// RecordMultipartUploadEnd decrements the active multipart uploads gauge.
 // Called when a multipart upload is completed or aborted.
-func RecordMultipartUploadEnd(userID string) {
-	oss3MultipartUploadsActive.WithLabelValues(userID).Dec()
+func RecordMultipartUploadEnd() {
+	oss3MultipartUploadsActive.WithLabelValues().Dec()
 }
 
 // RecordBackendError increments the backend error counter for the given operation and error type.
@@ -216,10 +215,10 @@ func RecordBackendError(operation, errorType string) {
 	oss3BackendErrorsTotal.WithLabelValues(operation, errorType).Inc()
 }
 
-// RecordQuotaUsage sets the current quota usage gauge for the given user.
+// RecordQuotaUsage sets the current quota usage gauge.
 // Called after reconciliation to reflect the corrected quota value.
-func RecordQuotaUsage(userID string, bytes int64) {
-	oss3QuotaUsageBytes.WithLabelValues(userID).Set(float64(bytes))
+func RecordQuotaUsage(bytes int64) {
+	oss3QuotaUsageBytes.WithLabelValues().Set(float64(bytes))
 }
 
 // RecordInstantUpload increments the instant upload hit counter for the given type.
@@ -242,17 +241,17 @@ func RecordConsistencyViolation(violationType string) {
 	oss3ConsistencyViolationTotal.WithLabelValues(violationType).Inc()
 }
 
-// RecordOrphanedRecord increments the orphaned record counter for the given operation and user.
+// RecordOrphanedRecord increments the orphaned record counter for the given operation.
 // Called when backend delete succeeds but DB delete fails after all retries.
-func RecordOrphanedRecord(operation, userID string) {
-	oss3OrphanedRecordTotal.WithLabelValues(operation, userID).Inc()
+func RecordOrphanedRecord(operation string) {
+	oss3OrphanedRecordTotal.WithLabelValues(operation).Inc()
 }
 
-// RecordOrphanedQuotaCommit increments the orphaned quota commit counter for the given user.
+// RecordOrphanedQuotaCommit increments the orphaned quota commit counter.
 // Called when quota commit fails after all retries while the upload succeeded.
 // Reconciliation will eventually fix the drift.
-func RecordOrphanedQuotaCommit(userID string) {
-	oss3OrphanedQuotaCommitTotal.WithLabelValues(userID).Inc()
+func RecordOrphanedQuotaCommit() {
+	oss3OrphanedQuotaCommitTotal.WithLabelValues().Inc()
 }
 
 // RecordQuotaCommitRetry increments the quota commit retry counter.

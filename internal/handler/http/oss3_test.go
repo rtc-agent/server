@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"io"
+	"sort"
 	"testing"
 	"time"
 
@@ -152,8 +155,11 @@ func (m *mockBackend) HeadObject(ctx context.Context, bucket, key string) (rtcos
 func (m *mockBackend) ListObjects(ctx context.Context, bucket string, opts rtcoss3.ListObjectsOptions) (*rtcoss3.ListObjectsResult, error) {
 	result := &rtcoss3.ListObjectsResult{}
 
+	// Collect all matching keys first, then sort for deterministic ordering
+	var matchingKeys []string
 	seenPrefixes := make(map[string]bool)
-	for fullKey, meta := range m.meta {
+
+	for fullKey := range m.meta {
 		if len(fullKey) <= len(bucket) || fullKey[:len(bucket)+1] != bucket+"/" {
 			continue
 		}
@@ -176,12 +182,66 @@ func (m *mockBackend) ListObjects(ctx context.Context, bucket string, opts rtcos
 			}
 		}
 
+		matchingKeys = append(matchingKeys, key)
+	}
+
+	// Sort keys for deterministic pagination
+	sort.Strings(matchingKeys)
+
+	// Apply marker: skip keys <= marker
+	startIdx := 0
+	if opts.Marker != "" {
+		for i, key := range matchingKeys {
+			if key > opts.Marker {
+				startIdx = i
+				break
+			}
+			startIdx = i + 1
+		}
+	}
+
+	// Apply continuation token (V2 pagination): decode as marker
+	if opts.ContinuationToken != "" {
+		// For mock, treat continuation token as a marker
+		decoded, err := base64.StdEncoding.DecodeString(opts.ContinuationToken)
+		if err != nil {
+			return nil, fmt.Errorf("invalid continuation token")
+		}
+		tokenMarker := string(decoded)
+		for i, key := range matchingKeys {
+			if key > tokenMarker {
+				startIdx = i
+				break
+			}
+			startIdx = i + 1
+		}
+	}
+
+	// Collect results with MaxKeys limit
+	maxKeys := opts.MaxKeys
+	if maxKeys <= 0 {
+		maxKeys = 1000 // default
+	}
+
+	for i := startIdx; i < len(matchingKeys); i++ {
+		key := matchingKeys[i]
+		fullKey := bucket + "/" + key
+		meta := m.meta[fullKey]
 		result.Objects = append(result.Objects, meta)
-		if opts.MaxKeys > 0 && len(result.Objects) >= opts.MaxKeys {
-			result.IsTruncated = true
+
+		if len(result.Objects) >= maxKeys {
+			if i+1 < len(matchingKeys) {
+				result.IsTruncated = true
+				result.NextMarker = key
+				// Encode next marker as continuation token for V2
+				result.NextContinuationToken = base64.StdEncoding.EncodeToString([]byte(key))
+				result.NextContinuationToken = base64.StdEncoding.EncodeToString([]byte(key))
+			}
 			break
 		}
 	}
+
+	result.KeyCount = len(result.Objects)
 
 	return result, nil
 }

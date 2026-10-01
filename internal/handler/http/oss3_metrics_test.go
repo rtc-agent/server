@@ -83,8 +83,8 @@ func TestExtractOperationFromMetrics(t *testing.T) {
 
 func TestRecordMultipartUploadStartEnd(t *testing.T) {
 	// These should not panic
-	RecordMultipartUploadStart("user-123")
-	RecordMultipartUploadEnd("user-123")
+	RecordMultipartUploadStart()
+	RecordMultipartUploadEnd()
 }
 
 func TestRecordBackendError(t *testing.T) {
@@ -94,5 +94,5 @@ func TestRecordBackendError(t *testing.T) {
 
 func TestRecordQuotaUsage(t *testing.T) {
 	// Should not panic
-	RecordQuotaUsage("user-123", 1024*1024)
+	RecordQuotaUsage(1024 * 1024)
 }

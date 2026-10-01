@@ -435,3 +435,45 @@ func isHexDigest(s string) bool {
 	}
 	return true
 }
+
+// SignS3Request signs an HTTP request with AWS SigV4 using the provided credentials.
+// It modifies the request in place by setting X-Amz-Date, X-Amz-Content-Sha256,
+// and Authorization headers. If sessionToken is non-empty, X-Amz-Security-Token
+// is also set and included in the signed headers.
+//
+// This is exported for use in integration tests and client SDKs.
+func SignS3Request(r *http.Request, accessKeyID, secretAccessKey, sessionToken, region string) {
+	now := time.Now().UTC()
+	date := now.Format("20060102")
+	amzDate := now.Format("20060102T150405Z")
+
+	r.Header.Set("X-Amz-Date", amzDate)
+	r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+
+	// Ensure host is set for canonical request construction
+	if r.Host == "" && r.URL != nil && r.URL.Host != "" {
+		r.Host = r.URL.Host
+	}
+
+	scope := date + "/" + region + "/s3/aws4_request"
+	signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
+
+	// Add session token for temporary credentials
+	if sessionToken != "" {
+		r.Header.Set("X-Amz-Security-Token", sessionToken)
+		signedHeaders = append(signedHeaders, "x-amz-security-token")
+		sort.Strings(signedHeaders)
+	}
+
+	canonicalReq := buildCanonicalRequest(r, signedHeaders, "UNSIGNED-PAYLOAD")
+	stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
+	signingKey := deriveSigningKey(secretAccessKey, date, region, "s3")
+	signature := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
+
+	signedHeadersStr := strings.Join(signedHeaders, ";")
+	authHeader := fmt.Sprintf(
+		"AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+		accessKeyID, scope, signedHeadersStr, signature,
+	)
+	r.Header.Set("Authorization", authHeader)
+}

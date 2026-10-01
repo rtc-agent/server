@@ -325,6 +325,11 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		span.RecordError(err)
+		// Check if the error is due to request body being too large
+		if strings.Contains(err.Error(), "http: request body too large") {
+			WriteS3Error(w, rtcoss3.ErrEntityTooLarge, r.URL.Path, "")
+			return
+		}
 		RecordBackendError("PutObject", err.Error())
 		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return // uploadSucceeded=false -> defer releases quota
@@ -343,7 +348,7 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 				zap.String("quota_request_id", quotaRequestID),
 				zap.Int64("amount", contentLength),
 				zap.Error(err))
-			RecordOrphanedQuotaCommit(userID)
+			RecordOrphanedQuotaCommit()
 		}
 	}
 
@@ -721,7 +726,7 @@ func (h *OSS3Handler) handleCopyObject(
 				zap.String("quota_request_id", quotaRequestID),
 				zap.Int64("amount", srcMeta.Size),
 				zap.Error(commitErr))
-			RecordOrphanedQuotaCommit(userID)
+			RecordOrphanedQuotaCommit()
 		}
 	}
 
@@ -753,7 +758,7 @@ func (h *OSS3Handler) handleCopyObject(
 				zap.String("dst_bucket", dstBucket),
 				zap.String("dst_key", dstKey),
 				zap.Error(retryErr))
-			RecordOrphanedRecord("copy_failed", userID)
+			RecordOrphanedRecord("copy_failed")
 		}
 	}
 
@@ -880,6 +885,11 @@ func (h *OSS3Handler) handleDeleteObjects(w http.ResponseWriter, r *http.Request
 
 	var req deleteRequest
 	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Check if the error is due to request body being too large
+		if strings.Contains(err.Error(), "http: request body too large") {
+			WriteS3Error(w, rtcoss3.ErrEntityTooLarge, r.URL.Path, "")
+			return
+		}
 		WriteS3Error(w, rtcoss3.ErrMalformedXML, r.URL.Path, "")
 		return
 	}
@@ -1235,7 +1245,7 @@ func (h *OSS3Handler) deleteFileRecordWithRetry(ctx context.Context, userID, key
 			zap.String("user_id", userID),
 			zap.String("key", key),
 			zap.Error(err))
-		RecordOrphanedRecord("delete_failed", userID)
+		RecordOrphanedRecord("delete_failed")
 	}
 }
 

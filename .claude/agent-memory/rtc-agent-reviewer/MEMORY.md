@@ -1,0 +1,1 @@
+- [OSS3 Strict Review 2026-10](project_oss3_review.md) -- 11 issues fixed: goroutine leak, quota cleanup, retry dedup, ListParts pagination, SigV4 parsing, cache logging

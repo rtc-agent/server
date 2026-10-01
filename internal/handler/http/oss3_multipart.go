@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -104,7 +105,7 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(
 			zap.Error(err))
 	}
 
-	RecordMultipartUploadStart(userID)
+	RecordMultipartUploadStart()
 
 	// Return XML response per S3 spec
 	type initiateResult struct {
@@ -162,6 +163,21 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 		return
 	}
 
+	// Check if part with this number already exists to prevent data overwrite
+	existingParts, err := h.oss3UC.Backend().ListParts(r.Context(), bucket, key, uploadID)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
+		return
+	}
+	for _, p := range existingParts {
+		if p.PartNumber == partNumber {
+			WriteS3Error(w, rtcoss3.ErrInvalidPart, r.URL.Path, "")
+			return
+		}
+	}
+
 	contentLength := r.ContentLength
 	if contentLength < 0 {
 		WriteS3Error(w, rtcoss3.ErrMissingContentLength, r.URL.Path, "")
@@ -213,7 +229,7 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 				zap.Int("part_number", partNumber),
 				zap.Int64("amount", contentLength),
 				zap.Error(err))
-			RecordOrphanedQuotaCommit(userID)
+			RecordOrphanedQuotaCommit()
 		}
 		quotaCommitted = true // Mark as committed regardless of success — avoid double-release
 	} else {
@@ -271,6 +287,11 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 
 	var req completeRequest
 	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Check if the error is due to request body being too large
+		if strings.Contains(err.Error(), "http: request body too large") {
+			WriteS3Error(w, rtcoss3.ErrEntityTooLarge, r.URL.Path, "")
+			return
+		}
 		WriteS3Error(w, rtcoss3.ErrMalformedXML, r.URL.Path, "")
 		return
 	}
@@ -366,7 +387,7 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 	// Return XML response per S3 spec
 	writeCompleteMultipartResult(w, bucket, key, etag)
 
-	RecordMultipartUploadEnd(userID)
+	RecordMultipartUploadEnd()
 }
 
 // writeCompleteMultipartResult writes the CompleteMultipartUpload XML response.
@@ -437,7 +458,7 @@ func (h *OSS3MultipartHandler) handleAbortMultipartUpload(
 			zap.Error(err))
 	}
 
-	RecordMultipartUploadEnd(userID)
+	RecordMultipartUploadEnd()
 
 	w.WriteHeader(http.StatusNoContent)
 }
