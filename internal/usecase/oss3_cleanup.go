@@ -96,6 +96,22 @@ func (uc *OSS3Usecase) RunCleanup(ctx context.Context) error {
 			zap.Int("count", credCount))
 	}
 
+	// Reconcile quota: compare DB file sums with Redis counters and fix drift.
+	// This is Layer 2 defense — it compensates for commit failures that survive
+	// Layer 1 retries. Runs under a distributed lock (single node at a time).
+	reconcileResult, reconcileErr := uc.ReconcileQuota(ctx)
+	if reconcileErr != nil {
+		// Log but do not fail the entire cleanup cycle — reconciliation is
+		// best-effort and will retry on the next cycle.
+		logger.Error(ctx, "cleanup: quota reconciliation failed",
+			zap.Error(reconcileErr))
+	} else if reconcileResult != nil && reconcileResult.UsersAdjusted > 0 {
+		logger.Info(ctx, "cleanup: quota reconciliation adjusted drift",
+			zap.Int("users_checked", reconcileResult.UsersChecked),
+			zap.Int("users_adjusted", reconcileResult.UsersAdjusted),
+			zap.Int64("total_drift_bytes", reconcileResult.TotalDriftBytes))
+	}
+
 	return nil
 }
 

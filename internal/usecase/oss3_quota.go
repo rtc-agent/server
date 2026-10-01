@@ -130,10 +130,14 @@ func (uc *OSS3Usecase) AdjustQuota(ctx context.Context, userID string, deltaByte
 
 // GetMultipartUploadTotalSize calculates the total size of all parts for a multipart upload.
 // Used by instant upload path to release quota committed during UploadPart.
+// Returns (0, nil) when the upload record does not exist.
 func (uc *OSS3Usecase) GetMultipartUploadTotalSize(ctx context.Context, uploadID string) (int64, error) {
 	upload, err := uc.uploadRepo.GetByUploadID(ctx, uploadID)
 	if err != nil {
 		return 0, fmt.Errorf("get upload record: %w", err)
+	}
+	if upload == nil {
+		return 0, nil
 	}
 
 	parts, err := uc.uploadRepo.ListParts(ctx, upload.ID)

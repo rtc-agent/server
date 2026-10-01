@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -17,6 +18,7 @@ type MultipartUploadRepo interface {
 	// GetByID looks up a multipart upload by ID.
 	GetByID(ctx context.Context, id uuid.UUID) (*model.MultipartUpload, error)
 	// GetByUploadID looks up a multipart upload by upload_id (MinIO upload ID).
+	// Returns (nil, nil) when the record is not found.
 	GetByUploadID(ctx context.Context, uploadID string) (*model.MultipartUpload, error)
 	// UpdateStatus updates the upload status and uploaded parts count.
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, uploadedParts int) error
@@ -62,10 +64,17 @@ func (r *multipartUploadRepo) GetByID(ctx context.Context, id uuid.UUID) (*model
 	return &upload, nil
 }
 
+// GetByUploadID looks up a multipart upload by upload_id (MinIO upload ID).
+// Returns (nil, nil) when the record is not found.
 func (r *multipartUploadRepo) GetByUploadID(ctx context.Context, uploadID string) (*model.MultipartUpload, error) {
 	var upload model.MultipartUpload
-	err := DBFromContext(ctx, r.db).WithContext(ctx).Where("upload_id = ?", uploadID).First(&upload).Error
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("upload_id = ?", uploadID).
+		First(&upload).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("get multipart upload by upload_id %s: %w", uploadID, err)
 	}
 	return &upload, nil

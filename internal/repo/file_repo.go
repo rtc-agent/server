@@ -29,6 +29,13 @@ type FileRepo interface {
 	// Used by ReconcileQuota (1H-3 R7 M2) to compare DB truth with Redis counter.
 	// SQL: SELECT user_id, COALESCE(SUM(size), 0) FROM files GROUP BY user_id
 	SumSizeByUserGrouped(ctx context.Context) (map[string]int64, error)
+	// SumSizeByUserGroupedPaginated returns total file size grouped by user_id,
+	// paginated by user_id cursor. Returns (map, nextCursor, error).
+	// An empty cursor starts from the beginning; an empty nextCursor in the result
+	// means no more pages.
+	// SQL: SELECT user_id, COALESCE(SUM(size), 0) as total
+	//      FROM files WHERE user_id > ? GROUP BY user_id ORDER BY user_id LIMIT ?
+	SumSizeByUserGroupedPaginated(ctx context.Context, cursor string, limit int) (map[string]int64, string, error)
 }
 
 type fileRepo struct {
@@ -133,4 +140,35 @@ func (r *fileRepo) SumSizeByUserGrouped(ctx context.Context) (map[string]int64, 
 		m[r.UserID] = r.Total
 	}
 	return m, nil
+}
+
+func (r *fileRepo) SumSizeByUserGroupedPaginated(ctx context.Context, cursor string, limit int) (map[string]int64, string, error) {
+	type result struct {
+		UserID string
+		Total  int64
+	}
+	var results []result
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.File{}).
+		Where("user_id > ?", cursor).
+		Select("user_id, COALESCE(SUM(size), 0) as total").
+		Group("user_id").
+		Order("user_id").
+		Limit(limit).
+		Scan(&results).Error; err != nil {
+		return nil, "", fmt.Errorf("sum file size grouped by user paginated: %w", err)
+	}
+
+	m := make(map[string]int64, len(results))
+	var nextCursor string
+	for _, r := range results {
+		m[r.UserID] = r.Total
+		nextCursor = r.UserID // last row becomes the next cursor
+	}
+
+	// If we got fewer rows than the limit, there are no more pages.
+	if len(results) < limit {
+		nextCursor = ""
+	}
+	return m, nextCursor, nil
 }
