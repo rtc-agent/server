@@ -889,7 +889,7 @@ func mapBackendError(err error) *rtcoss3.S3Error {
 		return rtcoss3.ErrAccessDenied
 	case errors.Is(err, rtcoss3.ErrBackendBucketNotFound):
 		return rtcoss3.ErrBucketNotFound
-	case errors.Is(err, rtcoss3.ErrInsufficientStorage):
+	case errors.Is(err, rtcoss3.ErrBackendInsufficientStorage):
 		return rtcoss3.ErrInsufficientStorage
 	default:
 		return rtcoss3.ErrInternalError

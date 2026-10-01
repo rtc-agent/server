@@ -253,7 +253,7 @@ func TestMapBackendError(t *testing.T) {
 		},
 		{
 			name:     "insufficient storage error",
-			err:      rtcoss3.ErrInsufficientStorage,
+			err:      rtcoss3.ErrBackendInsufficientStorage,
 			wantCode: "InsufficientStorage",
 		},
 		{
