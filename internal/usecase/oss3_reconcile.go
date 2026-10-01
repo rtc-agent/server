@@ -105,6 +105,18 @@ func (uc *OSS3Usecase) setRedisQuota(ctx context.Context, userID string, value i
 	return nil
 }
 
+// hasPendingQuotaReservations checks if a user has any pending quota reservations.
+// Pending reservations are stored with keys matching pattern "oss3:quota:pending:{userID}:*".
+// Returns true if any pending reservations exist, false otherwise.
+func (uc *OSS3Usecase) hasPendingQuotaReservations(ctx context.Context, userID string) (bool, error) {
+	pattern := cache.PrefixOSS3QuotaPending + userID + ":*"
+	iter := uc.redis.Scan(ctx, 0, pattern, 100).Iterator()
+	if iter.Err() != nil {
+		return false, fmt.Errorf("scan pending reservations for user %s: %w", userID, iter.Err())
+	}
+	return iter.Next(ctx), nil
+}
+
 // ReconcileQuota compares DB file sums against Redis quota counters and adjusts
 // any drift. This is the Layer 2 defense against quota counter drift caused by
 // commit failures that survive Layer 1 retries.
@@ -148,6 +160,23 @@ func (uc *OSS3Usecase) ReconcileQuota(ctx context.Context) (*ReconcileResult, er
 
 		for userID, dbSum := range page {
 			result.UsersChecked++
+
+			// Check for pending reservations before adjusting quota.
+			// Pending reservations indicate in-flight uploads; adjusting now could
+			// cause double-counting or lost reservations.
+			hasPending, err := uc.hasPendingQuotaReservations(ctx, userID)
+			if err != nil {
+				logger.Warn(ctx, "reconcile: failed to check pending reservations, skipping user",
+					zap.String("user_id", userID),
+					zap.Error(err))
+				continue
+			}
+			if hasPending {
+				logger.Debug(ctx, "reconcile: user has pending reservations, skipping adjustment",
+					zap.String("user_id", userID),
+					zap.Int64("db_sum", dbSum))
+				continue
+			}
 
 			redisVal, err := uc.getRedisQuota(ctx, userID)
 			if err != nil {

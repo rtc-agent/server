@@ -13,6 +13,9 @@ import (
 	"go.uber.org/zap"
 )
 
+// contextKeyOperation is the context key for storing the S3 operation name.
+type contextKeyOperation struct{}
+
 // AccessLogMiddleware logs S3 requests with structured fields.
 type AccessLogMiddleware struct {
 	oss3UC *usecase.OSS3Usecase
@@ -86,9 +89,11 @@ func (m *AccessLogMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	operation := extractOperation(r)
 
 	// Wrap the request to capture context enrichment from SigV4 middleware
+	// and store the operation in context for downstream handlers
 	originalContext := r.Context()
+	ctxWithOperation := context.WithValue(originalContext, contextKeyOperation{}, operation)
 	wrappedReq := r.WithContext(&contextCapturer{
-		Context:  originalContext,
+		Context:  ctxWithOperation,
 		enricher: enricher,
 	})
 
@@ -148,8 +153,8 @@ func (c *contextCapturer) Value(key interface{}) interface{} {
 
 // extractOperation extracts the S3 operation name from the request.
 // This is a pure function — no side effects on the request.
-// The operation name is computed on each call; the cost is negligible
-// (a few string comparisons) and avoids the complexity of context caching.
+// The operation is computed once by AccessLogMiddleware and cached in context
+// via contextKeyOperation for potential future use by downstream handlers.
 func extractOperation(r *http.Request) string {
 	_, key, _ := parseS3Path(r.URL.Path)
 	q := r.URL.Query()

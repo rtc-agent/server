@@ -26,16 +26,26 @@ var (
 	//	ARGV[3] = pendingTTL  (seconds, e.g. 300)
 	//
 	// Returns: 1 on success, 0 if quota exceeded.
+	// Idempotent: if pending key already exists with same amount, returns 1 without re-reserving.
 	//
 	// Use case: instant upload path reserves quota before verifying file existence;
 	// if upload fails, caller invokes luaQuotaRollback to release reservation.
 	luaQuotaReserve = `
 local current = tonumber(redis.call('GET', KEYS[1]) or '0')
-local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
+local existingPending = redis.call('GET', KEYS[2])
 local amount  = tonumber(ARGV[1])
 local maxQ    = tonumber(ARGV[2])
 local ttl     = tonumber(ARGV[3])
 
+-- Idempotency check: if pending key exists with same amount, return success
+if existingPending then
+    local existingAmount = tonumber(existingPending)
+    if existingAmount == amount then
+        return 1
+    end
+end
+
+local pending = tonumber(existingPending or '0')
 if (current + pending + amount) > maxQ then
     return 0
 end
