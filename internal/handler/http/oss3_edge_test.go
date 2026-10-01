@@ -611,9 +611,8 @@ func TestQuotaReservation_Concurrent(t *testing.T) {
 // TestPutObject_ZeroByte_Integration tests zero-byte file upload end-to-end.
 // Requires: RTC_OSS3_REFRESH_TOKEN, running server, Redis, MinIO.
 func TestPutObject_ZeroByte_Integration(t *testing.T) {
-	creds, serverURL, bucket := setupIntegrationTest(t)
+	creds, userID, serverURL, bucket := setupIntegrationTest(t)
 
-	userID := testUserID()
 	key := generateValidKey(userID, "txt")
 
 	// Upload zero-byte file
@@ -641,9 +640,8 @@ func TestPutObject_ZeroByte_Integration(t *testing.T) {
 // parts is rejected with an error.
 // Requires: RTC_OSS3_REFRESH_TOKEN, running server, Redis, MinIO.
 func TestMultipartUpload_MaxParts_Integration(t *testing.T) {
-	creds, serverURL, bucket := setupIntegrationTest(t)
+	creds, userID, serverURL, bucket := setupIntegrationTest(t)
 
-	userID := testUserID()
 	key := generateValidKey(userID, "bin")
 
 	// Create multipart upload
@@ -703,9 +701,8 @@ func TestMultipartUpload_MaxParts_Integration(t *testing.T) {
 // TestListObjects_Pagination_Integration tests pagination with 100 objects.
 // Requires: RTC_OSS3_REFRESH_TOKEN, running server, Redis, MinIO.
 func TestListObjects_Pagination_Integration(t *testing.T) {
-	creds, serverURL, bucket := setupIntegrationTest(t)
+	creds, userID, serverURL, bucket := setupIntegrationTest(t)
 
-	userID := testUserID()
 	client := &http.Client{}
 
 	// Upload 20 objects (using fewer for faster integration test)
@@ -793,9 +790,8 @@ func TestListObjects_Pagination_Integration(t *testing.T) {
 // objects don't exist, verifying the response contains both success and error info.
 // Requires: RTC_OSS3_REFRESH_TOKEN, running server, Redis, MinIO.
 func TestDeleteObjects_PartialSuccess_Integration(t *testing.T) {
-	creds, serverURL, bucket := setupIntegrationTest(t)
+	creds, userID, serverURL, bucket := setupIntegrationTest(t)
 
-	userID := testUserID()
 	client := &http.Client{}
 
 	// Upload 5 objects

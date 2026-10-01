@@ -48,7 +48,7 @@ func newS3Client(t *testing.T, creds *s3Creds, endpointURL, region string) *s3.C
 // TestMaxBytesReader_LargeBody tests that POST /?delete with a body exceeding
 // maxXMLRequestBodySize (1MB) returns a 413 EntityTooLarge error.
 func TestMaxBytesReader_LargeBody(t *testing.T) {
-	creds, serverURL, bucket := setupIntegrationTest(t)
+	creds, userID, serverURL, bucket := setupIntegrationTest(t)
 	client := newS3Client(t, creds, serverURL, "us-east-1")
 
 	// Build a DeleteObjects request with enough keys to exceed 1MB XML body.
@@ -56,7 +56,7 @@ func TestMaxBytesReader_LargeBody(t *testing.T) {
 	// so 20000 keys → ~2MB XML.
 	objects := make([]typesObject, 20000)
 	for i := range objects {
-		objects[i] = typesObject{Key: aws.String(fmt.Sprintf("user-00000000-0000-0000-0000-000000000001/%032x.txt", i))}
+		objects[i] = typesObject{Key: aws.String(fmt.Sprintf("user-%s/%032x.txt", userID, i))}
 	}
 
 	// Marshal the XML to verify size
@@ -106,11 +106,10 @@ func TestMaxBytesReader_LargeBody(t *testing.T) {
 // TestMaxBytesReader_CompleteMultipartUpload tests that CompleteMultipartUpload
 // with oversized XML body returns EntityTooLarge error.
 func TestMaxBytesReader_CompleteMultipartUpload(t *testing.T) {
-	creds, serverURL, bucket := setupIntegrationTest(t)
+	creds, userID, serverURL, bucket := setupIntegrationTest(t)
 	client := newS3Client(t, creds, serverURL, "us-east-1")
 	ctx := context.Background()
 
-	userID := testUserID()
 	key := generateValidKey(userID, "txt")
 
 	// Step 1: Create multipart upload via SDK
@@ -192,11 +191,10 @@ func TestMaxBytesReader_CompleteMultipartUpload(t *testing.T) {
 // TestMaxBytesReader_PutObject tests that uploading a file larger than the
 // max file size quota is rejected.
 func TestMaxBytesReader_PutObject(t *testing.T) {
-	creds, serverURL, bucket := setupIntegrationTest(t)
+	creds, userID, serverURL, bucket := setupIntegrationTest(t)
 	client := newS3Client(t, creds, serverURL, "us-east-1")
 	ctx := context.Background()
 
-	userID := testUserID()
 	key := generateValidKey(userID, "txt")
 
 	// Upload a normal small file first to verify the S3 client works
@@ -285,6 +283,11 @@ func signAWSRequest(t *testing.T, req *http.Request, creds *s3Creds) {
 	hash := sha256.Sum256(bodyBytes)
 	payloadHash := fmt.Sprintf("%x", hash)
 	req.Header.Set("X-Amz-Content-Sha256", payloadHash)
+
+	// Set Content-Length explicitly for signing
+	if req.ContentLength >= 0 {
+		req.Header.Set("Content-Length", fmt.Sprintf("%d", req.ContentLength))
+	}
 
 	signer := v4.NewSigner()
 	awsCreds := aws.Credentials{

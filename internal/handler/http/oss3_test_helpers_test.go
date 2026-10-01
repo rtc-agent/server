@@ -3,12 +3,14 @@ package httphandler
 import (
 	"bytes"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,10 +96,11 @@ func getS3Credentials(t *testing.T, accessToken string, serverURL string) *s3Cre
 
 // setupIntegrationTest performs the full auth setup for integration tests:
 // 1. Get access token from refresh token
-// 2. Get temporary S3 credentials
-// Returns the S3 credentials and the configured server URL and bucket.
+// 2. Extract user ID from JWT
+// 3. Get temporary S3 credentials
+// Returns the S3 credentials, user ID, server URL, and bucket.
 // Skips the test if RTC_OSS3_REFRESH_TOKEN is not set.
-func setupIntegrationTest(t *testing.T) (creds *s3Creds, serverURL, bucket string) {
+func setupIntegrationTest(t *testing.T) (creds *s3Creds, userID, serverURL, bucket string) {
 	t.Helper()
 
 	refreshToken := os.Getenv("RTC_OSS3_REFRESH_TOKEN")
@@ -115,8 +118,37 @@ func setupIntegrationTest(t *testing.T) (creds *s3Creds, serverURL, bucket strin
 	}
 
 	accessToken := getAccessToken(t, refreshToken, serverURL)
+	userID = extractUserIDFromJWT(t, accessToken)
 	creds = getS3Credentials(t, accessToken, serverURL)
-	return creds, serverURL, bucket
+	return creds, userID, serverURL, bucket
+}
+
+// extractUserIDFromJWT extracts the user_id claim from a JWT access token.
+func extractUserIDFromJWT(t *testing.T, accessToken string) string {
+	t.Helper()
+
+	parts := strings.Split(accessToken, ".")
+	if len(parts) != 3 {
+		t.Fatalf("invalid JWT format: expected 3 parts, got %d", len(parts))
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode JWT payload: %v", err)
+	}
+
+	var claims struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatalf("unmarshal JWT claims: %v", err)
+	}
+
+	if claims.UserID == "" {
+		t.Fatal("JWT missing user_id claim")
+	}
+
+	return claims.UserID
 }
 
 // newSignedS3Request creates an S3-signed HTTP request.
