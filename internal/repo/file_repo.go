@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
@@ -45,14 +46,17 @@ func (r *fileRepo) Create(ctx context.Context, file *model.File) error {
 	// and updating other fields.
 	// Explicit column list avoids overwriting immutable fields (id, created_at,
 	// user_id, key) which UpdateAll: true would inadvertently update.
-	return DBFromContext(ctx, r.db).WithContext(ctx).
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "key"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"bucket", "size", "content_type", "e_tag", "updated_at", "deleted_at",
 			}),
 		}).
-		Create(file).Error
+		Create(file).Error; err != nil {
+		return fmt.Errorf("create file %s: %w", file.Key, err)
+	}
+	return nil
 }
 
 // GetByUserAndKey looks up a file by user_id and key.
@@ -69,34 +73,45 @@ func (r *fileRepo) GetByUserAndKey(ctx context.Context, userID string, key strin
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil // not found is not an error — see method doc
 		}
-		return nil, err
+		return nil, fmt.Errorf("get file by user %s and key %s: %w", userID, key, err)
 	}
 	return &file, nil
 }
 
 func (r *fileRepo) Update(ctx context.Context, file *model.File) error {
-	return r.db.WithContext(ctx).Save(file).Error
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).Save(file).Error; err != nil {
+		return fmt.Errorf("update file %s: %w", file.Key, err)
+	}
+	return nil
 }
 
 func (r *fileRepo) Delete(ctx context.Context, id uuid.UUID) error {
-	return r.db.WithContext(ctx).
-		Delete(&model.File{}, "id = ?", id).Error
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Delete(&model.File{}, "id = ?", id).Error; err != nil {
+		return fmt.Errorf("delete file %s: %w", id, err)
+	}
+	return nil
 }
 
 func (r *fileRepo) DeleteByUserAndKey(ctx context.Context, userID string, key string) error {
-	return r.db.WithContext(ctx).
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("user_id = ? AND key = ?", userID, key).
-		Delete(&model.File{}).Error
+		Delete(&model.File{}).Error; err != nil {
+		return fmt.Errorf("delete file by user %s and key %s: %w", userID, key, err)
+	}
+	return nil
 }
 
 func (r *fileRepo) SumSizeByUser(ctx context.Context, userID string) (int64, error) {
 	var total int64
-	err := r.db.WithContext(ctx).
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.File{}).
 		Where("user_id = ?", userID).
 		Select("COALESCE(SUM(size), 0)").
-		Scan(&total).Error
-	return total, err
+		Scan(&total).Error; err != nil {
+		return 0, fmt.Errorf("sum file size by user %s: %w", userID, err)
+	}
+	return total, nil
 }
 
 func (r *fileRepo) SumSizeByUserGrouped(ctx context.Context) (map[string]int64, error) {
@@ -105,13 +120,12 @@ func (r *fileRepo) SumSizeByUserGrouped(ctx context.Context) (map[string]int64, 
 		Total  int64
 	}
 	var results []result
-	err := r.db.WithContext(ctx).
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.File{}).
 		Select("user_id, COALESCE(SUM(size), 0) as total").
 		Group("user_id").
-		Scan(&results).Error
-	if err != nil {
-		return nil, err
+		Scan(&results).Error; err != nil {
+		return nil, fmt.Errorf("sum file size grouped by user: %w", err)
 	}
 
 	m := make(map[string]int64, len(results))

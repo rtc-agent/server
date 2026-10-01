@@ -46,6 +46,12 @@ var (
 	// ScriptExecution
 	ErrScriptExecutionNotFound = errors.New("script execution not found")
 
+	// File (OSS3)
+	ErrFileNotFound = errors.New("file not found")
+
+	// MultipartUpload (OSS3)
+	ErrMultipartUploadNotFound = errors.New("multipart upload not found")
+
 	// Permission
 	ErrPermissionDenied = errors.New("permission denied")
 )
@@ -62,5 +68,7 @@ func IsNotFound(err error) bool {
 		errors.Is(err, ErrRefreshTokenNotFound) ||
 		errors.Is(err, ErrGoalNotFound) ||
 		errors.Is(err, ErrLoopNotFound) ||
-		errors.Is(err, ErrScriptExecutionNotFound)
+		errors.Is(err, ErrScriptExecutionNotFound) ||
+		errors.Is(err, ErrFileNotFound) ||
+		errors.Is(err, ErrMultipartUploadNotFound)
 }

@@ -57,6 +57,16 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	// Validate storage quota configuration (only when storage is enabled).
+	if c.Storage.IsEnabled() {
+		if err := c.Storage.Quota.Validate(); err != nil {
+			return err
+		}
+		if err := c.Storage.RateLimit.Validate(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -119,6 +129,33 @@ func (c *WorkerConfig) Validate() error {
 		// valid
 	default:
 		return fmt.Errorf("worker.token_counter_mode (%q) must be \"heuristic\" or \"tokenizer\"", c.TokenCounterMode)
+	}
+	return nil
+}
+
+// Validate checks QuotaConfig fields.
+// All quota limits must be positive to ensure meaningful constraints.
+func (c *QuotaConfig) Validate() error {
+	if c.MaxFileSizeBytes <= 0 {
+		return fmt.Errorf("storage.quota.max_file_size_bytes must be positive, got %d", c.MaxFileSizeBytes)
+	}
+	if c.MaxUserQuotaBytes <= 0 {
+		return fmt.Errorf("storage.quota.max_user_quota_bytes must be positive, got %d", c.MaxUserQuotaBytes)
+	}
+	if c.MaxConcurrentUploads <= 0 {
+		return fmt.Errorf("storage.quota.max_concurrent_uploads must be positive, got %d", c.MaxConcurrentUploads)
+	}
+	if c.PendingTTL <= 0 {
+		return fmt.Errorf("storage.quota.pending_ttl must be positive, got %v", c.PendingTTL)
+	}
+	return nil
+}
+
+// Validate checks RateLimitConfig fields.
+// Rate limit must be positive to allow requests.
+func (c *RateLimitConfig) Validate() error {
+	if c.RequestsPerMinute <= 0 {
+		return fmt.Errorf("storage.rate_limit.requests_per_minute must be positive, got %d", c.RequestsPerMinute)
 	}
 	return nil
 }

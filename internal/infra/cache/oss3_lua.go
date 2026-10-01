@@ -15,14 +15,20 @@ const (
 )
 
 // Lua script source code.
+// All scripts follow atomic execution semantics to ensure data consistency in distributed environments.
 var (
-	// luaQuotaReserve atomically reserves quota for an upload.
-	// KEYS[1] = oss3:quota:{user_id} (current quota counter)
-	// KEYS[2] = oss3:quota:pending:{user_id}:{request_id} (pending reservation)
-	// ARGV[1] = amount (bytes to reserve)
-	// ARGV[2] = maxQuota (user quota limit)
-	// ARGV[3] = pendingTTL (seconds, e.g. 300)
-	// Returns: 1 on success, 0 if quota exceeded
+	// luaQuotaReserve atomically reserves quota for an upload (two-phase allocation).
+	//
+	//	KEYS[1] = oss3:quota:{user_id}              (current quota counter)
+	//	KEYS[2] = oss3:quota:pending:{uid}:{reqID}  (pending reservation)
+	//	ARGV[1] = amount      (bytes to reserve)
+	//	ARGV[2] = maxQuota    (user quota limit)
+	//	ARGV[3] = pendingTTL  (seconds, e.g. 300)
+	//
+	// Returns: 1 on success, 0 if quota exceeded.
+	//
+	// Use case: instant upload path reserves quota before verifying file existence;
+	// if upload fails, caller invokes luaQuotaRollback to release reservation.
 	luaQuotaReserve = `
 local current = tonumber(redis.call('GET', KEYS[1]) or '0')
 local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
@@ -39,10 +45,15 @@ return 1
 `
 
 	// luaQuotaCommit atomically commits a pending quota reservation.
-	// KEYS[1] = oss3:quota:{user_id}
-	// KEYS[2] = oss3:quota:pending:{user_id}:{request_id}
-	// ARGV[1] = amount (bytes to commit, must not exceed pending)
-	// Returns: 1 on success, 0 if pending key missing, -1 if amount exceeds pending
+	//
+	//	KEYS[1] = oss3:quota:{user_id}              (current quota counter)
+	//	KEYS[2] = oss3:quota:pending:{uid}:{reqID}  (pending reservation)
+	//	ARGV[1] = amount  (bytes to commit, must not exceed pending)
+	//
+	// Returns: 1 on success, 0 if pending key missing (expired or already committed),
+	//          -1 if amount exceeds pending (caller bug).
+	//
+	// Use case: after successful upload, commit reserved quota to actual usage counter.
 	luaQuotaCommit = `
 local pendingVal = redis.call('GET', KEYS[2])
 if not pendingVal then
@@ -61,17 +72,25 @@ return 1
 `
 
 	// luaQuotaRollback releases a pending quota reservation.
-	// KEYS[1] = oss3:quota:pending:{user_id}:{request_id}
-	// Returns: 1 if deleted, 0 if already gone
+	//
+	//	KEYS[1] = oss3:quota:pending:{uid}:{reqID}  (pending reservation)
+	//
+	// Returns: 1 if deleted, 0 if already gone (expired or committed).
+	//
+	// Use case: upload failure or cancellation releases reserved quota.
 	luaQuotaRollback = `
 return redis.call('DEL', KEYS[1])
 `
 
 	// luaQuotaAdjust adjusts the committed quota counter by a delta (positive or negative).
-	// Used to release quota when instant upload detects duplicate content in multipart uploads.
-	// KEYS[1] = oss3:quota:{user_id}
-	// ARGV[1] = delta (positive = add, negative = subtract)
-	// Returns: 1 on success, 0 if would go negative
+	//
+	//	KEYS[1] = oss3:quota:{user_id}  (current quota counter)
+	//	ARGV[1] = delta  (positive = add, negative = subtract)
+	//
+	// Returns: 1 on success, 0 if would go negative (caller bug or race).
+	//
+	// Use case: instant upload detects duplicate content in multipart uploads,
+	// releases quota for the duplicate portion.
 	luaQuotaAdjust = `
 local delta = tonumber(ARGV[1])
 local current = tonumber(redis.call('GET', KEYS[1]) or '0')
@@ -86,12 +105,16 @@ return 1
 `
 
 	// luaRateLimitCheck atomically checks and records a request in the sliding window.
-	// KEYS[1] = oss3:rate:{user_id} (ZSET: member=requestID, score=timestamp)
-	// ARGV[1] = now (float, current unix timestamp)
-	// ARGV[2] = windowStart (float, now - 60)
-	// ARGV[3] = maxRequests (int)
-	// ARGV[4] = requestID (unique per request)
-	// Returns: current count (int)
+	//
+	//	KEYS[1] = oss3:rate:{user_id}  (ZSET: member=requestID, score=timestamp)
+	//	ARGV[1] = now           (float, current unix timestamp)
+	//	ARGV[2] = windowStart   (float, now - 60)
+	//	ARGV[3] = maxRequests   (int)
+	//	ARGV[4] = requestID     (unique per request)
+	//
+	// Returns: current count (int), including this request if allowed.
+	//
+	// Use case: per-user S3 API rate limiting with sliding window algorithm.
 	luaRateLimitCheck = `
 local now         = tonumber(ARGV[1])
 local windowStart = tonumber(ARGV[2])
@@ -112,11 +135,15 @@ redis.call('EXPIRE', KEYS[1], 120)
 return count + 1
 `
 
-	// luaLockAcquire acquires a distributed lock.
-	// KEYS[1] = oss3:lock:{resource}
-	// ARGV[1] = holderUUID
-	// ARGV[2] = ttlSeconds
-	// Returns: 1 if acquired, 0 if held by another
+	// luaLockAcquire acquires a distributed lock (reentrant for same holder).
+	//
+	//	KEYS[1] = oss3:lock:{resource}  (lock key)
+	//	ARGV[1] = holderUUID  (unique holder identifier)
+	//	ARGV[2] = ttlSeconds  (lock TTL)
+	//
+	// Returns: 1 if acquired, 0 if held by another holder.
+	//
+	// Use case: cleanup task lock, ensuring single-writer semantics across nodes.
 	luaLockAcquire = `
 local holder = ARGV[1]
 local ttl    = tonumber(ARGV[2])
@@ -131,10 +158,14 @@ return 1
 `
 
 	// luaLockExtend extends the TTL of a held lock.
-	// KEYS[1] = oss3:lock:{resource}
-	// ARGV[1] = holderUUID
-	// ARGV[2] = newTTL
-	// Returns: 1 if extended, 0 if lock lost
+	//
+	//	KEYS[1] = oss3:lock:{resource}  (lock key)
+	//	ARGV[1] = holderUUID  (must match current holder)
+	//	ARGV[2] = newTTL      (new TTL in seconds)
+	//
+	// Returns: 1 if extended, 0 if lock lost (expired or stolen).
+	//
+	// Use case: long-running cleanup task extends lock to prevent premature expiration.
 	luaLockExtend = `
 local holder = ARGV[1]
 local ttl    = tonumber(ARGV[2])
@@ -148,10 +179,14 @@ redis.call('EXPIRE', KEYS[1], ttl)
 return 1
 `
 
-	// luaLockRelease releases a distributed lock.
-	// KEYS[1] = oss3:lock:{resource}
-	// ARGV[1] = holderUUID
-	// Returns: 1 if released, 0 if lock already expired or held by another
+	// luaLockRelease releases a distributed lock (only if still held by caller).
+	//
+	//	KEYS[1] = oss3:lock:{resource}  (lock key)
+	//	ARGV[1] = holderUUID  (must match current holder)
+	//
+	// Returns: 1 if released, 0 if lock already expired or held by another.
+	//
+	// Use case: cleanup task completion releases lock for next acquisition.
 	luaLockRelease = `
 local holder = ARGV[1]
 
@@ -166,6 +201,9 @@ return redis.call('DEL', KEYS[1])
 
 // RegisterOSS3Scripts loads all OSS3 Lua scripts into Redis and caches their SHA hashes.
 // Call once at startup (after Redis connection is ready).
+//
+// Returns: map from script name (e.g., OSS3ScriptQuotaReserve) to *redis.Script.
+// go-redis automatically handles SCRIPT LOAD + EVALSHA caching; no manual management needed.
 func RegisterOSS3Scripts(rdb *redis.Client) map[string]*redis.Script {
 	scripts := map[string]*redis.Script{
 		OSS3ScriptQuotaReserve:  redis.NewScript(luaQuotaReserve),
