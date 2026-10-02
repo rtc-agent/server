@@ -10,6 +10,12 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
+// MaxFilesPerMessage is the maximum number of file attachments allowed per message.
+// Aligned with reference project's APIMaxMediaPerRequest (apiLimits.ts:94).
+// Prevents malicious clients from sending excessive file references that would
+// cause large DB queries via KeysExist (which batches in groups of 1000).
+const MaxFilesPerMessage = 100
+
 // ValidateFilesExist verifies that all referenced files exist in the database
 // and belong to the specified user.
 //
@@ -17,10 +23,18 @@ import (
 // file key starts with "user-{userID}/" to prevent user A from referencing user B's files.
 //
 // Returns nil if files is nil or empty (no validation needed).
-// Returns an error if any file is missing or does not belong to the user.
+// Returns an error if:
+//   - len(files) > MaxFilesPerMessage (too many files)
+//   - any file does not belong to the user (cross-user reference attempt)
+//   - any file is not found in the database
 func ValidateFilesExist(ctx context.Context, fileRepo repo.FileRepo, files []protocol.FileAttachment, userID uuid.UUID) error {
 	if len(files) == 0 {
 		return nil
+	}
+
+	// Enforce file count limit to prevent excessive DB queries
+	if len(files) > MaxFilesPerMessage {
+		return fmt.Errorf("too many file attachments: %d exceeds maximum %d", len(files), MaxFilesPerMessage)
 	}
 
 	keys := make([]string, 0, len(files))

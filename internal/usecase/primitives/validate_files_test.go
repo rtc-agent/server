@@ -114,6 +114,22 @@ func TestValidateFilesExist(t *testing.T) {
 			expectError: true,
 			errorMsg:    "does not belong to user",
 		},
+		{
+			name: "empty fileid - prefix check fails",
+			files: []protocol.FileAttachment{
+				{Fileid: ""}, // empty fileid should fail prefix check
+			},
+			existing:    map[string]bool{},
+			expectError: true,
+			errorMsg:    "does not belong to user",
+		},
+		{
+			name:        "too many files - exceeds limit",
+			files:       make([]protocol.FileAttachment, MaxFilesPerMessage+1),
+			existing:    map[string]bool{},
+			expectError: true,
+			errorMsg:    "too many file attachments",
+		},
 	}
 
 	for _, tt := range tests {

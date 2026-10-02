@@ -1,11 +1,18 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"strings"
 	"testing"
 
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
+	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -275,6 +282,177 @@ func TestConvertDBMessage_SkipsErrorType(t *testing.T) {
 	result, _ := h.convertDBMessage(context.Background(), msg)
 	if result != nil {
 		t.Errorf("expected nil for error content type (must not enter LLM context), got %d messages", len(result))
+	}
+}
+
+func TestConvertUserMessage_FileAttachments(t *testing.T) {
+	// Test convertUserMessage with various file attachment scenarios.
+	// These tests verify the file processing logic in convertDBMessage's
+	// user message branch (processFileAttachments).
+
+	ctx := context.Background()
+	bucket := "test-bucket"
+
+	// Helper to create a minimal JPEG image
+	createJPEG := func() []byte {
+		img := image.NewRGBA(image.Rect(0, 0, 10, 10))
+		for y := 0; y < 10; y++ {
+			for x := 0; x < 10; x++ {
+				img.Set(x, y, color.RGBA{255, 0, 0, 255})
+			}
+		}
+		var buf bytes.Buffer
+		_ = jpeg.Encode(&buf, img, nil)
+		return buf.Bytes()
+	}
+
+	tests := []struct {
+		name              string
+		text              string
+		files             []protocol.FileAttachment
+		ossObjects        map[string][]byte
+		ossBackendNil     bool
+		wantContent       string // expected substring in Content
+		wantMultiLen      int    // expected len(MultiContent)
+		wantContentHasXML bool   // whether Content should contain <file_content>
+	}{
+		{
+			name:          "OSS backend nil - files skipped",
+			text:          "hello with files",
+			files:         []protocol.FileAttachment{{Fileid: "user-123/test.jpg", Mimetype: "image/jpeg"}},
+			ossBackendNil: true,
+			wantContent:   "hello with files", // text preserved, files skipped
+			wantMultiLen:  0,
+		},
+		{
+			name:         "only image no text",
+			text:         "",
+			files:        []protocol.FileAttachment{{Fileid: "user-123/test.jpg", Mimetype: "image/jpeg"}},
+			ossObjects:   map[string][]byte{"user-123/test.jpg": createJPEG()},
+			wantContent:  "", // no text
+			wantMultiLen: 1,  // one image
+		},
+		{
+			name: "mixed image and text file",
+			text: "look at these files",
+			files: []protocol.FileAttachment{
+				{Fileid: "user-123/test.jpg", Mimetype: "image/jpeg"},
+				{Fileid: "user-123/readme.txt", Mimetype: "text/plain"},
+			},
+			ossObjects: map[string][]byte{
+				"user-123/test.jpg":   createJPEG(),
+				"user-123/readme.txt": []byte("Hello from text file"),
+			},
+			wantContent:       "Hello from text file", // text file content appended
+			wantMultiLen:      1,                      // one image
+			wantContentHasXML: true,                   // XML-wrapped text file
+		},
+		{
+			name:         "empty mimetype - silently skipped",
+			text:         "message with unknown file",
+			files:        []protocol.FileAttachment{{Fileid: "user-123/test.bin", Mimetype: ""}},
+			ossObjects:   map[string][]byte{"user-123/test.bin": []byte("binary data")},
+			wantContent:  "message with unknown file",
+			wantMultiLen: 0,
+		},
+		{
+			name:         "application/octet-stream - silently skipped",
+			text:         "message with octet-stream",
+			files:        []protocol.FileAttachment{{Fileid: "user-123/test.bin", Mimetype: "application/octet-stream"}},
+			ossObjects:   map[string][]byte{"user-123/test.bin": []byte("binary data")},
+			wantContent:  "message with octet-stream",
+			wantMultiLen: 0,
+		},
+		{
+			name:         "all images fail to load - text preserved",
+			text:         "message with broken images",
+			files:        []protocol.FileAttachment{{Fileid: "user-123/missing.jpg", Mimetype: "image/jpeg"}},
+			ossObjects:   map[string][]byte{}, // image not in OSS
+			wantContent:  "message with broken images",
+			wantMultiLen: 0, // image load failed, skipped
+		},
+		{
+			name:         "empty content and empty files",
+			text:         "",
+			files:        []protocol.FileAttachment{},
+			ossObjects:   map[string][]byte{},
+			wantContent:  "",
+			wantMultiLen: 0,
+		},
+		{
+			name:         "nil files - no processing",
+			text:         "text only message",
+			files:        nil,
+			ossObjects:   map[string][]byte{},
+			wantContent:  "text only message",
+			wantMultiLen: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Construct user message content with files
+			umc := protocol.UserMessageContent{Text: tt.text}
+			if tt.files != nil {
+				umc.Files = &tt.files
+			}
+			umcJSON, err := json.Marshal(umc)
+			if err != nil {
+				t.Fatalf("failed to marshal UserMessageContent: %v", err)
+			}
+
+			msg := &model.Message{
+				Role:    "user",
+				Content: `{"type":"user_message","data":` + string(umcJSON) + `}`,
+			}
+
+			var h *helpers
+			if tt.ossBackendNil {
+				h = &helpers{
+					logger:     logger.NoopLogger{},
+					ossBackend: nil,
+					ossBucket:  bucket,
+				}
+			} else {
+				h = &helpers{
+					logger:     logger.NoopLogger{},
+					ossBackend: &mockOSSBackend{objects: tt.ossObjects},
+					ossBucket:  bucket,
+				}
+			}
+
+			result, err := h.convertDBMessage(ctx, msg)
+			if err != nil {
+				t.Fatalf("convertDBMessage() error = %v", err)
+			}
+			if len(result) != 1 {
+				t.Fatalf("expected 1 message, got %d", len(result))
+			}
+
+			got := result[0]
+
+			// Check Content contains expected substring
+			if tt.wantContent != "" && !strings.Contains(got.Content, tt.wantContent) {
+				t.Errorf("Content = %q, want contains %q", got.Content, tt.wantContent)
+			}
+			if tt.wantContent == "" && got.Content != "" {
+				// For empty text cases, Content may contain XML-wrapped file content
+				// Only check if we don't expect XML
+				if !tt.wantContentHasXML && got.Content != "" {
+					t.Errorf("Content = %q, want empty", got.Content)
+				}
+			}
+
+			// Check MultiContent length
+			if len(got.MultiContent) != tt.wantMultiLen {
+				t.Errorf("len(MultiContent) = %d, want %d", len(got.MultiContent), tt.wantMultiLen)
+			}
+
+			// Check XML wrapping for text files
+			if tt.wantContentHasXML && !strings.Contains(got.Content, "<file_content") {
+				t.Errorf("Content = %q, want contains <file_content>", got.Content)
+			}
+		})
 	}
 }
 

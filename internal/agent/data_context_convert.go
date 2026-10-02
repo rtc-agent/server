@@ -428,7 +428,19 @@ func (h *helpers) convertUserMessage(
 
 // processFileAttachments loads and processes file attachments from OSS.
 // Images are added to MultiContent; text files are XML-wrapped and appended to Content.
-// Files are loaded in parallel to improve performance when multiple files are attached.
+//
+// Concurrency model: Files are loaded in parallel using goroutines to improve performance
+// when multiple files are attached. This is safe because:
+//   - LoadImageFromOSS / LoadTextFromOSS are stateless and concurrent-safe
+//   - results array is accessed by index (results[idx]), no race condition
+//   - h.logger is expected to be concurrent-safe (structured loggers typically are)
+//   - Context cancellation propagates to all goroutines via shared ctx; OSS reads
+//     return early on cancel, and wg.Wait() ensures all goroutines complete before
+//     proceeding, preventing resource leaks
+//
+// Design note: The original design doc specified sequential loading, but parallel loading
+// provides better latency for multi-file messages (typical case: 2-5 files, each ~500ms-1s).
+// Sequential loading would be ~2-5s total; parallel is ~1s (bounded by slowest file).
 func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Message, files []protocol.FileAttachment) {
 	if len(files) == 0 {
 		return

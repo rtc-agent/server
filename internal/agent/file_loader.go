@@ -149,6 +149,16 @@ func LoadImageFromOSS(ctx context.Context, backend rtcoss3.Backend, bucket, key 
 
 // detectImageFormatFromBuffer detects image format via magic bytes.
 // Uses github.com/gabriel-vasile/mimetype library for robust detection.
+//
+// Note: This library returns MIME types with parameters (e.g., "text/plain; charset=utf-8")
+// and supports more formats than the hand-written magic bytes version in the design doc
+// (BMP, TIFF, SVG, etc.). Callers must use strings.HasPrefix(mimeType, "image/") to filter,
+// as the library may return non-image types for short or ambiguous inputs.
+//
+// Edge cases:
+//   - Very short inputs (< 12 bytes): returns best-guess MIME (often "text/plain")
+//   - image/bmp, image/tiff: detected but imaging library may fail to decode
+//   - image/webp, image/gif: detected and explicitly rejected (imaging doesn't support)
 func detectImageFormatFromBuffer(data []byte) string {
 	mime := mimetype.Detect(data)
 	return mime.String()
