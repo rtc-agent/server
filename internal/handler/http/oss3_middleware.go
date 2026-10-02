@@ -6,30 +6,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/usecase"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
-)
-
-// contextKey is a custom type for OSS3-specific context keys.
-//
-// NOTE: The project-wide convention (internal/infra/contextx) uses an unexported
-// struct type `contextKey{ name string }` for keys. OSS3 intentionally uses a
-// `string`-backed type here because:
-//   - OSS3's user_id is a string (from the session token), not a uuid.UUID like
-//     contextx's userIDKey. Mixing types would force lossy conversions.
-//   - OSS3 keys are exported (ContextKeyUserID, etc.) for cross-package access
-//     between the handler and middleware, whereas contextx keys are unexported
-//     and accessed via getter functions.
-//
-// Keeping them separate avoids coupling OSS3 to the contextx package and
-// preserves the distinct semantics of each key namespace.
-type contextKey string
-
-const (
-	// ContextKeyUserID is the context key for user ID.
-	ContextKeyUserID contextKey = "user_id"
-	// ContextKeyRequestID is the context key for request ID.
-	ContextKeyRequestID contextKey = "request_id"
 )
 
 // RequestIDMiddleware generates and injects a request ID into the context.
@@ -42,8 +21,8 @@ func RequestIDMiddleware(next http.Handler) http.Handler {
 			requestID = uuid.New().String()
 		}
 
-		// Inject request ID into context
-		ctx := context.WithValue(r.Context(), ContextKeyRequestID, requestID)
+		// Inject request ID into context via contextx (single source of truth)
+		ctx := contextx.WithOSS3RequestID(r.Context(), requestID)
 		r = r.WithContext(ctx)
 
 		// Also set response header for client correlation
@@ -74,19 +53,45 @@ func NewBusinessRestrictionMiddleware(oss3UC *usecase.OSS3Usecase, bucket string
 // permission checks — the handler (ServeHTTP in oss3.go) already performs these.
 // This middleware now only verifies that the user ID was set by SigV4.
 func (m *BusinessRestrictionMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Extract user ID from context (set by SigV4 middleware)
-	userID := r.Context().Value(ContextKeyUserID)
-	if userID == nil {
-		WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
-		return
-	}
-	userIDStr, ok := userID.(string)
-	if !ok || userIDStr == "" {
-		WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
+	// Extract user ID from context (set by SigV4 middleware) via contextx
+	userID := contextx.GetOSS3UserID(r.Context())
+	if userID == "" {
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
 		return
 	}
 
 	// Call next handler
+	m.next.ServeHTTP(w, r)
+}
+
+// RateLimitMiddleware enforces per-user rate limits on S3 requests.
+// Consolidates CheckRateLimitOrReject calls that were previously scattered
+// across all handler methods (10 occurrences in oss3.go and oss3_multipart.go).
+type RateLimitMiddleware struct {
+	oss3UC *usecase.OSS3Usecase
+	next   http.Handler
+}
+
+// NewRateLimitMiddleware creates a new rate limit middleware.
+func NewRateLimitMiddleware(oss3UC *usecase.OSS3Usecase, next http.Handler) *RateLimitMiddleware {
+	return &RateLimitMiddleware{
+		oss3UC: oss3UC,
+		next:   next,
+	}
+}
+
+// ServeHTTP implements the http.Handler interface.
+// Checks the per-user rate limit before forwarding to the next handler.
+// Returns 429 SlowDown if the limit is exceeded.
+func (m *RateLimitMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	userID := contextx.GetOSS3UserID(r.Context())
+	requestID := contextx.GetOSS3RequestID(r.Context())
+
+	if err := m.oss3UC.CheckRateLimitOrReject(r.Context(), userID, requestID); err != nil {
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrSlowDown, r.URL.Path, "")
+		return
+	}
+
 	m.next.ServeHTTP(w, r)
 }
 
@@ -101,27 +106,13 @@ func hasPathPermission(userID, key string) bool {
 }
 
 // ExtractUserIDFromContext is a helper to extract user ID from context.
+// Delegates to contextx.GetOSS3UserID — the single source of truth for OSS3 context keys.
 func ExtractUserIDFromContext(ctx context.Context) string {
-	userID := ctx.Value(ContextKeyUserID)
-	if userID == nil {
-		return ""
-	}
-	userIDStr, ok := userID.(string)
-	if !ok {
-		return ""
-	}
-	return userIDStr
+	return contextx.GetOSS3UserID(ctx)
 }
 
 // ExtractRequestIDFromContext is a helper to extract request ID from context.
+// Delegates to contextx.GetOSS3RequestID — the single source of truth for OSS3 context keys.
 func ExtractRequestIDFromContext(ctx context.Context) string {
-	requestID := ctx.Value(ContextKeyRequestID)
-	if requestID == nil {
-		return ""
-	}
-	requestIDStr, ok := requestID.(string)
-	if !ok {
-		return ""
-	}
-	return requestIDStr
+	return contextx.GetOSS3RequestID(ctx)
 }

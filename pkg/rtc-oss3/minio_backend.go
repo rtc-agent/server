@@ -31,6 +31,7 @@ type MinIOOptions struct {
 	SecretKey           string
 	Bucket              string
 	PublicURL           string // Public-facing S3 endpoint for presigned URLs (empty = use Endpoint)
+	Region              string // S3 region for presigned URL signing (empty = "us-east-1")
 	UseSSL              bool
 	MaxIdleConns        int
 	MaxIdleConnsPerHost int
@@ -102,11 +103,15 @@ func NewMinIOBackend(opts MinIOOptions) (*MinIOBackend, error) {
 		publicHost = strings.TrimSuffix(publicHost, "/")
 
 		publicUseSSL := strings.HasPrefix(opts.PublicURL, "https://")
+		region := opts.Region
+		if region == "" {
+			region = "us-east-1"
+		}
 		publicClient, err = minio.New(publicHost, &minio.Options{
 			Creds:     credentials.NewStaticV4(opts.AccessKey, opts.SecretKey, ""),
 			Secure:    publicUseSSL,
 			Transport: transport,
-			Region:    "us-east-1", // Set region to avoid GetBucketLocation call
+			Region:    region,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("init public minio client: %w", err)
@@ -142,6 +147,9 @@ func (b *MinIOBackend) GetObject(ctx context.Context, bucket, key string) (io.Re
 
 	stat, err := obj.Stat()
 	if err != nil {
+		// Close error is intentionally ignored: Stat() already failed, and we are
+		// returning the Stat error to the caller. The underlying HTTP connection
+		// will be recycled by the MinIO client's Transport timeout.
 		_ = obj.Close()
 		return nil, ObjectMeta{}, mapMinIOError(ctx, err, "get_object.stat")
 	}
@@ -170,6 +178,9 @@ func (b *MinIOBackend) GetObjectRange(ctx context.Context, bucket, key string, s
 
 	stat, err := obj.Stat()
 	if err != nil {
+		// Close error is intentionally ignored: Stat() already failed, and we are
+		// returning the Stat error to the caller. The underlying HTTP connection
+		// will be recycled by the MinIO client's Transport timeout.
 		_ = obj.Close()
 		return nil, ObjectMeta{}, mapMinIOError(ctx, err, "get_object_range.stat")
 	}
@@ -251,101 +262,6 @@ func (b *MinIOBackend) HeadObject(ctx context.Context, bucket, key string) (Obje
 	}, nil
 }
 
-// ListObjects lists objects.
-// MEDIUM-22 fix: When delimiter is set and Recursive=false, the MinIO SDK handles
-// common prefix extraction server-side. Objects whose keys end with the delimiter
-// are common prefixes (directories); others are regular objects.
-// LOW-05 fix: Support pagination via Marker, ContinuationToken, and StartAfter.
-// Pagination fix: Use MaxKeys+1 strategy to accurately detect truncation.
-// CommonPrefixes count towards the MaxKeys quota (totalKeys tracks both Objects and CommonPrefixes).
-//
-// Boundary condition handling (H2):
-//   - We request maxKeys+1 items from MinIO to detect if there are more items
-//   - Both Objects and CommonPrefixes count towards maxKeys limit (per S3 spec)
-//   - If we receive maxKeys+1 items, we return maxKeys and set IsTruncated=true
-//   - If we receive <= maxKeys items, we return all and set IsTruncated=false
-//   - Edge case: if the (maxKeys+1)th item is a CommonPrefix, we correctly detect
-//     truncation but don't include it in results (client fetches next page)
-func (b *MinIOBackend) ListObjects(ctx context.Context, bucket string, opts ListObjectsOptions) (*ListObjectsResult, error) {
-	result := &ListObjectsResult{}
-
-	maxKeys := opts.MaxKeys
-	if maxKeys <= 0 {
-		maxKeys = 1000
-	}
-
-	listOpts := minio.ListObjectsOptions{
-		Prefix:    opts.Prefix,
-		Recursive: opts.Delimiter == "",
-		MaxKeys:   maxKeys + 1, // fetch one extra to detect truncation accurately
-	}
-
-	// Determine pagination start point
-	// Priority: ContinuationToken (V2) > StartAfter (V2) > Marker (V1)
-	if opts.ContinuationToken != "" {
-		// V2: ContinuationToken is opaque (base64-encoded), decode it first
-		decoded, err := DecodeContinuationToken(opts.ContinuationToken)
-		if err != nil {
-			return nil, fmt.Errorf("invalid continuation token: %w", err)
-		}
-		listOpts.StartAfter = decoded
-	} else if opts.StartAfter != "" {
-		// V2: StartAfter is the key to start after (first request only)
-		listOpts.StartAfter = opts.StartAfter
-	} else if opts.Marker != "" {
-		// V1: Marker is the key to start after
-		listOpts.StartAfter = opts.Marker
-	}
-
-	totalKeys := 0
-	var lastKey string
-	truncated := false
-
-	for object := range b.client.ListObjects(ctx, bucket, listOpts) {
-		if object.Err != nil {
-			return nil, mapMinIOError(ctx, object.Err, "list_objects")
-		}
-
-		lastKey = object.Key
-
-		// If delimiter is set, keys ending with delimiter are common prefixes
-		if opts.Delimiter != "" && strings.HasSuffix(object.Key, opts.Delimiter) {
-			// CommonPrefixes count towards MaxKeys quota
-			totalKeys++
-			if totalKeys > maxKeys {
-				truncated = true
-				break
-			}
-			result.CommonPrefixes = append(result.CommonPrefixes, object.Key)
-			continue
-		}
-
-		// Regular object - check if we've reached the quota
-		if totalKeys >= maxKeys {
-			truncated = true
-			break
-		}
-
-		result.Objects = append(result.Objects, ObjectMeta{
-			Key:          object.Key,
-			Size:         object.Size,
-			ContentType:  object.ContentType,
-			ETag:         object.ETag,
-			LastModified: object.LastModified,
-		})
-		totalKeys++
-	}
-
-	result.IsTruncated = truncated
-	if truncated && lastKey != "" {
-		result.NextMarker = lastKey
-		result.NextContinuationToken = EncodeContinuationToken(lastKey)
-	}
-	result.KeyCount = len(result.Objects) + len(result.CommonPrefixes)
-
-	return result, nil
-}
-
 // CopyObject copies an object.
 func (b *MinIOBackend) CopyObject(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string) (ObjectMeta, error) {
 	src := minio.CopySrcOptions{Bucket: srcBucket, Object: srcKey}
@@ -362,84 +278,6 @@ func (b *MinIOBackend) CopyObject(ctx context.Context, srcBucket, srcKey, dstBuc
 		Size:         info.Size,
 		LastModified: info.LastModified,
 	}, nil
-}
-
-// CreateMultipartUpload initiates a multipart upload.
-func (b *MinIOBackend) CreateMultipartUpload(ctx context.Context, bucket, key, contentType string) (*MultipartUploadResult, error) {
-	uploadID, err := b.core.NewMultipartUpload(ctx, bucket, key, minio.PutObjectOptions{
-		ContentType: contentType,
-	})
-	if err != nil {
-		return nil, mapMinIOError(ctx, err, "create_multipart_upload")
-	}
-	return &MultipartUploadResult{UploadID: uploadID}, nil
-}
-
-// UploadPart uploads a single part.
-func (b *MinIOBackend) UploadPart(ctx context.Context, bucket, key, uploadID string, partNumber int, reader io.Reader, size int64) (string, error) {
-	part, err := b.core.PutObjectPart(ctx, bucket, key, uploadID, partNumber, reader, size, minio.PutObjectPartOptions{})
-	if err != nil {
-		return "", mapMinIOError(ctx, err, "upload_part")
-	}
-	return part.ETag, nil
-}
-
-// CompleteMultipartUpload finalizes a multipart upload.
-func (b *MinIOBackend) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, parts []CompletedPart) (string, error) {
-	coreParts := make([]minio.CompletePart, len(parts))
-	for i, p := range parts {
-		coreParts[i] = minio.CompletePart{
-			PartNumber: p.PartNumber,
-			ETag:       p.ETag,
-		}
-	}
-	info, err := b.core.CompleteMultipartUpload(ctx, bucket, key, uploadID, coreParts, minio.PutObjectOptions{})
-	if err != nil {
-		return "", mapMinIOError(ctx, err, "complete_multipart_upload")
-	}
-	return info.ETag, nil
-}
-
-// AbortMultipartUpload aborts a multipart upload.
-func (b *MinIOBackend) AbortMultipartUpload(ctx context.Context, bucket, key, uploadID string) error {
-	err := b.core.AbortMultipartUpload(ctx, bucket, key, uploadID)
-	if err != nil {
-		return mapMinIOError(ctx, err, "abort_multipart_upload")
-	}
-	return nil
-}
-
-// ListParts lists uploaded parts.
-// Paginates through all parts using partNumberMarker until IsTruncated is false.
-func (b *MinIOBackend) ListParts(ctx context.Context, bucket, key, uploadID string) ([]PartInfo, error) {
-	const maxPartsPerPage = 1000
-	var allParts []PartInfo
-	partNumberMarker := 0
-
-	for {
-		result, err := b.core.ListObjectParts(ctx, bucket, key, uploadID, partNumberMarker, maxPartsPerPage)
-		if err != nil {
-			return nil, mapMinIOError(ctx, err, "list_parts")
-		}
-
-		for _, p := range result.ObjectParts {
-			allParts = append(allParts, PartInfo{
-				PartNumber:   p.PartNumber,
-				Size:         p.Size,
-				ETag:         p.ETag,
-				LastModified: p.LastModified,
-			})
-		}
-
-		if !result.IsTruncated {
-			break
-		}
-		// NextPartNumberMarker points to the last part returned; the next
-		// call should start *after* it.
-		partNumberMarker = result.NextPartNumberMarker
-	}
-
-	return allParts, nil
 }
 
 // PresignGet generates a presigned GET URL.

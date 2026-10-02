@@ -613,6 +613,10 @@ type MinIOConfig struct {
 	// Bucket is the bucket name (default "rtc-agent").
 	Bucket string `mapstructure:"bucket"`
 
+	// Region is the S3 region for presigned URL generation (e.g., "us-east-1").
+	// Used by publicClient to avoid GetBucketLocation calls. Default "us-east-1".
+	Region string `mapstructure:"region"`
+
 	// UseSSL enables HTTPS for MinIO connection.
 	UseSSL bool `mapstructure:"use_ssl"`
 
@@ -702,6 +706,32 @@ type CleanupConfig struct {
 
 	// CredentialExpiry is the expired credential cleanup threshold. Default 24h.
 	CredentialExpiry time.Duration `mapstructure:"credential_expiry"`
+
+	// Orphan holds orphan object cleanup configuration.
+	Orphan OrphanCleanupConfig `mapstructure:"orphan"`
+}
+
+// OrphanCleanupConfig holds MinIO orphan object cleanup configuration.
+// Orphan objects are MinIO objects with no corresponding DB record, typically
+// caused by DB failures after successful MinIO upload.
+type OrphanCleanupConfig struct {
+	// Enabled controls whether orphan cleanup is active. Default false.
+	// Orphan cleanup performs full-bucket scans and should be enabled only
+	// after verifying the reconciler does not interfere with normal operations.
+	Enabled bool `mapstructure:"enabled"`
+
+	// BatchSize is the number of MinIO objects scanned per batch.
+	// Larger batches reduce round-trips but increase memory usage. Default 500.
+	BatchSize int `mapstructure:"batch_size"`
+
+	// CooldownPeriod is the minimum age an object must have before it can be
+	// deleted. Objects newer than this are skipped to avoid deleting objects
+	// that are still being uploaded or committed. Default 1h.
+	CooldownPeriod time.Duration `mapstructure:"cooldown_period"`
+
+	// DryRun when true logs orphans without deleting them. Default true.
+	// Set to false only after verifying the reconciler identifies correct orphans.
+	DryRun bool `mapstructure:"dry_run"`
 }
 
 // EncryptionConfig holds SessionToken encryption configuration.

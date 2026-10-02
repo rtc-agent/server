@@ -30,15 +30,21 @@ func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, 
 	requestID = uuid.New().String()
 	quotaKey := cache.OSS3Quota(userID)
 	pendingKey := cache.OSS3QuotaPending(userID, requestID)
+	aggKey := cache.OSS3QuotaPendingAgg(userID)
+	// Pending key prefix for constructing other requests' pending keys during ZSET scan.
+	// Format: "oss3:quota:pending:{uid}:" — append requestID to get a specific pending key.
+	pendingKeyPrefix := cache.PrefixOSS3QuotaPending + userID + ":"
 
 	script := uc.scripts[cache.OSS3ScriptQuotaReserve]
 	// Lua script expects TTL in seconds (e.g., 300 for 5 minutes)
 	pendingTTLSeconds := int(uc.cfg.Quota.PendingTTL.Seconds())
 	result, err := script.Run(ctx, uc.redis,
-		[]string{quotaKey, pendingKey},
+		[]string{quotaKey, pendingKey, aggKey},
 		additionalBytes,
 		uc.cfg.Quota.MaxUserQuotaBytes,
 		pendingTTLSeconds,
+		requestID,
+		pendingKeyPrefix,
 	).Int()
 	if err != nil {
 		return "", fmt.Errorf("quota reserve: %w", err)
@@ -73,11 +79,13 @@ func (uc *OSS3Usecase) CommitQuota(ctx context.Context, userID, requestID string
 
 	quotaKey := cache.OSS3Quota(userID)
 	pendingKey := cache.OSS3QuotaPending(userID, requestID)
+	aggKey := cache.OSS3QuotaPendingAgg(userID)
 
 	script := uc.scripts[cache.OSS3ScriptQuotaCommit]
-	_, err = script.Run(ctx, uc.redis,
-		[]string{quotaKey, pendingKey},
+	result, err := script.Run(ctx, uc.redis,
+		[]string{quotaKey, pendingKey, aggKey},
 		amount,
+		requestID,
 	).Int()
 	if err != nil {
 		// Quota commit Lua script failed — clean up the marker so a retry can succeed.
@@ -91,7 +99,52 @@ func (uc *OSS3Usecase) CommitQuota(ctx context.Context, userID, requestID string
 		}
 		return fmt.Errorf("quota commit: %w", err)
 	}
-	return nil
+	// Handle Lua script return values:
+	//   1: success — pending committed to quota counter
+	//   0: pending key missing (expired or already committed)
+	//  -1: amount exceeds pending (caller bug)
+	switch result {
+	case 1:
+		return nil
+	case 0:
+		// Pending expired before commit — the reservation was lost.
+		// Log at Warn level so operators can track frequency; the upload succeeded
+		// but quota accounting is now inconsistent (data written without quota recorded).
+		// Clean up the marker since there is nothing to retry.
+		if delErr := uc.redis.Del(ctx, markerKey).Err(); delErr != nil {
+			logger.Error(ctx, "failed to cleanup quota commit marker after pending expiry",
+				zap.String("user_id", userID),
+				zap.String("request_id", requestID),
+				zap.Error(delErr))
+		}
+		logger.Warn(ctx, "quota commit skipped: pending reservation expired",
+			zap.String("user_id", userID),
+			zap.String("request_id", requestID),
+			zap.Int64("amount", amount))
+		return fmt.Errorf("quota commit: pending expired for request %s: %w", requestID, rtcoss3.ErrQuotaExceeded)
+	case -1:
+		// Amount exceeds reserved pending — indicates a caller bug (e.g., wrong amount passed).
+		// Log at Error level as this should never happen in correct code paths.
+		// Clean up the marker since the commit is invalid.
+		if delErr := uc.redis.Del(ctx, markerKey).Err(); delErr != nil {
+			logger.Error(ctx, "failed to cleanup quota commit marker after amount overflow",
+				zap.String("user_id", userID),
+				zap.String("request_id", requestID),
+				zap.Error(delErr))
+		}
+		logger.Error(ctx, "quota commit failed: amount exceeds pending reservation (caller bug)",
+			zap.String("user_id", userID),
+			zap.String("request_id", requestID),
+			zap.Int64("amount", amount))
+		return fmt.Errorf("quota commit: amount %d exceeds pending for request %s", amount, requestID)
+	default:
+		// Unexpected return value — defensive programming.
+		logger.Error(ctx, "quota commit returned unexpected value",
+			zap.String("user_id", userID),
+			zap.String("request_id", requestID),
+			zap.Int("result", result))
+		return fmt.Errorf("quota commit: unexpected return value %d", result)
+	}
 }
 
 // ReleaseQuota cancels a pending reservation (on upload failure or abort).
@@ -100,9 +153,10 @@ func (uc *OSS3Usecase) CommitQuota(ctx context.Context, userID, requestID string
 // If the pending key already expired (TTL), this is a no-op.
 func (uc *OSS3Usecase) ReleaseQuota(ctx context.Context, userID, requestID string) {
 	pendingKey := cache.OSS3QuotaPending(userID, requestID)
+	aggKey := cache.OSS3QuotaPendingAgg(userID)
 
 	script := uc.scripts[cache.OSS3ScriptQuotaRollback]
-	result, err := script.Run(ctx, uc.redis, []string{pendingKey}).Int()
+	result, err := script.Run(ctx, uc.redis, []string{pendingKey, aggKey}, requestID).Int()
 	if err != nil {
 		// Log at Warn level so persistent Redis issues are visible in monitoring.
 		// The pending key will eventually expire via TTL, but operators should
@@ -164,4 +218,50 @@ func (uc *OSS3Usecase) GetMultipartUploadTotalSize(ctx context.Context, uploadID
 		totalSize += p.Size
 	}
 	return totalSize, nil
+}
+
+// ReleaseQuotaForDeletedFile releases quota after a file is deleted.
+// Encapsulates the compensation logic so handlers only need to orchestrate.
+// Uses Background context internally to avoid cancellation issues when the client disconnects.
+// Logs errors but does not fail the caller — reconciliation will sync eventually.
+func (uc *OSS3Usecase) ReleaseQuotaForDeletedFile(ctx context.Context, userID, key string, fileSize int64) {
+	if fileSize <= 0 {
+		return
+	}
+	// Use Background context to avoid cancellation when the client disconnects.
+	bgCtx := context.Background()
+	if err := uc.AdjustQuota(bgCtx, userID, -fileSize); err != nil {
+		logger.Warn(bgCtx, "failed to adjust quota after delete",
+			zap.String("user_id", userID),
+			zap.String("key", key),
+			zap.Int64("size", fileSize),
+			zap.Error(err))
+	}
+}
+
+// ReleaseMultipartUploadQuota releases quota for discarded multipart upload parts.
+// Used by the instant upload path when an existing file is detected and parts are discarded.
+// Calculates total part size and releases quota atomically.
+// Uses Background context internally to avoid cancellation issues.
+// Logs errors but does not fail the caller — reconciliation will sync eventually.
+func (uc *OSS3Usecase) ReleaseMultipartUploadQuota(ctx context.Context, userID, uploadID string) {
+	bgCtx := context.Background()
+	partsTotalSize, err := uc.GetMultipartUploadTotalSize(bgCtx, uploadID)
+	if err != nil {
+		logger.Warn(ctx, "failed to get parts total size for quota release",
+			zap.String("user_id", userID),
+			zap.String("upload_id", uploadID),
+			zap.Error(err))
+		return
+	}
+	if partsTotalSize <= 0 {
+		return
+	}
+	if err := uc.AdjustQuota(bgCtx, userID, -partsTotalSize); err != nil {
+		logger.Warn(ctx, "failed to release quota for multipart upload",
+			zap.String("user_id", userID),
+			zap.String("upload_id", uploadID),
+			zap.Int64("parts_total_size", partsTotalSize),
+			zap.Error(err))
+	}
 }

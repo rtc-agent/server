@@ -511,5 +511,8 @@ func SignS3Request(r *http.Request, accessKeyID, secretAccessKey, sessionToken, 
 	payloadHash := "UNSIGNED-PAYLOAD"
 	r.Header.Set("X-Amz-Content-Sha256", payloadHash)
 
+	// SignHTTP error is intentionally ignored: this function is called in test/client
+	// contexts where the inputs are always valid (we control credentials and region).
+	// The AWS SDK v4 signer only fails on malformed credentials, which cannot happen here.
 	_ = signer.SignHTTP(context.Background(), awsCreds, r, payloadHash, "s3", region, now)
 }

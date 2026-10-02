@@ -36,6 +36,10 @@ type FileRepo interface {
 	// SQL: SELECT user_id, COALESCE(SUM(size), 0) as total
 	//      FROM files WHERE user_id > ? GROUP BY user_id ORDER BY user_id LIMIT ?
 	SumSizeByUserGroupedPaginated(ctx context.Context, cursor string, limit int) (map[string]int64, string, error)
+	// KeysExist returns the subset of keys that exist in the DB (not soft-deleted).
+	// Used by the orphan reconciler to identify MinIO objects with no DB record.
+	// SQL: SELECT key FROM files WHERE key IN (?) AND deleted_at IS NULL
+	KeysExist(ctx context.Context, keys []string) (map[string]bool, error)
 }
 
 type fileRepo struct {
@@ -140,6 +144,39 @@ func (r *fileRepo) SumSizeByUserGrouped(ctx context.Context) (map[string]int64, 
 		m[r.UserID] = r.Total
 	}
 	return m, nil
+}
+
+// KeysExist returns the subset of keys that exist in the DB (not soft-deleted).
+// Uses batched IN queries to avoid exceeding database parameter limits.
+func (r *fileRepo) KeysExist(ctx context.Context, keys []string) (map[string]bool, error) {
+	if len(keys) == 0 {
+		return make(map[string]bool), nil
+	}
+
+	result := make(map[string]bool, len(keys))
+
+	// Batch in chunks of 1000 to avoid SQL parameter limits.
+	const batchSize = 1000
+	for i := 0; i < len(keys); i += batchSize {
+		end := i + batchSize
+		if end > len(keys) {
+			end = len(keys)
+		}
+		batch := keys[i:end]
+
+		var foundKeys []string
+		if err := DBFromContext(ctx, r.db).WithContext(ctx).
+			Model(&model.File{}).
+			Where("key IN ?", batch).
+			Pluck("key", &foundKeys).Error; err != nil {
+			return nil, fmt.Errorf("keys exist batch query: %w", err)
+		}
+		for _, k := range foundKeys {
+			result[k] = true
+		}
+	}
+
+	return result, nil
 }
 
 func (r *fileRepo) SumSizeByUserGroupedPaginated(ctx context.Context, cursor string, limit int) (map[string]int64, string, error) {

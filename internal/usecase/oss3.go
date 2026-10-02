@@ -51,8 +51,8 @@ type OSS3Usecase struct {
 	credFlight singleflight.Group       // Deduplicates concurrent credential cache misses
 }
 
-// NewOSS3Usecase creates the OSS3 usecase and initializes AES-GCM.
-// Returns error if the encryption key is not 32 bytes.
+// NewOSS3Usecase creates the OSS3 usecase and optionally initializes AES-GCM.
+// Returns error if the encryption key is provided but invalid (not 32 bytes).
 func NewOSS3Usecase(
 	backend rtcoss3.Backend,
 	db *gorm.DB,
@@ -63,26 +63,7 @@ func NewOSS3Usecase(
 	scripts map[string]*redis.Script,
 	cfg config.StorageConfig,
 ) (*OSS3Usecase, error) {
-	// Initialize AES-256-GCM
-	// Key is hex-encoded (64 chars = 32 bytes)
-	keyHex := cfg.Encryption.SessionTokenKey
-	if len(keyHex) != 64 {
-		return nil, fmt.Errorf("encryption key must be 64 hex chars (32 bytes), got %d", len(keyHex))
-	}
-	key, err := hex.DecodeString(keyHex)
-	if err != nil {
-		return nil, fmt.Errorf("decode encryption key: %w", err)
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("new aes cipher: %w", err)
-	}
-	aesGCM, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("new gcm: %w", err)
-	}
-
-	return &OSS3Usecase{
+	uc := &OSS3Usecase{
 		backend:    backend,
 		db:         db,
 		fileRepo:   fileRepo,
@@ -91,8 +72,31 @@ func NewOSS3Usecase(
 		redis:      redisClient,
 		cfg:        cfg,
 		scripts:    scripts,
-		aesGCM:     aesGCM,
-	}, nil
+	}
+
+	// Initialize AES-256-GCM only if encryption key is configured
+	// Key is hex-encoded (64 chars = 32 bytes)
+	keyHex := cfg.Encryption.SessionTokenKey
+	if keyHex != "" {
+		if len(keyHex) != 64 {
+			return nil, fmt.Errorf("encryption key must be 64 hex chars (32 bytes), got %d", len(keyHex))
+		}
+		key, err := hex.DecodeString(keyHex)
+		if err != nil {
+			return nil, fmt.Errorf("decode encryption key: %w", err)
+		}
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return nil, fmt.Errorf("new aes cipher: %w", err)
+		}
+		aesGCM, err := cipher.NewGCM(block)
+		if err != nil {
+			return nil, fmt.Errorf("new gcm: %w", err)
+		}
+		uc.aesGCM = aesGCM
+	}
+
+	return uc, nil
 }
 
 // SessionTokenPayload is the structure encrypted in SessionToken.
@@ -105,6 +109,10 @@ type SessionTokenPayload struct {
 // encryptSessionToken encrypts a SessionTokenPayload using AES-256-GCM.
 // Returns base64-encoded string: nonce(12) + ciphertext + tag(16)
 func (uc *OSS3Usecase) encryptSessionToken(payload SessionTokenPayload) (string, error) {
+	if uc.aesGCM == nil {
+		return "", fmt.Errorf("encryption not configured: session_token_key not set")
+	}
+
 	plaintext, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal payload: %w", err)
@@ -121,6 +129,10 @@ func (uc *OSS3Usecase) encryptSessionToken(payload SessionTokenPayload) (string,
 
 // decryptSessionToken decrypts a SessionToken string.
 func (uc *OSS3Usecase) decryptSessionToken(token string) (*SessionTokenPayload, error) {
+	if uc.aesGCM == nil {
+		return nil, fmt.Errorf("encryption not configured: session_token_key not set")
+	}
+
 	sealed, err := base64.URLEncoding.DecodeString(token)
 	if err != nil {
 		return nil, fmt.Errorf("decode token: %w", err)
@@ -156,6 +168,10 @@ func (uc *OSS3Usecase) DecryptSessionToken(token string) (*SessionTokenPayload, 
 // encryptString encrypts a plain string using AES-256-GCM.
 // Returns base64-encoded string: nonce(12) + ciphertext + tag(16)
 func (uc *OSS3Usecase) encryptString(plaintext string) (string, error) {
+	if uc.aesGCM == nil {
+		return "", fmt.Errorf("encryption not configured: session_token_key not set")
+	}
+
 	nonce := make([]byte, 12) // 96-bit nonce
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("generate nonce: %w", err)
@@ -167,6 +183,10 @@ func (uc *OSS3Usecase) encryptString(plaintext string) (string, error) {
 
 // decryptString decrypts a base64-encoded AES-256-GCM encrypted string.
 func (uc *OSS3Usecase) decryptString(encoded string) (string, error) {
+	if uc.aesGCM == nil {
+		return "", fmt.Errorf("encryption not configured: session_token_key not set")
+	}
+
 	sealed, err := base64.URLEncoding.DecodeString(encoded)
 	if err != nil {
 		return "", fmt.Errorf("decode string: %w", err)
@@ -227,6 +247,12 @@ func (uc *OSS3Usecase) Backend() rtcoss3.Backend {
 }
 
 // FileRecord represents a file metadata record for handler layer.
+// This is a DTO (Data Transfer Object) that separates the handler layer from the
+// database model (model.File). We use FileRecord instead of model.File directly to:
+// 1. Avoid exposing database-specific fields (ID, CreatedAt, UpdatedAt, DeletedAt)
+// 2. Provide a stable API contract even if the database schema changes
+// 3. Maintain clear layer boundaries (handler → usecase → repo)
+// The manual field copying in CreateFileRecord/GetFileRecord is intentional.
 type FileRecord struct {
 	UserID      string
 	Bucket      string
@@ -347,25 +373,28 @@ func (uc *OSS3Usecase) GeneratePresignedURL(ctx context.Context, userID, operati
 // Parts and upload record are deleted atomically within a transaction to prevent
 // orphaned parts records if the second delete fails.
 func (uc *OSS3Usecase) DeleteMultipartUploadRecord(ctx context.Context, uploadID string) error {
-	// First get the upload by uploadID to get the UUID (outside transaction is fine)
-	upload, err := uc.uploadRepo.GetByUploadID(ctx, uploadID)
+	return uc.db.Transaction(func(tx *gorm.DB) error {
+		return uc.deleteUploadInTx(ctx, tx, uploadID)
+	})
+}
+
+// deleteUploadInTx deletes an upload record and its parts within the given transaction.
+// Extracted to allow callers to participate in a larger transaction without
+// creating nested, disconnected transactions on uc.db.
+func (uc *OSS3Usecase) deleteUploadInTx(ctx context.Context, tx *gorm.DB, uploadID string) error {
+	txCtx := repo.WithTx(ctx, tx)
+	upload, err := uc.uploadRepo.GetByUploadID(txCtx, uploadID)
 	if err != nil {
 		return err
 	}
 	if upload == nil {
-		// Record already gone — nothing to delete
 		return nil
 	}
-
-	// Wrap DeleteParts + Delete in a transaction for atomicity
-	return uc.db.Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
-		if err := uc.uploadRepo.DeleteParts(txCtx, upload.ID); err != nil {
-			return fmt.Errorf("delete parts: %w", err)
-		}
-		if err := uc.uploadRepo.Delete(txCtx, upload.ID); err != nil {
-			return fmt.Errorf("delete upload record: %w", err)
-		}
-		return nil
-	})
+	if err := uc.uploadRepo.DeleteParts(txCtx, upload.ID); err != nil {
+		return fmt.Errorf("delete parts: %w", err)
+	}
+	if err := uc.uploadRepo.Delete(txCtx, upload.ID); err != nil {
+		return fmt.Errorf("delete upload record: %w", err)
+	}
+	return nil
 }

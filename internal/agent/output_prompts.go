@@ -69,17 +69,6 @@ var subAgentParseFailedTmpl string
 //go:embed prompts/outputs/sub-agent-no-output.md
 var subAgentNoOutputTmpl string
 
-// --- Session memory output templates ---
-
-//go:embed prompts/outputs/session-memory-saved.md.tmpl
-var sessionMemorySavedTmpl string
-
-//go:embed prompts/outputs/no-session-memories.md
-var noSessionMemoriesTmpl string
-
-//go:embed prompts/outputs/session-memories-list.md.tmpl
-var sessionMemoriesListTmpl string
-
 // --- Memory output templates ---
 
 //go:embed prompts/outputs/memory-saved.md.tmpl
@@ -208,35 +197,6 @@ func formatSubAgentParseFailed() string {
 
 func formatSubAgentNoOutput() string {
 	return renderStatic(subAgentNoOutputTmpl)
-}
-
-// --- Session memory ---
-
-func formatSessionMemorySaved(id, category, title string) string {
-	return templateutil.MustRender("session-memory-saved", sessionMemorySavedTmpl, map[string]any{
-		"ID":       id,
-		"Category": category,
-		"Title":    title,
-	})
-}
-
-func formatNoSessionMemories() string {
-	return renderStatic(noSessionMemoriesTmpl)
-}
-
-type sessionMemoryItem struct {
-	Index     int
-	Category  string
-	Title     string
-	Content   string
-	CreatedAt string
-}
-
-func formatSessionMemoriesList(count int, memories []sessionMemoryItem) string {
-	return templateutil.MustRender("session-memories-list", sessionMemoriesListTmpl, map[string]any{
-		"Count":    count,
-		"Memories": memories,
-	})
 }
 
 // --- Memory ---

@@ -227,24 +227,24 @@ func provideUsecaseDependencies(
 	webFetchManager *webfetch.WebFetchManager,
 ) *usecase.Dependencies {
 	deps := &usecase.Dependencies{
-		DB:                svcCtx.DB,
-		Redis:             svcCtx.Redis,
-		SessionRepo:       svcCtx.SessionRepo,
-		MessageRepo:       svcCtx.MessageRepo,
-		TurnRepo:          svcCtx.TurnRepo,
-		RtcRepo:           svcCtx.RtcRepo,
-		GoalRepo:          svcCtx.GoalRepo,
-		LoopRepo:          svcCtx.LoopRepo,
-		MemoryRepo:        svcCtx.MemoryRepo,
-		UpdatePublisher:   svcCtx.UpdatePublisher,
-		ChatModel:         chatModelResult.model,
-		LLMConfig:         cfg.LLM,
-		SystemPrompt:      cfg.Worker.SystemPrompt,
-		WorkerConfig:      cfg.Worker,
-		CommandRegistry:   command.NewCommandRegistry(),
-		TaskScheduler:     taskScheduler,
-		WebSearchManager:  webSearchManager,
-		WebFetchManager:   webFetchManager,
+		DB:               svcCtx.DB,
+		Redis:            svcCtx.Redis,
+		SessionRepo:      svcCtx.SessionRepo,
+		MessageRepo:      svcCtx.MessageRepo,
+		TurnRepo:         svcCtx.TurnRepo,
+		RtcRepo:          svcCtx.RtcRepo,
+		GoalRepo:         svcCtx.GoalRepo,
+		LoopRepo:         svcCtx.LoopRepo,
+		MemoryRepo:       svcCtx.MemoryRepo,
+		UpdatePublisher:  svcCtx.UpdatePublisher,
+		ChatModel:        chatModelResult.model,
+		LLMConfig:        cfg.LLM,
+		SystemPrompt:     cfg.Worker.SystemPrompt,
+		WorkerConfig:     cfg.Worker,
+		CommandRegistry:  command.NewCommandRegistry(),
+		TaskScheduler:    taskScheduler,
+		WebSearchManager: webSearchManager,
+		WebFetchManager:  webFetchManager,
 	}
 
 	// Inject LLM extractor into WebFetchManager now that deps is available.
@@ -418,9 +418,9 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 
 	// Convert config types.
 	wsCfg := websearch.WebSearchConfig{
-		BalancerType:    cfg.WebSearch.BalancerType,
-		GlobalTimeout:   cfg.WebSearch.GlobalTimeout,
-		ProxyHealthURL:  cfg.WebSearch.ProxyHealthURL,
+		BalancerType:       cfg.WebSearch.BalancerType,
+		GlobalTimeout:      cfg.WebSearch.GlobalTimeout,
+		ProxyHealthURL:     cfg.WebSearch.ProxyHealthURL,
 		ProxyCheckInterval: cfg.WebSearch.ProxyCheckInterval,
 		CircuitBreaker: circuitbreaker.CircuitBreakerConfig{
 			FailureThreshold:    cfg.WebSearch.CircuitBreaker.FailureThreshold,
@@ -485,23 +485,23 @@ func provideWebFetchManager(cfg *config.Config, redisClient redis.UniversalClien
 	}
 
 	wfCfg := webfetch.WebFetchConfig{
-		Enabled:                    cfg.WebFetch.Enabled,
-		MaxConcurrency:             cfg.WebFetch.MaxConcurrency,
-		MaxDomainConcurrency:       cfg.WebFetch.MaxDomainConcurrency,
-		CacheTTL:                   cfg.WebFetch.CacheTTL,
-		MaxURLLength:               cfg.WebFetch.MaxURLLength,
-		MaxContentSize:             cfg.WebFetch.MaxContentSize,
-		FetchTimeout:               cfg.WebFetch.FetchTimeout,
-		MaxRedirects:               cfg.WebFetch.MaxRedirects,
-		LLMExtractThresholdBytes:   cfg.WebFetch.LLMExtractThresholdBytes,
-		LLMMaxTokens:               cfg.WebFetch.LLMMaxTokens,
-		MaxLLMExtractPerSession:    cfg.WebFetch.MaxLLMExtractPerSession,
-		UserAgent:                  cfg.WebFetch.UserAgent,
-		RespectRobotsTxt:           cfg.WebFetch.RespectRobotsTxt,
-		RobotsCacheTTL:             cfg.WebFetch.RobotsCacheTTL,
-		PreApprovedDomains:         cfg.WebFetch.PreApprovedDomains,
-		BlockedDomains:             cfg.WebFetch.BlockedDomains,
-		AllowedSchemes:             []string{"https", "http"},
+		Enabled:                  cfg.WebFetch.Enabled,
+		MaxConcurrency:           cfg.WebFetch.MaxConcurrency,
+		MaxDomainConcurrency:     cfg.WebFetch.MaxDomainConcurrency,
+		CacheTTL:                 cfg.WebFetch.CacheTTL,
+		MaxURLLength:             cfg.WebFetch.MaxURLLength,
+		MaxContentSize:           cfg.WebFetch.MaxContentSize,
+		FetchTimeout:             cfg.WebFetch.FetchTimeout,
+		MaxRedirects:             cfg.WebFetch.MaxRedirects,
+		LLMExtractThresholdBytes: cfg.WebFetch.LLMExtractThresholdBytes,
+		LLMMaxTokens:             cfg.WebFetch.LLMMaxTokens,
+		MaxLLMExtractPerSession:  cfg.WebFetch.MaxLLMExtractPerSession,
+		UserAgent:                cfg.WebFetch.UserAgent,
+		RespectRobotsTxt:         cfg.WebFetch.RespectRobotsTxt,
+		RobotsCacheTTL:           cfg.WebFetch.RobotsCacheTTL,
+		PreApprovedDomains:       cfg.WebFetch.PreApprovedDomains,
+		BlockedDomains:           cfg.WebFetch.BlockedDomains,
+		AllowedSchemes:           []string{"https", "http"},
 		RateLimit: webfetch.RateLimitConfig{
 			GlobalRPS:   cfg.WebFetch.RateLimit.GlobalRPS,
 			GlobalBurst: cfg.WebFetch.RateLimit.GlobalBurst,
@@ -664,6 +664,7 @@ func provideOSS3Backend(cfg *config.Config) (rtcoss3.Backend, error) {
 		SecretKey:           minioCfg.SecretKey,
 		Bucket:              minioCfg.Bucket,
 		PublicURL:           minioCfg.PublicURL,
+		Region:              minioCfg.Region,
 		UseSSL:              minioCfg.UseSSL,
 		MaxIdleConns:        minioCfg.MaxIdleConns,
 		MaxIdleConnsPerHost: minioCfg.MaxIdleConnsPerHost,
@@ -695,7 +696,7 @@ func provideOSS3Handler(oss3UC *usecase.OSS3Usecase, cfg *config.Config) *httpha
 	if oss3UC == nil {
 		return nil
 	}
-	return httphandler.NewOSS3Handler(oss3UC, cfg.Storage.MinIO.Bucket)
+	return httphandler.NewOSS3Handler(oss3UC, cfg.Storage.MinIO.Bucket, cfg.Storage.Quota.MaxFileSizeBytes)
 }
 
 func provideSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config) *httphandler.STSHandler {

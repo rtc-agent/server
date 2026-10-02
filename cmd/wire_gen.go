@@ -726,16 +726,18 @@ func provideOSS3Backend(cfg *config.Config) (rtcoss3.Backend, error) {
 	if cfg.Storage.Backend == "" {
 		return nil, nil
 	}
+	minioCfg := cfg.Storage.MinIO
 	return rtcoss3.NewMinIOBackend(rtcoss3.MinIOOptions{
-		Endpoint:            cfg.Storage.MinIO.Endpoint,
-		AccessKey:           cfg.Storage.MinIO.AccessKey,
-		SecretKey:           cfg.Storage.MinIO.SecretKey,
-		Bucket:              cfg.Storage.MinIO.Bucket,
-		PublicURL:           cfg.Storage.MinIO.PublicURL,
-		UseSSL:              cfg.Storage.MinIO.UseSSL,
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
+		Endpoint:            minioCfg.Endpoint,
+		AccessKey:           minioCfg.AccessKey,
+		SecretKey:           minioCfg.SecretKey,
+		Bucket:              minioCfg.Bucket,
+		PublicURL:           minioCfg.PublicURL,
+		Region:              minioCfg.Region,
+		UseSSL:              minioCfg.UseSSL,
+		MaxIdleConns:        minioCfg.MaxIdleConns,
+		MaxIdleConnsPerHost: minioCfg.MaxIdleConnsPerHost,
+		IdleConnTimeout:     minioCfg.IdleConnTimeout,
 	})
 }
 
@@ -763,7 +765,7 @@ func provideOSS3Handler(oss3UC *usecase.OSS3Usecase, cfg *config.Config) *httpha
 	if oss3UC == nil {
 		return nil
 	}
-	return httphandler.NewOSS3Handler(oss3UC, cfg.Storage.MinIO.Bucket)
+	return httphandler.NewOSS3Handler(oss3UC, cfg.Storage.MinIO.Bucket, cfg.Storage.Quota.MaxFileSizeBytes)
 }
 
 func provideSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config) *httphandler.STSHandler {

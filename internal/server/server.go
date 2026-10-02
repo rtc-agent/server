@@ -21,6 +21,7 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/svc"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -51,6 +52,9 @@ type Server struct {
 	instanceID         string                       // unique ID for distributed scanner lock
 	staleScannerCancel context.CancelFunc           // cancels the stale turn scanner goroutine
 	metrics            *turnagent.PrometheusMetrics // Prometheus metrics (may be nil)
+
+	// OSS3 cleanup scheduler
+	cleanupCancel context.CancelFunc // cancels the cleanup goroutine
 }
 
 // BuildProviderClients constructs the Provider list from config.
@@ -120,6 +124,25 @@ func (s *Server) Start() error {
 		if logger.IsDebugMode() {
 			logger.Debug(ctx, "[Server] stale turn scanner started",
 				zap.String("instance_id", s.instanceID))
+		}
+	}
+
+	// Start OSS3 periodic cleanup goroutine (expired uploads, credentials, quota/orphan reconciliation).
+	// Only started when a storage backend is configured.
+	if s.oss3Handler != nil && s.cfg.Storage.IsEnabled() {
+		oss3UC := s.oss3Handler.OSS3Usecase()
+		if oss3UC != nil && s.cleanupCancel == nil {
+			ctx, cancel := context.WithCancel(context.Background())
+			s.cleanupCancel = cancel
+			interval := s.cfg.Storage.Cleanup.Interval
+			if interval <= 0 {
+				interval = time.Hour
+			}
+			logger.SafeGo("oss3-cleanup", func() {
+				s.oss3CleanupLoop(ctx, oss3UC, interval)
+			})
+			logger.Info(ctx, "[Server] OSS3 cleanup scheduler started",
+				zap.Duration("interval", interval))
 		}
 	}
 
@@ -222,6 +245,11 @@ func (s *Server) Stop() {
 	// Stop stale turn scanner goroutine
 	if s.staleScannerCancel != nil {
 		s.staleScannerCancel()
+	}
+
+	// Stop OSS3 cleanup goroutine
+	if s.cleanupCancel != nil {
+		s.cleanupCancel()
 	}
 
 	// Stop goroutine metrics collector
@@ -368,12 +396,14 @@ func (s *Server) registerOSS3Routes(mux *http.ServeMux) {
 	}
 
 	// Build middleware chain (wrap from innermost to outermost)
-	// Request flow: AccessLog -> SigV4 -> BusinessRestriction -> Metrics -> RequestID -> Handler
+	// Request flow: AccessLog -> RequestID -> Metrics -> SigV4 -> RateLimit -> BusinessRestriction -> Handler
 	// MEDIUM-13 fix: Metrics placed outside SigV4 to count auth-rejected requests.
 	// M5: RequestID middleware added to inject request ID for tracing.
+	// OSS3-26 fix: RateLimit middleware consolidates per-handler rate limit checks.
 	// We build from handler outward (last wrapped = outermost = first to execute):
 	var handler http.Handler = s.oss3Handler
 	handler = httphandler.NewBusinessRestrictionMiddleware(oss3UC, s.cfg.Storage.MinIO.Bucket, handler)
+	handler = httphandler.NewRateLimitMiddleware(oss3UC, handler)
 	handler = httphandler.NewSigV4Middleware(oss3UC, s.cfg.Storage.S3Endpoint.Region, handler)
 	handler = httphandler.NewOSS3MetricsMiddleware()(handler)
 	handler = httphandler.RequestIDMiddleware(handler)
@@ -467,4 +497,34 @@ func basicAuth(next http.Handler, user, password string) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// oss3CleanupLoop runs OSS3 cleanup tasks periodically until ctx is cancelled.
+// Tasks include: expired upload cleanup, credential cleanup, quota reconciliation,
+// and orphan object reconciliation.
+func (s *Server) oss3CleanupLoop(ctx context.Context, uc *usecase.OSS3Usecase, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Run once immediately on startup (after a short delay to let the server settle).
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+		if err := uc.RunCleanup(ctx); err != nil {
+			logger.Error(ctx, "[Server] OSS3 cleanup cycle failed", zap.Error(err))
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info(ctx, "[Server] OSS3 cleanup scheduler stopped")
+			return
+		case <-ticker.C:
+			if err := uc.RunCleanup(ctx); err != nil {
+				logger.Error(ctx, "[Server] OSS3 cleanup cycle failed", zap.Error(err))
+			}
+		}
+	}
 }

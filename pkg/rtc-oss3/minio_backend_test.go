@@ -259,3 +259,134 @@ func TestMinIOBackendUnit(t *testing.T) {
 		}
 	})
 }
+
+// makeItems builds a sorted []rawListItem from keys. Items ending with
+// "/" are treated as common prefixes (Size=0, no ETag).
+func makeItems(keys ...string) []rawListItem {
+	items := make([]rawListItem, len(keys))
+	for i, k := range keys {
+		items[i] = rawListItem{Key: k, Size: 100, ETag: "etag"}
+	}
+	return items
+}
+
+// TestComputeListPagination_NextMarkerTruncatedObjects verifies that when
+// truncation happens at a regular object boundary, NextMarker points to
+// the last returned object key (not the item that triggered truncation).
+func TestComputeListPagination_NextMarkerTruncatedObjects(t *testing.T) {
+	// Items: a/1, b, c/1, d, e/1 — sorted lexicographically.
+	// With delimiter="/" and maxKeys=3, the first 3 items are returned:
+	//   objects=[b], commonPrefixes=[a/, c/], truncated=true
+	// NextMarker must be "c/" (last returned item), NOT "d" (the trigger).
+	items := makeItems("a/", "b", "c/", "d", "e/")
+	objs, prefixes, truncated, marker := computeListPagination(items, "/", 3)
+
+	if !truncated {
+		t.Fatal("expected truncated=true")
+	}
+	if len(objs) != 1 || objs[0].Key != "b" {
+		t.Errorf("objects: got %v, want [b]", objs)
+	}
+	if len(prefixes) != 2 || prefixes[0] != "a/" || prefixes[1] != "c/" {
+		t.Errorf("commonPrefixes: got %v, want [a/ c/]", prefixes)
+	}
+	if marker != "c/" {
+		t.Errorf("NextMarker: got %q, want %q (last returned item, not trigger)", marker, "c/")
+	}
+}
+
+// TestComputeListPagination_NextMarkerTruncatedCommonPrefixes verifies that
+// when all items are CommonPrefixes and truncation occurs, NextMarker
+// points to the last returned CommonPrefix.
+func TestComputeListPagination_NextMarkerTruncatedCommonPrefixes(t *testing.T) {
+	// 5 common prefixes, maxKeys=3 → return first 3, truncated.
+	items := makeItems("a/", "b/", "c/", "d/", "e/")
+	objs, prefixes, truncated, marker := computeListPagination(items, "/", 3)
+
+	if !truncated {
+		t.Fatal("expected truncated=true")
+	}
+	if len(objs) != 0 {
+		t.Errorf("objects: got %v, want empty", objs)
+	}
+	if len(prefixes) != 3 {
+		t.Fatalf("commonPrefixes: got %v, want 3 items", prefixes)
+	}
+	if marker != "c/" {
+		t.Errorf("NextMarker: got %q, want %q", marker, "c/")
+	}
+}
+
+// TestComputeListPagination_NotTruncated verifies that when all items fit
+// within the quota, IsTruncated is false and NextMarker is empty.
+func TestComputeListPagination_NotTruncated(t *testing.T) {
+	items := makeItems("a/", "b", "c/")
+	objs, prefixes, truncated, marker := computeListPagination(items, "/", 5)
+
+	if truncated {
+		t.Error("expected truncated=false")
+	}
+	if marker != "" {
+		t.Errorf("NextMarker: got %q, want empty (not truncated)", marker)
+	}
+	if len(objs) != 1 || objs[0].Key != "b" {
+		t.Errorf("objects: got %v, want [b]", objs)
+	}
+	if len(prefixes) != 2 {
+		t.Errorf("commonPrefixes: got %v, want 2 items", prefixes)
+	}
+}
+
+// TestComputeListPagination_NoDelimiter verifies that with empty delimiter
+// (recursive listing), all items are returned as objects and NextMarker
+// uses the last object key.
+func TestComputeListPagination_NoDelimiter(t *testing.T) {
+	items := makeItems("a", "b", "c", "d")
+	objs, prefixes, truncated, marker := computeListPagination(items, "", 3)
+
+	if !truncated {
+		t.Fatal("expected truncated=true")
+	}
+	if len(prefixes) != 0 {
+		t.Errorf("commonPrefixes: got %v, want empty (no delimiter)", prefixes)
+	}
+	if len(objs) != 3 {
+		t.Fatalf("objects: got %d, want 3", len(objs))
+	}
+	if marker != "c" {
+		t.Errorf("NextMarker: got %q, want %q", marker, "c")
+	}
+}
+
+// TestComputeListPagination_EmptyList verifies handling of empty input.
+func TestComputeListPagination_EmptyList(t *testing.T) {
+	objs, prefixes, truncated, marker := computeListPagination(nil, "/", 10)
+
+	if truncated {
+		t.Error("expected truncated=false for empty list")
+	}
+	if marker != "" {
+		t.Errorf("NextMarker: got %q, want empty", marker)
+	}
+	if len(objs) != 0 || len(prefixes) != 0 {
+		t.Error("expected empty results for empty input")
+	}
+}
+
+// TestComputeListPagination_ExactlyAtQuota verifies that when items exactly
+// fill the quota, IsTruncated is false (we fetch maxKeys+1, so if the
+// (maxKeys+1)th doesn't exist, it's not truncated).
+func TestComputeListPagination_ExactlyAtQuota(t *testing.T) {
+	items := makeItems("a/", "b", "c/")
+	objs, prefixes, truncated, marker := computeListPagination(items, "/", 3)
+
+	if truncated {
+		t.Error("expected truncated=false when items == maxKeys")
+	}
+	if marker != "" {
+		t.Errorf("NextMarker: got %q, want empty (not truncated)", marker)
+	}
+	if len(objs)+len(prefixes) != 3 {
+		t.Errorf("total items: got %d, want 3", len(objs)+len(prefixes))
+	}
+}

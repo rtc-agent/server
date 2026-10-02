@@ -186,6 +186,18 @@ const (
 	// Value: reserved bytes (int64); TTL: pendingTTL (e.g. 5m, auto-expire to prevent leaks).
 	PrefixOSS3QuotaPending = "oss3:quota:pending:"
 
+	// PrefixOSS3QuotaPendingAgg is per-user ZSET that aggregates ALL pending reservations.
+	// Solves the multi-concurrent-reserve problem: when multiple Reserve calls happen in
+	// parallel for the same user, each call can see the SUM of all other users' pending
+	// amounts (not just its own) and correctly enforce the quota limit.
+	// Full key: oss3:quota:pending_agg:{user_id}
+	// Value: ZSET where member=requestID, score=pending amount;
+	//        entries are added by Reserve, removed by Commit/Rollback.
+	//        Stale entries (whose pending key expired via TTL) are cleaned up lazily
+	//        during Reserve/Commit/Rollback when the pending key GET returns nil.
+	// TTL: 0 (self-managing; entries are explicitly removed on Commit/Rollback).
+	PrefixOSS3QuotaPendingAgg = "oss3:quota:pending_agg:"
+
 	// PrefixOSS3RateLimit is per-user S3 API rate limiter (ZSET-based sliding window).
 	// Full key: oss3:rate:{user_id}
 	// Value: ZSET where member=requestID, score=timestamp;
@@ -364,6 +376,13 @@ func OSS3Quota(userID string) string { return PrefixOSS3Quota + userID }
 // OSS3QuotaPending returns the Redis key for per-user pending quota reservation.
 func OSS3QuotaPending(userID, requestID string) string {
 	return PrefixOSS3QuotaPending + userID + ":" + requestID
+}
+
+// OSS3QuotaPendingAgg returns the Redis key for the per-user pending aggregation ZSET.
+// The ZSET tracks ALL pending reservations for a user so that concurrent Reserve calls
+// can correctly compute total pending usage (member=requestID, score=amount).
+func OSS3QuotaPendingAgg(userID string) string {
+	return PrefixOSS3QuotaPendingAgg + userID
 }
 
 // OSS3RateLimit returns the Redis key for per-user S3 API rate limiter.

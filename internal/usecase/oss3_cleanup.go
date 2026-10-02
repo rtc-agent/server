@@ -112,6 +112,20 @@ func (uc *OSS3Usecase) RunCleanup(ctx context.Context) error {
 			zap.Int64("total_drift_bytes", reconcileResult.TotalDriftBytes))
 	}
 
+	// Reconcile orphans: delete MinIO objects with no DB record.
+	// This is the safety net for DB failures that survive immediate compensation.
+	orphanResult, orphanErr := uc.ReconcileOrphans(ctx)
+	if orphanErr != nil {
+		logger.Error(ctx, "cleanup: orphan reconciliation failed",
+			zap.Error(orphanErr))
+	} else if orphanResult != nil && orphanResult.OrphansFound > 0 {
+		logger.Info(ctx, "cleanup: orphan reconciliation found orphans",
+			zap.Int("objects_scanned", orphanResult.ObjectsScanned),
+			zap.Int("orphans_found", orphanResult.OrphansFound),
+			zap.Int("orphans_deleted", orphanResult.OrphansDeleted),
+			zap.Int64("bytes_freed", orphanResult.BytesFreed))
+	}
+
 	return nil
 }
 

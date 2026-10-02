@@ -30,6 +30,12 @@ func NewOSS3CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
 
+			// Non-browser requests (CLI/SDK) have no Origin header; skip CORS checks.
+			if origin == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			// Empty origins list means deny all CORS requests
 			if len(origins) == 0 {
 				w.WriteHeader(http.StatusForbidden)

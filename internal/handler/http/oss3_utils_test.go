@@ -8,8 +8,12 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/rtc-agent/server/internal/infra/contextx"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 )
+
+// testContextKey is a custom type for context keys in tests to avoid collisions.
+type testContextKey string
 
 func TestParseS3Path(t *testing.T) {
 	tests := []struct {
@@ -387,7 +391,7 @@ func TestExtractUserIDFromContext(t *testing.T) {
 	}{
 		{
 			name:       "user id present",
-			ctx:        context.WithValue(context.Background(), ContextKeyUserID, "user123"),
+			ctx:        contextx.WithOSS3UserID(context.Background(), "user123"),
 			wantUserID: "user123",
 		},
 		{
@@ -397,7 +401,7 @@ func TestExtractUserIDFromContext(t *testing.T) {
 		},
 		{
 			name:       "user id wrong type",
-			ctx:        context.WithValue(context.Background(), ContextKeyUserID, 123),
+			ctx:        context.WithValue(context.Background(), testContextKey("wrong_key"), 123),
 			wantUserID: "",
 		},
 	}
@@ -420,7 +424,7 @@ func TestExtractRequestIDFromContext(t *testing.T) {
 	}{
 		{
 			name:          "request id present",
-			ctx:           context.WithValue(context.Background(), ContextKeyRequestID, "req123"),
+			ctx:           contextx.WithOSS3RequestID(context.Background(), "req123"),
 			wantRequestID: "req123",
 		},
 		{
@@ -430,7 +434,7 @@ func TestExtractRequestIDFromContext(t *testing.T) {
 		},
 		{
 			name:          "request id wrong type",
-			ctx:           context.WithValue(context.Background(), ContextKeyRequestID, 123),
+			ctx:           context.WithValue(context.Background(), testContextKey("wrong_key"), 123),
 			wantRequestID: "",
 		},
 	}

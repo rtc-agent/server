@@ -288,6 +288,12 @@ func setStorageDefaults(v *viper.Viper) {
 	v.SetDefault("storage.cleanup.multipart_expiry", 24*time.Hour)
 	v.SetDefault("storage.cleanup.credential_expiry", 24*time.Hour)
 
+	// Orphan cleanup defaults (conservative: disabled, dry-run)
+	v.SetDefault("storage.cleanup.orphan.enabled", false)
+	v.SetDefault("storage.cleanup.orphan.batch_size", 500)
+	v.SetDefault("storage.cleanup.orphan.cooldown_period", 1*time.Hour)
+	v.SetDefault("storage.cleanup.orphan.dry_run", true)
+
 	// Encryption defaults
 	v.SetDefault("storage.encryption.session_token_key", "")
 }

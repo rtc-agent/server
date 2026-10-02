@@ -1,20 +1,15 @@
 package httphandler
 
 import (
-	"bufio"
-	"context"
-	"errors"
-	"net"
 	"net/http"
 	"time"
 
+	"github.com/felixge/httpsnoop"
+	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
 )
-
-// contextKeyOperation is the context key for storing the S3 operation name.
-type contextKeyOperation struct{}
 
 // AccessLogMiddleware logs S3 requests with structured fields.
 type AccessLogMiddleware struct {
@@ -30,82 +25,36 @@ func NewAccessLogMiddleware(oss3UC *usecase.OSS3Usecase, next http.Handler) *Acc
 	}
 }
 
-// responseWriter wraps http.ResponseWriter to capture status code and response size.
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode   int
-	responseSize int
-}
-
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
-}
-
-func (rw *responseWriter) Write(b []byte) (int, error) {
-	n, err := rw.ResponseWriter.Write(b)
-	rw.responseSize += n
-	return n, err
-}
-
-// Flush implements http.Flusher for SSE and streaming support.
-func (rw *responseWriter) Flush() {
-	if flusher, ok := rw.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
-}
-
-// Hijack implements http.Hijacker for WebSocket support.
-func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	if hijacker, ok := rw.ResponseWriter.(http.Hijacker); ok {
-		return hijacker.Hijack()
-	}
-	return nil, nil, errors.New("underlying ResponseWriter does not support hijacking")
-}
-
-// contextEnricher is a mutable container to capture context values set by downstream handlers.
-// This is needed because Go's http.Request is immutable, and when SigV4 middleware calls
-// r.WithContext(ctx), it creates a new request that AccessLog cannot access directly.
-type contextEnricher struct {
-	userID    string
-	requestID string
-}
+// responseHeaderUserKey is the response header set by SigV4 middleware to
+// communicate the authenticated user ID back to the access log middleware.
+// This avoids the need for complex context capture patterns.
+const responseHeaderUserKey = "X-Oss3-User-Id"
 
 // ServeHTTP implements the http.Handler interface.
 func (m *AccessLogMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
-	// Create a mutable container to capture context values from downstream handlers
-	enricher := &contextEnricher{}
-
-	// Wrap response writer to capture status and size
-	rw := &responseWriter{
-		ResponseWriter: w,
-		statusCode:     http.StatusOK,
-	}
-
 	// Extract S3-specific fields (these don't change)
 	bucket, key, _ := parseS3Path(r.URL.Path)
 	operation := extractOperation(r)
 
-	// Wrap the request to capture context enrichment from SigV4 middleware
-	// and store the operation in context for downstream handlers
+	// Store the operation in context via contextx for potential downstream use
 	originalContext := r.Context()
-	ctxWithOperation := context.WithValue(originalContext, contextKeyOperation{}, operation)
-	wrappedReq := r.WithContext(&contextCapturer{
-		Context:  ctxWithOperation,
-		enricher: enricher,
-	})
+	ctxWithOperation := contextx.WithOSS3Operation(originalContext, operation)
+	r = r.WithContext(ctxWithOperation)
 
-	// Call next handler
-	m.next.ServeHTTP(rw, wrappedReq)
+	// Use httpsnoop to capture status code and bytes written while preserving
+	// all ResponseWriter interfaces (Hijacker, Flusher, Pusher, etc.).
+	metrics := httpsnoop.CaptureMetrics(http.HandlerFunc(m.next.ServeHTTP), w, r)
 
 	// Calculate duration
 	duration := time.Since(start)
 
-	// Use captured user_id if available, otherwise fall back to empty string
-	userID := enricher.userID
-	requestID := enricher.requestID
+	// Read user_id and request_id from response headers set by inner middleware.
+	// SigV4 sets X-Oss3-User-Id; RequestIDMiddleware sets X-Amz-Request-Id.
+	// This approach is simpler and more robust than context capture patterns.
+	userID := w.Header().Get(responseHeaderUserKey)
+	requestID := w.Header().Get("X-Amz-Request-Id")
 
 	// Log structured access log
 	logger.Info(originalContext, "[oss3.HTTP] request completed",
@@ -115,46 +64,23 @@ func (m *AccessLogMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		zap.String("key", key),
 		zap.String("operation", operation),
 		zap.String("method", r.Method),
-		zap.Int("status", rw.statusCode),
+		zap.Int("status", metrics.Code),
 		zap.String("duration", duration.String()), // LOW-08 fix: use string format instead of integer ms
-		zap.Int("response_size", rw.responseSize),
+		zap.Int64("response_size", metrics.Written),
 		zap.String("user_agent", r.UserAgent()),
 		zap.Int64("content_length", r.ContentLength),
 		zap.String("remote_addr", r.RemoteAddr),
 		zap.String("referer", r.Referer()),
 		zap.String("range", r.Header.Get("Range")),
 		zap.String("copy_source", r.Header.Get("X-Amz-Copy-Source")),
-		zap.String("etag", rw.Header().Get("ETag")),
+		zap.String("etag", w.Header().Get("ETag")),
 	)
-}
-
-// contextCapturer wraps a context and captures specific values set by downstream handlers.
-type contextCapturer struct {
-	context.Context
-	enricher *contextEnricher
-}
-
-// Value intercepts context.Value calls and captures user_id and request_id.
-func (c *contextCapturer) Value(key interface{}) interface{} {
-	val := c.Context.Value(key)
-	// Capture specific keys when they are set by downstream handlers
-	switch key {
-	case ContextKeyUserID:
-		if userID, ok := val.(string); ok {
-			c.enricher.userID = userID
-		}
-	case ContextKeyRequestID:
-		if requestID, ok := val.(string); ok {
-			c.enricher.requestID = requestID
-		}
-	}
-	return val
 }
 
 // extractOperation extracts the S3 operation name from the request.
 // This is a pure function — no side effects on the request.
 // The operation is computed once by AccessLogMiddleware and cached in context
-// via contextKeyOperation for potential future use by downstream handlers.
+// via contextx.WithOSS3Operation for potential future use by downstream handlers.
 func extractOperation(r *http.Request) string {
 	_, key, _ := parseS3Path(r.URL.Path)
 	q := r.URL.Query()

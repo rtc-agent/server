@@ -1,9 +1,9 @@
 package httphandler
 
 import (
-	"context"
 	"net/http"
 
+	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
@@ -41,14 +41,14 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract AccessKeyID from Authorization header
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
-		WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
 		return
 	}
 
 	// Parse credential to get AccessKeyID
 	cred, _, _, err := rtcoss3.ParseAuthorizationHeader(auth)
 	if err != nil {
-		WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
 	}
 
@@ -59,12 +59,12 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logger.Error(r.Context(), "SigV4: credential lookup failed",
 			zap.String("access_key_id", cred.AccessKeyID),
 			zap.Error(err))
-		WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
 		return
 	}
 	if credValue == nil {
 		// Credential not found — return 403
-		WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
 	}
 
@@ -73,7 +73,7 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logger.Error(r.Context(), "SigV4: signature verification failed",
 			zap.String("access_key_id", cred.AccessKeyID),
 			zap.Error(err))
-		WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
 	}
 
@@ -83,7 +83,7 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logger.Error(r.Context(), "SigV4: session token decryption failed",
 			zap.String("access_key_id", cred.AccessKeyID),
 			zap.Error(err))
-		WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
 	}
 
@@ -92,7 +92,11 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// handles it (generating a UUID if the client didn't provide one). Overwriting
 	// it here with r.Header.Get("X-Amz-Request-Id") would replace the UUID with
 	// an empty string when the client omits the header.
-	ctx := context.WithValue(r.Context(), ContextKeyUserID, payload.UserID)
+	ctx := contextx.WithOSS3UserID(r.Context(), payload.UserID)
+
+	// Set response header so AccessLogMiddleware can read the authenticated user ID
+	// without needing a complex context capture pattern.
+	w.Header().Set(responseHeaderUserKey, payload.UserID)
 
 	// Signature valid, call next handler with enriched context
 	m.next.ServeHTTP(w, r.WithContext(ctx))

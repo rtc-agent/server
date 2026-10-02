@@ -9,10 +9,14 @@
 package rtcoss3
 
 import (
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"net/http"
+
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // S3TimeFormat is the canonical time format used in S3 responses.
@@ -91,8 +95,13 @@ func WriteS3Error(w http.ResponseWriter, s3err *S3Error, resource, requestID str
 		Resource:  resource,
 		RequestID: requestID,
 	}
+	// xml.Header is a compile-time constant string; fmt.Fprint cannot fail on it.
 	_, _ = fmt.Fprint(w, xml.Header)
-	_ = xml.NewEncoder(w).Encode(resp)
+	if err := xml.NewEncoder(w).Encode(resp); err != nil {
+		// Header already sent; cannot return error response. Log for diagnostics.
+		logger.Error(context.Background(), "failed to encode S3 error XML response",
+			zap.Error(err))
+	}
 }
 
 // Standard S3 errors.

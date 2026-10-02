@@ -21,7 +21,7 @@ log:
   llm_payload: true
 
 auth:
-  jwt_secret: "rtc-agent-dev-jwt-secret-change-me-in-production"
+  jwt_secret: "${AUTH__JWT_SECRET}"  # 通过环境变量 AUTH__JWT_SECRET 配置
   access_token_ttl_seconds: 3600
 
 providers:
@@ -29,7 +29,7 @@ providers:
     enabled: false
     url: "http://192.168.31.60:20060"
     client_id: "test-client"
-    client_secret: "test-client-secret"
+    client_secret: "${PROVIDERS__MOCK__CLIENT_SECRET}"  # 通过环境变量 PROVIDERS__MOCK__CLIENT_SECRET 配置
 
 cors:
   allow_origins: ["*"]
@@ -191,8 +191,8 @@ storage:
   minio:
     endpoint: "minio:9000"          # 内网地址（Server → MinIO）
     public_url: "http://localhost:29000"  # 公网地址（Client → S3，用于生成 presigned URL）
-    access_key: "minioadmin"
-    secret_key: "minioadmin"
+    access_key: "${MINIO_ACCESS_KEY}"  # 通过环境变量 MINIO_ACCESS_KEY 配置
+    secret_key: "${MINIO_SECRET_KEY}"  # 通过环境变量 MINIO_SECRET_KEY 配置
     bucket: "rtc-agent"
     use_ssl: false
     max_idle_conns: 1024
@@ -218,4 +218,4 @@ storage:
     multipart_expiry: 24h
     credential_expiry: 24h
   encryption:
-    session_token_key: "81a0bccbbe9d654619e6f9069330988298d8ec23fdd5de7736ff090fb4ccabb1"  # 32 bytes hex (64 chars) — Override via STORAGE__ENCRYPTION__SESSION_TOKEN_KEY env var in production
+    session_token_key: "${OSS3_SESSION_TOKEN_KEY}"  # 通过环境变量 OSS3_SESSION_TOKEN_KEY 配置（64个十六进制字符 = 32字节）

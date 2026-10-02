@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,11 +27,11 @@ type ReconcileResult struct {
 	Duration time.Duration
 }
 
-// acquireReconcileLock tries to acquire the distributed lock for reconciliation.
+// acquireLock is a generic helper to acquire a distributed lock.
 // Returns (holderUUID, true) on success, ("", false) if another node holds it.
-func (uc *OSS3Usecase) acquireReconcileLock(ctx context.Context, ttl time.Duration) (string, bool, error) {
+func (uc *OSS3Usecase) acquireLock(ctx context.Context, lockName string, ttl time.Duration) (string, bool, error) {
 	holderUUID := uuid.New().String()
-	lockKey := cache.OSS3Lock("quota_reconcile")
+	lockKey := cache.OSS3Lock(lockName)
 
 	script := uc.scripts[cache.OSS3ScriptLockAcquire]
 	result, err := script.Run(ctx, uc.redis,
@@ -39,7 +40,7 @@ func (uc *OSS3Usecase) acquireReconcileLock(ctx context.Context, ttl time.Durati
 		int(ttl.Seconds()),
 	).Int()
 	if err != nil {
-		return "", false, fmt.Errorf("acquire reconcile lock: %w", err)
+		return "", false, fmt.Errorf("acquire %s lock: %w", lockName, err)
 	}
 	if result == 0 {
 		return "", false, nil // another holder holds the lock
@@ -47,9 +48,9 @@ func (uc *OSS3Usecase) acquireReconcileLock(ctx context.Context, ttl time.Durati
 	return holderUUID, true, nil
 }
 
-// extendReconcileLock extends the TTL of the distributed lock.
-func (uc *OSS3Usecase) extendReconcileLock(ctx context.Context, holderUUID string, ttl time.Duration) error {
-	lockKey := cache.OSS3Lock("quota_reconcile")
+// extendLock is a generic helper to extend the TTL of a distributed lock.
+func (uc *OSS3Usecase) extendLock(ctx context.Context, lockName, holderUUID string, ttl time.Duration) error {
+	lockKey := cache.OSS3Lock(lockName)
 
 	script := uc.scripts[cache.OSS3ScriptLockExtend]
 	result, err := script.Run(ctx, uc.redis,
@@ -58,17 +59,17 @@ func (uc *OSS3Usecase) extendReconcileLock(ctx context.Context, holderUUID strin
 		int(ttl.Seconds()),
 	).Int()
 	if err != nil {
-		return fmt.Errorf("extend reconcile lock: %w", err)
+		return fmt.Errorf("extend %s lock: %w", lockName, err)
 	}
 	if result == 0 {
-		return fmt.Errorf("reconcile lock lost (holder=%s)", holderUUID)
+		return fmt.Errorf("%s lock lost (holder=%s)", lockName, holderUUID)
 	}
 	return nil
 }
 
-// releaseReconcileLock releases the distributed lock if still held by caller.
-func (uc *OSS3Usecase) releaseReconcileLock(ctx context.Context, holderUUID string) {
-	lockKey := cache.OSS3Lock("quota_reconcile")
+// releaseLock is a generic helper to release a distributed lock.
+func (uc *OSS3Usecase) releaseLock(ctx context.Context, lockName, holderUUID string) {
+	lockKey := cache.OSS3Lock(lockName)
 
 	script := uc.scripts[cache.OSS3ScriptLockRelease]
 	_, err := script.Run(ctx, uc.redis,
@@ -76,10 +77,26 @@ func (uc *OSS3Usecase) releaseReconcileLock(ctx context.Context, holderUUID stri
 		holderUUID,
 	).Int()
 	if err != nil {
-		logger.Debug(ctx, "release reconcile lock failed (best-effort)",
+		logger.Debug(ctx, fmt.Sprintf("release %s lock failed (best-effort)", lockName),
 			zap.String("holder", holderUUID),
 			zap.Error(err))
 	}
+}
+
+// acquireReconcileLock tries to acquire the distributed lock for reconciliation.
+// Returns (holderUUID, true) on success, ("", false) if another node holds it.
+func (uc *OSS3Usecase) acquireReconcileLock(ctx context.Context, ttl time.Duration) (string, bool, error) {
+	return uc.acquireLock(ctx, "quota_reconcile", ttl)
+}
+
+// extendReconcileLock extends the TTL of the distributed lock.
+func (uc *OSS3Usecase) extendReconcileLock(ctx context.Context, holderUUID string, ttl time.Duration) error {
+	return uc.extendLock(ctx, "quota_reconcile", holderUUID, ttl)
+}
+
+// releaseReconcileLock releases the distributed lock if still held by caller.
+func (uc *OSS3Usecase) releaseReconcileLock(ctx context.Context, holderUUID string) {
+	uc.releaseLock(ctx, "quota_reconcile", holderUUID)
 }
 
 // getRedisQuota reads the current Redis quota counter for a user.
@@ -158,7 +175,17 @@ func (uc *OSS3Usecase) ReconcileQuota(ctx context.Context) (*ReconcileResult, er
 			return nil, fmt.Errorf("reconcile: page query: %w", err)
 		}
 
-		for userID, dbSum := range page {
+		// Sort user IDs for deterministic processing order.
+		// Map iteration order is non-deterministic in Go; sorting ensures
+		// consistent log ordering and predictable behavior on partial failures.
+		userIDs := make([]string, 0, len(page))
+		for uid := range page {
+			userIDs = append(userIDs, uid)
+		}
+		sort.Strings(userIDs)
+
+		for _, userID := range userIDs {
+			dbSum := page[userID]
 			result.UsersChecked++
 
 			// Check for pending reservations before adjusting quota.

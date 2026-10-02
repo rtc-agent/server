@@ -231,14 +231,17 @@ func TestNewOSS3Usecase_InvalidHexKey(t *testing.T) {
 	}
 }
 
-// TestNewOSS3Usecase_EmptyKey tests empty key.
+// TestNewOSS3Usecase_EmptyKey tests empty key (should succeed, encryption disabled).
 func TestNewOSS3Usecase_EmptyKey(t *testing.T) {
 	cfg := config.StorageConfig{
 		Encryption: config.EncryptionConfig{SessionTokenKey: ""},
 	}
-	_, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, nil, cfg)
-	if err == nil {
-		t.Error("Expected error for empty key")
+	uc, err := NewOSS3Usecase(nil, nil, nil, nil, nil, nil, nil, cfg)
+	if err != nil {
+		t.Errorf("Expected no error for empty key (encryption disabled), got: %v", err)
+	}
+	if uc == nil {
+		t.Error("Expected usecase to be created")
 	}
 }
 

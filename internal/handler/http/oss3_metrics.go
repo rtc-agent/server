@@ -259,9 +259,3 @@ func RecordOrphanedQuotaCommit() {
 func RecordQuotaCommitRetry() {
 	oss3QuotaCommitRetryTotal.Inc()
 }
-
-// RecordQuotaDrift sets the absolute drift between Redis quota counter and DB truth.
-// Called by the reconciliation loop after each cycle to track quota accuracy.
-func RecordQuotaDrift(driftBytes int64) {
-	oss3QuotaDriftBytes.Set(float64(driftBytes))
-}

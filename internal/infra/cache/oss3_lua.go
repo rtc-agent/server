@@ -19,25 +19,39 @@ const (
 var (
 	// luaQuotaReserve atomically reserves quota for an upload (two-phase allocation).
 	//
-	//	KEYS[1] = oss3:quota:{user_id}              (current quota counter)
-	//	KEYS[2] = oss3:quota:pending:{uid}:{reqID}  (pending reservation)
-	//	ARGV[1] = amount      (bytes to reserve)
-	//	ARGV[2] = maxQuota    (user quota limit)
-	//	ARGV[3] = pendingTTL  (seconds, e.g. 300)
+	//	KEYS[1] = oss3:quota:{user_id}              (current committed quota counter)
+	//	KEYS[2] = oss3:quota:pending:{uid}:{reqID}  (this request's pending reservation, with TTL)
+	//	KEYS[3] = oss3:quota:pending_agg:{uid}      (ZSET aggregating ALL pending reservations;
+	//	                                            member=requestID, score=amount)
+	//	ARGV[1] = amount            (bytes to reserve)
+	//	ARGV[2] = maxQuota          (user quota limit)
+	//	ARGV[3] = pendingTTL        (seconds, e.g. 300)
+	//	ARGV[4] = requestID         (unique request identifier, used as ZSET member)
+	//	ARGV[5] = pendingKeyPrefix  (e.g. "oss3:quota:pending:{uid}:", for constructing
+	//	                             other requests' pending keys during aggregation scan)
 	//
 	// Returns: 1 on success, 0 if quota exceeded.
 	// Idempotent: if pending key already exists with same amount, returns 1 without re-reserving.
 	//
-	// Use case: instant upload path reserves quota before verifying file existence;
-	// if upload fails, caller invokes luaQuotaRollback to release reservation.
+	// Aggregation: The ZSET in KEYS[3] tracks ALL pending reservations for this user.
+	// This solves the multi-concurrent-reserve problem: when multiple Reserve calls happen
+	// in parallel, each call sees the SUM of all pending amounts and correctly enforces quota.
+	//
+	// Stale entry cleanup: If a pending key has expired (TTL), its ZSET entry becomes stale
+	// (score > 0 but no backing key). The script detects and cleans up stale entries when
+	// encountered during ZSET iteration, keeping the aggregation accurate.
 	luaQuotaReserve = `
-local current = tonumber(redis.call('GET', KEYS[1]) or '0')
-local existingPending = redis.call('GET', KEYS[2])
-local amount  = tonumber(ARGV[1])
-local maxQ    = tonumber(ARGV[2])
-local ttl     = tonumber(ARGV[3])
+local current   = tonumber(redis.call('GET', KEYS[1]) or '0')
+local amount    = tonumber(ARGV[1])
+local maxQ      = tonumber(ARGV[2])
+local ttl       = tonumber(ARGV[3])
+local requestID = ARGV[4]
+local prefix    = ARGV[5]
+local pendingKey = KEYS[2]
+local aggKey     = KEYS[3]
 
--- Idempotency check: if pending key exists with same amount, return success
+-- Idempotency check: if this request's pending key exists with same amount, return success.
+local existingPending = redis.call('GET', pendingKey)
 if existingPending then
     local existingAmount = tonumber(existingPending)
     if existingAmount == amount then
@@ -45,12 +59,37 @@ if existingPending then
     end
 end
 
-local pending = tonumber(existingPending or '0')
-if (current + pending + amount) > maxQ then
+-- Sum ALL pending amounts from the aggregation ZSET, with lazy cleanup of stale entries.
+-- A stale entry is one whose pending key has expired (TTL) but whose ZSET score remains.
+local totalPending = 0
+local cursor = "0"
+repeat
+    local result = redis.call('ZSCAN', aggKey, cursor)
+    cursor = result[1]
+    local entries = result[2]
+    for i = 1, #entries, 2 do
+        local member = entries[i]
+        -- Construct the pending key for this member using the prefix.
+        local memberPendingKey = prefix .. member
+        local memberVal = redis.call('GET', memberPendingKey)
+        if not memberVal then
+            -- Stale entry: the pending key expired. Clean it up.
+            redis.call('ZREM', aggKey, member)
+        else
+            -- Live entry: use the actual key value (authoritative source).
+            totalPending = totalPending + tonumber(memberVal)
+        end
+    end
+until cursor == "0"
+
+-- Quota check: committed + all_pending + new_amount must not exceed limit.
+if (current + totalPending + amount) > maxQ then
     return 0
 end
 
-redis.call('SET', KEYS[2], amount, 'EX', ttl)
+-- Record the pending reservation (with TTL for safety) and add to aggregation ZSET.
+redis.call('SET', pendingKey, amount, 'EX', ttl)
+redis.call('ZADD', aggKey, amount, requestID)
 return 1
 `
 
@@ -58,15 +97,20 @@ return 1
 	//
 	//	KEYS[1] = oss3:quota:{user_id}              (current quota counter)
 	//	KEYS[2] = oss3:quota:pending:{uid}:{reqID}  (pending reservation)
-	//	ARGV[1] = amount  (bytes to commit, must not exceed pending)
+	//	KEYS[3] = oss3:quota:pending_agg:{uid}      (ZSET aggregating ALL pending reservations)
+	//	ARGV[1] = amount   (bytes to commit, must not exceed pending)
+	//	ARGV[2] = requestID (used to remove the entry from the aggregation ZSET)
 	//
 	// Returns: 1 on success, 0 if pending key missing (expired or already committed),
 	//          -1 if amount exceeds pending (caller bug).
 	//
 	// Use case: after successful upload, commit reserved quota to actual usage counter.
+	//          Also removes the entry from the aggregation ZSET to keep it accurate.
 	luaQuotaCommit = `
 local pendingVal = redis.call('GET', KEYS[2])
 if not pendingVal then
+    -- Pending key gone (expired). Clean up the ZSET entry too.
+    redis.call('ZREM', KEYS[3], ARGV[2])
     return 0
 end
 
@@ -78,18 +122,24 @@ end
 
 redis.call('INCRBY', KEYS[1], amount)
 redis.call('DEL', KEYS[2])
+redis.call('ZREM', KEYS[3], ARGV[2])
 return 1
 `
 
 	// luaQuotaRollback releases a pending quota reservation.
 	//
 	//	KEYS[1] = oss3:quota:pending:{uid}:{reqID}  (pending reservation)
+	//	KEYS[2] = oss3:quota:pending_agg:{uid}      (ZSET aggregating ALL pending reservations)
+	//	ARGV[1] = requestID (used to remove the entry from the aggregation ZSET)
 	//
 	// Returns: 1 if deleted, 0 if already gone (expired or committed).
+	//          Always removes the ZSET entry (even if pending key was already gone).
 	//
 	// Use case: upload failure or cancellation releases reserved quota.
 	luaQuotaRollback = `
-return redis.call('DEL', KEYS[1])
+local result = redis.call('DEL', KEYS[1])
+redis.call('ZREM', KEYS[2], ARGV[1])
+return result
 `
 
 	// luaQuotaAdjust adjusts the committed quota counter by a delta (positive or negative).

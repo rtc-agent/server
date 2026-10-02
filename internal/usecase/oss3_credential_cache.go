@@ -66,10 +66,26 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 	}
 	// Redis error or cache miss — fall through to DB with singleflight dedup
 
-	// Step 2: Query DB (deduplicated via singleflight to prevent cache stampede)
-	result, err, _ := uc.credFlight.Do(accessKeyID, func() (interface{}, error) {
-		return uc.credRepo.GetByAccessKeyID(ctx, accessKeyID)
+	// Step 2: Query DB (deduplicated via singleflight to prevent cache stampede).
+	//
+	// Use DoChan + background context so the DB query is decoupled from any
+	// single request's lifecycle. When the first (leader) request is cancelled,
+	// the DB query continues uninterrupted; other waiters still receive the
+	// result. Each caller independently decides whether to keep waiting via
+	// its own context.
+	ch := uc.credFlight.DoChan(accessKeyID, func() (interface{}, error) {
+		// Background context: immune to any caller's cancellation.
+		return uc.credRepo.GetByAccessKeyID(context.Background(), accessKeyID)
 	})
+
+	var result interface{}
+	select {
+	case <-ctx.Done():
+		// This caller gave up, but the DB query continues for other waiters.
+		return nil, ctx.Err()
+	case r := <-ch:
+		result, err = r.Val, r.Err
+	}
 	if err != nil {
 		// Distinguish "not found" from actual DB errors.
 		// gorm.ErrRecordNotFound means the credential does not exist — return nil, nil.
