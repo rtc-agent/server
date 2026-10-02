@@ -147,6 +147,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 	deviceID, _ := contextx.GetDeviceID(ctx)
 	creator := usecase.UserCreator{UserID: userID, DeviceID: deviceID}
 
@@ -226,7 +227,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 			return nil, fmt.Errorf("batch create messages: %w", err)
 		}
 
-		if err := h.publishSubmitWork(txCtx, newSession.ID); err != nil {
+		if err := h.publishSubmitWork(txCtx, newSession.ID, userID.String()); err != nil {
 			return nil, err
 		}
 

@@ -28,10 +28,11 @@ func ShouldSkipErrorMessage(ctx context.Context) bool {
 // attempt is the reactive compact escalation level (0 = first attempt). It is
 // stored in the payload so that the next Process invocation can escalate
 // compression (L1 → L2 → L3) instead of repeating L1 forever.
-func MarshalSubmitPayload(sessionID string, attempt int) []byte {
+func MarshalSubmitPayload(sessionID, userID string, attempt int) []byte {
 	p := WorkPayload{
 		Kind:                   WorkKindSubmit,
 		SessionID:              sessionID,
+		UserID:                 userID,
 		ReactiveCompactAttempt: attempt,
 	}
 	data, err := json.Marshal(p)

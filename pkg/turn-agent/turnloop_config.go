@@ -174,6 +174,35 @@ func (mgr *SessionTurnManager) genResumeImpl(
 		resumeCtx = WithTurnID(resumeCtx, turnID)
 	}
 
+	// Extract UserID from the first available work item and inject into context.
+	// This ensures file attachments and other user-scoped operations work correctly.
+	var userID string
+	for _, item := range newItems {
+		if item.UserID != "" {
+			userID = item.UserID
+			break
+		}
+	}
+	if userID == "" {
+		for _, item := range interrupted {
+			if item.UserID != "" {
+				userID = item.UserID
+				break
+			}
+		}
+	}
+	if userID == "" {
+		for _, item := range unhandled {
+			if item.UserID != "" {
+				userID = item.UserID
+				break
+			}
+		}
+	}
+	if userID != "" {
+		resumeCtx = WithUserID(resumeCtx, userID)
+	}
+
 	if len(mgr.cfg.Callbacks) > 0 {
 		resumeCtx = callbacks.InitCallbacks(resumeCtx, &callbacks.RunInfo{}, mgr.cfg.Callbacks...)
 	}

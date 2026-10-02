@@ -460,6 +460,7 @@ func (t *subAgentTool) publishSubAgentWork(ctx context.Context, subSessionID uui
 	payload, err := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: subSessionID.String(),
+		UserID:    t.session.OwnerRefID,
 		TraceID:   traceID,
 		SpanID:    spanID,
 	})

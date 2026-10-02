@@ -336,7 +336,7 @@ func (uc *OSS3Usecase) ValidateUploadOwnership(ctx context.Context, userID, uplo
 // Users can only generate presigned URLs for keys under their own prefix (user-{userID}/).
 func (uc *OSS3Usecase) GeneratePresignedURL(ctx context.Context, userID, operation, key string, expiresIn time.Duration) (string, time.Time, error) {
 	// Validate key prefix — user can only access their own prefix
-	expectedPrefix := "user-" + userID + "/"
+	expectedPrefix := rtcoss3.BuildUserPrefix(userID)
 	if !strings.HasPrefix(key, expectedPrefix) {
 		return "", time.Time{}, fmt.Errorf("%w: key must start with %q", ErrKeyPrefixViolation, expectedPrefix)
 	}

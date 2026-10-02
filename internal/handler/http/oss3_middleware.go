@@ -101,7 +101,7 @@ func (m *RateLimitMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 // rtcoss3.ValidateKey in the handler layer. Retained for test coverage and
 // as a standalone utility for future middleware use.
 func hasPathPermission(userID, key string) bool {
-	expectedPrefix := "user-" + userID + "/"
+	expectedPrefix := rtcoss3.BuildUserPrefix(userID)
 	return strings.HasPrefix(key, expectedPrefix) || key == ""
 }
 

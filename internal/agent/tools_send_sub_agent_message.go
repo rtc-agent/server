@@ -170,6 +170,7 @@ func (t *sendMessageToSubAgentTool) InvokableRun(ctx context.Context, argumentsI
 	payload, err := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: subSessionID.String(),
+		UserID:    subSession.OwnerRefID,
 		TraceID:   traceID,
 		SpanID:    spanID,
 	})

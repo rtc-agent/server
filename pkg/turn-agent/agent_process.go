@@ -108,16 +108,19 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// status update leaves the session stuck at "active" until the stale
 	// turn scanner runs (5-30 minutes).
 	turnCtx = WithSessionID(turnCtx, p.SessionID)
+	turnCtx = WithUserID(turnCtx, p.UserID)
 	defer turnCancel()
 	defer turnSpan.End()
 	turnSpan.SetAttributes(
 		attribute.String("session.id", p.SessionID),
+		attribute.String("user.id", p.UserID),
 		attribute.String("turn.id", turnID),
 		attribute.String("turn.work_kind", string(p.Kind)),
 	)
 	turnStart := time.Now()
 	a.log(turnCtx, LogLevelInfo, "turn.start", map[string]any{
 		"session_id": p.SessionID,
+		"user_id":    p.UserID,
 		"turn_id":    turnID,
 		"work_kind":  string(p.Kind),
 		"work_id":    work.ID,

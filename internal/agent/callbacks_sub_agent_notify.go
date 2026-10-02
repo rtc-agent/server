@@ -47,9 +47,16 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 
 	parentSessionID := subSession.ParentServerSessionID
 
+	// Load parent session to get userID (OwnerRefID).
+	var userID string
+	if parentSession, sessErr := h.deps.SessionRepo.GetByID(ctx, parentSessionID); sessErr == nil {
+		userID = parentSession.OwnerRefID
+	}
+
 	h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.start", map[string]any{
 		"sub_session_id":    subSession.ID.String(),
 		"parent_session_id": parentSessionID.String(),
+		"user_id":           userID,
 		"status":            status,
 	})
 
@@ -85,6 +92,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: parentSessionID.String(),
+		UserID:    userID,
 		TraceID:   traceID,
 		SpanID:    spanID,
 	})

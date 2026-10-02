@@ -546,6 +546,7 @@ func (a *Agent) tryReactiveCompactRecovery(
 	payloadBytes, err := json.Marshal(WorkPayload{
 		Kind:                   WorkKindSubmit,
 		SessionID:              p.SessionID,
+		UserID:                 p.UserID,
 		ReactiveCompactAttempt: attempt,
 		TraceID:                traceID,
 		SpanID:                 spanID,

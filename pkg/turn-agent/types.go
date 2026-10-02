@@ -44,6 +44,7 @@ type ctxSessionIDKey struct{}
 type ctxTurnIDKey struct{}
 type ctxLoadSourceKey struct{}
 type ctxPendingToolCallIDsKey struct{}
+type ctxUserIDKey struct{}
 
 // LoadSource identifies the source of a LoadMessages call.
 type LoadSource string
@@ -106,6 +107,18 @@ func WithTurnID(ctx context.Context, turnID string) context.Context {
 // TurnIDFromContext reads the turn ID from ctx, or returns "" if unset.
 func TurnIDFromContext(ctx context.Context) string {
 	id, _ := ctx.Value(ctxTurnIDKey{}).(string)
+	return id
+}
+
+// WithUserID returns a child context carrying the given user ID.
+// Used so downstream code (e.g., file loading) can construct user-scoped keys.
+func WithUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, ctxUserIDKey{}, userID)
+}
+
+// UserIDFromContext reads the user ID from ctx, or returns "" if unset.
+func UserIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(ctxUserIDKey{}).(string)
 	return id
 }
 
@@ -209,6 +222,10 @@ type WorkPayload struct {
 	// Paired with TraceID to restore the full span context on the worker side.
 	// Empty for legacy payloads or when no trace context is available.
 	SpanID string `json:"span_id,omitempty"`
+
+	// UserID identifies the user who owns the session. Used to construct
+	// user-scoped OSS keys when loading file attachments.
+	UserID string `json:"user_id,omitempty"`
 }
 
 // BatchResumeItem represents a single interrupt result in a batch resume.

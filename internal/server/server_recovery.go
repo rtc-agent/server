@@ -135,17 +135,25 @@ func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, 
 		return
 	}
 
+	// Load session to get userID (OwnerRefID).
+	var userID string
+	if session, sessErr := s.svcCtx.SessionRepo.GetByID(ctx, turn.SessionID); sessErr == nil {
+		userID = session.OwnerRefID
+	}
+
 	// Use submit payload (not resume) — see function docstring for rationale.
 	// Priority matches ResumeWorkPriority (same as runtime scanner's submit recovery).
-	payload := string(turnagent.MarshalSubmitPayload(sessionID, 0))
+	payload := string(turnagent.MarshalSubmitPayload(sessionID, userID, 0))
 	if _, err := s.queue.Publish(ctx, sessionID, payload, rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[Server] recoverStaleTurns: publish submit",
 			zap.String("turn_id", turn.ID.String()),
+			zap.String("user_id", userID),
 			zap.Error(err))
 	} else {
 		logger.Info(ctx, "[Server] recoverStaleTurns: published submit",
 			zap.String("turn_id", turn.ID.String()),
-			zap.String("session_id", sessionID))
+			zap.String("session_id", sessionID),
+			zap.String("user_id", userID))
 	}
 }
 
@@ -372,16 +380,25 @@ func (s *Server) publishRecoveryWorkItem(ctx context.Context, turn *model.Turn) 
 	if s.queue == nil {
 		return nil
 	}
-	payload := string(turnagent.MarshalSubmitPayload(turn.SessionID.String(), 0))
+
+	// Load session to get userID (OwnerRefID).
+	var userID string
+	if session, sessErr := s.svcCtx.SessionRepo.GetByID(ctx, turn.SessionID); sessErr == nil {
+		userID = session.OwnerRefID
+	}
+
+	payload := string(turnagent.MarshalSubmitPayload(turn.SessionID.String(), userID, 0))
 	if _, err := s.queue.Publish(ctx, turn.SessionID.String(), payload, rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[Server] publishRecoveryWorkItem: publish failed",
 			zap.String("turn_id", turn.ID.String()),
+			zap.String("user_id", userID),
 			zap.Error(err))
 		return err
 	}
 	logger.Info(ctx, "[Server] publishRecoveryWorkItem: published",
 		zap.String("turn_id", turn.ID.String()),
-		zap.String("session_id", turn.SessionID.String()))
+		zap.String("session_id", turn.SessionID.String()),
+		zap.String("user_id", userID))
 	return nil
 }
 

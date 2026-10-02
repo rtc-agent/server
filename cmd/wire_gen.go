@@ -869,7 +869,7 @@ func provideAsynqServer(cfg *config.Config) *asynq.Server {
 func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, deps *usecase.Dependencies) *asynq.ServeMux {
 
 	notificationCreator := agent.CreateLoopNotification(deps)
-	worker := loop.NewWorker(queue, loopRepo, notificationCreator)
+	worker := loop.NewWorker(queue, loopRepo, deps.SessionRepo, notificationCreator)
 	mux := asynq.NewServeMux()
 	worker.RegisterHandlers(mux)
 	return mux

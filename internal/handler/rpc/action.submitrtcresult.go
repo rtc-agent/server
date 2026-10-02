@@ -41,6 +41,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 	creator := usecase.UserCreator{UserID: userID}
 
 	rtcUUID, apiErr := parseUUID(req.RtcId, "rtc_id")
@@ -138,7 +139,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		h.recorder.submit(recorderCtx, rtc, req)
 	}
 
-	h.resumeTurnAfterRtc(ctx, rtc)
+	h.resumeTurnAfterRtc(ctx, rtc, userID.String())
 
 	return &protocol.SubmitRtcResultResponse{
 		Result:  protocol.SubmitRtcResultResult{Success: true},
@@ -282,7 +283,7 @@ func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc
 // context may be cancelled when the RPC returns, but the resume/submit
 // operations (DB queries, Redis SetNX, Queue.Publish) must complete
 // independently since they are fire-and-forget.
-func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) {
+func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc, userID string) {
 	// Detach from the RPC handler's context. The RTC result is already
 	// persisted; the resume is fire-and-forget and must not be aborted
 	// by the RPC context timeout/cancellation.
@@ -349,11 +350,11 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc) 
 
 	if len(activeTurns) > 0 {
 		span.SetAttributes(attribute.Bool("resume.active_turn", true))
-		h.resumeActiveTurn(ctx, rtc, activeTurns, batchResumeItems)
+		h.resumeActiveTurn(ctx, rtc, activeTurns, batchResumeItems, userID)
 		return
 	}
 
 	// Orphan path: no active turn (worker crash or turn already terminal).
 	span.SetAttributes(attribute.Bool("resume.orphan_submit", true))
-	h.publishOrphanSubmit(ctx, rtc)
+	h.publishOrphanSubmit(ctx, rtc, userID)
 }

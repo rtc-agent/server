@@ -187,9 +187,18 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 
 	parentSessionID := subSession.ParentServerSessionID.String()
 
+	// Load parent session to get userID (OwnerRefID).
+	var userID string
+	if parentSID, parseErr := uuid.Parse(parentSessionID); parseErr == nil {
+		if parentSession, sessErr := h.deps.SessionRepo.GetByID(ctx, parentSID); sessErr == nil {
+			userID = parentSession.OwnerRefID
+		}
+	}
+
 	h.logger.Info(ctx, "resumeParentAfterSubAgent.start", map[string]any{
 		"sub_session_id":    subSession.ID.String(),
 		"parent_session_id": parentSessionID,
+		"user_id":           userID,
 	})
 
 	// Extract the sub session's final result from lastMessage.
@@ -234,6 +243,7 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:            turnagent.WorkKindResume,
 		SessionID:       parentSessionID,
+		UserID:          userID,
 		SubAgentResult:  subAgentResult,
 		InterruptID:     interruptID,
 		InterruptResult: subAgentResult, // Sub agent result is the interrupt resolution

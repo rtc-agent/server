@@ -101,6 +101,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 	deviceID, _ := contextx.GetDeviceID(ctx)
 	creator := usecase.UserCreator{UserID: userID, DeviceID: deviceID}
 
@@ -218,7 +219,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		}
 		createdMessage = msg
 
-		if err := h.publishSubmitWork(txCtx, session.ID); err != nil {
+		if err := h.publishSubmitWork(txCtx, session.ID, userID.String()); err != nil {
 			return nil, err
 		}
 		if logger.IsDebugMode() {
@@ -285,7 +286,7 @@ func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string)
 }
 
 // publishSubmitWork publishes a submit work item inside the transaction.
-func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID) error {
+func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, userID string) error {
 	if h.deps.Queue == nil {
 		return nil
 	}
@@ -294,6 +295,7 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID) 
 	payload, err := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: sessionID.String(),
+		UserID:    userID,
 		TraceID:   traceID,
 		SpanID:    spanID,
 	})

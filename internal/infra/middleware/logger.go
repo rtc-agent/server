@@ -39,20 +39,27 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 // RequestLogger middleware creates a trace span for each request,
 // records the trace_id in logs, and logs request duration and status code.
 // For error responses (status >= 400), captures and logs the response body.
-// Note: WebSocket upgrade requests are not wrapped to avoid interfering with protocol upgrade.
+// Note: WebSocket upgrade requests skip tracing to avoid long-lived spans.
 // Note: /healthz and /metrics paths are not logged to avoid noise.
 func RequestLogger(next http.Handler) http.Handler {
 	tracer := otel.Tracer("http")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip logging for /healthz and /metrics paths.
-		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" || r.URL.Path == "/readyz" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		// Detect WebSocket upgrade requests.
 		isWebSocketUpgrade := strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+
+		// Skip tracing for WebSocket upgrade requests to avoid long-lived spans.
+		// WebSocket connections can last for minutes/hours, creating very deep trace trees.
+		if isWebSocketUpgrade {
+			next.ServeHTTP(w, r)
+			return
+		}
 
 		start := time.Now()
 
@@ -65,23 +72,6 @@ func RequestLogger(next http.Handler) http.Handler {
 			),
 		)
 		defer span.End()
-
-		// For WebSocket upgrade requests, pass the raw ResponseWriter without wrapping
-		// to avoid interfering with the WebSocket protocol upgrade.
-		if isWebSocketUpgrade {
-			next.ServeHTTP(w, r.WithContext(ctx))
-
-			duration := time.Since(start)
-			span.SetAttributes(attribute.String("http.type", "websocket_upgrade"))
-
-			logger.Info(ctx, "WebSocket upgrade request completed",
-				zap.String("method", r.Method),
-				zap.String("path", r.URL.Path),
-				zap.Duration("duration", duration),
-				zap.String("trace_id", span.SpanContext().TraceID().String()),
-			)
-			return
-		}
 
 		// Regular HTTP requests: wrap ResponseWriter to capture status code and error body.
 		rw := &responseWriter{

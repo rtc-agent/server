@@ -290,7 +290,8 @@ func TestConvertUserMessage_FileAttachments(t *testing.T) {
 	// These tests verify the file processing logic in convertDBMessage's
 	// user message branch (processFileAttachments).
 
-	ctx := context.Background()
+	// Add UserID to context so file attachments can be loaded
+	ctx := turnagent.WithUserID(context.Background(), "user-123")
 	bucket := "test-bucket"
 
 	// Helper to create a minimal JPEG image
@@ -327,8 +328,8 @@ func TestConvertUserMessage_FileAttachments(t *testing.T) {
 		{
 			name:         "only image no text",
 			text:         "",
-			files:        []protocol.FileAttachment{{Fileid: "user-123/test.jpg", Mimetype: "image/jpeg"}},
-			ossObjects:   map[string][]byte{"user-123/test.jpg": createJPEG()},
+			files:        []protocol.FileAttachment{{Fileid: "test.jpg", Mimetype: "image/jpeg"}},
+			ossObjects:   map[string][]byte{"user-user-123/test.jpg": createJPEG()},
 			wantContent:  "", // no text
 			wantMultiLen: 1,  // one image
 		},
@@ -336,12 +337,12 @@ func TestConvertUserMessage_FileAttachments(t *testing.T) {
 			name: "mixed image and text file",
 			text: "look at these files",
 			files: []protocol.FileAttachment{
-				{Fileid: "user-123/test.jpg", Mimetype: "image/jpeg"},
-				{Fileid: "user-123/readme.txt", Mimetype: "text/plain"},
+				{Fileid: "test.jpg", Mimetype: "image/jpeg"},
+				{Fileid: "readme.txt", Mimetype: "text/plain"},
 			},
 			ossObjects: map[string][]byte{
-				"user-123/test.jpg":   createJPEG(),
-				"user-123/readme.txt": []byte("Hello from text file"),
+				"user-user-123/test.jpg":   createJPEG(),
+				"user-user-123/readme.txt": []byte("Hello from text file"),
 			},
 			wantContent:       "Hello from text file", // text file content appended
 			wantMultiLen:      1,                      // one image

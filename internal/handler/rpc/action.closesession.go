@@ -39,6 +39,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 	creator := usecase.UserCreator{UserID: userID}
 
 	sessionUUID, apiErr := parseUUID(req.SessionId, "session_id")

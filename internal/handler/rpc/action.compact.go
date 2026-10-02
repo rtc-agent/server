@@ -40,6 +40,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 	creator := usecase.UserCreator{UserID: userID}
 
 	sessionUUID, apiErr := parseUUID(req.SessionId, "session_id")
@@ -105,6 +106,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:              turnagent.WorkKindCompact,
 		SessionID:         session.ID.String(),
+		UserID:            userID.String(),
 		CustomInstruction: req.CustomInstruction,
 		TraceID:           traceID,
 		SpanID:            spanID,

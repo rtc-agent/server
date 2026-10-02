@@ -806,7 +806,7 @@ func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
 func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, deps *usecase.Dependencies) *hibikenasynq.ServeMux {
 	// Create the notification creator callback for loop worker
 	notificationCreator := agent.CreateLoopNotification(deps)
-	worker := loop.NewWorker(queue, loopRepo, notificationCreator)
+	worker := loop.NewWorker(queue, loopRepo, deps.SessionRepo, notificationCreator)
 	mux := hibikenasynq.NewServeMux()
 	worker.RegisterHandlers(mux)
 	return mux

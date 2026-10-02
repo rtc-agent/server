@@ -104,9 +104,18 @@ func (g *GoalWorkflow) Tools(ctx command.Context) []tool.BaseTool {
 // because the registry holds its mutex while invoking hooks — doing so
 // would deadlock.
 func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
+	// Load session early to get userID for tracing.
+	var userID string
+	if g.helpers.deps.SessionRepo != nil {
+		if session, sessErr := g.helpers.deps.SessionRepo.GetByID(ctx.Context, ctx.SessionID); sessErr == nil {
+			userID = session.OwnerRefID
+		}
+	}
+
 	innerCtx, span := g.helpers.tracer.Start(ctx.Context, "goalWorkflow.onTurnComplete",
 		trace.WithAttributes(
 			attribute.String("session.id", ctx.SessionID.String()),
+			attribute.String("user.id", userID),
 			attribute.String("turn.id", ctx.TurnID.String()),
 		),
 	)
@@ -211,6 +220,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 		payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 			Kind:      turnagent.WorkKindSubmit,
 			SessionID: ctx.SessionID.String(),
+			UserID:    userID,
 			TraceID:   traceID,
 			SpanID:    spanID,
 		})
@@ -239,6 +249,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	g.helpers.logger.Info(ctx, "goalWorkflow.goal_extended", map[string]any{
 		"goal_id":         goal.ID.String(),
 		"session_id":      ctx.SessionID.String(),
+		"user_id":         userID,
 		"completed_turns": newTurns,
 		"max_turns":       goal.MaxTurns,
 	})

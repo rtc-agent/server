@@ -39,14 +39,16 @@ type NotificationCreator func(ctx context.Context, sessionID uuid.UUID, prompt s
 type Worker struct {
 	queue               *rtcqueue.Queue
 	loopRepo            repo.LoopRepo
+	sessionRepo         repo.SessionRepo
 	notificationCreator NotificationCreator
 }
 
 // NewWorker creates a loop worker.
-func NewWorker(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, notificationCreator NotificationCreator) *Worker {
+func NewWorker(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, sessionRepo repo.SessionRepo, notificationCreator NotificationCreator) *Worker {
 	return &Worker{
 		queue:               queue,
 		loopRepo:            loopRepo,
+		sessionRepo:         sessionRepo,
 		notificationCreator: notificationCreator,
 	}
 }
@@ -156,9 +158,16 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 
 	// 4. Submit to rtc-queue for execution (only SessionID, consistent with Goal pattern)
 	// Pass trace_id to maintain trace context across the rtcqueue boundary.
+	// Load session to get userID (OwnerRefID).
+	var userID string
+	if session, sessErr := w.sessionRepo.GetByID(ctx, sessionUUID); sessErr == nil {
+		userID = session.OwnerRefID
+	}
+
 	workPayload, err := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: payload.SessionID,
+		UserID:    userID,
 		TraceID:   payload.TraceID,
 		SpanID:    payload.SpanID,
 	})
@@ -185,6 +194,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	span.SetAttributes(attribute.Int("loop.turn", loop.CompletedTurns+1))
 	logger.Info(ctx, "[loop.Worker] task processed successfully",
 		zap.String("session_id", sessionUUID.String()),
+		zap.String("user_id", userID),
 		zap.String("loop_id", loop.ID.String()),
 		zap.Int("turn", loop.CompletedTurns+1),
 		zap.Int("max_turns", loop.MaxTurns))

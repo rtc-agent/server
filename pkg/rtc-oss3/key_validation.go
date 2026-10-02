@@ -21,7 +21,7 @@ func ValidateKey(key, userID string) *S3Error {
 	}
 
 	// Check user prefix
-	expectedPrefix := "user-" + userID + "/"
+	expectedPrefix := BuildUserPrefix(userID)
 	if !strings.HasPrefix(key, expectedPrefix) {
 		return ErrAccessDenied
 	}
@@ -52,7 +52,21 @@ func IsAllowedContentType(contentType string) bool {
 	return false
 }
 
+// BuildUserPrefix returns the user prefix for S3 keys.
+// Returns: user-{userID}/
+func BuildUserPrefix(userID string) string {
+	return fmt.Sprintf("user-%s/", userID)
+}
+
+// BuildFileKey constructs a full S3 key from user ID and file ID.
+// fileID format: {md5}.{ext} (e.g., "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6.txt")
+// Returns: user-{userID}/{fileID}
+func BuildFileKey(userID, fileID string) string {
+	return fmt.Sprintf("user-%s/%s", userID, fileID)
+}
+
 // GenerateKey generates a valid key in the format: {user-id}/{md5-hash}.{ext}
+// Deprecated: Use BuildFileKey instead for clarity.
 func GenerateKey(userID, md5Hash, ext string) string {
-	return fmt.Sprintf("user-%s/%s.%s", userID, md5Hash, ext)
+	return BuildFileKey(userID, md5Hash+"."+ext)
 }

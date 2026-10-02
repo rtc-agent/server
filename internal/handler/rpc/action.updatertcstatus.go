@@ -35,6 +35,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		span.SetStatus(codes.Error, "missing user_id in context")
 		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 	creator := usecase.UserCreator{UserID: userID}
 
 	rtcUUID, apiErr := parseUUID(req.RtcId, "rtc_id")
@@ -138,7 +139,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		// Reload RTC to get latest state for batch processing
 		updatedRtc, reloadErr := h.deps.Deps.RtcRepo.GetByID(ctx, rtcUUID)
 		if reloadErr == nil && updatedRtc != nil {
-			h.resumeTurnAfterRtc(ctx, updatedRtc)
+			h.resumeTurnAfterRtc(ctx, updatedRtc, userID.String())
 		}
 	}
 

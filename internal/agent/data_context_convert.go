@@ -15,6 +15,7 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
+	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -446,6 +447,20 @@ func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Mes
 		return
 	}
 
+	// Get userID from context to build full OSS keys.
+	userID := turnagent.UserIDFromContext(ctx)
+	h.logger.Info(ctx, "file_attachment.process_start", map[string]any{
+		"file_count": len(files),
+		"user_id":    userID,
+	})
+
+	if userID == "" {
+		h.logger.Error(ctx, "file_attachment.missing_user_id", map[string]any{
+			"message": "UserID not found in context; cannot load file attachments",
+		})
+		return
+	}
+
 	// Parallel loading results (preserving order)
 	type loadResult struct {
 		index       int
@@ -465,9 +480,32 @@ func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Mes
 		go func(idx int, f protocol.FileAttachment) {
 			defer wg.Done()
 
+			// Build full OSS key: user-{userID}/{fileID}
+			fullKey := rtcoss3.BuildFileKey(userID, f.Fileid)
+			h.logger.Info(ctx, "file_attachment.loading", map[string]any{
+				"index":    idx,
+				"file_id":  f.Fileid,
+				"full_key": fullKey,
+				"mimetype": f.Mimetype,
+			})
+
 			switch {
 			case strings.HasPrefix(f.Mimetype, "image/"):
-				data, mimeType, err := LoadImageFromOSS(ctx, h.ossBackend, h.ossBucket, f.Fileid)
+				data, mimeType, err := LoadImageFromOSS(ctx, h.ossBackend, h.ossBucket, fullKey)
+				if err != nil {
+					h.logger.Warn(ctx, "file_attachment.load_image_failed", map[string]any{
+						"file_id":  f.Fileid,
+						"full_key": fullKey,
+						"error":    err.Error(),
+					})
+				} else {
+					h.logger.Info(ctx, "file_attachment.load_image_success", map[string]any{
+						"file_id":   f.Fileid,
+						"full_key":  fullKey,
+						"mime_type": mimeType,
+						"data_size": len(data),
+					})
+				}
 				results[idx] = loadResult{
 					index:     idx,
 					fileType:  "image",
@@ -477,7 +515,20 @@ func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Mes
 				}
 
 			case strings.HasPrefix(f.Mimetype, "text/"):
-				content, err := LoadTextFromOSS(ctx, h.ossBackend, h.ossBucket, f.Fileid)
+				content, err := LoadTextFromOSS(ctx, h.ossBackend, h.ossBucket, fullKey)
+				if err != nil {
+					h.logger.Warn(ctx, "file_attachment.load_text_failed", map[string]any{
+						"file_id":  f.Fileid,
+						"full_key": fullKey,
+						"error":    err.Error(),
+					})
+				} else {
+					h.logger.Info(ctx, "file_attachment.load_text_success", map[string]any{
+						"file_id":        f.Fileid,
+						"full_key":       fullKey,
+						"content_length": len(content),
+					})
+				}
 				results[idx] = loadResult{
 					index:       idx,
 					fileType:    "text",
@@ -487,7 +538,7 @@ func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Mes
 
 			default:
 				// Unknown MIME type: log warning and skip
-				h.logger.Warn(ctx, "processFileAttachments.unsupported_mime_type", map[string]any{
+				h.logger.Warn(ctx, "file_attachment.unsupported_mime_type", map[string]any{
 					"file_id":  f.Fileid,
 					"mimetype": f.Mimetype,
 				})
@@ -500,29 +551,15 @@ func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Mes
 
 	// Process results in order
 	var textContents []string
+	successCount := 0
+	failCount := 0
 	for _, res := range results {
 		if res.err != nil {
-			// Log error and skip this file
-			var logKey string
-			switch res.fileType {
-			case "image":
-				logKey = "processFileAttachments.load_image_failed"
-			case "text":
-				logKey = "processFileAttachments.load_text_failed"
-			default:
-				logKey = "processFileAttachments.load_failed"
-			}
-			fileID := ""
-			if res.index < len(files) {
-				fileID = files[res.index].Fileid
-			}
-			h.logger.Warn(ctx, logKey, map[string]any{
-				"file_id": fileID,
-				"error":   res.err.Error(),
-			})
+			failCount++
 			continue
 		}
 
+		successCount++
 		switch res.fileType {
 		case "image":
 			msg.MultiContent = append(msg.MultiContent, ImageToInputPart(res.imageData, res.imageMime))
@@ -535,6 +572,14 @@ func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Mes
 			))
 		}
 	}
+
+	h.logger.Info(ctx, "file_attachment.process_complete", map[string]any{
+		"total_files":   len(files),
+		"success_count": successCount,
+		"fail_count":    failCount,
+		"image_count":   len(msg.MultiContent),
+		"text_count":    len(textContents),
+	})
 
 	// Append text file contents to Content (XML-wrapped)
 	if len(textContents) > 0 {
