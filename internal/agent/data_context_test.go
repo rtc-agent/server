@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/pkg/logger"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -238,7 +240,8 @@ func TestConvertDBMessage_EmptyContent(t *testing.T) {
 		Content: "",
 		Role:    "assistant",
 	}
-	result, _ := convertDBMessage(msg)
+	h := &helpers{logger: logger.NoopLogger{}}
+	result, _ := h.convertDBMessage(context.Background(), msg)
 	if result != nil {
 		t.Errorf("expected nil for empty content, got %v", result)
 	}
@@ -250,7 +253,8 @@ func TestConvertDBMessage_UnknownType(t *testing.T) {
 		Content: `{"type":"unknown_type","data":"something"}`,
 		Role:    "assistant",
 	}
-	result, _ := convertDBMessage(msg)
+	h := &helpers{logger: logger.NoopLogger{}}
+	result, _ := h.convertDBMessage(context.Background(), msg)
 	if result != nil {
 		t.Errorf("expected nil for unknown type, got %v", result)
 	}
@@ -267,7 +271,8 @@ func TestConvertDBMessage_SkipsErrorType(t *testing.T) {
 		Content: content,
 		Role:    "assistant",
 	}
-	result, _ := convertDBMessage(msg)
+	h := &helpers{logger: logger.NoopLogger{}}
+	result, _ := h.convertDBMessage(context.Background(), msg)
 	if result != nil {
 		t.Errorf("expected nil for error content type (must not enter LLM context), got %d messages", len(result))
 	}

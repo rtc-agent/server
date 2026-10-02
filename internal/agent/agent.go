@@ -42,6 +42,7 @@ import (
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 
@@ -155,6 +156,16 @@ type Config struct {
 	// When false (default), error messages still store sanitized RawError but the
 	// frontend is instructed not to render it.
 	ShowRawErrors bool
+
+	// OSS3Backend is the OSS storage backend for reading file attachments.
+	// Optional — may be nil when storage is not configured (provideOSS3Backend
+	// returns (nil, nil) in that case). When nil, file attachments are silently
+	// skipped during message conversion.
+	OSS3Backend rtcoss3.Backend
+
+	// OSS3Bucket is the default OSS bucket name.
+	// Used together with OSS3Backend to read file attachments.
+	OSS3Bucket string
 }
 
 // New constructs a *turnagent.Agent with all callbacks wired to the
@@ -203,6 +214,8 @@ func New(cfg Config) (*turnagent.Agent, error) {
 		toolResultBudgetMaxTokens:       cfg.ToolResultBudgetMaxTokens,
 		enableStrategicCacheBreakpoints: cfg.EnableStrategicCacheBreakpoints,
 		showRawErrors:                   cfg.ShowRawErrors,
+		ossBackend:                      cfg.OSS3Backend,
+		ossBucket:                       cfg.OSS3Bucket,
 	}
 
 	applyHelperDefaults(h)
@@ -371,6 +384,14 @@ type helpers struct {
 	// When false (default), sanitized RawError is still stored but the frontend
 	// is instructed not to render it.
 	showRawErrors bool
+
+	// ossBackend is the OSS storage backend for reading file attachments.
+	// May be nil when storage is not configured. When nil, file attachments
+	// are silently skipped during message conversion.
+	ossBackend rtcoss3.Backend
+
+	// ossBucket is the default OSS bucket name.
+	ossBucket string
 }
 
 // applyHelperDefaults fills in zero-value fields on helpers with sensible

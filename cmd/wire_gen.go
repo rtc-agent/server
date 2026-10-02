@@ -119,7 +119,8 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	dependencies := provideUsecaseDependencies(serviceContext, cmdChatModelResult, cfg, taskScheduler, webSearchManager, webFetchManager)
 	queue := provideQueue(rdb)
 	inspector := provideAsynqInspector(cfg)
-	handler := provideRPCHandler(serviceContext, dependencies, sessionRepo, queue, cfg, prometheusMetrics, inspector)
+	fileRepo := repo.NewFileRepo(db)
+	handler := provideRPCHandler(serviceContext, dependencies, sessionRepo, queue, cfg, prometheusMetrics, inspector, fileRepo)
 	httphandlerHandler := provideHTTPHandler(serviceContext)
 	redisStore := provideStateStore(universalClient)
 	client := provideOAuth2ProviderClient(cfg)
@@ -130,7 +131,6 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	fileRepo := repo.NewFileRepo(db)
 	multipartUploadRepo := repo.NewMultipartUploadRepo(db)
 	temporaryCredentialRepo := repo.NewTemporaryCredentialRepo(db)
 	v, err := provideOSS3LuaScripts(rdb)
@@ -678,6 +678,7 @@ func provideRPCHandler(
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
 	inspector *asynq.Inspector,
+	fileRepo repo.FileRepo,
 ) *rpchandler.Handler {
 	handler := rpchandler.NewHandler(&rpchandler.Dependencies{
 		Deps:                deps,
@@ -687,6 +688,7 @@ func provideRPCHandler(
 		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
 		Metrics:             metrics,
 		AsynqInspector:      inspector,
+		FileRepo:            fileRepo,
 	})
 	svc.RegisterRPCHandler(handler)
 	return handler

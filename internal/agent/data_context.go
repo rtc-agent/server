@@ -93,7 +93,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	var messages []*turnagent.Message
 	var droppedCount int
 	for _, msg := range dbMsgs {
-		converted, convErr := convertDBMessage(msg)
+		converted, convErr := h.convertDBMessage(ctx, msg)
 		if convErr != nil {
 			// Log parse errors at Debug level for observability. The overall
 			// drop count is logged at Warn below; this adds per-message detail.

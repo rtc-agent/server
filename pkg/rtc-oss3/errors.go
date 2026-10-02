@@ -137,6 +137,7 @@ var (
 	ErrInvalidCopySource    = &S3Error{"InvalidCopySource", "The specified copy source is not valid", http.StatusBadRequest}
 	ErrRateLimitExceeded    = &S3Error{"RateLimitExceeded", "You have exceeded your request rate limit", http.StatusTooManyRequests}
 	ErrInvalidKeyFormat     = &S3Error{"InvalidKeyFormat", "The specified key does not match the required format", http.StatusBadRequest}
+	ErrUnsupportedContentType = &S3Error{"UnsupportedContentType", "The specified Content-Type is not allowed. Only image/* and text/* types are permitted", http.StatusBadRequest}
 
 	// Additional errors for 1E-4 multipart operations
 	ErrInvalidPartNumber = &S3Error{"InvalidPartNumber", "The specified part number is not valid", http.StatusBadRequest}

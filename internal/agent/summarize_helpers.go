@@ -82,9 +82,42 @@ func formatMessagesForCompact(msgs []*schema.Message) string {
 			sb.WriteString("\n\n")
 
 		case schema.User:
-			// Write user message.
-			if msg.Content != "" {
+			// User messages may have Content, UserInputMultiContent, or both.
+			// Note: toEinoMessage merges Content into UserInputMultiContent as
+			// the first Text part (see requirement 2.2). Therefore, when
+			// UserInputMultiContent is non-empty, msg.Content's text is already
+			// included in it — we must not write msg.Content separately to avoid
+			// duplicating the user's text.
+			hasContent := msg.Content != ""
+			hasMultiContent := len(msg.UserInputMultiContent) > 0
+
+			if hasContent || hasMultiContent {
 				fmt.Fprintf(&sb, "## %s (turn %d)\n\n", role, i+1)
+			}
+
+			if hasMultiContent {
+				// UserInputMultiContent already contains Content text (as the
+				// first Text part). Only iterate UserInputMultiContent; do not
+				// write msg.Content separately.
+				// Images/files are replaced with markers; text parts are
+				// written as-is.
+				for _, part := range msg.UserInputMultiContent {
+					switch part.Type {
+					case schema.ChatMessagePartTypeText:
+						if part.Text != "" {
+							sb.WriteString(part.Text)
+							sb.WriteString("\n\n")
+						}
+					case schema.ChatMessagePartTypeImageURL:
+						sb.WriteString("[image]\n\n")
+					case schema.ChatMessagePartTypeFileURL:
+						sb.WriteString("[document]\n\n")
+					default:
+						// Other types (audio, etc.) are not handled yet.
+					}
+				}
+			} else if hasContent {
+				// No multimodal content: use original logic, write msg.Content.
 				sb.WriteString(msg.Content)
 				sb.WriteString("\n\n")
 			}

@@ -150,6 +150,13 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	deviceID, _ := contextx.GetDeviceID(ctx)
 	creator := usecase.UserCreator{UserID: userID, DeviceID: deviceID}
 
+	// Validate file attachments exist before forking.
+	// This prevents referencing non-existent files or files owned by other users.
+	if apiErr := h.validateFileAttachments(ctx, req.ContentData, userID, "ForkSession"); apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
+		return nil, apiErr
+	}
+
 	oldSessionID, apiErr := parseUUID(req.OldServerSessionId, "old_server_session_id")
 	if apiErr != nil {
 		span.SetStatus(codes.Error, apiErr.Message)

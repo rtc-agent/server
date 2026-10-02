@@ -10,9 +10,9 @@ import (
 	"github.com/pkoukk/tiktoken-go"
 )
 
-// estimatedImageChars is the fixed character estimate for image content.
-// Approximately 250 tokens (1000 chars / 4).
-const estimatedImageChars = 1000
+// estimatedImageTokens is the fixed token estimate for image content.
+// Conservative value aligned with the reference project's IMAGE_MAX_TOKEN_SIZE.
+const estimatedImageTokens = 2000
 
 // =============================================================================
 // TokenCounter interface
@@ -49,6 +49,7 @@ func (h *HeuristicTokenCounter) CountMessageTokens(msg *schema.Message) int {
 	}
 
 	var charCount int
+	var imageTokenCount int // Images use fixed token count, not charCount/4 heuristic
 
 	// Primary content (text + reasoning).
 	charCount += len(msg.Content)
@@ -59,9 +60,10 @@ func (h *HeuristicTokenCounter) CountMessageTokens(msg *schema.Message) int {
 		if part.Type == schema.ChatMessagePartTypeText {
 			charCount += len(part.Text)
 		}
-		// Image and other multimodal content estimated at a fixed token count (~250 tokens).
+		// Images use fixed token count (2000 tokens), not estimated via chars/4.
+		// Aligned with reference project's IMAGE_MAX_TOKEN_SIZE.
 		if part.Type == schema.ChatMessagePartTypeImageURL {
-			charCount += estimatedImageChars
+			imageTokenCount += estimatedImageTokens
 		}
 	}
 
@@ -87,7 +89,7 @@ func (h *HeuristicTokenCounter) CountMessageTokens(msg *schema.Message) int {
 		charCount += len(msg.ToolName)
 	}
 
-	return charCount / 4 // 4 chars per token
+	return charCount/4 + imageTokenCount // 4 chars per token for text, fixed for images
 }
 
 // =============================================================================
@@ -148,9 +150,10 @@ func (t *TiktokenTokenCounter) CountMessageTokens(msg *schema.Message) int {
 		if part.Type == schema.ChatMessagePartTypeText {
 			total += t.CountTokens(part.Text)
 		}
-		// Image and other multimodal content estimated at a fixed token count (~250 tokens).
+		// Images use fixed token count (2000 tokens).
+		// Aligned with reference project's IMAGE_MAX_TOKEN_SIZE.
 		if part.Type == schema.ChatMessagePartTypeImageURL {
-			total += estimatedImageChars / 4
+			total += estimatedImageTokens
 		}
 	}
 

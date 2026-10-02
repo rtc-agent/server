@@ -87,6 +87,28 @@ func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, 
 		clonedReq.Header.Del(h)
 	}
 
+	// Build a set of signed headers for O(1) lookup.
+	// "host", "content-length", "transfer-encoding" are implicit in the HTTP
+	// request and are handled specially by the signer — always keep them.
+	signedSet := make(map[string]bool, len(signedHeaders))
+	for _, h := range signedHeaders {
+		signedSet[strings.ToLower(h)] = true
+	}
+	signedSet["host"] = true
+	signedSet["content-length"] = true
+	signedSet["transfer-encoding"] = true
+
+	// Remove headers that the client did NOT include in SignedHeaders.
+	// This is critical: the AWS SDK SignHTTP will sign ALL headers present
+	// in the request, but the client only signed a specific subset.
+	// If extra headers are present (e.g., Referer, Accept-Encoding),
+	// the computed signature will differ from the client's.
+	for key := range clonedReq.Header {
+		if !signedSet[strings.ToLower(key)] {
+			clonedReq.Header.Del(key)
+		}
+	}
+
 	// Restore headers that Go HTTP server removes during request parsing.
 	// AWS SDK SignHTTP expects these headers to be present for signing.
 	if clonedReq.ContentLength >= 0 {

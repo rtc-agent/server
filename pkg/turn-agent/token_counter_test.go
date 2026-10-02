@@ -61,14 +61,14 @@ func TestEstimateMessageTokensPrecise_MultimodalImage(t *testing.T) {
 	msg := &schema.Message{
 		Role: schema.User,
 		UserInputMultiContent: []schema.MessageInputPart{
-			{Type: schema.ChatMessagePartTypeText, Text: "hello"}, // 5 chars
-			{Type: schema.ChatMessagePartTypeImageURL},            // 1000 chars (estimated)
+			{Type: schema.ChatMessagePartTypeText, Text: "hello"}, // 5 chars → 1 token
+			{Type: schema.ChatMessagePartTypeImageURL},            // 2000 tokens (fixed)
 		},
 	}
 	got := EstimateMessageTokensPrecise(msg)
-	// (5 + 1000) / 4 = 1005 / 4 = 251
-	if got != 251 {
-		t.Errorf("multimodal image: got %d, want 251", got)
+	// 5/4 + 2000 = 1 + 2000 = 2001
+	if got != 2001 {
+		t.Errorf("multimodal image: got %d, want 2001", got)
 	}
 }
 

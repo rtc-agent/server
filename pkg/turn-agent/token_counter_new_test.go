@@ -99,7 +99,7 @@ func TestHeuristicTokenCounter_CountMessageTokens(t *testing.T) {
 					{Type: schema.ChatMessagePartTypeImageURL},
 				},
 			},
-			want: 251, // (5 + 1000) / 4 = 251
+			want: 2001, // 5/4 + 2000 = 1 + 2000 = 2001
 		},
 	}
 
@@ -154,6 +154,25 @@ func TestTiktokenTokenCounter_CountMessageTokens(t *testing.T) {
 	got := tc.CountMessageTokens(msg)
 	if got <= 0 {
 		t.Errorf("CountMessageTokens() = %d, want > 0", got)
+	}
+}
+
+func TestTiktokenTokenCounter_CountMessageTokens_MultimodalImage(t *testing.T) {
+	tc := NewTiktokenTokenCounter()
+
+	msg := &schema.Message{
+		Role: schema.User,
+		UserInputMultiContent: []schema.MessageInputPart{
+			{Type: schema.ChatMessagePartTypeText, Text: "hello"}, // ~1-2 tokens with tiktoken
+			{Type: schema.ChatMessagePartTypeImageURL},            // 2000 tokens (fixed)
+		},
+	}
+
+	got := tc.CountMessageTokens(msg)
+	// Tiktoken should give ~1-2 tokens for "hello" + 2000 for image = ~2001-2002
+	// Allow some variance for text tokenization
+	if got < 2000 || got > 2010 {
+		t.Errorf("CountMessageTokens() = %d, want ~2001-2002", got)
 	}
 }
 

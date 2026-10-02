@@ -29,6 +29,29 @@ func ValidateKey(key, userID string) *S3Error {
 	return nil
 }
 
+// AllowedContentTypePrefixes lists the Content-Type prefixes permitted for uploads.
+// Only image/* and text/* types are allowed.
+var AllowedContentTypePrefixes = []string{"image/", "text/"}
+
+// IsAllowedContentType checks if the given Content-Type is in the allowed list.
+// Empty Content-Type defaults to "application/octet-stream" which is NOT allowed.
+// Content-Type may include parameters (e.g., "text/plain; charset=utf-8");
+// only the media type portion (before ';') is checked.
+func IsAllowedContentType(contentType string) bool {
+	// Strip parameters (e.g., "; charset=utf-8")
+	if idx := strings.Index(contentType, ";"); idx != -1 {
+		contentType = strings.TrimSpace(contentType[:idx])
+	}
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+
+	for _, prefix := range AllowedContentTypePrefixes {
+		if strings.HasPrefix(contentType, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // GenerateKey generates a valid key in the format: {user-id}/{md5-hash}.{ext}
 func GenerateKey(userID, md5Hash, ext string) string {
 	return fmt.Sprintf("user-%s/%s.%s", userID, md5Hash, ext)

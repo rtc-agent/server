@@ -152,6 +152,13 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 
 	// Upload to backend with compensation
 	contentType := r.Header.Get("Content-Type")
+
+	// Validate Content-Type against whitelist (image/* and text/* only)
+	if !rtcoss3.IsAllowedContentType(contentType) {
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrUnsupportedContentType, r.URL.Path, "")
+		return
+	}
+
 	etag, err := h.oss3UC.Backend().PutObject(
 		r.Context(), bucket, key, r.Body, contentLength, contentType)
 	if err != nil {

@@ -104,6 +104,13 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	deviceID, _ := contextx.GetDeviceID(ctx)
 	creator := usecase.UserCreator{UserID: userID, DeviceID: deviceID}
 
+	// Validate file attachments exist before creating the message.
+	// This prevents referencing non-existent files or files owned by other users.
+	if apiErr := h.validateFileAttachments(ctx, req.ContentData, userID, "SendMessage"); apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
+		return nil, apiErr
+	}
+
 	content := extractMessageContent(ctx, req.ContentData)
 
 	if err := primitives.ValidateCreateMessageRequest(content); err != nil {

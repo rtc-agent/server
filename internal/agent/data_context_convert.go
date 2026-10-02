@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -33,35 +34,17 @@ import (
 // Returns (nil, nil) for unrecognized content types (silently skipped).
 // Returns (nil, err) for parse errors — callers can log the error for
 // observability while still skipping the unparseable message.
-func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
+//
+// This is a helpers method to access OSS dependencies (ossBackend, ossBucket)
+// for loading file attachments from user messages.
+func (h *helpers) convertDBMessage(ctx context.Context, msg *model.Message) ([]*turnagent.Message, error) {
 	contentData, err := primitives.ParseContentData(msg.Content)
 	if err != nil {
 		return nil, fmt.Errorf("parse content data: %w", err)
 	}
 
-	// Build TokenUsage from DB fields (populated for assistant messages).
-	var tokenUsage *turnagent.TokenUsage
-	if msg.TotalTokens != nil {
-		tokenUsage = &turnagent.TokenUsage{
-			TotalTokens:  *msg.TotalTokens,
-			InputTokens:  intDeref(msg.InputTokens),
-			OutputTokens: intDeref(msg.OutputTokens),
-		}
-		if msg.CachedTokens != nil {
-			tokenUsage.CachedTokens = *msg.CachedTokens
-		}
-		if msg.ReasoningTokens != nil {
-			tokenUsage.ReasoningTokens = *msg.ReasoningTokens
-		}
-	}
-
-	// Extract TurnID for downstream response-level grouping.
-	// TurnID is used by groupAssistantByResponse to group messages from the
-	// same turn, then detect LLM response boundaries within each group.
-	var turnID string
-	if msg.TurnID != nil {
-		turnID = msg.TurnID.String()
-	}
+	tokenUsage := buildTokenUsage(msg)
+	turnID := extractTurnID(msg)
 
 	switch contentData.Type {
 	case protocol.ContentTypeSummary:
@@ -75,17 +58,7 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 		return msgs, nil
 
 	case protocol.ContentTypeUserMessage:
-		umc, err := primitives.ParseUserMessageContent(contentData.Data)
-		if err != nil {
-			return nil, fmt.Errorf("parse user message content: %w", err)
-		}
-		return []*turnagent.Message{{
-			Role:       msg.Role,
-			Content:    umc.Text,
-			TokenUsage: tokenUsage,
-			CreatedAt:  msg.CreatedAt,
-			TurnID:     turnID,
-		}}, nil
+		return h.convertUserMessage(ctx, msg, contentData, tokenUsage, turnID)
 
 	case protocol.ContentTypeText, protocol.ContentTypeMarkdown:
 		text, _ := primitives.ContentDataString(contentData.Data)
@@ -179,6 +152,33 @@ func intDeref(p *int) int {
 		return 0
 	}
 	return *p
+}
+
+// buildTokenUsage constructs a TokenUsage from DB message fields.
+func buildTokenUsage(msg *model.Message) *turnagent.TokenUsage {
+	if msg.TotalTokens == nil {
+		return nil
+	}
+	tu := &turnagent.TokenUsage{
+		TotalTokens:  *msg.TotalTokens,
+		InputTokens:  intDeref(msg.InputTokens),
+		OutputTokens: intDeref(msg.OutputTokens),
+	}
+	if msg.CachedTokens != nil {
+		tu.CachedTokens = *msg.CachedTokens
+	}
+	if msg.ReasoningTokens != nil {
+		tu.ReasoningTokens = *msg.ReasoningTokens
+	}
+	return tu
+}
+
+// extractTurnID extracts the TurnID string from a DB message.
+func extractTurnID(msg *model.Message) string {
+	if msg.TurnID == nil {
+		return ""
+	}
+	return msg.TurnID.String()
 }
 
 // convertSummaryContent expands a summary content block into multiple messages.
@@ -384,4 +384,79 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 		i++
 	}
 	return result
+}
+
+// convertUserMessage converts a user message with optional file attachments.
+// Extracted from convertDBMessage to reduce cyclomatic complexity.
+func (h *helpers) convertUserMessage(
+	ctx context.Context,
+	msg *model.Message,
+	contentData protocol.ContentData,
+	tokenUsage *turnagent.TokenUsage,
+	turnID string,
+) ([]*turnagent.Message, error) {
+	umc, err := primitives.ParseUserMessageContent(contentData.Data)
+	if err != nil {
+		return nil, fmt.Errorf("parse user message content: %w", err)
+	}
+
+	result := &turnagent.Message{
+		Role:       msg.Role,
+		Content:    umc.Text,
+		TokenUsage: tokenUsage,
+		CreatedAt:  msg.CreatedAt,
+		TurnID:     turnID,
+	}
+
+	// Process file attachments (images and text files)
+	if umc.Files != nil && h.ossBackend != nil {
+		h.processFileAttachments(ctx, result, *umc.Files)
+	}
+
+	return []*turnagent.Message{result}, nil
+}
+
+// processFileAttachments loads and processes file attachments from OSS.
+// Images are added to MultiContent; text files are XML-wrapped and appended to Content.
+func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Message, files []protocol.FileAttachment) {
+	var textContents []string
+	for _, file := range files {
+		switch {
+		case strings.HasPrefix(file.Mimetype, "image/"):
+			data, mimeType, err := LoadImageFromOSS(ctx, h.ossBackend, h.ossBucket, file.Fileid)
+			if err != nil {
+				h.logger.Warn(ctx, "processFileAttachments.load_image_failed", map[string]any{
+					"file_id": file.Fileid,
+					"error":   err.Error(),
+				})
+				continue
+			}
+			msg.MultiContent = append(msg.MultiContent, ImageToInputPart(data, mimeType))
+
+		case strings.HasPrefix(file.Mimetype, "text/"):
+			content, err := LoadTextFromOSS(ctx, h.ossBackend, h.ossBucket, file.Fileid)
+			if err != nil {
+				h.logger.Warn(ctx, "processFileAttachments.load_text_failed", map[string]any{
+					"file_id": file.Fileid,
+					"error":   err.Error(),
+				})
+				continue
+			}
+			name := ExtractFileName(file)
+			textContents = append(textContents, fmt.Sprintf(
+				"<file_content name=%q type=%q>\n%s\n</file_content>",
+				name, file.Mimetype, content,
+			))
+		}
+	}
+
+	// Append text file contents to Content (XML-wrapped)
+	if len(textContents) > 0 {
+		textBlock := strings.Join(textContents, "\n\n")
+		if msg.Content != "" {
+			msg.Content = msg.Content + "\n\n" + textBlock
+		} else {
+			msg.Content = textBlock
+		}
+	}
 }

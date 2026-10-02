@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	hibikenasynq "github.com/hibiken/asynq"
 	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
 
@@ -32,6 +34,7 @@ type Dependencies struct {
 	ScriptExecutionRepo repo.ScriptExecutionRepo     // script execution persistence
 	Metrics             *turnagent.PrometheusMetrics // Prometheus metrics
 	AsynqInspector      *hibikenasynq.Inspector      // asynq inspector for loop task cleanup
+	FileRepo            repo.FileRepo                // file existence validation for attachments
 }
 
 // Handler is the RPC handler.
@@ -174,4 +177,32 @@ func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]
 		zap.String("method", method),
 		zap.Duration("elapsed", time.Since(start)))
 	return result, nil
+}
+
+// ========== File attachment validation ==========
+
+// validateFileAttachments checks that all file attachments in a user message
+// exist and belong to the given user. Returns nil if validation passes or if
+// the content data is not a user message (no files to validate).
+func (h *Handler) validateFileAttachments(
+	ctx context.Context,
+	contentData protocol.ContentData,
+	userID uuid.UUID,
+	caller string,
+) *APIError {
+	if contentData.Type != protocol.ContentTypeUserMessage {
+		return nil
+	}
+	umc, parseErr := primitives.ParseUserMessageContent(contentData.Data)
+	if parseErr != nil {
+		logger.Warn(ctx, fmt.Sprintf("[%s] ParseUserMessageContent failed", caller), zap.Error(parseErr))
+		return nil // parse error: skip validation, let downstream handle
+	}
+	if umc.Files == nil || len(*umc.Files) == 0 {
+		return nil
+	}
+	if err := primitives.ValidateFilesExist(ctx, h.deps.FileRepo, *umc.Files, userID); err != nil {
+		return &APIError{Code: "file.not_found", Message: err.Error()}
+	}
+	return nil
 }

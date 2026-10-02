@@ -275,6 +275,7 @@ func provideAgent(
 	queue *rtcqueue.Queue,
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
+	ossBackend rtcoss3.Backend,
 ) (*turnagent.Agent, error) {
 	return agent.New(agent.Config{
 		Deps:                            deps,
@@ -293,6 +294,8 @@ func provideAgent(
 		ModelPricing:                    convertModelPricing(cfg.LLM.Pricing),
 		EnableStrategicCacheBreakpoints: cfg.Worker.EnableStrategicCacheBreakpoints,
 		ShowRawErrors:                   cfg.Debug.Enabled && cfg.Debug.ShowRawErrors,
+		OSS3Backend:                     ossBackend,
+		OSS3Bucket:                      cfg.Storage.MinIO.Bucket,
 	})
 }
 
@@ -608,6 +611,7 @@ func provideRPCHandler(
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
 	inspector *hibikenasynq.Inspector,
+	fileRepo repo.FileRepo,
 ) *rpchandler.Handler {
 	handler := rpchandler.NewHandler(&rpchandler.Dependencies{
 		Deps:                deps,
@@ -617,6 +621,7 @@ func provideRPCHandler(
 		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
 		Metrics:             metrics,
 		AsynqInspector:      inspector,
+		FileRepo:            fileRepo,
 	})
 	// Register globally for Centrifuge RPC callbacks
 	svc.RegisterRPCHandler(handler)

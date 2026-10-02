@@ -75,6 +75,12 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(
 		contentType = "application/octet-stream"
 	}
 
+	// Validate Content-Type against whitelist (image/* and text/* only)
+	if !rtcoss3.IsAllowedContentType(contentType) {
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrUnsupportedContentType, r.URL.Path, "")
+		return
+	}
+
 	// Create multipart upload in backend
 	result, err := h.oss3UC.Backend().CreateMultipartUpload(r.Context(), bucket, key, contentType)
 	if err != nil {

@@ -166,6 +166,11 @@ type Message struct {
 	// Supports "5m" (5 minutes, default) or "1h" (1 hour).
 	// Only meaningful when CacheBreakpoint is true.
 	CacheTTL string
+
+	// MultiContent holds multimodal content parts (images, etc.)
+	// for user messages. Mapped to schema.Message.UserInputMultiContent
+	// by toEinoMessage.
+	MultiContent []schema.MessageInputPart
 }
 
 // ToolCall describes one tool invocation requested by the assistant.
@@ -276,6 +281,23 @@ func toEinoMessage(m *Message) *schema.Message {
 			em.Extra = make(map[string]any)
 		}
 		em.Extra["_rtc_created_at"] = m.CreatedAt.Format(time.RFC3339Nano)
+	}
+
+	// 多模态内容映射
+	// 关键：如果同时有 Content 和 MultiContent，需要将 Content 作为 Text part
+	// 加入 MultiContent，否则 Claude 适配器会静默丢弃 Content（eino-ext 的
+	// Claude 适配器使用 else if 逻辑，UserInputMultiContent 存在时忽略 Content）。
+	if len(m.MultiContent) > 0 {
+		var parts []schema.MessageInputPart
+		if m.Content != "" {
+			parts = append(parts, schema.MessageInputPart{
+				Type: schema.ChatMessagePartTypeText,
+				Text: m.Content,
+			})
+		}
+		parts = append(parts, m.MultiContent...)
+		em.UserInputMultiContent = parts
+		// Content 保留原值（不影响 Claude 适配器，但保持向后兼容）
 	}
 
 	return em
