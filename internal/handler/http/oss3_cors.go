@@ -13,7 +13,7 @@ import (
 //
 // Unlike the main API CORS middleware, this one:
 //   - Is designed for the independent S3 port (:9000)
-//   - Allows S3-specific headers (x-amz-*, Authorization, Content-Type)
+//   - Allows S3-specific headers (Authorization, Content-Type, and x-amz-* headers)
 //   - Exposes S3-specific response headers (ETag, x-amz-request-id)
 //   - Handles OPTIONS preflight for presigned URL uploads from browsers
 //
@@ -54,16 +54,7 @@ func NewOSS3CORSMiddleware(origins []string) func(http.Handler) http.Handler {
 
 			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, DELETE, HEAD, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers",
-				"Authorization, Content-Type, Content-Length, Content-Encoding, "+
-					"amz-sdk-invocation-id, amz-sdk-request, "+
-					"x-amz-content-sha256, x-amz-date, x-amz-security-token, x-amz-user-agent, "+
-					"x-amz-sdk-checksum-algorithm, x-amz-decoded-content-length, x-amz-trailer, "+
-					"x-amz-checksum-crc32, x-amz-checksum-crc32c, x-amz-checksum-crc64nvme, "+
-					"x-amz-checksum-sha1, x-amz-checksum-sha256, x-amz-checksum-sha512, x-amz-checksum-md5, "+
-					"x-amz-acl, x-amz-copy-source, x-amz-meta-*, "+
-					"x-amz-storage-class, x-amz-tagging, "+
-					"x-amz-server-side-encryption, x-amz-website-redirect-location")
+			w.Header().Set("Access-Control-Allow-Headers", middleware.CORSAllowHeaders)
 			w.Header().Set("Access-Control-Expose-Headers", "ETag, x-amz-request-id, x-amz-id-2, x-amz-version-id")
 			w.Header().Set("Access-Control-Max-Age", "3600")
 			if allowOrigin != "*" {

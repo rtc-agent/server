@@ -144,7 +144,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	oss3Handler := provideOSS3Handler(oss3Usecase, cfg)
 	stsHandler := provideSTSHandler(oss3Usecase, jwtSigner, cfg)
 	stsPresignHandler := provideSTSPresignHandler(oss3Usecase, jwtSigner, cfg)
-	agent, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics)
+	agent, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics, backend)
 	if err != nil {
 		return nil, err
 	}
@@ -361,6 +361,7 @@ func provideAgent(
 	queue *rtcqueue.Queue,
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
+	ossBackend rtcoss3.Backend,
 ) (*turnagent.Agent, error) {
 	return agent.New(agent.Config{
 		Deps:                            deps,
@@ -379,6 +380,8 @@ func provideAgent(
 		ModelPricing:                    convertModelPricing(cfg.LLM.Pricing),
 		EnableStrategicCacheBreakpoints: cfg.Worker.EnableStrategicCacheBreakpoints,
 		ShowRawErrors:                   cfg.Debug.Enabled && cfg.Debug.ShowRawErrors,
+		OSS3Backend:                     ossBackend,
+		OSS3Bucket:                      cfg.Storage.MinIO.Bucket,
 	})
 }
 

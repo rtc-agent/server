@@ -2,6 +2,7 @@ package primitives
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -123,7 +124,7 @@ func TestValidateFilesExist(t *testing.T) {
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
-				} else if !contains(err.Error(), tt.errorMsg) {
+				} else if !strings.Contains(err.Error(), tt.errorMsg) {
 					t.Errorf("expected error containing %q, got %q", tt.errorMsg, err.Error())
 				}
 			} else {
@@ -133,17 +134,4 @@ func TestValidateFilesExist(t *testing.T) {
 			}
 		})
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && findSubstring(s, substr))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

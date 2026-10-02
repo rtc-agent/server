@@ -19,7 +19,13 @@ func NewChatModel(cfg *config.Config, metrics *turnagent.PrometheusMetrics) (mod
 	return newChatModel(context.Background(), &cfg.LLM, cfg.Log.LLMPayload, metrics)
 }
 
-// newChatModel creates a ChatModel from config (supports Claude and OpenAI).
+// newChatModel creates a ChatModel from config.
+//
+// NOTE: Only Claude protocol is fully supported and tested.
+// TODO: OpenAI protocol support is incomplete. The OpenAI adapter has not been
+// thoroughly tested with our message format, especially for multimodal content
+// (images, files). Production deployments should only use "claude" provider.
+//
 // Observability transport is always injected to ensure 100% metrics coverage.
 // When llmPayloadLog is enabled, full API request/response is logged to logs/llm-payload.log.
 func newChatModel(ctx context.Context, cfg *config.LLMConfig, llmPayloadLog bool, metrics *turnagent.PrometheusMetrics) (model.ToolCallingChatModel, error) {
@@ -43,6 +49,8 @@ func newChatModel(ctx context.Context, cfg *config.LLMConfig, llmPayloadLog bool
 	case "claude":
 		return newClaudeModel(ctx, cfg, httpClient)
 	case "openai":
+		// WARNING: OpenAI support is experimental and not recommended for production.
+		// See TODO comment in config.go for details.
 		return newOpenAIModel(ctx, cfg, httpClient)
 	default:
 		return nil, fmt.Errorf("unsupported llm.provider: %s (supported: claude, openai)", cfg.Provider)

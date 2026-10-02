@@ -469,9 +469,16 @@ type WorkerConfig struct {
 	EnableStrategicCacheBreakpoints bool `mapstructure:"enable_strategic_cache_breakpoints"`
 }
 
-// LLMConfig holds LLM model configuration (supports Claude and OpenAI protocols).
+// LLMConfig holds LLM model configuration.
+//
+// NOTE: Currently only Claude protocol is fully supported and tested.
+// TODO: OpenAI protocol support is incomplete and not recommended for production use.
+// The OpenAI adapter has not been thoroughly tested with our message format,
+// especially for multimodal content (images, files). Only use "claude" provider
+// in production until OpenAI support is fully validated.
 type LLMConfig struct {
-	// Provider is the model provider: "claude" or "openai".
+	// Provider is the model provider. Currently only "claude" is fully supported.
+	// "openai" is available but not recommended for production use.
 	Provider string `mapstructure:"provider"`
 
 	// APIKey is the API key.

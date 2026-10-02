@@ -287,6 +287,12 @@ func toEinoMessage(m *Message) *schema.Message {
 	// 关键：如果同时有 Content 和 MultiContent，需要将 Content 作为 Text part
 	// 加入 MultiContent，否则 Claude 适配器会静默丢弃 Content（eino-ext 的
 	// Claude 适配器使用 else if 逻辑，UserInputMultiContent 存在时忽略 Content）。
+	//
+	// TODO: 这个设计是脆弱的 — em.Content 和 em.UserInputMultiContent 中的第一个
+	// Text part 包含相同的文本。这依赖于 Claude 适配器的特定行为（UserInputMultiContent
+	// 存在时忽略 Content）。如果未来使用其他适配器（如 OpenAI），可能导致文本重复。
+	// 更好的方案是清空 em.Content，但这需要验证 Claude 适配器在 UserInputMultiContent
+	// 为空时是否能正确回退到 Content。当前方案仅在 Claude 适配器经过充分测试的环境中使用。
 	if len(m.MultiContent) > 0 {
 		var parts []schema.MessageInputPart
 		if m.Content != "" {

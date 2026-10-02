@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/disintegration/imaging"
 	"github.com/rtc-agent/server/pkg/protocol"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 )
@@ -366,4 +371,220 @@ func TestDetectImageFormatFromBuffer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// createTestImage creates a simple test image with the given dimensions.
+func createTestImage(width, height int, format string) ([]byte, error) {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	// Fill with a simple gradient pattern
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{
+				R: uint8(x % 256),
+				G: uint8(y % 256),
+				B: uint8((x + y) % 256),
+				A: 255,
+			})
+		}
+	}
+
+	var buf bytes.Buffer
+	switch format {
+	case "jpeg":
+		if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
+			return nil, err
+		}
+	case "png":
+		if err := png.Encode(&buf, img); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported format: %s", format)
+	}
+	return buf.Bytes(), nil
+}
+
+// createLargeTestImage creates a large test image that requires compression.
+func createLargeTestImage() ([]byte, error) {
+	// Create a 3000x2500 image (exceeds 2000x2000 max)
+	img := image.NewRGBA(image.Rect(0, 0, 3000, 2500))
+	// Fill with a pattern that doesn't compress well
+	for y := 0; y < 2500; y++ {
+		for x := 0; x < 3000; x++ {
+			img.Set(x, y, color.RGBA{
+				R: uint8(x % 256),
+				G: uint8(y % 256),
+				B: uint8((x * y) % 256),
+				A: 255,
+			})
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func TestLoadImageFromOSS(t *testing.T) {
+	ctx := context.Background()
+	bucket := "test-bucket"
+
+	t.Run("small JPEG (fast path)", func(t *testing.T) {
+		data, err := createTestImage(800, 600, "jpeg")
+		if err != nil {
+			t.Fatalf("createTestImage() error = %v", err)
+		}
+		backend := &mockOSSBackend{objects: map[string][]byte{"user-123/small.jpg": data}}
+
+		result, mimeType, err := LoadImageFromOSS(ctx, backend, bucket, "user-123/small.jpg")
+		if err != nil {
+			t.Fatalf("LoadImageFromOSS() error = %v", err)
+		}
+		if mimeType != "image/jpeg" {
+			t.Errorf("got mimeType %q, want %q", mimeType, "image/jpeg")
+		}
+		if len(result) == 0 {
+			t.Error("got empty data")
+		}
+	})
+
+	t.Run("small PNG (fast path)", func(t *testing.T) {
+		data, err := createTestImage(1000, 800, "png")
+		if err != nil {
+			t.Fatalf("createTestImage() error = %v", err)
+		}
+		backend := &mockOSSBackend{objects: map[string][]byte{"user-123/small.png": data}}
+
+		_, mimeType, err := LoadImageFromOSS(ctx, backend, bucket, "user-123/small.png")
+		if err != nil {
+			t.Fatalf("LoadImageFromOSS() error = %v", err)
+		}
+		if mimeType != "image/png" {
+			t.Errorf("got mimeType %q, want %q", mimeType, "image/png")
+		}
+	})
+
+	t.Run("empty file", func(t *testing.T) {
+		backend := &mockOSSBackend{
+			objects: map[string][]byte{"user-123/empty.jpg": {}},
+		}
+
+		_, _, err := LoadImageFromOSS(ctx, backend, bucket, "user-123/empty.jpg")
+		if err == nil || !strings.Contains(err.Error(), "image file is empty") {
+			t.Errorf("got error %v, want 'image file is empty'", err)
+		}
+	})
+
+	t.Run("WebP format rejected", func(t *testing.T) {
+		// WebP needs more complete structure for mimetype library detection
+		// Minimal valid WebP file structure
+		data := []byte{
+			0x52, 0x49, 0x46, 0x46, // RIFF
+			0x24, 0x00, 0x00, 0x00, // file size - 8
+			0x57, 0x45, 0x42, 0x50, // WEBP
+			0x56, 0x50, 0x38, 0x20, // VP8 (lossy)
+			0x1A, 0x00, 0x00, 0x00, // chunk size
+			0x9D, 0x01, 0x2A, // VP8 signature
+			0x01, 0x00, 0x01, 0x00, // width/height
+			0x01, 0x40, 0x25, 0xA4, 0x00, 0x03, 0x70, 0x00, 0xFE, 0xFB, 0x94, 0x00, 0x00,
+		}
+		backend := &mockOSSBackend{objects: map[string][]byte{"user-123/image.webp": data}}
+
+		_, _, err := LoadImageFromOSS(ctx, backend, bucket, "user-123/image.webp")
+		if err == nil || !strings.Contains(err.Error(), "WebP format not supported") {
+			t.Errorf("got error %v, want 'WebP format not supported'", err)
+		}
+	})
+
+	t.Run("GIF format rejected", func(t *testing.T) {
+		// GIF89a magic bytes
+		data := []byte{0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00}
+		backend := &mockOSSBackend{objects: map[string][]byte{"user-123/animation.gif": data}}
+
+		_, _, err := LoadImageFromOSS(ctx, backend, bucket, "user-123/animation.gif")
+		if err == nil || !strings.Contains(err.Error(), "GIF format not supported") {
+			t.Errorf("got error %v, want 'GIF format not supported'", err)
+		}
+	})
+
+	t.Run("large image requires compression", func(t *testing.T) {
+		data, err := createLargeTestImage()
+		if err != nil {
+			t.Fatalf("createLargeTestImage() error = %v", err)
+		}
+		backend := &mockOSSBackend{objects: map[string][]byte{"user-123/large.png": data}}
+
+		result, mimeType, err := LoadImageFromOSS(ctx, backend, bucket, "user-123/large.png")
+		if err != nil {
+			t.Fatalf("LoadImageFromOSS() error = %v", err)
+		}
+		// Should be converted to JPEG after compression
+		if mimeType != "image/jpeg" {
+			t.Errorf("got mimeType %q, want %q (should be converted to JPEG)", mimeType, "image/jpeg")
+		}
+		// Verify it can be decoded
+		if _, err := imaging.Decode(bytes.NewReader(result)); err != nil {
+			t.Errorf("compressed image cannot be decoded: %v", err)
+		}
+	})
+
+	t.Run("OSS read error", func(t *testing.T) {
+		backend := &mockOSSBackend{getErr: fmt.Errorf("connection timeout")}
+
+		_, _, err := LoadImageFromOSS(ctx, backend, bucket, "user-123/test.jpg")
+		if err == nil || !strings.Contains(err.Error(), "get object from OSS") {
+			t.Errorf("got error %v, want 'get object from OSS'", err)
+		}
+	})
+
+	t.Run("object not found", func(t *testing.T) {
+		backend := &mockOSSBackend{objects: map[string][]byte{}}
+
+		_, _, err := LoadImageFromOSS(ctx, backend, bucket, "user-123/nonexistent.jpg")
+		if err == nil || !strings.Contains(err.Error(), "object not found") {
+			t.Errorf("got error %v, want 'object not found'", err)
+		}
+	})
+
+	t.Run("corrupted image data", func(t *testing.T) {
+		// Valid JPEG header but corrupted data
+		header := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01}
+		data := make([]byte, 0, len(header)+100)
+		data = append(data, header...)
+		data = append(data, make([]byte, 100)...) // Add garbage
+		backend := &mockOSSBackend{objects: map[string][]byte{"user-123/corrupted.jpg": data}}
+
+		_, _, err := LoadImageFromOSS(ctx, backend, bucket, "user-123/corrupted.jpg")
+		if err == nil || !strings.Contains(err.Error(), "decode image") {
+			t.Errorf("got error %v, want 'decode image'", err)
+		}
+	})
+
+	t.Run("oversized image exceeds max read size", func(t *testing.T) {
+		// Create data larger than ImageMaxReadSize (20MB)
+		data := make([]byte, ImageMaxReadSize+1024)
+		// Set JPEG magic bytes
+		data[0] = 0xFF
+		data[1] = 0xD8
+		data[2] = 0xFF
+		backend := &mockOSSBackend{objects: map[string][]byte{"user-123/huge.jpg": data}}
+
+		_, _, err := LoadImageFromOSS(ctx, backend, bucket, "user-123/huge.jpg")
+		if err == nil || !strings.Contains(err.Error(), "exceeds maximum read size") {
+			t.Errorf("got error %v, want 'exceeds maximum read size'", err)
+		}
+	})
+
+	t.Run("non-image MIME type rejected", func(t *testing.T) {
+		// Text data, not an image
+		data := []byte("Hello, World! This is not an image.")
+		backend := &mockOSSBackend{objects: map[string][]byte{"user-123/notimage.txt": data}}
+
+		_, _, err := LoadImageFromOSS(ctx, backend, bucket, "user-123/notimage.txt")
+		if err == nil || !strings.Contains(err.Error(), "unsupported image format") {
+			t.Errorf("got error %v, want 'unsupported image format'", err)
+		}
+	})
 }

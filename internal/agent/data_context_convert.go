@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -409,8 +410,17 @@ func (h *helpers) convertUserMessage(
 	}
 
 	// Process file attachments (images and text files)
-	if umc.Files != nil && h.ossBackend != nil {
-		h.processFileAttachments(ctx, result, *umc.Files)
+	if umc.Files != nil && len(*umc.Files) > 0 {
+		if h.ossBackend == nil {
+			// OSS not configured: file attachments will be silently skipped.
+			// Log a warning to help diagnose why files are missing from LLM context.
+			h.logger.Warn(ctx, "convertUserMessage.oss_not_configured", map[string]any{
+				"file_count": len(*umc.Files),
+				"message":    "file attachments are skipped because OSS storage is not configured",
+			})
+		} else {
+			h.processFileAttachments(ctx, result, *umc.Files)
+		}
 	}
 
 	return []*turnagent.Message{result}, nil
@@ -418,34 +428,98 @@ func (h *helpers) convertUserMessage(
 
 // processFileAttachments loads and processes file attachments from OSS.
 // Images are added to MultiContent; text files are XML-wrapped and appended to Content.
+// Files are loaded in parallel to improve performance when multiple files are attached.
 func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Message, files []protocol.FileAttachment) {
-	var textContents []string
-	for _, file := range files {
-		switch {
-		case strings.HasPrefix(file.Mimetype, "image/"):
-			data, mimeType, err := LoadImageFromOSS(ctx, h.ossBackend, h.ossBucket, file.Fileid)
-			if err != nil {
-				h.logger.Warn(ctx, "processFileAttachments.load_image_failed", map[string]any{
-					"file_id": file.Fileid,
-					"error":   err.Error(),
-				})
-				continue
-			}
-			msg.MultiContent = append(msg.MultiContent, ImageToInputPart(data, mimeType))
+	if len(files) == 0 {
+		return
+	}
 
-		case strings.HasPrefix(file.Mimetype, "text/"):
-			content, err := LoadTextFromOSS(ctx, h.ossBackend, h.ossBucket, file.Fileid)
-			if err != nil {
-				h.logger.Warn(ctx, "processFileAttachments.load_text_failed", map[string]any{
-					"file_id": file.Fileid,
-					"error":   err.Error(),
+	// Parallel loading results (preserving order)
+	type loadResult struct {
+		index       int
+		fileType    string // "image" or "text"
+		imageData   []byte
+		imageMime   string
+		textContent string
+		err         error
+	}
+
+	results := make([]loadResult, len(files))
+	var wg sync.WaitGroup
+
+	// Launch parallel loaders
+	for i, file := range files {
+		wg.Add(1)
+		go func(idx int, f protocol.FileAttachment) {
+			defer wg.Done()
+
+			switch {
+			case strings.HasPrefix(f.Mimetype, "image/"):
+				data, mimeType, err := LoadImageFromOSS(ctx, h.ossBackend, h.ossBucket, f.Fileid)
+				results[idx] = loadResult{
+					index:     idx,
+					fileType:  "image",
+					imageData: data,
+					imageMime: mimeType,
+					err:       err,
+				}
+
+			case strings.HasPrefix(f.Mimetype, "text/"):
+				content, err := LoadTextFromOSS(ctx, h.ossBackend, h.ossBucket, f.Fileid)
+				results[idx] = loadResult{
+					index:       idx,
+					fileType:    "text",
+					textContent: content,
+					err:         err,
+				}
+
+			default:
+				// Unknown MIME type: log warning and skip
+				h.logger.Warn(ctx, "processFileAttachments.unsupported_mime_type", map[string]any{
+					"file_id":  f.Fileid,
+					"mimetype": f.Mimetype,
 				})
-				continue
 			}
+		}(i, file)
+	}
+
+	// Wait for all loaders to complete
+	wg.Wait()
+
+	// Process results in order
+	var textContents []string
+	for _, res := range results {
+		if res.err != nil {
+			// Log error and skip this file
+			var logKey string
+			switch res.fileType {
+			case "image":
+				logKey = "processFileAttachments.load_image_failed"
+			case "text":
+				logKey = "processFileAttachments.load_text_failed"
+			default:
+				logKey = "processFileAttachments.load_failed"
+			}
+			fileID := ""
+			if res.index < len(files) {
+				fileID = files[res.index].Fileid
+			}
+			h.logger.Warn(ctx, logKey, map[string]any{
+				"file_id": fileID,
+				"error":   res.err.Error(),
+			})
+			continue
+		}
+
+		switch res.fileType {
+		case "image":
+			msg.MultiContent = append(msg.MultiContent, ImageToInputPart(res.imageData, res.imageMime))
+		case "text":
+			file := files[res.index]
 			name := ExtractFileName(file)
 			textContents = append(textContents, fmt.Sprintf(
 				"<file_content name=%q type=%q>\n%s\n</file_content>",
-				name, file.Mimetype, content,
+				name, file.Mimetype, res.textContent,
 			))
 		}
 	}
