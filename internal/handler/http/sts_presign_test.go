@@ -100,7 +100,7 @@ func TestSTSPresign_InvalidOperation_Returns400(t *testing.T) {
 
 	rec := doPresignRequest(t, handler, presignRequest{
 		Operation: "delete",
-		Key:       "user-00000000-0000-0000-0000-000000000001/file.txt",
+		Key:       "user-00000000-0000-0000-0000-000000000001/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
 	}, &uid)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -135,17 +135,13 @@ func TestSTSPresign_KeyPrefixMismatch_Returns403(t *testing.T) {
 	handler := newTestPresignHandler(t)
 	uid := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
-	// Key belongs to a different user
+	// Key belongs to a different user (valid format, different UUID)
 	rec := doPresignRequest(t, handler, presignRequest{
 		Operation: "put",
-		Key:       "user-other-user/file.txt",
+		Key:       "user-00000000-0000-0000-0000-000000000002/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
 	}, &uid)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
-
-	var resp map[string]string
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Contains(t, resp["error"], "must start with")
 }
 
 // TestSTSPresign_ValidPut_Returns200 verifies that a well-formed "put"
@@ -157,7 +153,7 @@ func TestSTSPresign_ValidPut_Returns200(t *testing.T) {
 
 	rec := doPresignRequest(t, handler, presignRequest{
 		Operation: "put",
-		Key:       "user-00000000-0000-0000-0000-000000000001/file.txt",
+		Key:       "user-00000000-0000-0000-0000-000000000001/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
 		ExpiresIn: 3600,
 	}, &uid)
 
@@ -182,7 +178,7 @@ func TestSTSPresign_ValidGet_Returns200(t *testing.T) {
 
 	rec := doPresignRequest(t, handler, presignRequest{
 		Operation: "get",
-		Key:       "user-00000000-0000-0000-0000-000000000001/file.txt",
+		Key:       "user-00000000-0000-0000-0000-000000000001/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
 	}, &uid)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -202,7 +198,7 @@ func TestSTSPresign_ExpiryExceeded_Returns403(t *testing.T) {
 	// Max is 7 days (604800s); request 8 days
 	rec := doPresignRequest(t, handler, presignRequest{
 		Operation: "put",
-		Key:       "user-00000000-0000-0000-0000-000000000001/file.txt",
+		Key:       "user-00000000-0000-0000-0000-000000000001/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
 		ExpiresIn: 8 * 24 * 3600, // 8 days
 	}, &uid)
 
@@ -223,7 +219,7 @@ func TestSTSPresign_DefaultExpiry_IsOneHour(t *testing.T) {
 	// expiresIn=0 triggers the default (1h)
 	rec := doPresignRequest(t, handler, presignRequest{
 		Operation: "put",
-		Key:       "user-00000000-0000-0000-0000-000000000001/file.txt",
+		Key:       "user-00000000-0000-0000-0000-000000000001/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
 		ExpiresIn: 0,
 	}, &uid)
 

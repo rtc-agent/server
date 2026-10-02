@@ -11,6 +11,7 @@ import (
 	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
+	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	"go.uber.org/zap"
 )
 
@@ -101,6 +102,13 @@ func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.
 	// Validate key
 	if req.Key == "" {
 		writePresignError(w, http.StatusBadRequest, "key is required")
+		return
+	}
+
+	// Validate key format (user-{uuid}/{md5}.{ext})
+	// Fail early before generating a presigned URL that would fail on use.
+	if s3Err := rtcoss3.ValidateKey(req.Key, userID.String()); s3Err != nil {
+		writePresignError(w, s3Err.HTTPCode, s3Err.Message)
 		return
 	}
 
