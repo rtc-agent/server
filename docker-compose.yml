@@ -206,6 +206,9 @@ services:
     environment:
       DEBUG: true
       LLM__API_KEY: "${LLM__API_KEY}"
+      AUTH__JWT_SECRET: "${AUTH__JWT_SECRET}"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
       STORAGE__ENCRYPTION__SESSION_TOKEN_KEY: "${OSS3_SESSION_TOKEN_KEY:-}"
     expose:
       - "8888"
@@ -234,6 +237,9 @@ services:
     environment:
       DEBUG: true
       LLM__API_KEY: "${LLM__API_KEY}"
+      AUTH__JWT_SECRET: "${AUTH__JWT_SECRET}"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
       STORAGE__ENCRYPTION__SESSION_TOKEN_KEY: "${OSS3_SESSION_TOKEN_KEY:-}"
     expose:
       - "8888"

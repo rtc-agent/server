@@ -709,19 +709,21 @@ func TestMultipartUpload_MaxParts_Integration(t *testing.T) {
 	}
 }
 
-// TestListObjects_Pagination_Integration tests pagination with 100 objects.
+// TestListObjects_Pagination_Integration tests pagination with 20 objects.
+// Uses generateValidKey for unique keys and verifies all uploaded objects appear
+// in paginated results, regardless of other objects in the bucket.
 // Requires: RTC_OSS3_REFRESH_TOKEN, running server, Redis, MinIO.
 func TestListObjects_Pagination_Integration(t *testing.T) {
 	creds, userID, serverURL, bucket := setupIntegrationTest(t)
 
 	client := &http.Client{}
 
-	// Upload 20 objects (using fewer for faster integration test)
+	// Upload 20 objects with unique keys.
 	numObjects := 20
-	uploadedKeys := make([]string, 0, numObjects)
+	uploadedKeySet := make(map[string]bool, numObjects)
 	for i := 0; i < numObjects; i++ {
 		key := generateValidKey(userID, "txt")
-		uploadedKeys = append(uploadedKeys, key)
+		uploadedKeySet[key] = true
 
 		path := fmt.Sprintf("/s3/%s/%s", bucket, key)
 		data := []byte(fmt.Sprintf("content-%d", i))
@@ -748,18 +750,34 @@ func TestListObjects_Pagination_Integration(t *testing.T) {
 		}
 	}
 
-	// List with max-keys=5 (paginate through results)
-	// Use a prefix that matches only our uploaded objects
-	allKeys := make([]string, 0, numObjects)
+	// Cleanup: defer deletion of all uploaded objects.
+	defer func() {
+		for key := range uploadedKeySet {
+			delPath := fmt.Sprintf("/s3/%s/%s", bucket, key)
+			delReq, _ := http.NewRequest(http.MethodDelete, serverURL+delPath, nil)
+			parsedURL, _ := url.Parse(serverURL)
+			if parsedURL != nil {
+				delReq.Host = parsedURL.Host
+			}
+			rtcoss3.SignS3Request(delReq, creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken, "us-east-1")
+			resp, err := client.Do(delReq)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}
+	}()
+
+	// Paginate through ALL objects with user prefix (may include leftovers).
+	// Track which of our uploaded keys we find.
+	userPrefix := fmt.Sprintf("user-%s/", userID)
+	foundKeys := make(map[string]bool, numObjects)
 	marker := ""
 	pages := 0
-	// Extract common prefix from first key (user-{uuid}/)
-	commonPrefix := strings.Split(uploadedKeys[0], "/")[0] + "/"
 	for {
 		pages++
-		listPath := fmt.Sprintf("/s3/%s?max-keys=5&prefix=%s", bucket, commonPrefix)
+		listPath := fmt.Sprintf("/s3/%s?max-keys=5&prefix=%s", bucket, userPrefix)
 		if marker != "" {
-			listPath += "&marker=" + marker
+			listPath += "&marker=" + url.QueryEscape(marker)
 		}
 
 		listReq := newSignedS3Request(t, http.MethodGet, listPath, nil, creds, serverURL)
@@ -775,7 +793,6 @@ func TestListObjects_Pagination_Integration(t *testing.T) {
 			t.Fatalf("list objects page %d: status %d, body: %s", pages, listResp.StatusCode, string(bodyBytes))
 		}
 
-		// Parse XML response
 		type listResult struct {
 			XMLName     xml.Name `xml:"ListBucketResult"`
 			IsTruncated bool     `xml:"IsTruncated"`
@@ -791,10 +808,13 @@ func TestListObjects_Pagination_Integration(t *testing.T) {
 		}
 
 		for _, c := range result.Contents {
-			allKeys = append(allKeys, c.Key)
+			if uploadedKeySet[c.Key] {
+				foundKeys[c.Key] = true
+			}
 		}
 
-		t.Logf("Page %d: got %d objects, IsTruncated=%v, NextMarker=%q", pages, len(result.Contents), result.IsTruncated, result.NextMarker)
+		t.Logf("Page %d: got %d objects, IsTruncated=%v, found %d/%d uploaded keys",
+			pages, len(result.Contents), result.IsTruncated, len(foundKeys), numObjects)
 
 		if !result.IsTruncated {
 			break
@@ -804,14 +824,19 @@ func TestListObjects_Pagination_Integration(t *testing.T) {
 			marker = result.Contents[len(result.Contents)-1].Key
 		}
 
-		if pages > 50 {
-			t.Fatal("too many pages, possible infinite loop")
+		// Safety limit — but don't fail, just stop paginating.
+		if pages > 200 {
+			t.Log("reached 200 pages, stopping pagination")
+			break
 		}
 	}
 
-	assert.True(t, len(allKeys) >= numObjects, "expected at least %d objects, got %d in %d pages", numObjects, len(allKeys), pages)
+	// All uploaded keys must be found in the paginated results.
+	assert.Equal(t, numObjects, len(foundKeys),
+		"expected all %d uploaded keys to appear in pagination, found %d in %d pages",
+		numObjects, len(foundKeys), pages)
 	assert.True(t, pages > 1, "expected multiple pages for pagination test")
-	t.Logf("Listed %d objects in %d pages (uploaded %d new objects)", len(allKeys), pages, numObjects)
+	t.Logf("Found all %d uploaded keys in %d pages", len(foundKeys), pages)
 }
 
 // TestDeleteObjects_PartialSuccess_Integration tests batch delete where some
