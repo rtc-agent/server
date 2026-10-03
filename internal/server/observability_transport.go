@@ -59,8 +59,7 @@ type LLMResponseObserver interface {
 	//   - elapsed: wall-clock time from request start to response complete
 	//   - usage: token usage extracted from the response (may be empty if
 	//     the provider doesn't include usage or if parsing failed)
-	//   - stream: whether this was a streaming (SSE) response
-	Observe(req *http.Request, model string, statusCode int, elapsed time.Duration, usage TokenUsage, stream bool)
+	Observe(req *http.Request, model string, statusCode int, elapsed time.Duration, usage TokenUsage)
 }
 
 // observabilityTransport wraps an http.RoundTripper and provides:
@@ -207,7 +206,7 @@ func (t *observabilityTransport) RoundTrip(req *http.Request) (*http.Response, e
 
 		// Notify observer
 		if t.observer != nil {
-			t.observer.Observe(req, model, resp.StatusCode, elapsed, usage, false)
+			t.observer.Observe(req, model, resp.StatusCode, elapsed, usage)
 		}
 
 		// Payload logging: response
@@ -321,7 +320,7 @@ func (orc *observabilityReadCloser) Read(p []byte) (int, error) {
 
 		// Notify observer
 		if orc.observer != nil {
-			orc.observer.Observe(orc.req, orc.model, orc.statusCode, time.Since(orc.startTime), usage, orc.isStream)
+			orc.observer.Observe(orc.req, orc.model, orc.statusCode, time.Since(orc.startTime), usage)
 		}
 
 		// Payload logging: log stream completion summary (not full body)

@@ -23,7 +23,7 @@ func NewHTTPMetricsObserver(metrics turnagent.Metrics) LLMResponseObserver {
 }
 
 // Observe implements LLMResponseObserver.
-func (o *httpMetricsObserver) Observe(req *http.Request, model string, statusCode int, elapsed time.Duration, usage TokenUsage, stream bool) {
+func (o *httpMetricsObserver) Observe(req *http.Request, model string, statusCode int, elapsed time.Duration, usage TokenUsage) {
 	// Record HTTP-level metrics
 	o.metrics.RecordLLMHTTPRequest(context.Background(), turnagent.LLMHTTPMetricsAttrs{
 		Model:        model,
