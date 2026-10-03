@@ -9,6 +9,9 @@ server:
   # For production deployments, MUST set SERVER__ENV=production via environment variable.
   # Leaving this as "development" in production disables critical security checks.
   env: "development"
+  # shutdown_timeout: 10s       # 优雅关闭超时（等待 in-flight 请求完成）
+  # rpc_timeout: 10s            # RPC handler 上下文超时
+  # client_queue_max_size: 52428800  # Centrifuge 客户端消息队列上限（字节），默认 50MB
 
 database:
   dsn: "postgres://rtc_agent:rtc_agent@postgres:5432/rtc_agent?sslmode=disable"
@@ -176,6 +179,20 @@ web_fetch:
     db: 0
 
   user_agent: "RTCAgent-WebFetch/1.0"
+
+# Debug 端点（pprof + goroutines）
+# 生产环境建议禁用或配置认证
+debug:
+  enabled: true  # Docker 开发环境默认启用
+  # user: "admin"
+  # password: "${DEBUG__PASSWORD}"
+  # goroutine_leak_threshold: 1000  # goroutine 数量告警阈值
+  # show_raw_errors: false           # 是否在错误信息中显示 RawError
+
+# Metrics 端点（Prometheus）
+metrics:
+  # user: "admin"
+  # password: "${METRICS__PASSWORD}"
 
 # Object Storage (rtc-oss3) — MinIO backend
 storage:
