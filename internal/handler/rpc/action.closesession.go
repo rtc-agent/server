@@ -27,7 +27,7 @@ import (
 
 // CloseSession closes a session.
 func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRequest) (*protocol.CloseSessionResponse, error) {
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.closeSession",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.close_session",
 		trace.WithAttributes(
 			attribute.String("session.id", req.SessionId),
 		),
@@ -80,6 +80,9 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		if err := primitives.UpdateSessionStatus(txCtx, h.deps.Deps, session.ID, protocol.SessionStatusClosed); err != nil {
 			return nil, err
 		}
+
+		// Record session close metric (normal close initiated by user)
+		h.deps.Metrics.RecordSessionClosed(txCtx, "normal")
 
 		// Delete session memories (soft delete; they have served their purpose for compression).
 		if err := h.deps.Deps.MemoryRepo.DeleteByScope(txCtx, memory.ScopeSession, session.ID); err != nil {

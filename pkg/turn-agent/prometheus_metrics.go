@@ -37,6 +37,11 @@ type PrometheusMetrics struct {
 
 	// Recovery metrics (stale turn scanner)
 	staleTurnsRecovered *prometheus.CounterVec // label: status (running/pending/interrupted)
+
+	// Business event metrics
+	sessionCreatedTotal *prometheus.CounterVec
+	sessionClosedTotal  *prometheus.CounterVec
+	messagesSentTotal   *prometheus.CounterVec
 }
 
 // NewPrometheusMetrics creates and registers all Prometheus metrics.
@@ -184,6 +189,28 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name:      "stale_turns_recovered_total",
 			Help:      "Total number of stale turns recovered by the periodic scanner.",
 		}, []string{"status"}), // status: "running", "pending", "interrupted"
+
+		// Business event metrics
+		sessionCreatedTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "session",
+			Name:      "created_total",
+			Help:      "Total number of sessions created.",
+		}, []string{}),
+
+		sessionClosedTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "session",
+			Name:      "closed_total",
+			Help:      "Total number of sessions closed.",
+		}, []string{"reason"}), // reason: "normal", "timeout", "error"
+
+		messagesSentTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "message",
+			Name:      "sent_total",
+			Help:      "Total number of messages sent.",
+		}, []string{"type"}), // type: "user", "assistant", "system"
 	}
 }
 
@@ -311,4 +338,25 @@ func (m *PrometheusMetrics) RecordStaleTurnRecovery(ctx context.Context, attrs S
 		status = "unknown"
 	}
 	m.staleTurnsRecovered.WithLabelValues(status).Inc()
+}
+
+// RecordSessionCreated records a session creation event.
+func (m *PrometheusMetrics) RecordSessionCreated(ctx context.Context) {
+	m.sessionCreatedTotal.WithLabelValues().Inc()
+}
+
+// RecordSessionClosed records a session close event.
+func (m *PrometheusMetrics) RecordSessionClosed(ctx context.Context, reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	m.sessionClosedTotal.WithLabelValues(reason).Inc()
+}
+
+// RecordMessageSent records a message send event.
+func (m *PrometheusMetrics) RecordMessageSent(ctx context.Context, msgType string) {
+	if msgType == "" {
+		msgType = "unknown"
+	}
+	m.messagesSentTotal.WithLabelValues(msgType).Inc()
 }

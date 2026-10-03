@@ -88,9 +88,9 @@ func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Sessio
 
 // SendMessage sends a message (auto-creates session + turn).
 func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequest) (*protocol.SendMessageResponse, error) {
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.sendMessage",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.send_message",
 		trace.WithAttributes(
-			attribute.String("client.session_id", req.ClientSessionId),
+			attribute.String("client.session.id", req.ClientSessionId),
 			attribute.String("client.id", req.ClientId),
 		),
 	)
@@ -168,6 +168,8 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 			if err := primitives.CreateSession(txCtx, h.deps.Deps, session); err != nil {
 				return nil, fmt.Errorf("create session: %w", err)
 			}
+			// Record session creation metric
+			h.deps.Metrics.RecordSessionCreated(txCtx)
 		} else {
 			if err := primitives.TouchSession(txCtx, h.deps.Deps, session.ID); err != nil {
 				if errors.Is(err, repo.ErrSessionClosedOrNotFound) {
@@ -218,6 +220,9 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 			return nil, fmt.Errorf("create message: %w", err)
 		}
 		createdMessage = msg
+
+		// Record message sent metrics
+		h.deps.Metrics.RecordMessageSent(txCtx, string(protocol.MessageRoleUser))
 
 		if err := h.publishSubmitWork(txCtx, session.ID, userID.String()); err != nil {
 			return nil, err

@@ -71,6 +71,15 @@ type Metrics interface {
 	// RecordStaleTurnRecovery records a stale turn recovery event.
 	// Called by the server's stale turn scanner when a stuck turn is recovered.
 	RecordStaleTurnRecovery(ctx context.Context, attrs StaleTurnRecoveryAttrs)
+
+	// RecordSessionCreated records a session creation event.
+	RecordSessionCreated(ctx context.Context)
+
+	// RecordSessionClosed records a session close event with the close reason.
+	RecordSessionClosed(ctx context.Context, reason string)
+
+	// RecordMessageSent records a message send event with the message type.
+	RecordMessageSent(ctx context.Context, msgType string)
 }
 
 // TurnMetricsAttrs contains attributes for a turn event.

@@ -134,7 +134,7 @@ func buildForkMessages(
 //   - Replace the last message with the new content_data
 //   - Trigger the AI flow (via rtc-queue Publish)
 func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequest) (*protocol.ForkSessionResponse, error) {
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.forkSession",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.fork_session",
 		trace.WithAttributes(
 			attribute.String("old_session.id", req.OldServerSessionId),
 			attribute.String("old_message.id", req.OldServerMessageId),
@@ -220,6 +220,8 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		if err := primitives.CreateSession(txCtx, h.deps.Deps, newSession); err != nil {
 			return nil, fmt.Errorf("create session: %w", err)
 		}
+		// Record session creation metric
+		h.deps.Metrics.RecordSessionCreated(txCtx)
 
 		// turnID is nil — the turn is created asynchronously by turn-agent.
 		createdMessages, err = primitives.BatchCreateMessages(txCtx, h.deps.Deps, newSession.ID, nil, messagesToCreate)
