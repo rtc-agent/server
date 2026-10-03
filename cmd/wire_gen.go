@@ -376,7 +376,7 @@ func provideAgent(
 		CheckpointTTL:                   cfg.Worker.CheckpointTTL,
 		StreamChunkTTL:                  cfg.Worker.StreamChunkTTL,
 		Logger:                          agent.NewLogger(),
-		Tracer:                          otel.GetTracerProvider().Tracer("turnagent"),
+		Tracer:                          otel.GetTracerProvider().Tracer("turn-agent"),
 		Metrics:                         metrics,
 		ModelPricing:                    convertModelPricing(cfg.LLM.Pricing),
 		EnableStrategicCacheBreakpoints: cfg.Worker.EnableStrategicCacheBreakpoints,

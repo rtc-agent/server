@@ -231,10 +231,10 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 
 	// Publish Resume work item to parent session's rtc-queue.
 	// Extract trace context for cross-process propagation.
-	ctx, span := h.tracer.Start(ctx, "subAgent.resumeParent",
+	ctx, span := h.tracer.Start(ctx, "sub_agent.resume_parent",
 		trace.WithAttributes(
-			attribute.String("sub_session_id", subSession.ID.String()),
-			attribute.String("parent_session_id", parentSessionID),
+			attribute.String("sub_session.id", subSession.ID.String()),
+			attribute.String("session.parent_id", parentSessionID),
 		),
 	)
 	defer span.End()

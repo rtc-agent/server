@@ -109,12 +109,13 @@ func (mgr *SessionTurnManager) genResume() func(
 		loop *adk.TurnLoop[TurnWorkItem, *schema.Message],
 		interrupted, unhandled, newItems []TurnWorkItem,
 	) (*adk.GenResumeResult[TurnWorkItem, *schema.Message], error) {
-		return mgr.genResumeImpl(interrupted, unhandled, newItems)
+		return mgr.genResumeImpl(ctx, interrupted, unhandled, newItems)
 	}
 }
 
 // genResumeImpl builds the resume input for a checkpoint recovery.
 func (mgr *SessionTurnManager) genResumeImpl(
+	ctx context.Context,
 	interrupted, unhandled, newItems []TurnWorkItem,
 ) (*adk.GenResumeResult[TurnWorkItem, *schema.Message], error) {
 	// Cancel the previous resume context to release its timer.
@@ -144,7 +145,9 @@ func (mgr *SessionTurnManager) genResumeImpl(
 	// the parent of the TurnLoop's execution, and StopTurn / lock-loss / worker
 	// shutdown all cancel that context. The resumeCancelMu + doCleanup path
 	// handles timer goroutine lifecycle (see session_manager.go doCleanup Step 2b).
-	resumeCtx, cancel := context.WithCancel(context.Background())
+	//
+	// Use the incoming ctx as parent to preserve trace context propagation.
+	resumeCtx, cancel := context.WithCancel(ctx)
 	mgr.resumeCancel = cancel
 	mgr.resumeCancelMu.Unlock()
 

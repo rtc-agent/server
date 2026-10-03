@@ -23,12 +23,12 @@ import (
 // implements a compensation flow: quota reservation -> backend upload ->
 // quota commit -> DB record. Splitting it would hide the data flow.
 func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.PutObject",
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.put_object",
 		trace.WithAttributes(
 			attribute.String("bucket", bucket),
 			attribute.String("key", key),
-			attribute.Int64("content_length", r.ContentLength),
-			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+			attribute.Int64("http.request.body.size", r.ContentLength),
+			attribute.String("user.id", ExtractUserIDFromContext(r.Context())),
 		),
 	)
 	defer span.End()
@@ -87,7 +87,7 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	if instantResult.Hit {
 		if instantResult.ConsistencyViolation {
 			// MinIO has file but DB missing → consistency repair
-			span.SetAttributes(attribute.String("instant_upload", "minio_repair"))
+			span.SetAttributes(attribute.String("oss.upload_source", "minio_repair"))
 			RecordConsistencyViolation(instantResult.ViolationType)
 			logger.Info(ctx, "instant upload: MinIO hit, repairing DB record",
 				zap.String("user_id", userID),
@@ -105,7 +105,7 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 			}
 		} else {
 			// Both DB and MinIO have the file → instant upload hit
-			span.SetAttributes(attribute.String("instant_upload", "db_hit"))
+			span.SetAttributes(attribute.String("oss.upload_source", "db_hit"))
 			logger.Info(ctx, "instant upload: DB and MinIO hit",
 				zap.String("user_id", userID),
 				zap.String("key", key),
@@ -119,7 +119,7 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 
 	if instantResult.ConsistencyViolation {
 		// DB has record but MinIO missing → consistency violation, fall through to normal upload
-		span.SetAttributes(attribute.Bool("db_consistency_violation", true))
+		span.SetAttributes(attribute.Bool("db.consistency_violation", true))
 		RecordConsistencyViolation(instantResult.ViolationType)
 		logger.Warn(ctx, "instant upload: DB record exists but MinIO file missing, re-uploading",
 			zap.String("user_id", userID),

@@ -73,7 +73,7 @@ func (b *TopicBroker) handlePubSubMessage(msg rueidis.PubSubMessage) {
 		if sc.IsValid() {
 			spanCtx = trace.ContextWithRemoteSpanContext(spanCtx, sc)
 		}
-		_, span := b.tracer.Start(spanCtx, "centrifugeplus.topicbroker.pubsub",
+		_, span := b.tracer.Start(spanCtx, "centrifuge_plus.topic_broker.pubsub",
 			trace.WithAttributes(
 				AttributeChannel.String(ch),
 				AttributeMessageType.String("publication"),
@@ -130,7 +130,7 @@ func (b *TopicBroker) handlePubSubMessage(msg rueidis.PubSubMessage) {
 
 	// Join/Leave messages: no need to extract trace parent, process directly.
 	if strings.HasPrefix(rawPayload, "__j1:") {
-		_, span := b.tracer.Start(context.Background(), "centrifugeplus.topicbroker.pubsub",
+		_, span := b.tracer.Start(context.Background(), "centrifuge_plus.topic_broker.pubsub",
 			trace.WithAttributes(
 				AttributeChannel.String(ch),
 				AttributeMessageType.String("join"),
@@ -152,7 +152,7 @@ func (b *TopicBroker) handlePubSubMessage(msg rueidis.PubSubMessage) {
 	}
 
 	if strings.HasPrefix(rawPayload, "__l1:") {
-		_, span := b.tracer.Start(context.Background(), "centrifugeplus.topicbroker.pubsub",
+		_, span := b.tracer.Start(context.Background(), "centrifuge_plus.topic_broker.pubsub",
 			trace.WithAttributes(
 				AttributeChannel.String(ch),
 				AttributeMessageType.String("leave"),
@@ -180,7 +180,7 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 		// Interface methods cannot accept context; use an internal context with timeout to prevent Redis commands from blocking indefinitely.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
-		_, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.subscribe",
+		_, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.subscribe",
 			trace.WithAttributes(AttributeChannel.String(ch)),
 		)
 
@@ -227,7 +227,7 @@ func (b *TopicBroker) Unsubscribe(channels ...string) error {
 	for _, ch := range channels {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
-		_, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.unsubscribe",
+		_, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.unsubscribe",
 			trace.WithAttributes(AttributeChannel.String(ch)),
 		)
 

@@ -101,7 +101,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// (including the LLM call running in mgr.Run) when StopTurn is called.
 	turnCtx, turnCancel := context.WithCancel(ctx)
 	var turnSpan trace.Span
-	turnCtx, turnSpan = a.startSpanIfEnabled(turnCtx, "turn")
+	turnCtx, turnSpan = a.startSpanIfEnabled(turnCtx, "turn_agent.turn")
 	// Enrich context with sessionID so ALL callbacks (not just beginTurn) can
 	// fall back to it when DB lookups fail (e.g., failTurn/cancelTurn session
 	// status update). Without this, a GetByID failure after a terminal turn

@@ -20,7 +20,7 @@ import (
 
 // UpdateSession updates a session (currently only supports title).
 func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSessionRequest) (*protocol.UpdateSessionResponse, error) {
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.updateSession",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.update_session",
 		trace.WithAttributes(
 			attribute.String("session.id", req.SessionId),
 		),

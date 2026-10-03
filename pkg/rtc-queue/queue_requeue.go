@@ -23,7 +23,7 @@ import (
 // The check is safe: if the lock still exists, the worker is likely alive
 // and we should not interfere.
 func (q *Queue) RequeueGhostWork(ctx context.Context, sessionID string) (string, error) {
-	ctx, span := queueTracer().Start(ctx, "Queue.RequeueGhostWork",
+	ctx, span := queueTracer().Start(ctx, "queue.requeue_ghost_work",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 		),
@@ -67,7 +67,7 @@ func (q *Queue) RequeueGhostWork(ctx context.Context, sessionID string) (string,
 // This is more efficient than calling RequeueGhostWork in a loop when
 // recovering many sessions at once (e.g., during server restart).
 func (q *Queue) RequeueGhostWorksBatch(ctx context.Context, sessionIDs []string) (map[string]string, error) {
-	ctx, span := queueTracer().Start(ctx, "Queue.RequeueGhostWorksBatch",
+	ctx, span := queueTracer().Start(ctx, "queue.requeue_ghost_works_batch",
 		trace.WithAttributes(
 			attribute.Int("session.count", len(sessionIDs)),
 		),
@@ -138,7 +138,7 @@ func (q *Queue) RequeueGhostWorksBatch(ctx context.Context, sessionIDs []string)
 // Returns nil on success. Returns an error if the work is not found or not in
 // "processing" state.
 func (q *Queue) RequeueWork(ctx context.Context, workID string) error {
-	ctx, span := queueTracer().Start(ctx, "Queue.RequeueWork",
+	ctx, span := queueTracer().Start(ctx, "queue.requeue_work",
 		trace.WithAttributes(
 			attribute.String("work.id", workID),
 		),

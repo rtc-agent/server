@@ -95,10 +95,10 @@ func (t *webSearchTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 //  4. publishToolMessages — persist input+output (on both success and failure)
 //  5. Return JSON result to the LLM (same value as persisted for cache consistency)
 func (t *webSearchTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.webSearch",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.web_search",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -140,7 +140,7 @@ func (t *webSearchTool) InvokableRun(ctx context.Context, argumentsInJSON string
 
 	span.SetAttributes(
 		attribute.String("query", args.Query),
-		attribute.Int("max_results", args.MaxResults),
+		attribute.Int("tool.max_results", args.MaxResults),
 		attribute.String("time_range", args.TimeRange),
 	)
 
@@ -189,7 +189,7 @@ func (t *webSearchTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		return "", fmt.Errorf("webSearch: publish messages: %w", err)
 	}
 
-	span.SetAttributes(attribute.Int("result_count", len(resp.Results)))
+	span.SetAttributes(attribute.Int("tool.result_count", len(resp.Results)))
 	t.helpers.logger.Info(ctx, "webSearch.completed", map[string]any{
 		"session_id":   t.session.ID.String(),
 		"query":        args.Query,

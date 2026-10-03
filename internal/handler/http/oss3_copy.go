@@ -22,12 +22,12 @@ func (h *OSS3Handler) handleCopyObject(
 	w http.ResponseWriter, r *http.Request,
 	dstBucket, dstKey, copySource string,
 ) {
-	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.CopyObject",
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.copy_object",
 		trace.WithAttributes(
-			attribute.String("dst_bucket", dstBucket),
-			attribute.String("dst_key", dstKey),
-			attribute.String("copy_source", copySource),
-			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+			attribute.String("oss.destination.bucket", dstBucket),
+			attribute.String("oss.destination.key", dstKey),
+			attribute.String("oss.copy_source", copySource),
+			attribute.String("user.id", ExtractUserIDFromContext(r.Context())),
 		),
 	)
 	defer span.End()

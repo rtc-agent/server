@@ -72,10 +72,10 @@ func (t *webFetchTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 //  4. publishToolMessages — persist input+output (on both success and failure)
 //  5. Return formatted text to the LLM (via FormatFetchResponse)
 func (t *webFetchTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.webFetch",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.web_fetch",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -109,7 +109,7 @@ func (t *webFetchTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 
 	span.SetAttributes(
 		attribute.String("url", args.URL),
-		attribute.Int("prompt_length", len(args.Prompt)),
+		attribute.Int("tool.prompt_length", len(args.Prompt)),
 	)
 
 	// 3. Execute fetch.
@@ -155,8 +155,8 @@ func (t *webFetchTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 	}
 
 	span.SetAttributes(
-		attribute.Int("bytes", int(resp.Bytes)),
-		attribute.Int("status_code", resp.Code),
+		attribute.Int("http.response.body.size", int(resp.Bytes)),
+		attribute.Int("http.response.status_code", resp.Code),
 	)
 
 	t.helpers.logger.Info(ctx, "webFetch.completed", map[string]any{

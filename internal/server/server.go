@@ -12,6 +12,9 @@ import (
 	"github.com/google/uuid"
 	hibikenasynq "github.com/hibiken/asynq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	httphandler "github.com/rtc-agent/server/internal/handler/http"
@@ -110,7 +113,18 @@ func (s *Server) Start() error {
 	// Recover stale turns from previous crash/restart BEFORE starting worker.
 	// This ensures that turns left in running/pending state are marked as
 	// interrupted and have resume work items published.
-	s.recoverStaleTurns(context.Background())
+	// Create a root span with timeout to provide trace context for all downstream operations.
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ctx, span := otel.Tracer("server").Start(ctx, "server.recoverStaleTurns",
+			trace.WithAttributes(
+				attribute.String("instance_id", s.instanceID),
+			),
+		)
+		defer span.End()
+		s.recoverStaleTurns(ctx)
+	}
 
 	// Start periodic stale turn scanner goroutine.
 	// Uses a Redis distributed lock to ensure only one Server instance scans

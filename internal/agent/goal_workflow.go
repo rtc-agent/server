@@ -112,7 +112,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 		}
 	}
 
-	innerCtx, span := g.helpers.tracer.Start(ctx.Context, "goalWorkflow.onTurnComplete",
+	innerCtx, span := g.helpers.tracer.Start(ctx.Context, "goal_workflow.on_turn_complete",
 		trace.WithAttributes(
 			attribute.String("session.id", ctx.SessionID.String()),
 			attribute.String("user.id", userID),

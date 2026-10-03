@@ -62,11 +62,11 @@ func (t *sendMessageToSubAgentTool) Info(ctx context.Context) (*schema.ToolInfo,
 }
 
 func (t *sendMessageToSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.sendMessageToSubAgent",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.send_message_to_sub_agent",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
-			attribute.Int("args_length", len(argumentsInJSON)),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
+			attribute.Int("tool.args_length", len(argumentsInJSON)),
 		),
 	)
 	defer span.End()

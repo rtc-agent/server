@@ -94,10 +94,10 @@ func (t *saveMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *saveMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.saveMemory",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.save_memory",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -168,7 +168,7 @@ func (t *saveMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
-	span.SetAttributes(attribute.String("user_id", userID.String()))
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 
 	// Build metadata with importance and source session (OKF sources format)
 	metadataMap := args.Metadata
@@ -210,7 +210,7 @@ func (t *saveMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return errMsg, nil
 	}
 
-	span.SetAttributes(attribute.String("memory_id", mem.ID.String()))
+	span.SetAttributes(attribute.String("memory.id", mem.ID.String()))
 	t.helpers.logger.Info(ctx, "saveMemory.success", map[string]any{
 		"user_id":    userID.String(),
 		"memory_id":  mem.ID.String(),
@@ -280,10 +280,10 @@ func (t *updateMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *updateMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.updateMemory",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.update_memory",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -307,7 +307,7 @@ func (t *updateMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
-	span.SetAttributes(attribute.String("memory_id", args.MemoryID))
+	span.SetAttributes(attribute.String("memory.id", args.MemoryID))
 
 	memoryID, err := uuid.Parse(args.MemoryID)
 	if err != nil {
@@ -326,7 +326,7 @@ func (t *updateMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
-	span.SetAttributes(attribute.String("user_id", userID.String()))
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 
 	existing, err := t.helpers.deps.MemoryRepo.GetByID(ctx, memoryID)
 	if err != nil {
@@ -365,12 +365,12 @@ func (t *updateMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		return errMsg, nil
 	}
 	if len(fields) == 0 {
-		span.SetAttributes(attribute.Bool("no_fields", true))
+		span.SetAttributes(attribute.Bool("memory.no_fields", true))
 		resultJSON := "No fields to update."
 		t.persistResult(ctx, argumentsInJSON, resultJSON)
 		return resultJSON, nil
 	}
-	span.SetAttributes(attribute.Int("field_count", len(fields)))
+	span.SetAttributes(attribute.Int("memory.field_count", len(fields)))
 
 	if err := t.helpers.deps.MemoryRepo.Update(ctx, memoryID, fields); err != nil {
 		span.RecordError(err)
@@ -411,10 +411,10 @@ func (t *deleteMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *deleteMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.deleteMemory",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.delete_memory",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -432,7 +432,7 @@ func (t *deleteMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
-	span.SetAttributes(attribute.String("memory_id", args.MemoryID))
+	span.SetAttributes(attribute.String("memory.id", args.MemoryID))
 
 	memoryID, err := uuid.Parse(args.MemoryID)
 	if err != nil {
@@ -451,7 +451,7 @@ func (t *deleteMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}
-	span.SetAttributes(attribute.String("user_id", userID.String()))
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 
 	existing, err := t.helpers.deps.MemoryRepo.GetByID(ctx, memoryID)
 	if err != nil {
@@ -519,10 +519,10 @@ func (t *listMemoriesTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *listMemoriesTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.listMemories",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.list_memories",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -545,7 +545,7 @@ func (t *listMemoriesTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		return errMsg, nil
 	}
 	span.SetAttributes(
-		attribute.String("user_id", userID.String()),
+		attribute.String("user.id", userID.String()),
 		attribute.String("category", args.Category),
 	)
 

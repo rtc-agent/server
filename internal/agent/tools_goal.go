@@ -55,10 +55,10 @@ func (t *createGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.createGoal",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.create_goal",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -70,7 +70,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if args.Condition == "" {
 		return "Error: condition is required and cannot be empty", nil
 	}
-	span.SetAttributes(attribute.Int("condition_length", len(args.Condition)))
+	span.SetAttributes(attribute.Int("tool.condition_length", len(args.Condition)))
 
 	// 1. Check for existing active goal.
 	existing, err := t.helpers.deps.GoalRepo.FindActive(ctx, t.session.ID)
@@ -139,7 +139,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return "", fmt.Errorf("createGoal: publish messages: %w", err)
 	}
 
-	span.SetAttributes(attribute.String("goal_id", goal.ID.String()))
+	span.SetAttributes(attribute.String("goal.id", goal.ID.String()))
 	t.helpers.logger.Info(ctx, "createGoal.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"goal_id":    goal.ID.String(),
@@ -260,10 +260,10 @@ func finalizeGoalStatus(
 ) (string, error) {
 	ctx, span := h.tracer.Start(ctx, "tool."+toolName,
 		trace.WithAttributes(
-			attribute.String("session_id", session.ID.String()),
-			attribute.String("turn_id", turnID.String()),
-			attribute.String("target_status", string(status)),
-			attribute.Int("reason_length", len(reason)),
+			attribute.String("session.id", session.ID.String()),
+			attribute.String("turn.id", turnID.String()),
+			attribute.String("tool.target_status", string(status)),
+			attribute.Int("tool.reason_length", len(reason)),
 		),
 	)
 	defer span.End()
@@ -317,7 +317,7 @@ func finalizeGoalStatus(
 		return "", fmt.Errorf("%s: publish messages: %w", toolName, err)
 	}
 
-	span.SetAttributes(attribute.String("goal_id", goal.ID.String()))
+	span.SetAttributes(attribute.String("goal.id", goal.ID.String()))
 	h.logger.Info(ctx, logEvent, map[string]any{
 		"session_id": session.ID.String(),
 		"goal_id":    goal.ID.String(),

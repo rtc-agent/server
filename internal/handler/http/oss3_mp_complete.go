@@ -21,12 +21,12 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 	bucket, key, uploadID string,
 ) {
 	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(
-		r.Context(), "oss3.CompleteMultipartUpload",
+		r.Context(), "oss3.complete_multipart_upload",
 		trace.WithAttributes(
 			attribute.String("bucket", bucket),
 			attribute.String("key", key),
-			attribute.String("upload_id", uploadID),
-			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+			attribute.String("oss.upload.id", uploadID),
+			attribute.String("user.id", ExtractUserIDFromContext(r.Context())),
 		),
 	)
 	defer span.End()
@@ -90,7 +90,7 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 		existingMeta, headErr := h.oss3UC.Backend().HeadObject(ctx, bucket, key)
 		if headErr == nil && existingMeta.Key != "" {
 			// Both DB and MinIO confirm file exists (instant upload hit)
-			span.SetAttributes(attribute.String("instant_upload", "multipart"))
+			span.SetAttributes(attribute.String("oss.upload_source", "multipart"))
 			logger.Info(ctx, "instant upload: multipart hit",
 				zap.String("user_id", userID),
 				zap.String("key", key),
@@ -123,7 +123,7 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 			return
 		}
 		// DB has record but MinIO file missing — consistency violation, fall through
-		span.SetAttributes(attribute.Bool("db_consistency_violation", true))
+		span.SetAttributes(attribute.Bool("db.consistency_violation", true))
 		RecordConsistencyViolation("db_has_minio_missing")
 		logger.Warn(ctx, "instant upload: DB record exists but MinIO file missing, completing multipart upload",
 			zap.String("user_id", userID),

@@ -59,10 +59,10 @@ func (t *todoWriteTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helper.tracer.Start(ctx, "tool.todoWrite",
+	ctx, span := t.helper.tracer.Start(ctx, "tool.todo_write",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.Int("args_length", len(argumentsInJSON)),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.Int("tool.args_length", len(argumentsInJSON)),
 		),
 	)
 	defer span.End()
@@ -80,7 +80,7 @@ func (t *todoWriteTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	if len(args.Todos) == 0 {
 		args.Todos = make([]model.TodoItem, 0)
 	}
-	span.SetAttributes(attribute.Int("todo_count", len(args.Todos)))
+	span.SetAttributes(attribute.Int("tool.todo_count", len(args.Todos)))
 
 	// 2. Validate todos.
 	for i, todo := range args.Todos {

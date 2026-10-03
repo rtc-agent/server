@@ -20,12 +20,12 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 	w http.ResponseWriter, r *http.Request,
 	bucket, key, uploadID string,
 ) {
-	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.UploadPart",
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.upload_part",
 		trace.WithAttributes(
 			attribute.String("bucket", bucket),
 			attribute.String("key", key),
-			attribute.String("upload_id", uploadID),
-			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+			attribute.String("oss.upload.id", uploadID),
+			attribute.String("user.id", ExtractUserIDFromContext(r.Context())),
 		),
 	)
 	defer span.End()

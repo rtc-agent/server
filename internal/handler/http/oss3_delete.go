@@ -21,11 +21,11 @@ import (
 func (h *OSS3Handler) handleDeleteObject(
 	w http.ResponseWriter, r *http.Request, bucket, key string,
 ) {
-	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.DeleteObject",
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.delete_object",
 		trace.WithAttributes(
 			attribute.String("bucket", bucket),
 			attribute.String("key", key),
-			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+			attribute.String("user.id", ExtractUserIDFromContext(r.Context())),
 		),
 	)
 	defer span.End()
@@ -61,10 +61,10 @@ func (h *OSS3Handler) handleDeleteObject(
 // handleDeleteObjects handles POST /{bucket}?delete= — batch delete objects (H4).
 // S3 spec: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
 func (h *OSS3Handler) handleDeleteObjects(w http.ResponseWriter, r *http.Request, bucket string) {
-	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.DeleteObjects",
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.delete_objects",
 		trace.WithAttributes(
 			attribute.String("bucket", bucket),
-			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+			attribute.String("user.id", ExtractUserIDFromContext(r.Context())),
 		),
 	)
 	defer span.End()

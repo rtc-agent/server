@@ -18,7 +18,7 @@ import (
 // existing turn. Returns ErrNoActiveTurn (unwrapped) when a resume target is
 // no longer active, so callers can distinguish transient from permanent errors.
 func (a *Agent) resolveTurnID(ctx context.Context, sessionID, workID string, kind WorkKind) (string, error) {
-	resolveCtx, resolveSpan := a.startSpanIfEnabled(ctx, "resolve_turn_id",
+	resolveCtx, resolveSpan := a.startSpanIfEnabled(ctx, "turn_agent.resolve_turn_id",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.String("work.id", workID),

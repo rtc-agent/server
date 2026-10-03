@@ -81,7 +81,7 @@ func (a *Agent) handleNonOwnerCompletion(
 			return nil
 		}
 
-		_, requeueSpan := a.startSpanIfEnabled(ctx, "requeue_abandoned_work",
+		_, requeueSpan := a.startSpanIfEnabled(ctx, "turn_agent.requeue_abandoned_work",
 			trace.WithAttributes(
 				attribute.String("session.id", sessionID),
 				attribute.String("turn.id", turnID),
@@ -273,7 +273,7 @@ func (a *Agent) pushOrReplace(
 		"turn_id":    turnID,
 	})
 
-	_, replaceSpan := a.startSpanIfEnabled(ctx, "push_or_replace",
+	_, replaceSpan := a.startSpanIfEnabled(ctx, "turn_agent.push_or_replace",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.String("turn.id", turnID),
@@ -344,7 +344,7 @@ func (a *Agent) handleOwnerLifecycleEnd(
 				"message":    "owner's work abandoned but session cancelled; skipping requeue",
 			})
 		} else {
-			_, requeueSpan := a.startSpanIfEnabled(ctx, "requeue_owner_work",
+			_, requeueSpan := a.startSpanIfEnabled(ctx, "turn_agent.requeue_owner_work",
 				trace.WithAttributes(
 					attribute.String("session.id", p.SessionID),
 					attribute.String("turn.id", turnID),
@@ -461,7 +461,7 @@ func (a *Agent) tryReactiveCompactRecovery(
 	turnDuration time.Duration,
 	exitReason error,
 ) bool {
-	recoveryCtx, recoverySpan := a.startSpanIfEnabled(ctx, "reactive_compact_recovery",
+	recoveryCtx, recoverySpan := a.startSpanIfEnabled(ctx, "turn_agent.reactive_compact_recovery",
 		trace.WithAttributes(
 			attribute.String("session.id", p.SessionID),
 			attribute.String("turn.id", turnID),

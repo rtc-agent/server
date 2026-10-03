@@ -252,12 +252,12 @@ func (t *scriptTool) InvokableRun(ctx context.Context, argumentsInJSON string, o
 //   - r.manager.deps -> r.helpers.deps (the integration struct is helpers, not Manager)
 //   - Logger calls use h.logger.Info instead of logger.Debug/Info directly.
 func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumentsInJSON string, _ ...tool.Option) (string, error) {
-	ctx, span := r.helpers.tracer.Start(ctx, "rtcTool."+toolName,
+	ctx, span := r.helpers.tracer.Start(ctx, "rtc_tool."+toolName,
 		trace.WithAttributes(
-			attribute.String("session_id", r.session.ID.String()),
-			attribute.String("turn_id", r.turnID.String()),
-			attribute.String("tool_name", toolName),
-			attribute.Int("args_length", len(argumentsInJSON)),
+			attribute.String("session.id", r.session.ID.String()),
+			attribute.String("turn.id", r.turnID.String()),
+			attribute.String("tool.name", toolName),
+			attribute.Int("tool.args_length", len(argumentsInJSON)),
 		),
 	)
 	defer span.End()
@@ -283,8 +283,8 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	result, err := r.handleRtcFirstCall(ctx, toolName, argumentsInJSON)
 	// handleRtcFirstCall returns an interrupt (expected control flow, not an error)
 	span.AddEvent("first_call_interrupted", trace.WithAttributes(
-		attribute.String("interrupt_type", "first_call"),
-		attribute.String("tool_name", toolName),
+		attribute.String("tool.interrupt_type", "first_call"),
+		attribute.String("tool.name", toolName),
 	))
 	span.SetStatus(codes.Ok, "interrupted_for_user_input")
 	return result, err

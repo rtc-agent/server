@@ -22,7 +22,7 @@ import (
 
 // UpdateRtcStatus updates RTC execution status (executing/failed/timeout/rejected).
 func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcStatusRequest) (*protocol.UpdateRtcStatusResponse, error) {
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.updateRtcStatus",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.update_rtc_status",
 		trace.WithAttributes(
 			attribute.String("rtc.id", req.RtcId),
 			attribute.String("rtc.status", string(req.Status)),

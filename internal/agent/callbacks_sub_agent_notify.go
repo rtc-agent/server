@@ -79,10 +79,10 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 
 	// Publish Submit work item to parent session's rtc-queue to trigger a new turn.
 	// Extract trace context for cross-process propagation.
-	ctx, span := h.tracer.Start(ctx, "subAgent.notify",
+	ctx, span := h.tracer.Start(ctx, "sub_agent.notify",
 		trace.WithAttributes(
-			attribute.String("sub_session_id", subSession.ID.String()),
-			attribute.String("parent_session_id", parentSessionID.String()),
+			attribute.String("sub_session.id", subSession.ID.String()),
+			attribute.String("session.parent_id", parentSessionID.String()),
 			attribute.String("status", status),
 		),
 	)

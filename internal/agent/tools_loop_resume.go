@@ -40,10 +40,10 @@ func (t *resumeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.resumeLoop",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.resume_loop",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -66,7 +66,7 @@ func (t *resumeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		span.SetAttributes(attribute.Bool("not_found", true))
 		return "Error: no paused loop found to resume", nil
 	}
-	span.SetAttributes(attribute.String("loop_id", pausedLoop.ID.String()))
+	span.SetAttributes(attribute.String("loop.id", pausedLoop.ID.String()))
 
 	// Check for existing active loop (only one active loop per session).
 	existingActive, err := t.helpers.deps.LoopRepo.FindActive(ctx, t.session.ID)

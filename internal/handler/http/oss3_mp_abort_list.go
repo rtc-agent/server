@@ -20,12 +20,12 @@ func (h *OSS3MultipartHandler) handleAbortMultipartUpload(
 	bucket, key, uploadID string,
 ) {
 	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(
-		r.Context(), "oss3.AbortMultipartUpload",
+		r.Context(), "oss3.abort_multipart_upload",
 		trace.WithAttributes(
 			attribute.String("bucket", bucket),
 			attribute.String("key", key),
-			attribute.String("upload_id", uploadID),
-			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+			attribute.String("oss.upload.id", uploadID),
+			attribute.String("user.id", ExtractUserIDFromContext(r.Context())),
 		),
 	)
 	defer span.End()
@@ -63,12 +63,12 @@ func (h *OSS3MultipartHandler) handleListParts(
 	w http.ResponseWriter, r *http.Request,
 	bucket, key, uploadID string,
 ) {
-	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.ListParts",
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.list_parts",
 		trace.WithAttributes(
 			attribute.String("bucket", bucket),
 			attribute.String("key", key),
-			attribute.String("upload_id", uploadID),
-			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+			attribute.String("oss.upload.id", uploadID),
+			attribute.String("user.id", ExtractUserIDFromContext(r.Context())),
 		),
 	)
 	defer span.End()

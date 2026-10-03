@@ -14,10 +14,10 @@ import (
 
 // handleListObjects handles GET /{bucket} — list objects.
 func (h *OSS3Handler) handleListObjects(w http.ResponseWriter, r *http.Request, bucket string) {
-	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.ListObjects",
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.list_objects",
 		trace.WithAttributes(
 			attribute.String("bucket", bucket),
-			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+			attribute.String("user.id", ExtractUserIDFromContext(r.Context())),
 		),
 	)
 	defer span.End()

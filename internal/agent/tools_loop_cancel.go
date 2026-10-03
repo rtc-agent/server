@@ -125,10 +125,10 @@ func finalizeLoopStatus(
 ) (string, error) {
 	ctx, span := h.tracer.Start(ctx, "tool."+toolName,
 		trace.WithAttributes(
-			attribute.String("session_id", session.ID.String()),
-			attribute.String("turn_id", turnID.String()),
-			attribute.String("target_status", string(status)),
-			attribute.Int("reason_length", len(reason)),
+			attribute.String("session.id", session.ID.String()),
+			attribute.String("turn.id", turnID.String()),
+			attribute.String("tool.target_status", string(status)),
+			attribute.Int("tool.reason_length", len(reason)),
 		),
 	)
 	defer span.End()
@@ -186,7 +186,7 @@ func finalizeLoopStatus(
 		return "", fmt.Errorf("%s: publish messages: %w", toolName, err)
 	}
 
-	span.SetAttributes(attribute.String("loop_id", loop.ID.String()))
+	span.SetAttributes(attribute.String("loop.id", loop.ID.String()))
 	h.logger.Info(ctx, logEvent, map[string]any{
 		"session_id": session.ID.String(),
 		"loop_id":    loop.ID.String(),

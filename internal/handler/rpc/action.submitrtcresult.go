@@ -28,7 +28,7 @@ import (
 
 // SubmitRtcResult submits an RTC execution result, marks the RTC as completed, and continues the LLM flow.
 func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcResultRequest) (*protocol.SubmitRtcResultResponse, error) {
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.submitRtcResult",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.submit_rtc_result",
 		trace.WithAttributes(
 			attribute.String("rtc.id", req.RtcId),
 			attribute.Bool("rtc.success", req.Success),
@@ -292,7 +292,7 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc, 
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(callerCtx), 30*time.Second)
 	defer cancel()
 
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.resumeTurnAfterRtc",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.resume_turn_after_rtc",
 		trace.WithAttributes(
 			attribute.String("rtc.id", rtc.ID.String()),
 			attribute.String("session.id", rtc.SessionID.String()),

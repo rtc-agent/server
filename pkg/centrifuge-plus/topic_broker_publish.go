@@ -17,7 +17,7 @@ import (
 // range is [final - Count + 1, ..., final] (Count defaults to 1 if zero).
 // Each channel must appear at most once in reqs.
 func (b *TopicBroker) BatchIncrby(ctx context.Context, reqs []ChannelIncrbyRequest) (map[string]centrifuge.StreamPosition, error) {
-	ctx, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.batch_incrby",
+	ctx, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.batch_incrby",
 		trace.WithAttributes(AttributeChannel.String(fmt.Sprintf("%v", reqs))),
 	)
 	defer span.End()
@@ -59,7 +59,7 @@ func (b *TopicBroker) BatchIncrby(ctx context.Context, reqs []ChannelIncrbyReque
 	}
 
 	// Execute Lua script
-	_, luaSpan := b.tracer.Start(ctx, "centrifugeplus.topicbroker.batch_incrby.lua")
+	_, luaSpan := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.batch_incrby.lua")
 	result, err := b.incrbyOffsetScript.Exec(ctx, b.redisClient, keys, args).AsStrSlice()
 	if err != nil {
 		recordError(luaSpan, err)
@@ -94,7 +94,7 @@ func (b *TopicBroker) BatchIncrby(ctx context.Context, reqs []ChannelIncrbyReque
 // Call this after DB transaction commits. No HINCRBY, no XADD, no Asynq.
 // Returns error if epoch mismatch occurs.
 func (b *TopicBroker) PublishWithOffset(ctx context.Context, ch string, data []byte, opts centrifuge.PublishOptions, sp centrifuge.StreamPosition) error {
-	ctx, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.publish_with_offset",
+	ctx, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.publish_with_offset",
 		trace.WithAttributes(
 			AttributeChannel.String(ch),
 			AttributeOffset.Int64(int64(sp.Offset)), //nolint:gosec // offset will not exceed int64 range
@@ -134,7 +134,7 @@ func (b *TopicBroker) PublishWithOffset(ctx context.Context, ch string, data []b
 	}
 
 	// Execute Lua script
-	_, luaSpan := b.tracer.Start(ctx, "centrifugeplus.topicbroker.publish_with_offset.lua")
+	_, luaSpan := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.publish_with_offset.lua")
 	result, err := b.publishWithOffsetScript.Exec(ctx, b.redisClient, keys, args).AsStrSlice()
 	if err != nil {
 		recordError(luaSpan, err)
@@ -169,7 +169,7 @@ func (b *TopicBroker) PublishWithOffset(ctx context.Context, ch string, data []b
 // The epoch is lazily initialized via SETNX on first call for each channel,
 // then read from Redis for subsequent calls. All within a single Lua script invocation.
 func (b *TopicBroker) PublishWithUserOffset(ctx context.Context, ch string, data []byte, offset uint32, opts centrifuge.PublishOptions) (result centrifuge.PublishResult, err error) {
-	ctx, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.publish_user_update",
+	ctx, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.publish_user_update",
 		trace.WithAttributes(
 			AttributeChannel.String(ch),
 			AttributeOffset.Int64(int64(offset)),
@@ -220,7 +220,7 @@ func (b *TopicBroker) PublishWithUserOffset(ctx context.Context, ch string, data
 	}
 
 	// Execute Lua script
-	_, luaSpan := b.tracer.Start(ctx, "centrifugeplus.topicbroker.publish_user_update.lua")
+	_, luaSpan := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.publish_user_update.lua")
 	scriptResult, scriptErr := b.publishUserUpdateScript.Exec(ctx, b.redisClient, keys, args).AsStrSlice()
 	if scriptErr != nil {
 		recordError(luaSpan, scriptErr)
@@ -261,7 +261,7 @@ func (b *TopicBroker) Publish(ch string, data []byte, opts centrifuge.PublishOpt
 
 // PublishWithContext is like Publish but accepts a context for distributed tracing.
 func (b *TopicBroker) PublishWithContext(ctx context.Context, ch string, data []byte, opts centrifuge.PublishOptions) (result centrifuge.PublishResult, err error) {
-	ctx, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.publish",
+	ctx, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.publish",
 		trace.WithAttributes(AttributeChannel.String(ch)),
 	)
 	defer func() {
@@ -311,7 +311,7 @@ func (b *TopicBroker) PublishJoin(ch string, info *centrifuge.ClientInfo) error 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.publish_join",
+	_, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.publish_join",
 		trace.WithAttributes(AttributeChannel.String(ch)),
 	)
 	defer span.End()
@@ -330,7 +330,7 @@ func (b *TopicBroker) PublishLeave(ch string, info *centrifuge.ClientInfo) error
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.publish_leave",
+	_, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.publish_leave",
 		trace.WithAttributes(AttributeChannel.String(ch)),
 	)
 	defer span.End()

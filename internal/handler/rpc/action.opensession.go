@@ -23,7 +23,7 @@ import (
 
 // OpenSession reopens a closed session (status: closed -> idle).
 func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequest) (*protocol.OpenSessionResponse, error) {
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.openSession",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.open_session",
 		trace.WithAttributes(
 			attribute.String("session.id", req.SessionId),
 		),

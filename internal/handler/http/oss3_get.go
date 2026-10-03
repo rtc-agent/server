@@ -18,11 +18,11 @@ import (
 
 // handleGetObject handles GET /{bucket}/{key} — download object.
 func (h *OSS3Handler) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.GetObject",
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.get_object",
 		trace.WithAttributes(
 			attribute.String("bucket", bucket),
 			attribute.String("key", key),
-			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+			attribute.String("user.id", ExtractUserIDFromContext(r.Context())),
 		),
 	)
 	defer span.End()
@@ -213,11 +213,11 @@ func parseRangeHeader(rangeHeader string) (start, end int64, hasRange bool, err 
 
 // handleHeadObject handles HEAD /{bucket}/{key} — get object metadata.
 func (h *OSS3Handler) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.HeadObject",
+	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.head_object",
 		trace.WithAttributes(
 			attribute.String("bucket", bucket),
 			attribute.String("key", key),
-			attribute.String("user_id", ExtractUserIDFromContext(r.Context())),
+			attribute.String("user.id", ExtractUserIDFromContext(r.Context())),
 		),
 	)
 	defer span.End()

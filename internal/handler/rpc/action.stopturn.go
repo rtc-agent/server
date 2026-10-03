@@ -20,7 +20,7 @@ import (
 // StopTurn stops a running Turn (cancels the LLM call).
 // Stops all active turns for the session (supports cross-node operation).
 func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (*protocol.StopTurnResponse, error) {
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.stopTurn",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.stop_turn",
 		trace.WithAttributes(
 			attribute.String("session.id", req.SessionId),
 		),
