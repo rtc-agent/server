@@ -2,6 +2,7 @@ package httphandler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -13,20 +14,20 @@ import (
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/infra/httputil"
 	"github.com/rtc-agent/server/internal/infra/middleware"
-	"github.com/rtc-agent/server/internal/svc"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/memory"
 )
 
 // MemoriesHandler handles memory export HTTP requests.
 type MemoriesHandler struct {
-	svcCtx *svc.ServiceContext
-	signer *auth.JWTSigner
+	memoryUC *usecase.MemoryUsecase
+	signer   *auth.JWTSigner
 }
 
 // NewMemoriesHandler creates a MemoriesHandler.
-func NewMemoriesHandler(svcCtx *svc.ServiceContext, signer *auth.JWTSigner) *MemoriesHandler {
-	return &MemoriesHandler{svcCtx: svcCtx, signer: signer}
+func NewMemoriesHandler(memoryUC *usecase.MemoryUsecase, signer *auth.JWTSigner) *MemoriesHandler {
+	return &MemoriesHandler{memoryUC: memoryUC, signer: signer}
 }
 
 // RegisterRoutes registers memory-related routes on the given ServeMux.
@@ -41,12 +42,12 @@ func (h *MemoriesHandler) RegisterRoutes(mux *http.ServeMux, allowDevBypass bool
 
 // ExportRequest defines the JSON request body for memory export.
 type ExportRequest struct {
-	Scope      string   `json:"scope"`      // "session" | "user" | "global"
-	ScopeID    string   `json:"scopeId"`    // UUID string
-	Format     string   `json:"format"`     // "okf-bundle"
-	Types      []string `json:"types"`      // filter by types
-	Tags       []string `json:"tags"`       // filter by tags
-	IncludeLog bool     `json:"includeLog"` // generate log.md
+	Scope      string   `json:"scope"`       // "session" | "user" | "global"
+	ScopeID    string   `json:"scope_id"`    // UUID string
+	Format     string   `json:"format"`      // "okf-bundle"
+	Types      []string `json:"types"`       // filter by types
+	Tags       []string `json:"tags"`        // filter by tags
+	IncludeLog bool     `json:"include_log"` // generate log.md
 }
 
 // ExportMemories handles POST /api/memories/export.
@@ -63,10 +64,10 @@ type ExportRequest struct {
 func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Check if memory repo is configured
-	if h.svcCtx.MemoryRepo == nil {
+	// Check if memory is configured
+	if !h.memoryUC.IsMemoryConfigured() {
 		httputil.WriteJSON(w, http.StatusNotImplemented, map[string]string{
-			"error": "memory_not_configured",
+			"error": "memory.not_configured",
 		})
 		return
 	}
@@ -78,7 +79,7 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 	var req ExportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_json",
+			"error": "memory.invalid_json",
 		})
 		return
 	}
@@ -86,7 +87,7 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 	// Validate scope
 	if !memory.IsValidScopeType(memory.ScopeType(req.Scope)) {
 		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_scope",
+			"error": "memory.invalid_scope",
 		})
 		return
 	}
@@ -95,7 +96,7 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 	scopeID, err := uuid.Parse(req.ScopeID)
 	if err != nil {
 		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_scope_id",
+			"error": "memory.invalid_scope_id",
 		})
 		return
 	}
@@ -103,7 +104,7 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 	// Validate format
 	if req.Format != "okf-bundle" {
 		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "unsupported_format",
+			"error": "memory.unsupported_format",
 		})
 		return
 	}
@@ -111,37 +112,6 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 	// --- Authorization: verify scope ownership ---
 	// JWTAuth middleware has already ensured userID is present in context.
 	userID, _ := contextx.GetUserID(ctx)
-
-	switch req.Scope {
-	case "user":
-		// User scope: caller may only export their own memories.
-		if req.ScopeID != userID.String() {
-			httputil.WriteJSON(w, http.StatusForbidden, map[string]string{
-				"error": "forbidden",
-			})
-			return
-		}
-	case "session":
-		// Session scope: caller must own the session.
-		session, sessionErr := h.svcCtx.SessionRepo.GetByID(ctx, scopeID)
-		if sessionErr != nil {
-			httputil.WriteJSON(w, http.StatusNotFound, map[string]string{
-				"error": "session_not_found",
-			})
-			return
-		}
-		if session.OwnerRefID != userID.String() {
-			httputil.WriteJSON(w, http.StatusForbidden, map[string]string{
-				"error": "forbidden",
-			})
-			return
-		}
-	}
-
-	logger.Info(ctx, "[memories.HTTP] export request",
-		zap.String("scope", req.Scope),
-		zap.String("scopeId", req.ScopeID),
-		zap.String("format", req.Format))
 
 	// Set response headers for gzip download
 	filename := fmt.Sprintf("memories-%s-%s.tar.gz", req.Scope, time.Now().Format("20060102-150405"))
@@ -157,9 +127,27 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 		IncludeLog: req.IncludeLog,
 	}
 
-	// Create exporter and run export
-	exporter := memory.NewExporter(h.svcCtx.MemoryRepo)
-	if err := exporter.Export(ctx, opts, w); err != nil {
+	logger.Info(ctx, "[memories.HTTP] export request",
+		zap.String("scope", req.Scope),
+		zap.String("scopeId", req.ScopeID),
+		zap.String("format", req.Format))
+
+	// Delegate to use case (handles ownership validation and export)
+	if err := h.memoryUC.ExportMemories(ctx, userID, memory.ScopeType(req.Scope), scopeID, opts, w); err != nil {
+		// Map use case errors to HTTP responses
+		if errors.Is(err, usecase.ErrForbidden) {
+			// Headers already set, but we can still write status
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
+			return
+		}
+		if errors.Is(err, usecase.ErrSessionNotFound) {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "session.not_found"})
+			return
+		}
+
+		// Export failed after headers were sent
 		logger.Error(ctx, "[memories.HTTP] export failed",
 			zap.String("scope", req.Scope),
 			zap.String("scopeId", req.ScopeID),

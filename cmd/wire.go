@@ -653,14 +653,16 @@ func provideInterruptHandler(
 	svcCtx *svc.ServiceContext,
 	jwtSigner *auth.JWTSigner,
 ) *httphandler.InterruptHandler {
-	return httphandler.NewInterruptHandler(redisClient, cfg.Worker, svcCtx.SessionRepo, jwtSigner)
+	interruptUC := usecase.NewInterruptUsecase(redisClient, cfg.Worker, svcCtx.SessionRepo)
+	return httphandler.NewInterruptHandler(interruptUC, jwtSigner)
 }
 
 func provideMemoriesHandler(
 	svcCtx *svc.ServiceContext,
 	jwtSigner *auth.JWTSigner,
 ) *httphandler.MemoriesHandler {
-	return httphandler.NewMemoriesHandler(svcCtx, jwtSigner)
+	memoryUC := usecase.NewMemoryUsecase(svcCtx.MemoryRepo, svcCtx.SessionRepo)
+	return httphandler.NewMemoriesHandler(memoryUC, jwtSigner)
 }
 
 func provideOSS3Backend(cfg *config.Config) (rtcoss3.Backend, error) {

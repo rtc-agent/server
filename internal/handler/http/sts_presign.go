@@ -8,6 +8,7 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/contextx"
+	"github.com/rtc-agent/server/internal/infra/httputil"
 	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -80,7 +81,7 @@ type presignResponse struct {
 func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.Request) {
 	userID, ok := contextx.GetUserID(r.Context())
 	if !ok {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		httputil.WriteError(w, http.StatusUnauthorized, "presign.unauthorized", "authentication required")
 		return
 	}
 
@@ -89,40 +90,45 @@ func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.
 
 	var req presignRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writePresignError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		writePresignError(w, r, http.StatusBadRequest, "presign.invalid_request", "invalid request body: "+err.Error())
 		return
 	}
 
 	// Validate operation
 	if req.Operation != "put" && req.Operation != "get" {
-		writePresignError(w, http.StatusBadRequest, "operation must be 'put' or 'get'")
+		writePresignError(w, r, http.StatusBadRequest, "presign.invalid_request", "operation must be 'put' or 'get'")
 		return
 	}
 
 	// Validate key
 	if req.Key == "" {
-		writePresignError(w, http.StatusBadRequest, "key is required")
+		writePresignError(w, r, http.StatusBadRequest, "presign.invalid_request", "key is required")
 		return
 	}
 
 	// Validate key format (user-{uuid}/{md5}.{ext})
 	// Fail early before generating a presigned URL that would fail on use.
 	if s3Err := rtcoss3.ValidateKey(req.Key, userID.String()); s3Err != nil {
-		writePresignError(w, s3Err.HTTPCode, s3Err.Message)
+		writePresignError(w, r, s3Err.HTTPCode, "presign.invalid_key", s3Err.Message)
 		return
 	}
 
-	// Default expiry: 1 hour
+	// Default expiry: 1 hour, max: 7 days (AWS S3 limit).
 	expiresIn := time.Duration(req.ExpiresIn) * time.Second
 	if expiresIn <= 0 {
 		expiresIn = time.Hour
+	}
+	const maxPresignExpiry = 7 * 24 * time.Hour
+	if expiresIn > maxPresignExpiry {
+		writePresignError(w, r, http.StatusBadRequest, "presign.invalid_request", "expires_in must not exceed 7 days (604800 seconds)")
+		return
 	}
 
 	url, expiresAt, err := h.oss3UC.GeneratePresignedURL(r.Context(), userID.String(), req.Operation, req.Key, expiresIn)
 	if err != nil {
 		// Check if it's a permission error
 		if isPermissionError(err) {
-			writePresignError(w, http.StatusForbidden, err.Error())
+			writePresignError(w, r, http.StatusForbidden, "presign.forbidden", err.Error())
 			return
 		}
 		logger.Error(r.Context(), "failed to generate presigned URL",
@@ -131,7 +137,7 @@ func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.
 			zap.String("key", req.Key),
 			zap.Error(err),
 		)
-		writePresignError(w, http.StatusInternalServerError, "failed to generate presigned URL")
+		writePresignError(w, r, http.StatusInternalServerError, "presign.internal_error", "failed to generate presigned URL")
 		return
 	}
 
@@ -142,7 +148,9 @@ func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		logger.Warn(r.Context(), "failed to encode presign response", zap.Error(err))
+	}
 }
 
 // isPermissionError checks if the error is a permission/validation error.
@@ -152,9 +160,16 @@ func isPermissionError(err error) bool {
 		errors.Is(err, usecase.ErrExpiryExceeded)
 }
 
-// writePresignError writes a JSON error response.
-func writePresignError(w http.ResponseWriter, status int, message string) {
+// writePresignError writes a JSON error response with consistent format.
+func writePresignError(w http.ResponseWriter, r *http.Request, status int, code, description string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+	resp := map[string]string{
+		"error":             code,
+		"error_description": description,
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		logger.Warn(r.Context(), "failed to encode error response", zap.Error(err))
+	}
 }

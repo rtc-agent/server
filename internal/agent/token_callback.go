@@ -46,6 +46,19 @@ import (
 // Stored in context by OnStart, retrieved by OnEnd/OnEndWithStreamOutput to compute latency.
 type llmStartTimeKey struct{}
 
+// sessionCacheKey is the context key for caching the session object within a turn.
+// Avoids redundant DB queries when reportLLMCall is invoked multiple times per turn.
+type sessionCacheKey struct{}
+
+// sessionFromContext retrieves the cached session from context, if any.
+func sessionFromContext(ctx context.Context) *dbmodel.Session {
+	v := ctx.Value(sessionCacheKey{})
+	if v == nil {
+		return nil
+	}
+	return v.(*dbmodel.Session)
+}
+
 // newTokenUsageCallbackHandler builds an eino callbacks.Handler that captures
 // token usage from both streaming and non-streaming ChatModel calls.
 //
@@ -148,12 +161,19 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 
 	costMicros := calculateCostMicros(fullUsage, h.modelPricing)
 
-	session, sessErr := h.deps.SessionRepo.GetByID(ctx, sessionID)
-	if sessErr != nil {
-		h.logger.Warn(ctx, "token_callback.get_session_failed", map[string]any{
-			"session_id": sessionID,
-			"error":      sessErr.Error(),
-		})
+	// Use cached session from context to avoid redundant DB queries.
+	// In a ReAct loop, reportLLMCall may be invoked 5-10 times per turn;
+	// the session is loaded once and cached for the duration of the turn.
+	session := sessionFromContext(ctx)
+	if session == nil {
+		var sessErr error
+		session, sessErr = h.deps.SessionRepo.GetByID(ctx, sessionID)
+		if sessErr != nil {
+			h.logger.Warn(ctx, "token_callback.get_session_failed", map[string]any{
+				"session_id": sessionID,
+				"error":      sessErr.Error(),
+			})
+		}
 	}
 
 	isCompress := isCompressContext(ctx)

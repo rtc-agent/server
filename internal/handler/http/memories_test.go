@@ -17,7 +17,7 @@ import (
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
-	"github.com/rtc-agent/server/internal/svc"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/memory"
 	"github.com/rtc-agent/server/pkg/protocol"
 )
@@ -69,7 +69,7 @@ func (r *mockMemoryRepo) Search(_ context.Context, _ memory.ScopeType, _ uuid.UU
 	return nil, nil
 }
 
-func (r *mockMemoryRepo) Update(_ context.Context, _ uuid.UUID, _ map[string]any) error {
+func (r *mockMemoryRepo) Update(_ context.Context, _ uuid.UUID, _ map[string]any, _ ...time.Time) error {
 	return nil
 }
 
@@ -182,12 +182,9 @@ func newTestHandler(t *testing.T) (*MemoriesHandler, *mockMemoryRepo, *mockSessi
 	memRepo := &mockMemoryRepo{}
 	sessRepo := newMockSessionRepo()
 
-	svcCtx := &svc.ServiceContext{
-		MemoryRepo:  memRepo,
-		SessionRepo: sessRepo,
-	}
+	memoryUC := usecase.NewMemoryUsecase(memRepo, sessRepo)
 
-	h := NewMemoriesHandler(svcCtx, signer)
+	h := NewMemoriesHandler(memoryUC, signer)
 	return h, memRepo, sessRepo
 }
 
@@ -370,7 +367,7 @@ func TestExportMemories_SessionScope_NotFound(t *testing.T) {
 		"X-Device-ID": "test-device",
 	})
 
-	assertExportError(t, rec, http.StatusNotFound, "session_not_found")
+	assertExportError(t, rec, http.StatusNotFound, "session.not_found")
 }
 
 func TestExportMemories_SessionScope_SuccessWhenOwner(t *testing.T) {
