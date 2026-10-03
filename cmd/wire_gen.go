@@ -841,19 +841,11 @@ func provideServer(
 // provideTaskScheduler creates the asynq-based TaskScheduler.
 // It returns the usecase.TaskScheduler interface for injection into usecase.Dependencies.
 func provideTaskScheduler(cfg *config.Config) (usecase.TaskScheduler, error) {
-	addr := cfg.Asynq.RedisAddr
-	if addr == "" {
-		addr = cfg.Redis.Addr
-	}
-	return taskscheduler.NewTaskScheduler(addr)
+	return taskscheduler.NewTaskScheduler(asynqRedisOpt(cfg))
 }
 
 // provideAsynqServer creates the asynq Server for processing loop tasks.
 func provideAsynqServer(cfg *config.Config) *asynq.Server {
-	addr := cfg.Asynq.RedisAddr
-	if addr == "" {
-		addr = cfg.Redis.Addr
-	}
 	concurrency := cfg.Asynq.Concurrency
 	if concurrency <= 0 {
 		concurrency = 10
@@ -862,13 +854,14 @@ func provideAsynqServer(cfg *config.Config) *asynq.Server {
 	if queueName == "" {
 		queueName = "loop"
 	}
-	return asynq.NewServer(asynq.RedisClientOpt{Addr: addr}, asynq.Config{
-		Concurrency: concurrency,
-		Queues: map[string]int{
-			queueName: 6,
-			"default": 3,
+	return asynq.NewServer(
+		asynqRedisOpt(cfg), asynq.Config{
+			Concurrency: concurrency,
+			Queues: map[string]int{
+				queueName: 6,
+				"default": 3,
+			},
 		},
-	},
 	)
 }
 
@@ -884,11 +877,25 @@ func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, deps *usecas
 
 // provideAsynqInspector creates the asynq Inspector for task management.
 func provideAsynqInspector(cfg *config.Config) *asynq.Inspector {
+	return asynq.NewInspector(asynqRedisOpt(cfg))
+}
+
+// asynqRedisOpt builds a RedisClientOpt for asynq components.
+// Uses Asynq-specific config when available, falling back to the shared Redis config.
+func asynqRedisOpt(cfg *config.Config) asynq.RedisClientOpt {
 	addr := cfg.Asynq.RedisAddr
 	if addr == "" {
 		addr = cfg.Redis.Addr
 	}
-	return asynq.NewInspector(asynq.RedisClientOpt{Addr: addr})
+	password := cfg.Asynq.RedisPassword
+	if password == "" {
+		password = cfg.Redis.Password
+	}
+	return asynq.RedisClientOpt{
+		Addr:     addr,
+		Password: password,
+		DB:       cfg.Asynq.RedisDB,
+	}
 }
 
 // provideRecoveryCancel creates the recovery goroutine and returns its cancel function.

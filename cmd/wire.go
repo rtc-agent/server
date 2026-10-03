@@ -776,19 +776,11 @@ func provideServer(
 // provideTaskScheduler creates the asynq-based TaskScheduler.
 // It returns the usecase.TaskScheduler interface for injection into usecase.Dependencies.
 func provideTaskScheduler(cfg *config.Config) (usecase.TaskScheduler, error) {
-	addr := cfg.Asynq.RedisAddr
-	if addr == "" {
-		addr = cfg.Redis.Addr
-	}
-	return taskscheduler.NewTaskScheduler(addr)
+	return taskscheduler.NewTaskScheduler(asynqRedisOpt(cfg))
 }
 
 // provideAsynqServer creates the asynq Server for processing loop tasks.
 func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
-	addr := cfg.Asynq.RedisAddr
-	if addr == "" {
-		addr = cfg.Redis.Addr
-	}
 	concurrency := cfg.Asynq.Concurrency
 	if concurrency <= 0 {
 		concurrency = 10
@@ -798,7 +790,7 @@ func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
 		queueName = "loop"
 	}
 	return hibikenasynq.NewServer(
-		hibikenasynq.RedisClientOpt{Addr: addr},
+		asynqRedisOpt(cfg),
 		hibikenasynq.Config{
 			Concurrency: concurrency,
 			Queues: map[string]int{
@@ -821,11 +813,25 @@ func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, deps *usecas
 
 // provideAsynqInspector creates the asynq Inspector for task management.
 func provideAsynqInspector(cfg *config.Config) *hibikenasynq.Inspector {
+	return hibikenasynq.NewInspector(asynqRedisOpt(cfg))
+}
+
+// asynqRedisOpt builds a RedisClientOpt for asynq components.
+// Uses Asynq-specific config when available, falling back to the shared Redis config.
+func asynqRedisOpt(cfg *config.Config) hibikenasynq.RedisClientOpt {
 	addr := cfg.Asynq.RedisAddr
 	if addr == "" {
 		addr = cfg.Redis.Addr
 	}
-	return hibikenasynq.NewInspector(hibikenasynq.RedisClientOpt{Addr: addr})
+	password := cfg.Asynq.RedisPassword
+	if password == "" {
+		password = cfg.Redis.Password
+	}
+	return hibikenasynq.RedisClientOpt{
+		Addr:     addr,
+		Password: password,
+		DB:       cfg.Asynq.RedisDB,
+	}
 }
 
 // provideRecoveryCancel creates the recovery goroutine and returns its cancel function.
