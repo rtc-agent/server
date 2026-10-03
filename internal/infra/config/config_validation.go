@@ -66,6 +66,10 @@ func (c *Config) Validate() error {
 	if c.Auth.AccessTokenTTLSeconds <= 0 {
 		return fmt.Errorf("auth.access_token_ttl_seconds must be positive, got %d", c.Auth.AccessTokenTTLSeconds)
 	}
+	// Security: enforce redirect URI whitelist in production to prevent open redirect attacks.
+	if c.Server.Env == "production" && len(c.Auth.AllowedRedirectURIs) == 0 {
+		return fmt.Errorf("auth.allowed_redirect_uris is required in production environment")
+	}
 
 	// Validate worker compression threshold configuration.
 	if err := c.Worker.Validate(); err != nil {

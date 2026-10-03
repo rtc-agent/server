@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 )
@@ -41,6 +42,9 @@ func expandEnvVars(cfg *Config) {
 		cfg.WebSearch.Proxies[i].URL = expandEnvRef(cfg.WebSearch.Proxies[i].URL)
 	}
 
+	// Web fetch sensitive fields.
+	cfg.WebFetch.Redis.Password = expandEnvRef(cfg.WebFetch.Redis.Password)
+
 	// Storage (rtc-oss3) sensitive fields.
 	cfg.Storage.MinIO.AccessKey = expandEnvRef(cfg.Storage.MinIO.AccessKey)
 	cfg.Storage.MinIO.SecretKey = expandEnvRef(cfg.Storage.MinIO.SecretKey)
@@ -53,12 +57,16 @@ func expandEnvVars(cfg *Config) {
 var envRefPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 // expandEnvRef replaces ${VAR} references in a string with the corresponding environment variable values.
-// If the environment variable is not set, it is replaced with an empty string. Strings without ${...} are returned unchanged.
+// If the environment variable is not set, a warning is logged and the reference is replaced with an empty string.
+// Strings without ${...} are returned unchanged.
 func expandEnvRef(s string) string {
 	return envRefPattern.ReplaceAllStringFunc(s, func(match string) string {
 		key := envRefPattern.FindStringSubmatch(match)[1]
 		val, ok := os.LookupEnv(key)
 		if !ok {
+			// Log warning for unset environment variable references to aid debugging.
+			// Use fmt.Fprintf to stderr since logger may not be initialized yet.
+			fmt.Fprintf(os.Stderr, "[config] warning: environment variable %q is not set, using empty string\n", key)
 			return ""
 		}
 		return val

@@ -36,7 +36,7 @@ type MetricsConfig struct {
 // DebugConfig holds /debug/pprof and /debug/goroutines endpoint configuration.
 // These endpoints expose internal process state; authentication must be configured in production.
 type DebugConfig struct {
-	// Enabled controls whether debug endpoints are active. Defaults to true.
+	// Enabled controls whether debug endpoints are active. Defaults to false.
 	// Set to false to completely disable /debug/* routes.
 	Enabled bool `mapstructure:"enabled"`
 	// User is the basic auth username. Empty disables authentication (development only).
@@ -256,6 +256,10 @@ type WebFetchConfig struct {
 
 	// BlockedDomains is the list of blocked domains.
 	BlockedDomains []string `mapstructure:"blocked_domains"`
+
+	// Redis holds the dedicated Redis configuration for caching and rate limiting.
+	// When Addr is empty, the shared redis client is used.
+	Redis WebFetchRedisConfig `mapstructure:"redis"`
 }
 
 // WebFetchRateLimitConfig holds dual-layer rate limiting configuration for web fetch.
@@ -268,6 +272,19 @@ type WebFetchRateLimitConfig struct {
 	DomainRPS float64 `mapstructure:"domain_rps"`
 	// DomainBurst is the per-domain burst size.
 	DomainBurst int `mapstructure:"domain_burst"`
+}
+
+// WebFetchRedisConfig holds the dedicated Redis configuration for web fetch
+// caching and rate limiting.
+type WebFetchRedisConfig struct {
+	// Addr is the Redis address. Empty falls back to the shared redis client.
+	Addr string `mapstructure:"addr"`
+
+	// Password is the Redis password.
+	Password string `mapstructure:"password"`
+
+	// DB is the Redis database number.
+	DB int `mapstructure:"db"`
 }
 
 // AsynqConfig holds asynq task scheduling configuration.
