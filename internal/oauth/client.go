@@ -61,7 +61,7 @@ func (c *Client) GetProviders() []string {
 // GetAuthorizationURL constructs the provider authorization page URL.
 // Returns an error if the provider is not in the registered list
 // (used to reject requests for unsupported providers).
-func (c *Client) GetAuthorizationURL(provider string, state string, redirectURI string) (string, error) {
+func (c *Client) GetAuthorizationURL(provider string, state string, redirectURI string, codeChallenge string, codeChallengeMethod string) (string, error) {
 	cfg, ok := c.providers[provider]
 	if !ok {
 		return "", fmt.Errorf("unsupported provider: %s", provider)
@@ -77,12 +77,20 @@ func (c *Client) GetAuthorizationURL(provider string, state string, redirectURI 
 	if redirectURI != "" {
 		q.Set("redirect_uri", redirectURI)
 	}
+	// PKCE parameters (RFC 7636)
+	if codeChallenge != "" {
+		q.Set("code_challenge", codeChallenge)
+		if codeChallengeMethod == "" {
+			codeChallengeMethod = "S256"
+		}
+		q.Set("code_challenge_method", codeChallengeMethod)
+	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
 
 // ExchangeCode exchanges an authorization code with the provider for user info.
-func (c *Client) ExchangeCode(ctx context.Context, provider string, code string, redirectURI string) (*ProviderUserInfo, error) {
+func (c *Client) ExchangeCode(ctx context.Context, provider string, code string, redirectURI string, codeVerifier string) (*ProviderUserInfo, error) {
 	cfg, ok := c.providers[provider]
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider: %s", provider)
@@ -91,7 +99,7 @@ func (c *Client) ExchangeCode(ctx context.Context, provider string, code string,
 	// Determine flow based on UserInfoURL.
 	if cfg.UserInfoURL != "" {
 		// Two-step mode: code -> access_token -> userinfo
-		accessToken, err := c.exchangeCodeForToken(ctx, cfg, code, redirectURI)
+		accessToken, err := c.exchangeCodeForToken(ctx, cfg, code, redirectURI, codeVerifier)
 		if err != nil {
 			return nil, err
 		}
@@ -99,11 +107,11 @@ func (c *Client) ExchangeCode(ctx context.Context, provider string, code string,
 	}
 
 	// Direct mode: TokenURL returns user info directly (Mock provider).
-	return c.parseUserInfoFromTokenResponse(ctx, cfg, code, redirectURI)
+	return c.parseUserInfoFromTokenResponse(ctx, cfg, code, redirectURI, codeVerifier)
 }
 
 // exchangeCodeForToken exchanges an authorization code for an access_token.
-func (c *Client) exchangeCodeForToken(ctx context.Context, cfg *ProviderConfig, code string, redirectURI string) (string, error) {
+func (c *Client) exchangeCodeForToken(ctx context.Context, cfg *ProviderConfig, code string, redirectURI string, codeVerifier string) (string, error) {
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"client_id":     {cfg.ClientID},
@@ -112,6 +120,10 @@ func (c *Client) exchangeCodeForToken(ctx context.Context, cfg *ProviderConfig, 
 	}
 	if redirectURI != "" {
 		form.Set("redirect_uri", redirectURI)
+	}
+	// PKCE code_verifier (RFC 7636)
+	if codeVerifier != "" {
+		form.Set("code_verifier", codeVerifier)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, strings.NewReader(form.Encode()))
@@ -238,7 +250,7 @@ func (c *Client) fetchUserInfo(ctx context.Context, userInfoURL string, accessTo
 // parseUserInfoFromTokenResponse provides backward compatibility for providers
 // whose TokenURL endpoint returns user info directly (instead of requiring a
 // separate UserInfo call).
-func (c *Client) parseUserInfoFromTokenResponse(ctx context.Context, cfg *ProviderConfig, code string, redirectURI string) (*ProviderUserInfo, error) {
+func (c *Client) parseUserInfoFromTokenResponse(ctx context.Context, cfg *ProviderConfig, code string, redirectURI string, codeVerifier string) (*ProviderUserInfo, error) {
 	form := url.Values{
 		"client_id":     {cfg.ClientID},
 		"client_secret": {cfg.ClientSecret},
@@ -246,6 +258,10 @@ func (c *Client) parseUserInfoFromTokenResponse(ctx context.Context, cfg *Provid
 	}
 	if redirectURI != "" {
 		form.Set("redirect_uri", redirectURI)
+	}
+	// PKCE code_verifier (RFC 7636)
+	if codeVerifier != "" {
+		form.Set("code_verifier", codeVerifier)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, strings.NewReader(form.Encode()))
