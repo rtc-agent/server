@@ -20,6 +20,13 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'")
+		// HSTS: instruct browsers to always use HTTPS for 1 year.
+		// Only set on HTTPS connections to avoid blocking HTTP during development.
+		if r.TLS != nil {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		// Permissions-Policy: restrict browser features.
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 
 		next.ServeHTTP(w, r)
 	})

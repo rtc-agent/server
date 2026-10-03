@@ -299,18 +299,35 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	metricsHandler := promhttp.Handler()
 	if s.cfg.Metrics.User != "" && s.cfg.Metrics.Password != "" {
 		metricsHandler = basicAuth(metricsHandler, s.cfg.Metrics.User, s.cfg.Metrics.Password)
-	} else if s.cfg.Server.Env != "development" {
-		logger.Warn(context.Background(), "metrics endpoint without authentication - configure metrics.user and metrics.password")
+		mux.Handle("GET /metrics", metricsHandler)
+	} else if s.cfg.Server.Env == "development" {
+		// Development mode: allow unauthenticated metrics for local debugging.
+		mux.Handle("GET /metrics", metricsHandler)
+	} else {
+		// Production mode: refuse to serve metrics without authentication.
+		logger.Error(context.Background(), "metrics endpoint disabled: configure metrics.user and metrics.password for production")
+		// Don't register the handler - return 404 for /metrics requests.
 	}
-	mux.Handle("GET /metrics", metricsHandler)
 
 	// Debug endpoints: pprof + goroutine monitoring (optional basic auth).
 	if s.cfg.Debug.Enabled {
 		s.registerDebugRoutes(mux)
 	}
 
-	// OAuth2 endpoints.
+	// OAuth2 endpoints - protect public endpoints with IP rate limiting.
+	// 5 req/s per IP, burst 10, 1 hour TTL for limiter entries.
+	ipRateLimiter := middleware.NewIPRateLimiter(5, 10, time.Hour)
+	s.oauth2Handler.SetIPRateLimiter(ipRateLimiter)
 	s.oauth2Handler.RegisterRoutes(mux)
+
+	// Start IP rate limiter cleanup goroutine to prevent memory growth.
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			ipRateLimiter.Cleanup()
+		}
+	}()
 
 	// Interrupt endpoints (frontend submits interrupt answers).
 	isDevInterrupt := s.cfg.Server.Env == "development"
@@ -365,9 +382,17 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 }
 
 // registerDebugRoutes registers /debug/* routes (pprof + goroutines).
-// In production, configure debug.user/password to enable basic auth protection.
+// In production, debug.user/password are REQUIRED to enable these endpoints.
+// In development, endpoints are registered without auth if credentials are not configured.
 func (s *Server) registerDebugRoutes(mux *http.ServeMux) {
 	hasAuth := s.cfg.Debug.User != "" && s.cfg.Debug.Password != ""
+	isProduction := s.cfg.Server.Env != "development"
+
+	// Security: In production, refuse to register debug endpoints without authentication.
+	if isProduction && !hasAuth {
+		logger.Error(context.Background(), "debug endpoints disabled: debug.user and debug.password are required in production environment")
+		return
+	}
 
 	// goroutines endpoint
 	goroutinesHandler := middleware.GoroutinesHandler()
@@ -383,9 +408,6 @@ func (s *Server) registerDebugRoutes(mux *http.ServeMux) {
 		logger.Info(context.Background(), "[Server] debug endpoints protected with basic auth")
 	} else {
 		middleware.RegisterPprofRoutes(mux)
-		if s.cfg.Server.Env != "development" {
-			logger.Warn(context.Background(), "debug endpoints without authentication - configure debug.user and debug.password")
-		}
 	}
 
 	logger.Info(context.Background(), "[Server] debug endpoints registered",
