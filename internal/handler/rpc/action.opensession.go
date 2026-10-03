@@ -91,7 +91,7 @@ func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequ
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[OpenSession] push failed after commit (data safe)", zap.Error(err))
 		} else {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			return nil, h.internalError(ctx, "open.error", "internal error", err)
 		}

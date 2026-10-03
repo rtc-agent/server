@@ -245,7 +245,7 @@ func (t *observabilityTransport) logError(event, url string, err error) {
 	if t.payloadLog {
 		l := t.payloadLogger()
 		if l != nil {
-			l.Error(event,
+			l.Error("LLM HTTP error",
 				zap.String("event", event),
 				zap.String("url", url),
 				zap.Error(err),

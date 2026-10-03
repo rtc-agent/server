@@ -48,7 +48,7 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 		zap.String("session", req.SessionId))
 
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, sessionUUID, creator); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		return nil, h.ownershipError(ctx, err)
 	}
 
@@ -91,7 +91,7 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[UpdateSession] push failed after commit (data safe)", zap.Error(err))
 		} else {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			return nil, h.internalError(ctx, "update.error", "internal error", err)
 		}

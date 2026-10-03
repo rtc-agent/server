@@ -237,7 +237,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 			return nil // degrade: log but do not interrupt main flow
 		}
 		if _, err := g.helpers.queue.Publish(ctx, ctx.SessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			g.helpers.logger.Warn(ctx, "goalWorkflow.publish_failed", map[string]any{
 				"goal_id":    goal.ID.String(),

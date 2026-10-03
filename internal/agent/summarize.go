@@ -105,7 +105,7 @@ func (h *helpers) finalizeSummaryStreamOnError(
 	if chunkErr := h.appendStreamChunk(ctx, sessionID, uuid.Nil,
 		"", "stream_failed",
 		summaryMsgID, summaryFinalized,
-		buildSummaryContent, "summary", nil); chunkErr != nil {
+		buildSummaryContent, "summary", nil, nil); chunkErr != nil {
 		h.logger.Warn(ctx, "summarize.finalize_failed_on_error", map[string]any{
 			"error": chunkErr.Error(),
 		})
@@ -182,7 +182,7 @@ func (h *helpers) runCompressionSummary(
 		return h.appendStreamChunk(ctx, sessionID, uuid.Nil,
 			chunk, "",
 			&summaryMsgID, &summaryFinalized,
-			buildSummaryContent, "summary", nil)
+			buildSummaryContent, "summary", nil, nil)
 	}
 
 	var mode CompactMode
@@ -258,7 +258,7 @@ func (h *helpers) finalizeSummaryStreamWithMetadata(
 	if chunkErr := h.appendStreamChunk(ctx, sessionID, uuid.Nil,
 		"", "stream_finalize",
 		&summaryMsgID, summaryFinalized,
-		finalBuildContent, "summary", nil); chunkErr != nil {
+		finalBuildContent, "summary", nil, nil); chunkErr != nil {
 		h.logger.Warn(ctx, "summarize.finalize_failed", map[string]any{
 			"error": chunkErr.Error(),
 		})

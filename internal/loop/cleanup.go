@@ -49,7 +49,7 @@ func cancelActiveLoop(ctx context.Context, loopRepo repo.LoopRepo, inspector *hi
 
 	loop, err := loopRepo.FindActive(ctx, sessionID)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Cleanup] find active loop",
 			zap.String("session_id", sessionID.String()),
@@ -78,7 +78,7 @@ func cancelActiveLoop(ctx context.Context, loopRepo repo.LoopRepo, inspector *hi
 		"status":      model.LoopStatusCancelled,
 		"last_reason": &reason,
 	}); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Cleanup] cancel loop",
 			zap.String("loop_id", loop.ID.String()),
@@ -107,7 +107,7 @@ func cancelActiveGoal(ctx context.Context, goalRepo repo.GoalRepo, sessionID uui
 
 	goal, err := goalRepo.FindActive(ctx, sessionID)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Cleanup] find active goal",
 			zap.String("session_id", sessionID.String()),
@@ -125,7 +125,7 @@ func cancelActiveGoal(ctx context.Context, goalRepo repo.GoalRepo, sessionID uui
 		"status":      model.GoalStatusCancelled,
 		"last_reason": &reason,
 	}); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Cleanup] cancel goal",
 			zap.String("goal_id", goal.ID.String()),

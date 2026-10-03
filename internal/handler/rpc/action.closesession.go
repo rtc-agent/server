@@ -96,7 +96,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[CloseSession] push failed after commit (data safe)", zap.Error(err))
 		} else {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			return nil, h.internalError(ctx, "close.error", "internal error", err)
 		}

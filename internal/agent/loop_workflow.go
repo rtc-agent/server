@@ -117,7 +117,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 
 	loop, err := l.helpers.deps.LoopRepo.FindActive(ctx, ctx.SessionID)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		l.helpers.logger.Warn(ctx, "loopWorkflow.find_active_failed", map[string]any{
 			"session_id": ctx.SessionID.String(),
@@ -152,7 +152,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 			})
 		})
 		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			l.helpers.logger.Warn(ctx, "loopWorkflow.update_exhausted_failed", map[string]any{
 				"loop_id": loop.ID.String(),
@@ -182,7 +182,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 		})
 	})
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		l.helpers.logger.Warn(ctx, "loopWorkflow.update_loop_failed", map[string]any{
 			"loop_id": loop.ID.String(),
@@ -290,7 +290,7 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 			})
 			return // Idempotent: task already scheduled
 		}
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		l.helpers.logger.Warn(ctx, "loopWorkflow.schedule_failed", map[string]any{
 			"loop_id":    loop.ID.String(),

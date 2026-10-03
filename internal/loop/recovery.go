@@ -76,7 +76,7 @@ func recoverExpired(ctx context.Context, deps RecoveryDeps) {
 
 	expired, err := deps.LoopRepo.FindExpiredLoops(ctx)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Recovery] find expired loops",
 			zap.Error(err))
@@ -134,7 +134,7 @@ func recoverStale(ctx context.Context, deps RecoveryDeps) {
 
 	stale, err := deps.LoopRepo.FindStaleLoops(ctx, staleThreshold)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Recovery] find stale loops",
 			zap.Error(err))
@@ -173,7 +173,7 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 		SpanID:    spanID,
 	})
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Recovery] marshal payload",
 			zap.String("loop_id", loop.ID.String()),
@@ -195,7 +195,7 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 		hibikenasynq.MaxRetry(retryMax),
 	)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Recovery] reenqueue failed",
 			zap.String("loop_id", loop.ID.String()),
@@ -209,7 +209,7 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 	if err := deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
 		"asynq_task_id": info.ID,
 	}); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Recovery] update task_id failed",
 			zap.String("loop_id", loop.ID.String()),

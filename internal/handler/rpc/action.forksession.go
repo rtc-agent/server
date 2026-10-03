@@ -153,18 +153,18 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	// Validate file attachments exist before forking.
 	// This prevents referencing non-existent files or files owned by other users.
 	if apiErr := h.validateFileAttachments(ctx, req.ContentData, userID, "ForkSession"); apiErr != nil {
-		span.SetStatus(codes.Error, apiErr.Message)
+		span.SetStatus(codes.Error, apiErr.Code)
 		return nil, apiErr
 	}
 
 	oldSessionID, apiErr := parseUUID(req.OldServerSessionId, "old_server_session_id")
 	if apiErr != nil {
-		span.SetStatus(codes.Error, apiErr.Message)
+		span.SetStatus(codes.Error, apiErr.Code)
 		return nil, apiErr
 	}
 	oldMessageID, apiErr := parseUUID(req.OldServerMessageId, "old_server_message_id")
 	if apiErr != nil {
-		span.SetStatus(codes.Error, apiErr.Message)
+		span.SetStatus(codes.Error, apiErr.Code)
 		return nil, apiErr
 	}
 
@@ -238,7 +238,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[ForkSession] push failed after commit (data safe)", zap.Error(err))
 		} else {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			return nil, h.internalError(ctx, "fork.error", "internal error", err)
 		}

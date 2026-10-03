@@ -107,7 +107,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	// Validate file attachments exist before creating the message.
 	// This prevents referencing non-existent files or files owned by other users.
 	if apiErr := h.validateFileAttachments(ctx, req.ContentData, userID, "SendMessage"); apiErr != nil {
-		span.SetStatus(codes.Error, apiErr.Message)
+		span.SetStatus(codes.Error, apiErr.Code)
 		return nil, apiErr
 	}
 
@@ -246,7 +246,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[SendMessage] push failed after commit (data safe)", zap.Error(err))
 		} else {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			return nil, h.internalError(ctx, "send.error", "internal error", err)
 		}

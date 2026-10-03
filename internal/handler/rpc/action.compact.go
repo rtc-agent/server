@@ -88,7 +88,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	// 4. Dedup: check if a compact task for this session is already in the queue.
 	hasPending, checkErr := h.deps.Queue.HasPendingWorkByKind(ctx, session.ID.String(), string(turnagent.WorkKindCompact))
 	if checkErr != nil {
-		span.SetStatus(codes.Error, checkErr.Error())
+		span.SetStatus(codes.Error, "compact.dedup_error")
 		span.RecordError(checkErr)
 		return nil, h.internalError(ctx, "compact.dedup_error", "internal error", checkErr)
 	}
@@ -112,13 +112,13 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		SpanID:            spanID,
 	})
 	if marshalErr != nil {
-		span.SetStatus(codes.Error, marshalErr.Error())
+		span.SetStatus(codes.Error, "compact.marshal_error")
 		span.RecordError(marshalErr)
 		return nil, h.internalError(ctx, "compact.marshal_error", "internal error", marshalErr)
 	}
 
 	if _, err := h.deps.Queue.Publish(ctx, session.ID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		return nil, h.internalError(ctx, "compact.queue_error", "failed to enqueue compact task", err)
 	}

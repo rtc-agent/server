@@ -48,7 +48,7 @@ func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (
 		zap.String("session", req.SessionId))
 
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, sessionUUID, creator); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		return nil, h.ownershipError(ctx, err)
 	}
 
