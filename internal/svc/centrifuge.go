@@ -102,8 +102,12 @@ func setupCentrifuge(
 	signer *auth.JWTSigner, rpcTimeout time.Duration,
 ) error {
 	node.SetBroker(broker)
-	node.OnConnecting(createOnConnectingHandler(signer))
-	node.OnConnect(createOnConnectHandler(broker, rpcTimeout))
+
+	// Create metrics collector (promauto registers automatically).
+	metrics := newCentrifugeMetrics()
+
+	node.OnConnecting(createOnConnectingHandler(signer, metrics))
+	node.OnConnect(createOnConnectHandler(broker, rpcTimeout, metrics))
 
 	if err := node.Run(); err != nil {
 		return fmt.Errorf("run node: %w", err)
@@ -133,8 +137,10 @@ func (l *centrifugeLogger) Error(msg string, args ...any) {
 
 // createOnConnectingHandler returns the OnConnecting callback: JWT verification
 // -> extract identity -> write to Credentials.
-func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetrics) func(stdcontext.Context, centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 	return func(ctx stdcontext.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		start := time.Now()
+
 		logger.Info(ctx, "[Centrifuge] OnConnecting started",
 			zap.String("token_length", fmt.Sprintf("%d", len(e.Token))),
 			zap.Bool("has_token", len(e.Token) > 0),
@@ -142,12 +148,15 @@ func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, 
 
 		claims, err := signer.ParseAccessToken(e.Token)
 		if err != nil {
+			metrics.recordConnecting("error", time.Since(start))
 			logger.Error(ctx, "[Centrifuge] JWT verification failed, rejecting connection",
 				zap.Error(err),
 				zap.String("token_preview", previewToken(e.Token)),
 			)
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 		}
+
+		metrics.recordConnecting("success", time.Since(start))
 
 		ci := &clientInfo{
 			UserID:   claims.UserID,
@@ -184,7 +193,7 @@ func previewToken(token string) string {
 
 // createOnConnectHandler returns the OnConnect callback: subscription
 // validation + History + RPC handling.
-func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.Duration) func(*centrifuge.Client) {
+func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.Duration, metrics *centrifugeMetrics) func(*centrifuge.Client) {
 	return func(client *centrifuge.Client) {
 		// Panic recovery to capture and log any unhandled errors.
 		defer func() {
@@ -237,10 +246,13 @@ func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.D
 			),
 		)
 
-		setupSubscribeHandler(client, broker, clientCtx)
+		// Record successful connection
+		metrics.recordConnected()
+
+		setupSubscribeHandler(client, broker, clientCtx, metrics)
 		setupHistoryHandler(client, clientCtx)
-		setupRPCHandler(client, userID, ci.DeviceID, rpcTimeout, clientCtx)
-		setupDisconnectHandler(client, userID, ci.DeviceID, clientSpan)
+		setupRPCHandler(client, userID, ci.DeviceID, rpcTimeout, clientCtx, metrics)
+		setupDisconnectHandler(client, userID, ci.DeviceID, clientSpan, metrics)
 
 		logger.Info(stdcontext.Background(), "[Centrifuge] client connected",
 			zap.String("client_id", client.ID()),
@@ -251,12 +263,16 @@ func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.D
 
 // setupDisconnectHandler registers the disconnect callback: ends the client span
 // and records slow disconnects as errors so they appear in Jaeger.
-func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, clientSpan trace.Span) {
+func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, clientSpan trace.Span, metrics *centrifugeMetrics) {
 	client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 		reason := e.Reason
 		code := e.Code
 
-		if reason == "slow" {
+		// Classify disconnect reason for metrics
+		var reasonLabel string
+		switch {
+		case reason == "slow":
+			reasonLabel = "slow"
 			clientSpan.RecordError(fmt.Errorf("client disconnected: slow (code %d)", code))
 			clientSpan.SetStatus(codes.Error, "slow disconnect")
 
@@ -266,14 +282,21 @@ func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceI
 				zap.String("device_id", deviceID),
 				zap.Uint32("code", code),
 			)
-		} else {
-			logger.Info(stdcontext.Background(), "[Centrifuge] client disconnected",
-				zap.String("client_id", client.ID()),
-				zap.String("user_id", userID.String()),
-				zap.String("reason", reason),
-				zap.Uint32("code", code),
-			)
+		case code >= 400:
+			reasonLabel = "error"
+		default:
+			reasonLabel = "normal"
 		}
+
+		// Record disconnect metrics
+		metrics.recordDisconnected(reasonLabel)
+
+		logger.Info(stdcontext.Background(), "[Centrifuge] client disconnected",
+			zap.String("client_id", client.ID()),
+			zap.String("user_id", userID.String()),
+			zap.String("reason", reason),
+			zap.Uint32("code", code),
+		)
 
 		// End the long-lived client span.
 		clientSpan.End()
@@ -282,7 +305,7 @@ func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceI
 
 // setupSubscribeHandler registers the channel subscription callback:
 // validates ownership, registers channel type, enables recovery.
-func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.DualBroker, clientCtx stdcontext.Context) {
+func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.DualBroker, clientCtx stdcontext.Context, metrics *centrifugeMetrics) {
 	client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 		// Create trace span for subscribe operation (as child of client span)
 		tracer := otel.Tracer("centrifuge")
@@ -303,10 +326,13 @@ func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.Dua
 				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
+			// Record user channel subscription
+			metrics.recordSubscription("user")
 		}
 
 		if channel.IsTopic(ch) {
 			broker.RegisterChannelType(ch, centrifugeplus.Topic)
+			metrics.recordSubscription("topic")
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
 					EnableRecovery: true,
@@ -316,6 +342,7 @@ func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.Dua
 		}
 		if channel.IsLive(ch) {
 			broker.RegisterChannelType(ch, centrifugeplus.Live)
+			metrics.recordSubscription("live")
 		}
 		cb(centrifuge.SubscribeReply{}, nil)
 	})
@@ -342,12 +369,14 @@ func setupHistoryHandler(client *centrifuge.Client, clientCtx stdcontext.Context
 
 // setupRPCHandler registers the RPC handler callback: injects identity
 // context and dispatches to the global RPCHandler.
-func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, rpcTimeout time.Duration, clientCtx stdcontext.Context) {
+func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, rpcTimeout time.Duration, clientCtx stdcontext.Context, metrics *centrifugeMetrics) {
 	client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
 		logger.Info(stdcontext.Background(), "[Centrifuge] RPC called",
 			zap.String("method", e.Method),
 			zap.String("client_id", client.ID()),
 		)
+
+		rpcStart := time.Now()
 
 		ctx, cancel := stdcontext.WithTimeout(clientCtx, rpcTimeout)
 		defer cancel()
@@ -370,6 +399,7 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 		rpcHandlerMu.RUnlock()
 
 		if handler == nil {
+			metrics.recordRPC(e.Method, "error", time.Since(rpcStart))
 			cb(centrifuge.RPCReply{}, &centrifuge.Error{
 				Code:    500,
 				Message: "RPC handler not registered",
@@ -378,12 +408,15 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 		}
 
 		resp, err := handler.HandleRPC(ctx, e.Method, e.Data)
+		rpcDuration := time.Since(rpcStart)
+
 		if err != nil {
 			// Only forward APIError (sanitized, safe errors); other errors
 			// return a generic message to prevent leaking internal details
 			// (database statements, connection info) to the client.
 			if apiErr, ok := extractAPIError(err); ok {
 				span.RecordError(err)
+				metrics.recordRPC(e.Method, "error", rpcDuration)
 				cb(centrifuge.RPCReply{}, &centrifuge.Error{
 					Code:    500,
 					Message: apiErr,
@@ -393,6 +426,7 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 					zap.String("method", e.Method),
 					zap.Error(err))
 				span.RecordError(err)
+				metrics.recordRPC(e.Method, "error", rpcDuration)
 				cb(centrifuge.RPCReply{}, &centrifuge.Error{
 					Code:    500,
 					Message: "internal error",
@@ -400,6 +434,7 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 			}
 			return
 		}
+		metrics.recordRPC(e.Method, "success", rpcDuration)
 		cb(centrifuge.RPCReply{Data: resp}, nil)
 	})
 }
