@@ -114,7 +114,8 @@ func setServerDefaults(v *viper.Viper) {
 }
 
 func setAuthDefaults(v *viper.Viper) {
-	v.SetDefault("auth.access_token_ttl_seconds", 3600)
+	// Security: 15-minute access token TTL reduces risk window if token is leaked.
+	v.SetDefault("auth.access_token_ttl_seconds", 900)
 	v.SetDefault("auth.refresh_token_ttl", 30*24*time.Hour)
 	v.SetDefault("auth.oauth2_state_ttl", 10*time.Minute)
 	v.SetDefault("auth.allowed_redirect_uris", []string{})
@@ -144,7 +145,9 @@ func setCORSDefaults(v *viper.Viper) {
 }
 
 func setDebugDefaults(v *viper.Viper) {
-	v.SetDefault("debug.enabled", true)
+	// Security: debug endpoints disabled by default to prevent info leakage in production.
+	// Enable explicitly via DEBUG__ENABLED=true or debug.enabled in config.yaml.
+	v.SetDefault("debug.enabled", false)
 	v.SetDefault("debug.goroutine_leak_threshold", 1000)
 }
 

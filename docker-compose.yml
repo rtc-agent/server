@@ -204,7 +204,7 @@ services:
     env_file:
       - .env
     environment:
-      DEBUG: true
+      DEBUG__ENABLED: "true"
       LLM__API_KEY: "${LLM__API_KEY}"
       AUTH__JWT_SECRET: "${AUTH__JWT_SECRET}"
       MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
@@ -235,7 +235,7 @@ services:
     env_file:
       - .env
     environment:
-      DEBUG: true
+      DEBUG__ENABLED: "true"
       LLM__API_KEY: "${LLM__API_KEY}"
       AUTH__JWT_SECRET: "${AUTH__JWT_SECRET}"
       MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"

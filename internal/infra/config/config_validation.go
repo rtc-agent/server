@@ -7,6 +7,14 @@ import (
 
 // Validate checks required configuration fields, returning the first error found.
 func (c *Config) Validate() error {
+	// Validate server environment.
+	switch c.Server.Env {
+	case "development", "production":
+		// valid
+	default:
+		return fmt.Errorf("server.env must be 'development' or 'production', got %q", c.Server.Env)
+	}
+
 	// Validate database configuration.
 	if c.Database.DSN == "" {
 		return fmt.Errorf("database.dsn is required")
@@ -21,10 +29,22 @@ func (c *Config) Validate() error {
 	if c.LLM.APIKey == "" {
 		return fmt.Errorf("llm.api_key is required: set it via LLM__API_KEY environment variable")
 	}
+	// Validate reasoning_effort if set.
+	switch c.LLM.ReasoningEffort {
+	case "", "low", "medium", "high":
+		// valid
+	default:
+		return fmt.Errorf("llm.reasoning_effort (%q) must be \"low\", \"medium\", or \"high\"", c.LLM.ReasoningEffort)
+	}
 
 	// Validate that at least one OAuth provider is enabled.
 	if !c.Providers.Mock.Enabled && !c.Providers.GitHub.Enabled && !c.Providers.Google.Enabled {
 		return fmt.Errorf("at least one OAuth provider must be enabled (mock, github, or google)")
+	}
+
+	// Mock OAuth provider must not be enabled in production.
+	if c.Server.Env == "production" && c.Providers.Mock.Enabled {
+		return fmt.Errorf("providers.mock.enabled must be false in production environment")
 	}
 
 	// Validate OAuth2 provider URL format.
@@ -37,6 +57,11 @@ func (c *Config) Validate() error {
 	// Validate auth configuration.
 	if c.Auth.JWTSecret == "" {
 		return fmt.Errorf("auth.jwt_secret is required")
+	}
+	// Security: reject weak/default JWT secrets in production.
+	const weakJWTSecrets = "rtc-agent-dev-jwt-secret-change-me-in-production"
+	if c.Auth.JWTSecret == weakJWTSecrets {
+		return fmt.Errorf("auth.jwt_secret must not use the default development value in production: generate a secure random string")
 	}
 	if c.Auth.AccessTokenTTLSeconds <= 0 {
 		return fmt.Errorf("auth.access_token_ttl_seconds must be positive, got %d", c.Auth.AccessTokenTTLSeconds)
@@ -52,13 +77,12 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	// Validate storage encryption configuration.
-	if err := c.Storage.Encryption.Validate(); err != nil {
-		return err
-	}
-
-	// Validate storage quota configuration (only when storage is enabled).
+	// Validate storage configuration (only when storage is enabled).
 	if c.Storage.IsEnabled() {
+		// Validate storage encryption configuration.
+		if err := c.Storage.Encryption.Validate(); err != nil {
+			return err
+		}
 		if err := c.Storage.Quota.Validate(); err != nil {
 			return err
 		}

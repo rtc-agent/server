@@ -112,6 +112,7 @@ func TestConfig_Validate_WithInvalidWorkerConfig(t *testing.T) {
 		},
 		Server: ServerConfig{
 			Port: 8080,
+			Env:  "development",
 		},
 		Auth: AuthConfig{
 			JWTSecret:             "test-secret",
@@ -200,13 +201,14 @@ func TestEncryptionConfig_Validate(t *testing.T) {
 }
 
 func TestConfig_Validate_EncryptionConfig(t *testing.T) {
-	// Test that Config.Validate calls EncryptionConfig.Validate
+	// Test that Config.Validate calls EncryptionConfig.Validate when storage is enabled.
 	cfg := &Config{
 		Database: DatabaseConfig{
 			DSN: "postgres://test",
 		},
 		Server: ServerConfig{
 			Port: 8080,
+			Env:  "development",
 		},
 		LLM: LLMConfig{
 			APIKey: "test-key",
@@ -221,6 +223,7 @@ func TestConfig_Validate_EncryptionConfig(t *testing.T) {
 			AccessTokenTTLSeconds: 3600,
 		},
 		Storage: StorageConfig{
+			Backend: "minio", // Enable storage to trigger encryption validation
 			Encryption: EncryptionConfig{
 				SessionTokenKey: "", // Invalid: empty
 			},
@@ -232,5 +235,12 @@ func TestConfig_Validate_EncryptionConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "session_token_key") {
 		t.Errorf("error = %q, want to contain 'session_token_key'", err.Error())
+	}
+
+	// Test that encryption validation is skipped when storage is disabled.
+	cfg.Storage.Backend = "" // Disable storage
+	err = cfg.Validate()
+	if err != nil {
+		t.Errorf("expected no error when storage is disabled, got: %v", err)
 	}
 }
