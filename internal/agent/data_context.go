@@ -44,6 +44,17 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		return nil, fmt.Errorf("loadMessages: list messages for session %s: %w", sessionID, err)
 	}
 
+	// Pre-parse all message content data once to avoid redundant parsing.
+	// The parsed results are cached in parsedContents keyed by message pointer.
+	parsedContents := make(map[*model.Message]protocol.ContentData, len(dbMsgs))
+	parsedOK := make(map[*model.Message]bool, len(dbMsgs))
+	for _, msg := range dbMsgs {
+		if cd, parseErr := primitives.ParseContentData(msg.Content); parseErr == nil {
+			parsedContents[msg] = cd
+			parsedOK[msg] = true
+		}
+	}
+
 	// Summary truncation: find the most recent summary message and truncate
 	// history to start from it. Messages before the summary are already
 	// compressed into it and would not be sent to the agent.
@@ -54,8 +65,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// always remain present in the context").
 	summaryIdx := -1
 	for i := len(dbMsgs) - 1; i >= 0; i-- {
-		contentData, parseErr := primitives.ParseContentData(dbMsgs[i].Content)
-		if parseErr == nil && contentData.Type == protocol.ContentTypeSummary {
+		if parsedOK[dbMsgs[i]] && parsedContents[dbMsgs[i]].Type == protocol.ContentTypeSummary {
 			summaryIdx = i
 			break
 		}
@@ -66,8 +76,7 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		// These would be lost by truncation but must be preserved.
 		var preservedPrompts []*model.Message
 		for i := 0; i < summaryIdx; i++ {
-			contentData, parseErr := primitives.ParseContentData(dbMsgs[i].Content)
-			if parseErr == nil && contentData.Type == protocol.ContentTypePrompt {
+			if parsedOK[dbMsgs[i]] && parsedContents[dbMsgs[i]].Type == protocol.ContentTypePrompt {
 				preservedPrompts = append(preservedPrompts, dbMsgs[i])
 			}
 		}
@@ -88,13 +97,19 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// Prompt messages are included at their natural position (based on global_offset).
 	// Deduplication is handled by persistCommandPromptsIfNeeded when creating new prompts.
 	//
-	// convertDBMessage may return nil for unparseable or unrecognized content
-	// types; skip those to prevent nil entries from reaching the LLM adapter
-	// (which would produce nil schema.Message entries and risk a panic).
+	// convertDBMessageWithContent uses pre-parsed ContentData to avoid redundant parsing.
+	// It may return nil for unparseable or unrecognized content types; skip those to
+	// prevent nil entries from reaching the LLM adapter (which would produce nil
+	// schema.Message entries and risk a panic).
 	var messages []*turnagent.Message
 	var droppedCount int
 	for _, msg := range dbMsgs {
-		converted, convErr := h.convertDBMessage(ctx, msg)
+		var cd protocol.ContentData
+		hasContent := parsedOK[msg]
+		if hasContent {
+			cd = parsedContents[msg]
+		}
+		converted, convErr := h.convertDBMessageWithContent(ctx, msg, cd, hasContent)
 		if convErr != nil {
 			// Log parse errors at Debug level for observability. The overall
 			// drop count is logged at Warn below; this adds per-message detail.

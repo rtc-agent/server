@@ -44,6 +44,20 @@ func (h *helpers) convertDBMessage(ctx context.Context, msg *model.Message) ([]*
 	if err != nil {
 		return nil, fmt.Errorf("parse content data: %w", err)
 	}
+	return h.convertDBMessageWithContent(ctx, msg, contentData, true)
+}
+
+// convertDBMessageWithContent converts a single model.Message using pre-parsed ContentData.
+// This avoids redundant JSON parsing when the content has already been parsed (e.g., during
+// summary detection in loadMessages). If contentParsed is false, the function will re-parse.
+func (h *helpers) convertDBMessageWithContent(ctx context.Context, msg *model.Message, contentData protocol.ContentData, contentParsed bool) ([]*turnagent.Message, error) {
+	if !contentParsed {
+		cd, err := primitives.ParseContentData(msg.Content)
+		if err != nil {
+			return nil, fmt.Errorf("parse content data: %w", err)
+		}
+		contentData = cd
+	}
 
 	tokenUsage := buildTokenUsage(msg)
 	turnID := extractTurnID(msg)

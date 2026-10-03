@@ -38,7 +38,7 @@ func (h *helpers) finalizeStreamMessage(
 	// Use a synthetic empty chunk with a FinishReason to trigger the
 	// finalization path in appendStreamChunk.
 	return h.appendStreamChunk(ctx, sessionID, turnID, "", "stream_finalize",
-		msgID, new(bool), buildContent, kind, tokenUsage)
+		msgID, new(bool), buildContent, kind, tokenUsage, nil)
 }
 
 // createAndPublishMessage creates a message record and publishes a
@@ -100,6 +100,10 @@ type turnStreamState struct {
 	markdownFinalized bool
 	thinkingMsgID     uuid.UUID
 	thinkingFinalized bool
+
+	// ownerRefID caches the session's OwnerRefID to avoid repeated DB queries
+	// per stream chunk. Populated on the first appendStreamChunk call.
+	ownerRefID string
 }
 
 // appendStreamChunk handles one chunk of a streaming response.
@@ -117,6 +121,10 @@ type turnStreamState struct {
 //
 // tokenUsage is persisted to the message record on finalization (isLast).
 // Pass nil for intermediate chunks or when token data is unavailable.
+//
+// ownerRefIDCache is used to avoid repeated DB queries for the session's
+// OwnerRefID across multiple stream chunks. It should point to a field in
+// the caller's state struct.
 func (h *helpers) appendStreamChunk(
 	ctx context.Context,
 	sessionID uuid.UUID,
@@ -128,17 +136,28 @@ func (h *helpers) appendStreamChunk(
 	buildContent func(string) (protocol.ContentData, error),
 	kind string,
 	tokenUsage *turnagent.TokenUsage,
+	ownerRefIDCache *string,
 ) error {
 	if h.deps.UpdatePublisher == nil {
 		return nil
 	}
 
-	session, err := h.deps.SessionRepo.GetByID(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("appendStreamChunk: get session: %w", err)
+	// Use cached OwnerRefID if available, otherwise query DB and cache it.
+	var ownerRefID string
+	if ownerRefIDCache != nil && *ownerRefIDCache != "" {
+		ownerRefID = *ownerRefIDCache
+	} else {
+		session, err := h.deps.SessionRepo.GetByID(ctx, sessionID)
+		if err != nil {
+			return fmt.Errorf("appendStreamChunk: get session: %w", err)
+		}
+		ownerRefID = session.OwnerRefID
+		if ownerRefIDCache != nil {
+			*ownerRefIDCache = ownerRefID
+		}
 	}
-	topicCh := channel.UserTopic(session.OwnerRefID)
-	liveCh := channel.UserLive(session.OwnerRefID)
+	topicCh := channel.UserTopic(ownerRefID)
+	liveCh := channel.UserLive(ownerRefID)
 
 	isFirst := *msgID == uuid.Nil
 	isLast := finishReason != ""
