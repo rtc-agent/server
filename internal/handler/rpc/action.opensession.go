@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
@@ -50,7 +49,7 @@ func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequ
 
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionUUID)
 	if err != nil {
-		if repo.IsNotFound(err) {
+		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")
 			return nil, &APIError{Code: "session.not_found", Message: fmt.Sprintf("session %s not found", req.SessionId)}
 		}

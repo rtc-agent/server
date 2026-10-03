@@ -13,13 +13,12 @@ import (
 	"github.com/google/uuid"
 	hibikenasynq "github.com/hibiken/asynq"
 	"github.com/rtc-agent/server/internal/infra/config"
-	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -28,13 +27,13 @@ import (
 // Dependencies required by the RPC Handler.
 type Dependencies struct {
 	Deps                *usecase.Dependencies
-	SessionRepo         repo.SessionRepo
+	SessionRepo         primitives.SessionRepo
 	Queue               *rtcqueue.Queue // rtc-queue for publishing/cancelling work items
 	API                 config.APIConfig
-	ScriptExecutionRepo repo.ScriptExecutionRepo     // script execution persistence
-	Metrics             *turnagent.PrometheusMetrics // Prometheus metrics
-	AsynqInspector      *hibikenasynq.Inspector      // asynq inspector for loop task cleanup
-	FileRepo            repo.FileRepo                // file existence validation for attachments
+	ScriptExecutionRepo primitives.ScriptExecutionRepo // script execution persistence
+	Metrics             *turnagent.PrometheusMetrics   // Prometheus metrics
+	AsynqInspector      *hibikenasynq.Inspector        // asynq inspector for loop task cleanup
+	FileRepo            primitives.FileRepo            // file existence validation for attachments
 }
 
 // Handler is the RPC handler.

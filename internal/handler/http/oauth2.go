@@ -22,8 +22,8 @@ import (
 	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/svc"
+	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 )
@@ -282,7 +282,7 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	rtHash := hashRefreshToken(req.RefreshToken)
 	rt, err := h.svcCtx.RefreshTokenRepo.FindByHash(ctx, rtHash)
 	if err != nil {
-		if repo.IsNotFound(err) {
+		if primitives.IsNotFound(err) {
 			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token is invalid")
 		} else {
 			logger.Error(ctx, "failed to find refresh_token", zap.Error(err))
@@ -384,7 +384,7 @@ func parseRefreshRequest(w http.ResponseWriter, r *http.Request) (*protocol.OAut
 func (h *OAuth2Handler) findOrCreateUser(ctx context.Context, provider string, userInfo *oauth.ProviderUserInfo) (*model.OAuth2User, error) {
 	user, err := h.svcCtx.OAuth2UserRepo.FindByProvider(ctx, provider, userInfo.ProviderUserID)
 	if err != nil {
-		if !repo.IsNotFound(err) {
+		if !primitives.IsNotFound(err) {
 			return nil, fmt.Errorf("find user by provider: %w", err)
 		}
 		// Record does not exist, create it.

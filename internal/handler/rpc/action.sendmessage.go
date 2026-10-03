@@ -11,7 +11,6 @@ import (
 	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
@@ -172,8 +171,8 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 			h.deps.Metrics.RecordSessionCreated(txCtx)
 		} else {
 			if err := primitives.TouchSession(txCtx, h.deps.Deps, session.ID); err != nil {
-				if errors.Is(err, repo.ErrSessionClosedOrNotFound) {
-					return nil, fmt.Errorf("session %s is closed: %w", session.ID, repo.ErrSessionClosed)
+				if errors.Is(err, primitives.ErrSessionClosedOrNotFound) {
+					return nil, fmt.Errorf("session %s is closed: %w", session.ID, primitives.ErrSessionClosed)
 				}
 				return nil, fmt.Errorf("touch session: %w", err)
 			}

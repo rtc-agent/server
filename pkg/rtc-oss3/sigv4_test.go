@@ -83,7 +83,7 @@ func TestE2ESignatureVerification(t *testing.T) {
 		scope := date + "/" + region + "/" + service + "/aws4_request"
 		signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
 
-		canonicalReq := buildCanonicalRequest(req, signedHeaders, "UNSIGNED-PAYLOAD")
+		canonicalReq := buildCanonicalRequest(req, signedHeaders)
 		stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
 		signingKey := deriveSigningKey(secretKey, date, region, service)
 		signature := fmt.Sprintf("%x", hmacSHA256(signingKey, []byte(stringToSign)))
@@ -108,7 +108,7 @@ func TestE2ESignatureVerification(t *testing.T) {
 		scope := date + "/" + region + "/" + service + "/aws4_request"
 		signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
 
-		canonicalReq := buildCanonicalRequest(req, signedHeaders, "UNSIGNED-PAYLOAD")
+		canonicalReq := buildCanonicalRequest(req, signedHeaders)
 		stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
 		signingKey := deriveSigningKey(secretKey, date, region, service)
 		signature := fmt.Sprintf("%x", hmacSHA256(signingKey, []byte(stringToSign)))
@@ -135,7 +135,7 @@ func TestE2ESignatureVerification(t *testing.T) {
 		scope := date + "/" + region + "/" + service + "/aws4_request"
 		signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
 
-		canonicalReq := buildCanonicalRequest(req, signedHeaders, "UNSIGNED-PAYLOAD")
+		canonicalReq := buildCanonicalRequest(req, signedHeaders)
 		stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
 		signingKey := deriveSigningKey(secretKey, date, region, service)
 		signature := fmt.Sprintf("%x", hmacSHA256(signingKey, []byte(stringToSign)))
@@ -162,7 +162,7 @@ func TestE2ESignatureVerification(t *testing.T) {
 		scope := date + "/" + region + "/" + service + "/aws4_request"
 		signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
 
-		canonicalReq := buildCanonicalRequest(req, signedHeaders, "UNSIGNED-PAYLOAD")
+		canonicalReq := buildCanonicalRequest(req, signedHeaders)
 		stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
 		// Sign with wrong key
 		signingKey := deriveSigningKey("wrongkey", date, region, service)
@@ -302,7 +302,7 @@ func TestBuildCanonicalRequest(t *testing.T) {
 	req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
 
 	signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date"}
-	canonicalReq := buildCanonicalRequest(req, signedHeaders, "UNSIGNED-PAYLOAD")
+	canonicalReq := buildCanonicalRequest(req, signedHeaders)
 
 	if canonicalReq == "" {
 		t.Error("canonicalReq is empty")

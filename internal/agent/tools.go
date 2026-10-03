@@ -280,14 +280,14 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	}
 
 	// === First-call path ===
-	result, err := r.handleRtcFirstCall(ctx, toolName, argumentsInJSON)
+	err := r.handleRtcFirstCall(ctx, toolName, argumentsInJSON)
 	// handleRtcFirstCall returns an interrupt (expected control flow, not an error)
 	span.AddEvent("first_call_interrupted", trace.WithAttributes(
 		attribute.String("tool.interrupt_type", "first_call"),
 		attribute.String("tool.name", toolName),
 	))
 	span.SetStatus(codes.Ok, "interrupted_for_user_input")
-	return result, err
+	return "", err
 }
 
 // handleRtcResume handles the resume path for RTC tools: checks if the RTC
@@ -358,15 +358,15 @@ func (r *rtcToolBase) handleRtcResume(ctx context.Context, state rtcInterruptSta
 
 // handleRtcFirstCall handles the first-call path for RTC tools: creates the
 // RTC record, message, and triggers the interrupt.
-func (r *rtcToolBase) handleRtcFirstCall(ctx context.Context, toolName, argumentsInJSON string) (string, error) {
+func (r *rtcToolBase) handleRtcFirstCall(ctx context.Context, toolName, argumentsInJSON string) error {
 	callID := compose.GetToolCallID(ctx)
 	if callID == "" {
-		return "", fmt.Errorf("rtc: tool_call_id not set in context")
+		return fmt.Errorf("rtc: tool_call_id not set in context")
 	}
 
 	turnUUID := r.turnID
 	if turnUUID == uuid.Nil {
-		return "", fmt.Errorf("rtc: turn UUID is nil")
+		return fmt.Errorf("rtc: turn UUID is nil")
 	}
 
 	rtcID := uuid.Must(uuid.NewV7())
@@ -384,7 +384,7 @@ func (r *rtcToolBase) handleRtcFirstCall(ctx context.Context, toolName, argument
 
 	msgID, err := r.createRtcAndMessage(ctx, rtcID, clientID, turnUUID, toolName, argumentsInJSON, contentData)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	r.registerRtcBatch(ctx, rtcID, turnUUID)
@@ -402,7 +402,7 @@ func (r *rtcToolBase) handleRtcFirstCall(ctx context.Context, toolName, argument
 		MessageID: msgID.String(),
 		Args:      argumentsInJSON,
 	}
-	return "", tool.StatefulInterrupt(ctx, info, state)
+	return tool.StatefulInterrupt(ctx, info, state)
 }
 
 // createRtcAndMessage transactionally creates a Message and RTC record.

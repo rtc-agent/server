@@ -159,10 +159,6 @@ type completeGoalTool struct {
 	turnID  uuid.UUID
 }
 
-type completeGoalArgs struct {
-	Reason string `json:"reason"`
-}
-
 // goalResult is the JSON returned to LLM for both completeGoal and
 // cancelGoal tools. Both produce structurally identical output.
 type goalResult struct {
@@ -188,14 +184,8 @@ func (t *completeGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *completeGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	var args completeGoalArgs
-	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "completeGoal", argumentsInJSON, &args); !ok {
-		return errMsg, nil
-	}
-	if args.Reason == "" {
-		return "Error: reason is required and cannot be empty", nil
-	}
-	return finalizeGoalStatus(ctx, t.helpers, t.session, t.turnID, "completeGoal", "completeGoal.completed", model.GoalStatusCompleted, args.Reason, "no active goal to complete", argumentsInJSON)
+	var args goalStatusArgs
+	return runGoalStatusTool(ctx, t.helpers, t.session, t.turnID, "completeGoal", "completeGoal.completed", model.GoalStatusCompleted, "no active goal to complete", argumentsInJSON, &args)
 }
 
 // ---------------------------------------------------------------------------
@@ -206,10 +196,6 @@ type cancelGoalTool struct {
 	session *model.Session
 	helpers *helpers
 	turnID  uuid.UUID
-}
-
-type cancelGoalArgs struct {
-	Reason string `json:"reason"`
 }
 
 func (t *cancelGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -227,19 +213,38 @@ func (t *cancelGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	var args cancelGoalArgs
-	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "cancelGoal", argumentsInJSON, &args); !ok {
-		return errMsg, nil
-	}
-	if args.Reason == "" {
-		return "Error: reason is required and cannot be empty", nil
-	}
-	return finalizeGoalStatus(ctx, t.helpers, t.session, t.turnID, "cancelGoal", "cancelGoal.completed", model.GoalStatusCancelled, args.Reason, "no active goal to cancel", argumentsInJSON)
+	var args goalStatusArgs
+	return runGoalStatusTool(ctx, t.helpers, t.session, t.turnID, "cancelGoal", "cancelGoal.completed", model.GoalStatusCancelled, "no active goal to cancel", argumentsInJSON, &args)
 }
 
 // ---------------------------------------------------------------------------
 // finalizeGoalStatus — shared implementation for complete/cancel goal tools
 // ---------------------------------------------------------------------------
+
+// goalStatusArgs is a generic args struct for goal status tools.
+type goalStatusArgs struct {
+	Reason string `json:"reason"`
+}
+
+// runGoalStatusTool is a generic helper for completeGoal and cancelGoal tools.
+func runGoalStatusTool(
+	ctx context.Context,
+	h *helpers,
+	session *model.Session,
+	turnID uuid.UUID,
+	toolName, logEvent string,
+	status model.GoalStatus,
+	notFoundMsg, argumentsInJSON string,
+	args *goalStatusArgs,
+) (string, error) {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, h, session.ID, session.OwnerRefID, turnID, toolName, argumentsInJSON, args); !ok {
+		return errMsg, nil
+	}
+	if args.Reason == "" {
+		return "Error: reason is required and cannot be empty", nil
+	}
+	return finalizeGoalStatus(ctx, h, session, turnID, toolName, logEvent, status, args.Reason, notFoundMsg, argumentsInJSON)
+}
 
 // finalizeGoalStatus finds the active goal, updates its status, publishes tool
 // result messages, and returns the JSON-serialized result.

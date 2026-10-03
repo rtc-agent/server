@@ -7,8 +7,8 @@ import (
 	"fmt"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -58,7 +58,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	// 1. Verify session existence.
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionUUID)
 	if err != nil {
-		if repo.IsNotFound(err) {
+		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")
 			return nil, &APIError{
 				Code:    "session.not_found",

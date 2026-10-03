@@ -63,7 +63,7 @@ func (r *RobotsChecker) IsAllowed(rawURL string, userAgent string) (bool, error)
 		if entry.allowAll {
 			return true, nil
 		}
-		return r.checkPath(entry, parsed.Path, userAgent), nil
+		return r.checkPath(entry, parsed.Path), nil
 	}
 
 	// Fetch robots.txt.
@@ -98,7 +98,7 @@ func (r *RobotsChecker) IsAllowed(rawURL string, userAgent string) (bool, error)
 	if entry.allowAll {
 		return true, nil
 	}
-	return r.checkPath(entry, parsed.Path, userAgent), nil
+	return r.checkPath(entry, parsed.Path), nil
 }
 
 // parseRobotsTxt parses robots.txt content and returns an entry.
@@ -157,7 +157,7 @@ func (r *RobotsChecker) parseRobotsTxt(content, userAgent string) *robotsEntry {
 }
 
 // checkPath checks if a path is allowed based on cached robots rules.
-func (r *RobotsChecker) checkPath(entry *robotsEntry, path, userAgent string) bool {
+func (r *RobotsChecker) checkPath(entry *robotsEntry, path string) bool {
 	if entry.allowAll {
 		return true
 	}

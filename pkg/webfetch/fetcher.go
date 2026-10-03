@@ -261,7 +261,7 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 		respCopy.Cached = true
 		respCopy.DurationMs = time.Since(start).Milliseconds()
 		m.metrics.RecordSuccess("cached", respCopy.DurationMs)
-		m.logAudit(ctx, req, &respCopy, start, nil)
+		m.logAudit(req, &respCopy, start, nil)
 		return &respCopy, nil
 	}
 	m.metrics.RecordCacheMiss()
@@ -269,7 +269,7 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 	// 3. SSRF check.
 	if err := m.security.CheckURL(ctx, req.URL); err != nil {
 		m.metrics.RecordSSRFBlocked()
-		m.logAudit(ctx, req, nil, start, err)
+		m.logAudit(req, nil, start, err)
 		return nil, fmt.Errorf("security check failed: %w", err)
 	}
 
@@ -280,7 +280,7 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 			m.logger.Warn("robots.txt check failed, allowing by default",
 				zap.String("url", req.URL), zap.Error(err))
 		} else if !allowed {
-			m.logAudit(ctx, req, nil, start, fmt.Errorf("blocked by robots.txt"))
+			m.logAudit(req, nil, start, fmt.Errorf("blocked by robots.txt"))
 			return nil, fmt.Errorf("%w: %s", ErrRobotsBlocked, req.URL)
 		}
 	}
@@ -333,12 +333,12 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 				CodeText: http.StatusText(statusCode),
 			}
 			m.metrics.RecordSuccess("redirect", time.Since(start).Milliseconds())
-			m.logAudit(ctx, req, redirectResp, start, nil)
+			m.logAudit(req, redirectResp, start, nil)
 			return redirectResp, nil
 		}
 		if result.Err != nil {
 			m.metrics.RecordError(classifyError(result.Err))
-			m.logAudit(ctx, req, nil, start, result.Err)
+			m.logAudit(req, nil, start, result.Err)
 			return nil, result.Err
 		}
 		resp, ok := result.Val.(*FetchResponse)
@@ -353,12 +353,12 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 			domainType = "pre_approved"
 		}
 		m.metrics.RecordSuccess(domainType, respCopy.DurationMs)
-		m.logAudit(ctx, req, &respCopy, start, nil)
+		m.logAudit(req, &respCopy, start, nil)
 		return &respCopy, nil
 
 	case <-ctx.Done():
 		m.metrics.RecordError("context_canceled")
-		m.logAudit(ctx, req, nil, start, ctx.Err())
+		m.logAudit(req, nil, start, ctx.Err())
 		return nil, fmt.Errorf("fetch canceled: %w", ctx.Err())
 	}
 }
@@ -653,7 +653,7 @@ func (m *WebFetchManager) checkRateLimit(rawURL string) error {
 	return nil
 }
 
-func (m *WebFetchManager) logAudit(ctx context.Context, req *FetchRequest, resp *FetchResponse, start time.Time, fetchErr error) {
+func (m *WebFetchManager) logAudit(req *FetchRequest, resp *FetchResponse, start time.Time, fetchErr error) {
 	parsedURL, _ := url.Parse(req.URL)
 	domain := ""
 	if parsedURL != nil {

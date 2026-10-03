@@ -33,49 +33,43 @@ func (a *Agent) resolveTurnID(ctx context.Context, sessionID, workID string, kin
 	switch kind {
 	case WorkKindSubmit:
 		resolveSpan.AddEvent("create_turn")
-		turnID, err = a.cfg.CreateTurn(resolveCtx, sessionID, workID)
-		if err != nil {
-			resolveSpan.RecordError(err)
-			resolveSpan.SetAttributes(attribute.String("turn.status", "error"))
-			a.log(resolveCtx, LogLevelError, "resolve_turn_id.create_failed", map[string]any{
-				"session_id": sessionID,
-				"work_id":    workID,
-				"error":      err.Error(),
-			})
-			return "", fmt.Errorf("CreateTurn: %w", err)
-		}
-		resolveSpan.SetAttributes(attribute.String("turn.id", turnID))
-		a.log(resolveCtx, LogLevelInfo, "resolve_turn_id.created", map[string]any{
-			"session_id": sessionID,
-			"turn_id":    turnID,
-			"work_id":    workID,
+		turnID, err = a.executeTurnOperation(resolveCtx, resolveSpan, sessionID, workID, "CreateTurn", "created", "create_failed", func() (string, error) {
+			return a.cfg.CreateTurn(resolveCtx, sessionID, workID)
 		})
-		return turnID, nil
+		return turnID, err
 	case WorkKindResume:
 		resolveSpan.AddEvent("lookup_turn")
-		turnID, err = a.cfg.LookupTurn(resolveCtx, sessionID, workID)
-		if err != nil {
-			resolveSpan.RecordError(err)
-			resolveSpan.SetAttributes(attribute.String("turn.status", "error"))
-			a.log(resolveCtx, LogLevelError, "resolve_turn_id.lookup_failed", map[string]any{
-				"session_id": sessionID,
-				"work_id":    workID,
-				"error":      err.Error(),
-			})
-			return "", fmt.Errorf("LookupTurn: %w", err)
-		}
-		resolveSpan.SetAttributes(attribute.String("turn.id", turnID))
-		a.log(resolveCtx, LogLevelInfo, "resolve_turn_id.resumed", map[string]any{
-			"session_id": sessionID,
-			"turn_id":    turnID,
-			"work_id":    workID,
+		turnID, err = a.executeTurnOperation(resolveCtx, resolveSpan, sessionID, workID, "LookupTurn", "resumed", "lookup_failed", func() (string, error) {
+			return a.cfg.LookupTurn(resolveCtx, sessionID, workID)
 		})
-		return turnID, nil
+		return turnID, err
 	default:
 		err := fmt.Errorf("unknown work kind: %q", kind)
 		resolveSpan.RecordError(err)
 		return "", err
 	}
+}
+
+// executeTurnOperation executes a turn operation with consistent error handling and logging.
+func (a *Agent) executeTurnOperation(ctx context.Context, span trace.Span, sessionID, workID, operation, successEvent, errorEvent string, fn func() (string, error)) (string, error) {
+	turnID, err := fn()
+	if err != nil {
+		span.RecordError(err)
+		span.SetAttributes(attribute.String("turn.status", "error"))
+		a.log(ctx, LogLevelError, fmt.Sprintf("resolve_turn_id.%s", errorEvent), map[string]any{
+			"session_id": sessionID,
+			"work_id":    workID,
+			"error":      err.Error(),
+		})
+		return "", fmt.Errorf("%s: %w", operation, err)
+	}
+	span.SetAttributes(attribute.String("turn.id", turnID))
+	a.log(ctx, LogLevelInfo, fmt.Sprintf("resolve_turn_id.%s", successEvent), map[string]any{
+		"session_id": sessionID,
+		"turn_id":    turnID,
+		"work_id":    workID,
+	})
+	return turnID, nil
 }
 
 // beginTurn invokes the appropriate Begin/Resume callback when the caller is

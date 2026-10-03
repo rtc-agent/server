@@ -177,7 +177,7 @@ func VerifySigV4Presigned(r *http.Request, secretAccessKey string, region string
 	// For presigned URLs, payload is always UNSIGNED-PAYLOAD
 	signedHeaders := strings.Split(q.Get("X-Amz-SignedHeaders"), ";")
 	sort.Strings(signedHeaders)
-	canonicalReq := buildCanonicalRequestForPresign(r, signedHeaders)
+	canonicalReq := buildCanonicalRequest(r, signedHeaders)
 
 	stringToSign := buildStringToSign(amzDate, scope, canonicalReq)
 	signingKey := deriveSigningKey(secretAccessKey, dateStr, region, service)
@@ -320,7 +320,7 @@ func checkPresignedExpiry(amzDate, expires string) error {
 }
 
 // buildCanonicalRequest builds the canonical request string.
-func buildCanonicalRequest(r *http.Request, signedHeaders []string, payloadHash string) string {
+func buildCanonicalRequest(r *http.Request, signedHeaders []string) string {
 	var b strings.Builder
 
 	// HTTPRequestMethod
@@ -344,29 +344,6 @@ func buildCanonicalRequest(r *http.Request, signedHeaders []string, payloadHash 
 	b.WriteByte('\n')
 
 	// HashedPayload
-	if payloadHash == "UNSIGNED-PAYLOAD" {
-		b.WriteString("UNSIGNED-PAYLOAD")
-	} else {
-		b.WriteString(payloadHash)
-	}
-
-	return b.String()
-}
-
-// buildCanonicalRequestForPresign builds canonical request for presigned URLs.
-func buildCanonicalRequestForPresign(r *http.Request, signedHeaders []string) string {
-	var b strings.Builder
-
-	b.WriteString(r.Method)
-	b.WriteByte('\n')
-	b.WriteString(canonicalURI(r.URL.Path))
-	b.WriteByte('\n')
-	b.WriteString(canonicalQueryString(r.URL.Query()))
-	b.WriteByte('\n')
-	b.WriteString(canonicalHeaders(r, signedHeaders))
-	b.WriteByte('\n')
-	b.WriteString(strings.Join(signedHeaders, ";"))
-	b.WriteByte('\n')
 	b.WriteString("UNSIGNED-PAYLOAD")
 
 	return b.String()

@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
-
-	"github.com/google/uuid"
 )
 
 // parseUUID converts a protocol.UUID to uuid.UUID.
@@ -44,7 +43,7 @@ func parseUUIDPtr(id *protocol.UUID, fieldName string) (*uuid.UUID, *APIError) {
 func (h *Handler) loadOwnedSession(ctx context.Context, sessionID uuid.UUID, userID uuid.UUID) (*model.Session, error) {
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionID)
 	if err != nil {
-		if repo.IsNotFound(err) {
+		if primitives.IsNotFound(err) {
 			return nil, &APIError{
 				Code:    "session.not_found",
 				Message: fmt.Sprintf("session %s not found", sessionID),

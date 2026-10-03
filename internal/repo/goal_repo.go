@@ -70,28 +70,8 @@ func (r *goalRepo) FindActive(ctx context.Context, sessionID uuid.UUID) (*model.
 }
 
 func (r *goalRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]any) error {
-	autoFillCompletedAt(fields, goalTerminalStatuses)
-	// State guard: prevent status transition from terminal states back to active.
-	// If updating status to active, add WHERE condition to exclude terminal states.
-	query := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Goal{})
-	if newStatus, ok := fields["status"]; ok && newStatus == model.GoalStatusActive {
-		// Only allow transition to active if not in a terminal state.
-		query = query.Where("id = ? AND status NOT IN ?", id, []string{
-			string(model.GoalStatusCompleted),
-			string(model.GoalStatusCancelled),
-			string(model.GoalStatusExhausted),
-		})
-	} else {
-		query = query.Where("id = ?", id)
-	}
-	result := query.Updates(fields)
-	if result.Error != nil {
-		return fmt.Errorf("update goal %s: %w", id, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("update goal %s: %w", id, ErrGoalNotFound)
-	}
-	return nil
+	return updateWithStateGuard(ctx, r.db, &model.Goal{}, id, fields, goalTerminalStatuses,
+		"goal", ErrGoalNotFound)
 }
 
 func (r *goalRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Goal, error) {

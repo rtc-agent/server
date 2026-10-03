@@ -13,7 +13,8 @@ var testMetrics = newCentrifugeMetrics()
 func TestNewCentrifugeMetrics(t *testing.T) {
 	t.Parallel()
 
-	m := newCentrifugeMetrics()
+	// Use the shared testMetrics instance to avoid duplicate promauto registration.
+	m := testMetrics
 	assert.NotNil(t, m)
 	assert.NotNil(t, m.connectionsTotal)
 	assert.NotNil(t, m.disconnectReason)

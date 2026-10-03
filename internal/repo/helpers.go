@@ -125,3 +125,60 @@ func updateWithAutoTimestamp(
 	}
 	return nil
 }
+
+// updateWithStateGuard updates an entity with state transition guards.
+// Prevents transitioning from terminal states back to any non-terminal state
+// (e.g., completed -> active, completed -> paused). Only terminal -> terminal
+// transitions (e.g., active -> completed) and non-status updates are unrestricted.
+func updateWithStateGuard(
+	ctx context.Context,
+	db *gorm.DB,
+	entity any,
+	id uuid.UUID,
+	fields map[string]any,
+	terminalStatuses []any,
+	entityName string,
+	notFoundErr error,
+) error {
+	// Copy to avoid mutating the caller's map.
+	updates := make(map[string]any, len(fields))
+	for k, v := range fields {
+		updates[k] = v
+	}
+	autoFillCompletedAt(updates, terminalStatuses)
+
+	// Build string slice for SQL NOT IN clause from terminal statuses.
+	excludedStatuses := make([]string, 0, len(terminalStatuses))
+	for _, ts := range terminalStatuses {
+		excludedStatuses = append(excludedStatuses, fmt.Sprintf("%v", ts))
+	}
+
+	// State guard: prevent resurrection from terminal states to any non-terminal state.
+	query := DBFromContext(ctx, db).WithContext(ctx).Model(entity)
+	if newStatus, ok := updates["status"]; ok {
+		statusStr := fmt.Sprintf("%v", newStatus)
+		isTerminal := false
+		for _, excluded := range excludedStatuses {
+			if statusStr == excluded {
+				isTerminal = true
+				break
+			}
+		}
+		if !isTerminal {
+			// Target is a non-terminal status: block if current DB row is in a terminal state.
+			query = query.Where("id = ? AND status NOT IN ?", id, excludedStatuses)
+		} else {
+			query = query.Where("id = ?", id)
+		}
+	} else {
+		query = query.Where("id = ?", id)
+	}
+	result := query.Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("update %s %s: %w", entityName, id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("update %s %s: %w", entityName, id, notFoundErr)
+	}
+	return nil
+}

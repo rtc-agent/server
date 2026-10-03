@@ -107,7 +107,7 @@ func TestSTSPresign_InvalidOperation_Returns400(t *testing.T) {
 
 	var resp map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Equal(t, "invalid_request", resp["error"])
+	assert.Equal(t, "presign.invalid_request", resp["error"])
 	assert.Contains(t, resp["error_description"], "operation")
 }
 
@@ -126,7 +126,7 @@ func TestSTSPresign_EmptyKey_Returns400(t *testing.T) {
 
 	var resp map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Equal(t, "invalid_request", resp["error"])
+	assert.Equal(t, "presign.invalid_request", resp["error"])
 	assert.Contains(t, resp["error_description"], "key")
 }
 
@@ -208,7 +208,7 @@ func TestSTSPresign_ExpiryExceeded_Returns400(t *testing.T) {
 
 	var resp map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Equal(t, "invalid_request", resp["error"])
+	assert.Equal(t, "presign.invalid_request", resp["error"])
 	assert.Contains(t, resp["error_description"], "must not exceed")
 }
 
