@@ -360,3 +360,196 @@ groups:
         annotations:
           summary: "OSS3 后端错误率异常"
           description: "后端错误速率: {{ $value | humanize }}/s"
+
+  - name: new-metrics-alerts
+    rules:
+      # ==================== Centrifuge / WebSocket ====================
+
+      # WebSocket 异常断连率过高（error 类型占全部断连 > 20%）
+      - alert: CentrifugeHighErrorDisconnectRate
+        expr: |
+          (
+            sum(rate(rtc_centrifuge_disconnect_reason_total{job="rtc-agent-server",reason="error"}[5m]))
+            /
+            (sum(rate(rtc_centrifuge_disconnect_reason_total{job="rtc-agent-server"}[5m])) > 0)
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WebSocket 异常断连率 > 20%"
+          description: "error 类型断连占全部断连比例过高，当前值: {{ $value | humanizePercentage }}"
+
+      # RPC 调用错误率过高
+      - alert: CentrifugeRPCHighErrorRate
+        expr: |
+          (
+            sum(rate(rtc_centrifuge_rpc_requests_total{job="rtc-agent-server",status="error"}[5m]))
+            /
+            (sum(rate(rtc_centrifuge_rpc_requests_total{job="rtc-agent-server"}[5m])) > 0)
+          ) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Centrifuge RPC 调用错误率 > 10%"
+          description: "RPC 调用错误率过高，当前值: {{ $value | humanizePercentage }}"
+
+      # RPC 延迟过高（p95 > 1s）
+      - alert: CentrifugeRPCHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(rtc_centrifuge_rpc_duration_seconds_bucket{job="rtc-agent-server"}[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Centrifuge RPC p95 延迟 > 1s"
+          description: "RPC 调用延迟过高，当前 p95: {{ $value | humanizeDuration }}"
+
+      # ==================== Queue 生命周期 ====================
+
+      # Queue 等待时间过长（p95 > 30s）
+      - alert: QueueHighWaitDuration
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(rtc_queue_wait_duration_seconds_bucket{job="rtc-agent-server"}[5m])) by (le)
+          ) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue 等待时间 p95 > 30s"
+          description: "消息在 Queue 中等待时间过长，当前 p95: {{ $value | humanizeDuration }}"
+
+      # Queue 处理时间过长（p95 > 5min）
+      - alert: QueueHighProcessingDuration
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(rtc_queue_processing_duration_seconds_bucket{job="rtc-agent-server"}[5m])) by (le)
+          ) > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue 处理时间 p95 > 5min"
+          description: "消息处理耗时过长，当前 p95: {{ $value | humanizeDuration }}"
+
+      # Queue complete 失败率过高（> 10%）
+      - alert: QueueHighCompleteFailureRate
+        expr: |
+          (
+            sum(rate(rtc_queue_complete_total{job="rtc-agent-server",status="failed"}[5m]))
+            /
+            (sum(rate(rtc_queue_complete_total{job="rtc-agent-server"}[5m])) > 0)
+          ) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue complete 失败率 > 10%"
+          description: "消息处理完成失败率过高，当前值: {{ $value | humanizePercentage }}"
+
+      # Queue 取消率过高（取消数 / 发布数 > 20%）
+      - alert: QueueHighCancelRate
+        expr: |
+          (
+            sum(rate(rtc_queue_cancel_total{job="rtc-agent-server"}[5m]))
+            /
+            (sum(rate(rtc_queue_publish_total{job="rtc-agent-server"}[5m])) > 0)
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue 取消率 > 20%"
+          description: "消息取消比例过高，当前值: {{ $value | humanizePercentage }}"
+
+      # ==================== Auth 认证失败 ====================
+
+      # 认证失败速率突增（> 1/秒）
+      - alert: AuthFailuresSpike
+        expr: |
+          sum(rate(rtc_auth_failures_total{job="rtc-agent-server"}[5m])) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "认证失败速率突增 (>1/秒)"
+          description: "认证失败速率异常，可能存在攻击或配置问题，当前值: {{ $value | humanize }}/s"
+
+      # ==================== Circuit Breaker 熔断器 ====================
+
+      # 熔断器状态变为 open（服务降级）
+      - alert: CircuitBreakerOpen
+        expr: |
+          rtc_circuitbreaker_state{job="rtc-agent-server",state="open"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "熔断器 {{ $labels.name }} 已打开"
+          description: "服务 {{ $labels.name }} 熔断器处于 open 状态，服务已降级"
+
+      # ==================== DB 查询 ====================
+
+      # DB 查询延迟过高（p95 > 1s）
+      - alert: DBHighQueryLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(rtc_db_query_duration_seconds_bucket{job="rtc-agent-server"}[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB 查询 p95 延迟 > 1s"
+          description: "数据库查询延迟过高，当前 p95: {{ $value | humanizeDuration }}"
+
+      # DB 查询错误率过高（> 5%）
+      - alert: DBHighQueryErrorRate
+        expr: |
+          (
+            sum(rate(rtc_db_queries_total{job="rtc-agent-server",status="error"}[5m]))
+            /
+            (sum(rate(rtc_db_queries_total{job="rtc-agent-server"}[5m])) > 0)
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DB 查询错误率 > 5%"
+          description: "数据库查询错误率过高，当前值: {{ $value | humanizePercentage }}"
+
+      # DB 完全不可用（错误率 100%）
+      - alert: DBUnavailable
+        expr: |
+          (
+            sum(rate(rtc_db_queries_total{job="rtc-agent-server",status="error"}[2m]))
+            /
+            (sum(rate(rtc_db_queries_total{job="rtc-agent-server"}[2m])) > 0)
+          ) > 0.9
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DB 完全不可用"
+          description: "数据库查询几乎全部失败，当前错误率: {{ $value | humanizePercentage }}"
+
+      # ==================== 业务事件 ====================
+
+      # Session 关闭错误率过高（reason="error" 占比 > 20%）
+      - alert: SessionHighErrorCloseRate
+        expr: |
+          (
+            sum(rate(rtc_session_closed_total{job="rtc-agent-server",reason="error"}[5m]))
+            /
+            (sum(rate(rtc_session_closed_total{job="rtc-agent-server"}[5m])) > 0)
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Session 错误关闭率 > 20%"
+          description: "Session 因 error 关闭的比例过高，当前值: {{ $value | humanizePercentage }}"
