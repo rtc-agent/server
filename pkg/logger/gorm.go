@@ -5,11 +5,31 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
+
+// maxSQLLength is the maximum length of SQL statement to log (in bytes).
+// SQL longer than this will be truncated to avoid excessive log output.
+const maxSQLLength = 100
+
+// truncateSQL safely truncates a SQL string to maxLen bytes without breaking
+// multi-byte UTF-8 characters. If truncated, appends a marker.
+func truncateSQL(sql string, maxLen int) string {
+	if len(sql) <= maxLen {
+		return sql
+	}
+	// Find a safe cut point that doesn't break a UTF-8 character.
+	// Scan backward from maxLen to find a valid UTF-8 rune boundary.
+	cutPoint := maxLen
+	for cutPoint > 0 && !utf8.RuneStart(sql[cutPoint]) {
+		cutPoint--
+	}
+	return sql[:cutPoint] + "... (truncated)"
+}
 
 // GormLogger forwards GORM logs to the zap logger.
 type GormLogger struct {
@@ -77,10 +97,13 @@ func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (stri
 	elapsed := time.Since(begin)
 	sql, rows := fc()
 
+	// Truncate SQL if too long to avoid excessive log output.
+	sqlToLog := truncateSQL(sql, maxSQLLength)
+
 	// Build log fields.
 	fields := []zap.Field{
 		zap.Duration("elapsed", elapsed),
-		zap.String("sql", sql),
+		zap.String("sql", sqlToLog),
 		zap.Int64("rows", rows),
 	}
 
