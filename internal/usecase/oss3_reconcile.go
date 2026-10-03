@@ -77,7 +77,8 @@ func (uc *OSS3Usecase) releaseLock(ctx context.Context, lockName, holderUUID str
 		holderUUID,
 	).Int()
 	if err != nil {
-		logger.Debug(ctx, fmt.Sprintf("release %s lock failed (best-effort)", lockName),
+		logger.Debug(ctx, "release_lock_failed_best_effort",
+			zap.String("lock_name", lockName),
 			zap.String("holder", holderUUID),
 			zap.Error(err))
 	}

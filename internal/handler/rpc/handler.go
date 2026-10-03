@@ -141,10 +141,10 @@ func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]
 
 	userID, _ := contextx.GetUserID(ctx)
 	deviceID, _ := contextx.GetDeviceID(ctx)
-	logger.Info(ctx, "[RPC] ->",
+	logger.Info(ctx, "rpc.request_start",
 		zap.String("method", method),
-		zap.String("user", userID.String()),
-		zap.String("device", deviceID))
+		zap.String("user_id", userID.String()),
+		zap.String("device_id", deviceID))
 
 	route, ok := h.routes[protocol.RpcMethod(method)]
 	if !ok {
@@ -156,7 +156,7 @@ func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]
 
 	resp, err := route(ctx, data)
 	if err != nil {
-		logger.Warn(ctx, "[RPC] <- err",
+		logger.Warn(ctx, "rpc.request_error",
 			zap.String("method", method),
 			zap.Error(err),
 			zap.Duration("elapsed", time.Since(start)))
@@ -165,7 +165,7 @@ func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]
 
 	result, jsonErr := json.Marshal(resp)
 	if jsonErr != nil {
-		logger.Error(ctx, "[RPC] marshal response failed",
+		logger.Error(ctx, "rpc.marshal_response_failed",
 			zap.String("method", method),
 			zap.Error(jsonErr))
 		return nil, &APIError{
@@ -173,7 +173,7 @@ func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]
 			Message: "failed to serialize response",
 		}
 	}
-	logger.Info(ctx, "[RPC] <- ok",
+	logger.Info(ctx, "rpc.request_done",
 		zap.String("method", method),
 		zap.Duration("elapsed", time.Since(start)))
 	return result, nil
@@ -195,7 +195,9 @@ func (h *Handler) validateFileAttachments(
 	}
 	umc, parseErr := primitives.ParseUserMessageContent(contentData.Data)
 	if parseErr != nil {
-		logger.Warn(ctx, fmt.Sprintf("[%s] ParseUserMessageContent failed", caller), zap.Error(parseErr))
+		logger.Warn(ctx, caller+".parse_user_message_content_failed",
+			zap.String("caller", caller),
+			zap.Error(parseErr))
 		return nil // parse error: skip validation, let downstream handle
 	}
 	if umc.Files == nil || len(*umc.Files) == 0 {
