@@ -32,7 +32,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		span.SetStatus(codes.Error, "missing user_id in context")
-		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
 	span.SetAttributes(attribute.String("user.id", userID.String()))
 	creator := usecase.UserCreator{UserID: userID}
@@ -58,7 +58,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 	default:
 		span.SetStatus(codes.Error, "rtc.invalid_status")
 		return nil, &APIError{
-			Code:    "rtc.invalid_status",
+			Code:    ErrorCodeRtcInvalidStatus,
 			Message: fmt.Sprintf("invalid target status: %s", req.Status),
 		}
 	}
@@ -68,7 +68,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "rtc.not_found")
-			return nil, &APIError{Code: "rtc.not_found", Message: fmt.Sprintf("rtc %s not found", req.RtcId)}
+			return nil, &APIError{Code: ErrorCodeRtcNotFound, Message: fmt.Sprintf("rtc %s not found", req.RtcId)}
 		}
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
@@ -86,7 +86,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 		}
 		span.SetStatus(codes.Error, "rtc.invalid_state")
 		return nil, &APIError{
-			Code:    "rtc.invalid_state",
+			Code:    ErrorCodeRtcInvalidState,
 			Message: fmt.Sprintf("rtc %s is %s, cannot update to %s", req.RtcId, rtc.Status, req.Status),
 		}
 	}

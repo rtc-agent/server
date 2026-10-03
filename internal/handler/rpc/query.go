@@ -19,7 +19,7 @@ func parseUUID(id protocol.UUID, fieldName string) (uuid.UUID, *APIError) {
 	parsed, err := uuid.Parse(id)
 	if err != nil {
 		return uuid.Nil, &APIError{
-			Code:    "invalid_argument",
+			Code:    ErrorCodeInvalidArgument,
 			Message: fmt.Sprintf("invalid %s: %s", fieldName, id),
 		}
 	}
@@ -45,7 +45,7 @@ func (h *Handler) loadOwnedSession(ctx context.Context, sessionID uuid.UUID, use
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			return nil, &APIError{
-				Code:    "session.not_found",
+				Code:    ErrorCodeSessionNotFound,
 				Message: fmt.Sprintf("session %s not found", sessionID),
 			}
 		}
@@ -54,7 +54,7 @@ func (h *Handler) loadOwnedSession(ctx context.Context, sessionID uuid.UUID, use
 	creator := usecase.UserCreator{UserID: userID}
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
 		return nil, &APIError{
-			Code:    "permission_denied",
+			Code:    ErrorCodePermissionDenied,
 			Message: fmt.Sprintf("session %s does not belong to user", sessionID),
 		}
 	}
@@ -65,7 +65,7 @@ func (h *Handler) loadOwnedSession(ctx context.Context, sessionID uuid.UUID, use
 func (h *Handler) requireUserID(ctx context.Context) (uuid.UUID, error) {
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
-		return uuid.Nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return uuid.Nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
 	return userID, nil
 }
@@ -77,13 +77,13 @@ func clampLimit(reqLimit *int, defaultLimit, maxLimit int) (int, *APIError) {
 	}
 	if *reqLimit <= 0 {
 		return 0, &APIError{
-			Code:    "invalid_argument",
+			Code:    ErrorCodeInvalidArgument,
 			Message: "limit must be positive",
 		}
 	}
 	if *reqLimit > maxLimit {
 		return 0, &APIError{
-			Code:    "invalid_argument",
+			Code:    ErrorCodeInvalidArgument,
 			Message: fmt.Sprintf("limit exceeds maximum (%d)", maxLimit),
 		}
 	}

@@ -104,7 +104,7 @@ func dispatch[Req any, Resp any](fn func(context.Context, *Req) (*Resp, error)) 
 		var req Req
 		if err := json.Unmarshal(data, &req); err != nil {
 			return nil, &APIError{
-				Code:    "invalid_request",
+				Code:    ErrorCodeInvalidRequest,
 				Message: "failed to parse request body",
 			}
 		}
@@ -159,7 +159,7 @@ func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]
 	route, ok := h.routes[protocol.RpcMethod(method)]
 	if !ok {
 		return nil, &APIError{
-			Code:    "method_not_found",
+			Code:    ErrorCodeMethodNotFound,
 			Message: fmt.Sprintf("unknown RPC method: %s", method),
 		}
 	}
@@ -179,7 +179,7 @@ func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]
 			zap.String("method", method),
 			zap.Error(jsonErr))
 		return nil, &APIError{
-			Code:    "internal_error",
+			Code:    ErrorCodeInternalError,
 			Message: "failed to serialize response",
 		}
 	}
@@ -214,7 +214,7 @@ func (h *Handler) validateFileAttachments(
 		return nil
 	}
 	if err := primitives.ValidateFilesExist(ctx, h.deps.FileRepo, *umc.Files, userID); err != nil {
-		return &APIError{Code: "file.not_found", Message: err.Error()}
+		return &APIError{Code: ErrorCodeFileNotFound, Message: err.Error()}
 	}
 	return nil
 }

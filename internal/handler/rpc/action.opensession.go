@@ -32,7 +32,7 @@ func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequ
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		span.SetStatus(codes.Error, "missing user_id in context")
-		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
 	span.SetAttributes(attribute.String("user.id", userID.String()))
 	creator := usecase.UserCreator{UserID: userID}
@@ -51,7 +51,7 @@ func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequ
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")
-			return nil, &APIError{Code: "session.not_found", Message: fmt.Sprintf("session %s not found", req.SessionId)}
+			return nil, &APIError{Code: ErrorCodeSessionNotFound, Message: fmt.Sprintf("session %s not found", req.SessionId)}
 		}
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
@@ -59,7 +59,7 @@ func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequ
 	}
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
 		span.SetStatus(codes.Error, "permission_denied")
-		return nil, &APIError{Code: "permission_denied", Message: fmt.Sprintf("session %s does not belong to user", session.ID)}
+		return nil, &APIError{Code: ErrorCodePermissionDenied, Message: fmt.Sprintf("session %s does not belong to user", session.ID)}
 	}
 
 	// Idempotent: if session is not closed, return success without modifying.

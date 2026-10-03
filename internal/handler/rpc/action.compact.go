@@ -38,7 +38,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		span.SetStatus(codes.Error, "missing user_id in context")
-		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
 	span.SetAttributes(attribute.String("user.id", userID.String()))
 	creator := usecase.UserCreator{UserID: userID}
@@ -61,7 +61,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")
 			return nil, &APIError{
-				Code:    "session.not_found",
+				Code:    ErrorCodeSessionNotFound,
 				Message: fmt.Sprintf("session %s not found", req.SessionId),
 			}
 		}
@@ -74,7 +74,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
 		span.SetStatus(codes.Error, "permission_denied")
 		return nil, &APIError{
-			Code:    "permission_denied",
+			Code:    ErrorCodePermissionDenied,
 			Message: fmt.Sprintf("session %s does not belong to user", session.ID),
 		}
 	}
@@ -95,7 +95,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	if hasPending {
 		span.SetStatus(codes.Error, "compact.already_pending")
 		return nil, &APIError{
-			Code:    "compact.already_pending",
+			Code:    ErrorCodeCompactAlreadyPending,
 			Message: "a compact task is already pending or processing for this session",
 		}
 	}

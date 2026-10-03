@@ -38,7 +38,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		span.SetStatus(codes.Error, "missing user_id in context")
-		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
 	span.SetAttributes(attribute.String("user.id", userID.String()))
 	creator := usecase.UserCreator{UserID: userID}
@@ -60,7 +60,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "rtc.not_found")
-			return nil, &APIError{Code: "rtc.not_found", Message: fmt.Sprintf("rtc %s not found", req.RtcId)}
+			return nil, &APIError{Code: ErrorCodeRtcNotFound, Message: fmt.Sprintf("rtc %s not found", req.RtcId)}
 		}
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
@@ -81,7 +81,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	if req.ClientId != nil && *req.ClientId != rtc.ClientID {
 		span.SetStatus(codes.Error, "rtc.client_id_mismatch")
 		return nil, &APIError{
-			Code:    "rtc.client_id_mismatch",
+			Code:    ErrorCodeRtcClientMismatch,
 			Message: fmt.Sprintf("client_id mismatch: expected %s, got %s", rtc.ClientID, *req.ClientId),
 		}
 	}
@@ -97,7 +97,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		// Validate that it is legal JSON.
 		if !json.Valid(req.Result) {
 			span.SetStatus(codes.Error, "invalid JSON in result")
-			return nil, &APIError{Code: "rtc.invalid_result", Message: "result is not valid JSON"}
+			return nil, &APIError{Code: ErrorCodeRtcInvalidResult, Message: "result is not valid JSON"}
 		}
 		// Convert to compact form (remove extra whitespace) while preserving
 		// the original JSON key order. json.Compact only strips whitespace;
@@ -105,7 +105,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		var buf bytes.Buffer
 		if err := json.Compact(&buf, req.Result); err != nil {
 			span.SetStatus(codes.Error, "failed to compact result JSON")
-			return nil, &APIError{Code: "rtc.invalid_result", Message: "failed to compact result JSON"}
+			return nil, &APIError{Code: ErrorCodeRtcInvalidResult, Message: "failed to compact result JSON"}
 		}
 		s := buf.String()
 		resultJSON = &s

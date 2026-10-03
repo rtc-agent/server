@@ -144,7 +144,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		span.SetStatus(codes.Error, "missing user_id in context")
-		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
 	span.SetAttributes(attribute.String("user.id", userID.String()))
 	deviceID, _ := contextx.GetDeviceID(ctx)
@@ -193,7 +193,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "message.not_found")
-			return nil, &APIError{Code: "message.not_found", Message: fmt.Sprintf("old message %s not found", req.OldServerMessageId)}
+			return nil, &APIError{Code: ErrorCodeMessageNotFound, Message: fmt.Sprintf("old message %s not found", req.OldServerMessageId)}
 		}
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
@@ -208,7 +208,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	}
 	if len(oldMessages) == 0 {
 		span.SetStatus(codes.Error, "message.not_found")
-		return nil, &APIError{Code: "message.not_found", Message: "no messages found to fork"}
+		return nil, &APIError{Code: ErrorCodeMessageNotFound, Message: "no messages found to fork"}
 	}
 
 	newSession := buildForkSessionModel(oldSession, req.NewClientSessionId, creator, deviceID)
@@ -266,7 +266,7 @@ func (h *Handler) validateForkSource(ctx context.Context, oldSessionID uuid.UUID
 	oldSession, err := h.deps.SessionRepo.GetByID(ctx, oldSessionID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
-			return nil, &APIError{Code: "session.not_found", Message: fmt.Sprintf("old session %s not found", oldSessionID)}
+			return nil, &APIError{Code: ErrorCodeSessionNotFound, Message: fmt.Sprintf("old session %s not found", oldSessionID)}
 		}
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}

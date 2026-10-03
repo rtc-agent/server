@@ -25,15 +25,15 @@ func (h *Handler) internalError(ctx context.Context, code, publicMsg string, err
 // ownershipError classifies errors from CheckSessionOwnership into safe API errors.
 //
 // CheckSessionOwnership may return three categories of errors:
-//   - ErrPermissionDenied: ownership check failed -> "permission_denied"
+//   - ErrPermissionDenied: ownership check failed -> "auth.permission_denied"
 //   - primitives.IsNotFound: session does not exist -> "session.not_found"
-//   - Other (database errors, etc.) -> log and return generic "internal_error"
+//   - Other (database errors, etc.) -> log and return generic "rpc.internal_error"
 func (h *Handler) ownershipError(ctx context.Context, err error) *APIError {
 	if errors.Is(err, primitives.ErrPermissionDenied) {
-		return &APIError{Code: "permission_denied", Message: "permission denied"}
+		return &APIError{Code: ErrorCodePermissionDenied, Message: "permission denied"}
 	}
 	if primitives.IsNotFound(err) {
-		return &APIError{Code: "session.not_found", Message: "session not found"}
+		return &APIError{Code: ErrorCodeSessionNotFound, Message: "session not found"}
 	}
-	return h.internalError(ctx, "internal_error", "session ownership check failed", err)
+	return h.internalError(ctx, ErrorCodeInternalError, "session ownership check failed", err)
 }

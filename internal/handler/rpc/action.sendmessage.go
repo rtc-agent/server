@@ -98,7 +98,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		span.SetStatus(codes.Error, "missing user_id in context")
-		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
 	span.SetAttributes(attribute.String("user.id", userID.String()))
 	deviceID, _ := contextx.GetDeviceID(ctx)
@@ -115,7 +115,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 
 	if err := primitives.ValidateCreateMessageRequest(content); err != nil {
 		span.SetStatus(codes.Error, "validation_error")
-		return nil, &APIError{Code: "invalid_argument", Message: err.Error()}
+		return nil, &APIError{Code: ErrorCodeInvalidArgument, Message: err.Error()}
 	}
 
 	sessionUUIDPtr, apiErr := parseUUIDPtr(req.ServerSessionId, "server_session_id")
@@ -278,11 +278,11 @@ func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string)
 	}
 	existing, err := h.deps.Deps.MessageRepo.FindByClientID(ctx, clientID)
 	if err != nil {
-		return &APIError{Code: "internal_error", Message: "idempotency check failed"}
+		return &APIError{Code: ErrorCodeInternalError, Message: "idempotency check failed"}
 	}
 	if existing != nil {
 		return &APIError{
-			Code:    "client_id_conflict",
+			Code:    ErrorCodeMessageClientIDConflict,
 			Message: fmt.Sprintf("client_id %s already used for message %s", clientID, existing.ID),
 		}
 	}

@@ -36,7 +36,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		span.SetStatus(codes.Error, "missing user_id in context")
-		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
 	span.SetAttributes(attribute.String("user.id", userID.String()))
 	creator := usecase.UserCreator{UserID: userID}
@@ -55,7 +55,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")
-			return nil, &APIError{Code: "session.not_found", Message: fmt.Sprintf("session %s not found", req.SessionId)}
+			return nil, &APIError{Code: ErrorCodeSessionNotFound, Message: fmt.Sprintf("session %s not found", req.SessionId)}
 		}
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
@@ -63,7 +63,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	}
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
 		span.SetStatus(codes.Error, "permission_denied")
-		return nil, &APIError{Code: "permission_denied", Message: fmt.Sprintf("session %s does not belong to user", session.ID)}
+		return nil, &APIError{Code: ErrorCodePermissionDenied, Message: fmt.Sprintf("session %s does not belong to user", session.ID)}
 	}
 	if protocol.SessionStatus(session.Status) == protocol.SessionStatusClosed {
 		logger.Info(ctx, "[CloseSession] session already closed", zap.String("session", session.ID.String()))

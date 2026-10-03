@@ -2,6 +2,8 @@ package rpchandler
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -30,7 +32,21 @@ func (h *Handler) MessageList(ctx context.Context, req *protocol.MessageListRequ
 		return nil, err
 	}
 
-	messages, err := h.deps.Deps.MessageRepo.ListBySession(ctx, sessionUUID, req.Cursor, limit)
+	// Parse string cursor to uint32 (global_offset).
+	var cursor *uint32
+	if req.Cursor != nil && *req.Cursor != "" {
+		offset, parseErr := strconv.ParseUint(*req.Cursor, 10, 32)
+		if parseErr != nil {
+			return nil, &APIError{
+				Code:    ErrorCodeMessageInvalidCursor,
+				Message: fmt.Sprintf("invalid cursor value: %s", *req.Cursor),
+			}
+		}
+		offset32 := uint32(offset)
+		cursor = &offset32
+	}
+
+	messages, err := h.deps.Deps.MessageRepo.ListBySession(ctx, sessionUUID, cursor, limit)
 	if err != nil {
 		return nil, h.internalError(ctx, "message.list_failed", "internal error", err)
 	}
@@ -40,9 +56,9 @@ func (h *Handler) MessageList(ctx context.Context, req *protocol.MessageListRequ
 		items = append(items, model.ToProtocolMessage(m))
 	}
 
-	var nextCursor *uint32
+	var nextCursor *string
 	if len(messages) == limit {
-		last := messages[len(messages)-1].GlobalOffset
+		last := fmt.Sprintf("%d", messages[len(messages)-1].GlobalOffset)
 		nextCursor = &last
 	}
 
