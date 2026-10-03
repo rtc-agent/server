@@ -51,7 +51,21 @@ jobs:
         run: go mod download
 
       - name: Unit tests
-        run: go test -short -count=1 ./...
+        run: go test -short -count=1 -race -timeout=5m -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Coverage report
+        run: |
+          total=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${total}%"
+          echo "COVERAGE_PCT=${total}" >> "$GITHUB_ENV"
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 30
 
   build:
     runs-on: ubuntu-latest
