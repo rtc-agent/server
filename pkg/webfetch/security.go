@@ -136,7 +136,7 @@ func (s *SecurityChecker) checkSSRF(ctx context.Context, host string) error {
 	resolver := &net.Resolver{PreferGo: true}
 	addrs, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrDNSFailed, err)
+		return fmt.Errorf("%w: %w", ErrDNSFailed, err)
 	}
 	if len(addrs) == 0 {
 		return fmt.Errorf("%w: no IP addresses resolved for %q", ErrDNSFailed, host)

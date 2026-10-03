@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/pkg/circuitbreaker"
@@ -297,7 +298,7 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 
 	// 6. singleflight dedup.
 	ch := m.singleFlight.DoChan(cacheKey, func() (interface{}, error) {
-		rawResult, err := m.doFetch(ctx, req)
+		rawResult, err := m.doFetch(ctx, req, parsedURL)
 		if err != nil {
 			if errors.Is(err, ErrCrossDomainRedirect) {
 				return rawResult, err
@@ -390,12 +391,11 @@ func (m *WebFetchManager) validateRequest(req *FetchRequest) error {
 }
 
 // doFetch executes the HTTP request.
-func (m *WebFetchManager) doFetch(ctx context.Context, req *FetchRequest) (*rawFetchResult, error) {
+func (m *WebFetchManager) doFetch(ctx context.Context, req *FetchRequest, parsedURL *url.URL) (*rawFetchResult, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, m.config.FetchTimeout)
 	defer cancel()
 
 	// Get circuit breaker for this domain (if enabled).
-	parsedURL, _ := url.Parse(req.URL)
 	domain := ""
 	if parsedURL != nil {
 		domain = parsedURL.Hostname()
@@ -625,14 +625,14 @@ func (m *WebFetchManager) releaseSlots(parsedURL *url.URL) {
 
 func (m *WebFetchManager) classifyHTTPError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("%w: %v", ErrTimeout, err)
+		return fmt.Errorf("%w: %w", ErrTimeout, err)
 	}
 	if errors.Is(err, context.Canceled) {
 		return fmt.Errorf("request canceled: %w", err)
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		return fmt.Errorf("%w: %v", ErrConnectionReset, err)
+		return fmt.Errorf("%w: %w", ErrConnectionReset, err)
 	}
 	return fmt.Errorf("fetch error: %w", err)
 }
@@ -731,12 +731,18 @@ func formatRedirectMessage(originalURL, redirectURL string, statusCode int) stri
 
 // truncateContent truncates s to maxLen runes (multi-byte safe).
 func truncateContent(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
+	// Fast path: if byte length <= maxLen, rune count is definitely <= maxLen.
+	if len(s) <= maxLen {
 		return s
 	}
+	// Check rune count without allocating []rune.
+	if utf8.RuneCountInString(s) <= maxLen {
+		return s
+	}
+	// Need to truncate: convert to runes.
+	runes := []rune(s)
 	const suffix = "\n\n[... truncated ...]"
-	cut := maxLen - len([]rune(suffix))
+	cut := maxLen - utf8.RuneCountInString(suffix)
 	if cut < 0 {
 		cut = 0
 	}
