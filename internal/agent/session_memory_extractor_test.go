@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -47,7 +48,7 @@ func (*mockMemoryRepo) Create(context.Context, *memory.Memory) error {
 func (*mockMemoryRepo) BatchCreate(context.Context, []*memory.Memory) error {
 	panic("not implemented")
 }
-func (*mockMemoryRepo) Update(context.Context, uuid.UUID, map[string]any) error {
+func (*mockMemoryRepo) Update(context.Context, uuid.UUID, map[string]any, ...time.Time) error {
 	panic("not implemented")
 }
 func (*mockMemoryRepo) Delete(context.Context, uuid.UUID) error {

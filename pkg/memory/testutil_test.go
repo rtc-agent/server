@@ -78,7 +78,7 @@ func (r *mockRepo) Search(_ context.Context, scope ScopeType, scopeID uuid.UUID,
 	return result, nil
 }
 
-func (r *mockRepo) Update(_ context.Context, id uuid.UUID, fields map[string]any) error {
+func (r *mockRepo) Update(_ context.Context, id uuid.UUID, fields map[string]any, _ ...time.Time) error {
 	return nil
 }
 

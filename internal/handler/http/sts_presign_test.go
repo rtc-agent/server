@@ -107,7 +107,8 @@ func TestSTSPresign_InvalidOperation_Returns400(t *testing.T) {
 
 	var resp map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Contains(t, resp["error"], "operation")
+	assert.Equal(t, "invalid_request", resp["error"])
+	assert.Contains(t, resp["error_description"], "operation")
 }
 
 // TestSTSPresign_EmptyKey_Returns400 verifies that an empty key in the
@@ -125,7 +126,8 @@ func TestSTSPresign_EmptyKey_Returns400(t *testing.T) {
 
 	var resp map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Contains(t, resp["error"], "key")
+	assert.Equal(t, "invalid_request", resp["error"])
+	assert.Contains(t, resp["error_description"], "key")
 }
 
 // TestSTSPresign_KeyPrefixMismatch_Returns403 verifies that a user cannot
@@ -188,10 +190,10 @@ func TestSTSPresign_ValidGet_Returns200(t *testing.T) {
 	assert.NotEmpty(t, resp.URL)
 }
 
-// TestSTSPresign_ExpiryExceeded_Returns403 verifies that requesting an
+// TestSTSPresign_ExpiryExceeded_Returns400 verifies that requesting an
 // expiry longer than the server-imposed maximum (7 days) is rejected with
-// 403 Forbidden.
-func TestSTSPresign_ExpiryExceeded_Returns403(t *testing.T) {
+// 400 Bad Request.
+func TestSTSPresign_ExpiryExceeded_Returns400(t *testing.T) {
 	handler := newTestPresignHandler(t)
 	uid := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
@@ -202,11 +204,12 @@ func TestSTSPresign_ExpiryExceeded_Returns403(t *testing.T) {
 		ExpiresIn: 8 * 24 * 3600, // 8 days
 	}, &uid)
 
-	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 
 	var resp map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Contains(t, resp["error"], "must not exceed")
+	assert.Equal(t, "invalid_request", resp["error"])
+	assert.Contains(t, resp["error_description"], "must not exceed")
 }
 
 // TestSTSPresign_DefaultExpiry_IsOneHour verifies that omitting the ExpiresIn
