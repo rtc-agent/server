@@ -336,6 +336,12 @@ type ServerConfig struct {
 	// RPCTimeout is the RPC handler context timeout.
 	// Default 10s.
 	RPCTimeout time.Duration `mapstructure:"rpc_timeout"`
+
+	// ClientQueueMaxSize is the maximum size of client's message queue in bytes.
+	// When exceeded, Centrifuge closes the client connection with DisconnectSlow.
+	// This limits RPC response size since replies go through the message queue.
+	// Default 52428800 (50MB).
+	ClientQueueMaxSize int `mapstructure:"client_queue_max_size"`
 }
 
 // DatabaseConfig holds database connection and migration configuration.

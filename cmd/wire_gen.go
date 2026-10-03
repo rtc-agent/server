@@ -62,7 +62,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	repository := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
 	updatePublisher := provideUpdatePublisher(db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo)
-	node, err := provideCentrifugeNode()
+	node, err := provideCentrifugeNode(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	repository := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
 	updatePublisher := provideUpdatePublisher(db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo)
-	node, err := provideCentrifugeNode()
+	node, err := provideCentrifugeNode(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -239,10 +239,17 @@ func provideJWTSigner(cfg *config.Config) (*auth.JWTSigner, error) {
 	return auth.NewJWTSigner(cfg.Auth.JWTSecret, time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second)
 }
 
-func provideCentrifugeNode() (*centrifuge.Node, error) {
+func provideCentrifugeNode(cfg *config.Config) (*centrifuge.Node, error) {
+	// Set default ClientQueueMaxSize to 50MB if not configured
+	clientQueueMaxSize := cfg.Server.ClientQueueMaxSize
+	if clientQueueMaxSize == 0 {
+		clientQueueMaxSize = 50 * 1024 * 1024 // 50MB
+	}
+
 	return centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelDebug,
-		LogHandler: newCentrifugeLogHandler(),
+		LogLevel:         centrifuge.LogLevelDebug,
+		LogHandler:       newCentrifugeLogHandler(),
+		ClientQueueMaxSize: clientQueueMaxSize,
 	})
 }
 
@@ -703,7 +710,11 @@ func provideRPCHandler(
 }
 
 func provideHTTPHandler(svcCtx *svc.ServiceContext) *httphandler.Handler {
-	return httphandler.NewHandler(svcCtx)
+	return httphandler.NewHandler(
+		svcCtx.DB,
+		svcCtx.Redis,
+		svcCtx.CentrifugeNode,
+	)
 }
 
 func provideOAuth2Handler(
@@ -713,7 +724,14 @@ func provideOAuth2Handler(
 	providerClient *oauth.Client,
 	cfg *config.Config,
 ) *httphandler.OAuth2Handler {
-	return httphandler.NewOAuth2Handler(svcCtx, jwtSigner, stateStore, providerClient, cfg.Auth)
+	authUC := usecase.NewAuthUsecase(
+		svcCtx.OAuth2UserRepo,
+		svcCtx.DeviceRepo,
+		svcCtx.RefreshTokenRepo,
+		jwtSigner,
+		cfg.Auth.RefreshTokenTTL,
+	)
+	return httphandler.NewOAuth2Handler(authUC, jwtSigner, stateStore, providerClient, cfg.Auth)
 }
 
 func provideInterruptHandler(
