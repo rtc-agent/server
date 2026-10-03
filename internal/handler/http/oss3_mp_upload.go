@@ -113,10 +113,10 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 	// quotaCommitted tracks whether quota has been charged to the user.
 	// If false at function exit, the defer releases the pending reservation.
 	quotaCommitted := false
-	// Bug #15 fix: Use Background context to avoid cancellation issues.
+	// Bug #15 fix: Use WithoutCancel to preserve tracing context while avoiding cancellation.
 	defer func() {
 		if !quotaCommitted && quotaRequestID != "" {
-			h.oss3UC.ReleaseQuota(context.Background(), userID, quotaRequestID)
+			h.oss3UC.ReleaseQuota(context.WithoutCancel(r.Context()), userID, quotaRequestID)
 		}
 	}()
 

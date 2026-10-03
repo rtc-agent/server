@@ -64,9 +64,3 @@ func BuildUserPrefix(userID string) string {
 func BuildFileKey(userID, fileID string) string {
 	return fmt.Sprintf("user-%s/%s", userID, fileID)
 }
-
-// GenerateKey generates a valid key in the format: {user-id}/{md5-hash}.{ext}
-// Deprecated: Use BuildFileKey instead for clarity.
-func GenerateKey(userID, md5Hash, ext string) string {
-	return BuildFileKey(userID, md5Hash+"."+ext)
-}

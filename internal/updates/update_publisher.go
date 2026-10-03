@@ -273,7 +273,7 @@ func (u *UpdatePublisher) RunAndPublish(
 	pushUpdates, pushErr := u.Push(ctx, items, saved)
 	if pushErr != nil {
 		logger.Error(ctx, "[UpdatePublisher] push failed (data already committed)", zap.Error(pushErr))
-		return pushUpdates, fmt.Errorf("%w: %v", ErrPushAfterCommit, pushErr)
+		return pushUpdates, fmt.Errorf("%w: %w", ErrPushAfterCommit, pushErr)
 	}
 	return pushUpdates, nil
 }

@@ -474,11 +474,34 @@ func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Mes
 	results := make([]loadResult, len(files))
 	var wg sync.WaitGroup
 
+	// Semaphore to limit concurrent file loads.
+	// Prevents OOM when a user sends many attachments (each image may hold up to 20MB).
+	const maxConcurrentLoads = 10
+	sem := make(chan struct{}, maxConcurrentLoads)
+
 	// Launch parallel loaders
 	for i, file := range files {
 		wg.Add(1)
 		go func(idx int, f protocol.FileAttachment) {
 			defer wg.Done()
+			// Acquire semaphore slot (blocks if maxConcurrentLoads are already running).
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			// Panic recovery to prevent process crash
+			defer func() {
+				if r := recover(); r != nil {
+					h.logger.Error(ctx, "file_attachment.panic_recovery", map[string]any{
+						"index":   idx,
+						"file_id": f.Fileid,
+						"panic":   fmt.Sprintf("%v", r),
+					})
+					results[idx] = loadResult{
+						index:    idx,
+						fileType: "unknown",
+						err:      fmt.Errorf("panic in file loader: %v", r),
+					}
+				}
+			}()
 
 			// Build full OSS key: user-{userID}/{fileID}
 			fullKey := rtcoss3.BuildFileKey(userID, f.Fileid)

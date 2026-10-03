@@ -6,6 +6,7 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/contextx"
+	"github.com/rtc-agent/server/internal/infra/httputil"
 	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -57,7 +58,7 @@ func (h *STSHandler) RegisterRoutes(mux *http.ServeMux) {
 func (h *STSHandler) IssueTemporaryCredentials(w http.ResponseWriter, r *http.Request) {
 	userID, ok := contextx.GetUserID(r.Context())
 	if !ok {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		httputil.WriteError(w, http.StatusUnauthorized, "credentials.unauthorized", "authentication required")
 		return
 	}
 
@@ -67,7 +68,7 @@ func (h *STSHandler) IssueTemporaryCredentials(w http.ResponseWriter, r *http.Re
 			zap.String("user_id", userID.String()),
 			zap.Error(err),
 		)
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		httputil.WriteError(w, http.StatusInternalServerError, "credentials.internal_error", "failed to issue credentials")
 		return
 	}
 
@@ -80,5 +81,7 @@ func (h *STSHandler) IssueTemporaryCredentials(w http.ResponseWriter, r *http.Re
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		logger.Warn(r.Context(), "failed to encode response", zap.Error(err))
+	}
 }

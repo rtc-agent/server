@@ -401,7 +401,7 @@ func (q *Queue) CancelSession(ctx context.Context, sessionID, reason string) err
 	_, err := cancelSessionScript.Run(ctx, q.rdb, []string{keyQueue(sessionID)},
 		now,
 	).Result()
-	if err != nil && err != redis.Nil {
+	if err != nil && !errors.Is(err, redis.Nil) {
 		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("rtcqueue: cancel session pending: %w", err)
 	}
@@ -416,7 +416,7 @@ func (q *Queue) CancelSession(ctx context.Context, sessionID, reason string) err
 		keyActive(sessionID),
 		ChannelSessionCancel(sessionID),
 	}, reason, now).Result()
-	if err != nil && err != redis.Nil {
+	if err != nil && !errors.Is(err, redis.Nil) {
 		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("rtcqueue: cancel session active: %w", err)
 	}

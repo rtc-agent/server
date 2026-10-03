@@ -143,10 +143,10 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	// NOT call ReleaseQuota because the pending key has already been consumed
 	// by the (failed) commit attempt and the data lives in MinIO.
 	uploadSucceeded := false
-	// Bug #15 fix: Use Background context to avoid cancellation issues.
+	// Bug #15 fix: Use WithoutCancel to preserve tracing context while avoiding cancellation.
 	defer func() {
 		if !uploadSucceeded && quotaRequestID != "" {
-			h.oss3UC.ReleaseQuota(context.Background(), userID, quotaRequestID)
+			h.oss3UC.ReleaseQuota(context.WithoutCancel(r.Context()), userID, quotaRequestID)
 		}
 	}()
 

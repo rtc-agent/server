@@ -19,8 +19,11 @@ type Repository interface {
 	ListRecentForInjection(ctx context.Context, scope ScopeType, scopeID uuid.UUID, maxCount, maxTokens int) ([]*Memory, error)
 	Search(ctx context.Context, scope ScopeType, scopeID uuid.UUID, query string, limit int) ([]*Memory, error)
 
-	// Update
-	Update(ctx context.Context, id uuid.UUID, fields map[string]any) error
+	// Update updates a memory by ID.
+	// If expectedUpdatedAt is non-zero, it acts as an optimistic lock:
+	// the update only succeeds if the current updated_at matches.
+	// Returns ErrOptimisticLock if the lock check fails.
+	Update(ctx context.Context, id uuid.UUID, fields map[string]any, expectedUpdatedAt ...time.Time) error
 
 	// Delete (soft delete)
 	Delete(ctx context.Context, id uuid.UUID) error

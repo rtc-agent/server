@@ -25,6 +25,14 @@ import (
 
 // rpcHandlerInstance is the global RPC handler instance, set by RegisterRPCHandler.
 // Access is protected by sync.RWMutex.
+//
+// NOTE: This is an intentional architectural decision to break the circular
+// dependency between svc and rpchandler packages. The svc package needs to
+// call RPC handlers from Centrifuge callbacks, but rpchandler imports svc
+// for ServiceContext. Using a global with an interface (RPCHandler) allows
+// us to avoid this circular import while maintaining type safety.
+// An alternative would be to pass the handler through ServiceContext, but
+// that would require Wire configuration changes and add complexity.
 var (
 	rpcHandlerMu       sync.RWMutex
 	rpcHandlerInstance RPCHandler
@@ -414,12 +422,19 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 			// Only forward APIError (sanitized, safe errors); other errors
 			// return a generic message to prevent leaking internal details
 			// (database statements, connection info) to the client.
-			if apiErr, ok := extractAPIError(err); ok {
+			if errCode, errMessage, ok := extractAPIError(err); ok {
 				span.RecordError(err)
 				metrics.recordRPC(e.Method, "error", rpcDuration)
+				// Format error message as JSON to match HTTP error format:
+				// {"error": "code", "error_description": "message"}
+				// This ensures consistent error structure across WebSocket and HTTP.
+				errJSON, _ := json.Marshal(map[string]string{
+					"error":             errCode,
+					"error_description": errMessage,
+				})
 				cb(centrifuge.RPCReply{}, &centrifuge.Error{
 					Code:    500,
-					Message: apiErr,
+					Message: string(errJSON),
 				})
 			} else {
 				logger.Error(ctx, "RPC handler returned non-API error",
@@ -442,17 +457,22 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 // extractAPIError attempts to extract a safe, client-visible error message
 // from an error. It checks whether the error implements a struct with
 // Code/Message fields.
-func extractAPIError(err error) (string, bool) {
+//
+// Returns (code, message, true) for APIError-compatible errors.
+// Returns ("", "", false) for non-API errors.
+func extractAPIError(err error) (code, message string, ok bool) {
 	// rpchandler.APIError has Code and Message fields.
 	// Use structural typing to avoid directly importing the rpchandler package.
 	type safeError interface {
 		Error() string
 		SafeMessage() string
+		ErrorCode() string
+		ErrorMessage() string
 	}
 	if se, ok := err.(safeError); ok {
-		return se.SafeMessage(), true
+		return se.ErrorCode(), se.ErrorMessage(), true
 	}
-	return "", false
+	return "", "", false
 }
 
 // RegisterRPCHandler registers the RPC handler.

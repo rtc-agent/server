@@ -101,7 +101,7 @@ func (q *Queue) RequeueGhostWorksBatch(ctx context.Context, sessionIDs []string)
 	}
 
 	// Execute pipeline
-	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
 		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("rtcqueue: batch requeue ghost works: %w", err)
 	}

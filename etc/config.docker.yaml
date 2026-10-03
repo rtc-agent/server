@@ -123,7 +123,6 @@ web_fetch:
   max_concurrency: 20
   max_domain_concurrency: 5
   cache_ttl: 30m
-  cache_max_size: 1000
   max_url_length: 2000
   max_content_size: 10485760  # 10MB
   fetch_timeout: 60s
@@ -131,29 +130,22 @@ web_fetch:
 
   # LLM 提取配置
   llm_extract_threshold: 50000
-  llm_cache_ttl: 1h
   max_llm_per_session: 50
   llm_max_tokens: 4096
 
   # 速率限制
   rate_limit:
-    global_rate: 100
+    global_rps: 100
     global_burst: 200
-    domain_rate: 10
+    domain_rps: 10
     domain_burst: 20
 
   # Robots.txt 合规
   respect_robots_txt: true
   robots_cache_ttl: 24h
 
-  # 熔断器配置
-  circuit_breaker:
-    enabled: true
-    failure_threshold: 50
-    open_timeout: 30s
-    half_open_max_requests: 3
-    window_size: 20
-    window_duration: 1m
+  # 熔断器配置（注意：熔断器配置在 pkg/webfetch 内部实现，此处仅为参考）
+  # 实际熔断器配置请参考 pkg/webfetch/fetcher.go 中的默认值
 
   # 代理池配置
   proxies:
@@ -172,9 +164,6 @@ web_fetch:
     - "docs.python.org"
     - "pkg.go.dev"
   blocked_domains: []
-  allowed_schemes:
-    - "https"
-    - "http"
 
   # Redis 配置（用于缓存和速率限制）
   # 如果不配置，将使用全局 redis 配置

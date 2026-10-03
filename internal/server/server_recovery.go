@@ -25,36 +25,55 @@ import (
 //     lookup failures. This matches the runtime scanner's recovery approach.
 //   - Performs ghost-work cleanup and session-lock release (runtime scanner does not).
 func (s *Server) recoverStaleTurns(ctx context.Context) {
-	staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurns(ctx, staleTurnStatuses)
-	if err != nil {
-		logger.Error(ctx, "[Server] recoverStaleTurns: find stale turns", zap.Error(err))
-		return
-	}
+	// Process stale turns in batches to avoid loading too many into memory at once.
+	// After a prolonged outage, there could be thousands of stale turns.
+	const recoveryBatchSize = 500
+	var totalRecovered int
 
-	if len(staleTurns) == 0 {
-		return
-	}
-
-	logger.Info(ctx, "[Server] recoverStaleTurns: found stale turns",
-		zap.Int("count", len(staleTurns)))
-
-	// sessionStatusCache avoids repeated DB queries for sessions with multiple
-	// stale turns. Key: sessionID string, Value: session status string.
-	sessionStatusCache := make(map[string]string)
-	sessionIDs := make(map[string]bool)
-
-	for _, turn := range staleTurns {
-		sessionID := turn.SessionID.String()
-
-		if s.handleClosedSessionTurn(ctx, turn, sessionID, sessionStatusCache) {
-			continue
+	for {
+		staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurnsWithLimit(ctx, staleTurnStatuses, recoveryBatchSize)
+		if err != nil {
+			logger.Error(ctx, "[Server] recoverStaleTurns: find stale turns", zap.Error(err))
+			return
 		}
 
-		sessionIDs[sessionID] = true
-		s.markAndPublishStaleTurn(ctx, turn, sessionID)
+		if len(staleTurns) == 0 {
+			break
+		}
+
+		logger.Info(ctx, "[Server] recoverStaleTurns: processing batch",
+			zap.Int("batch_size", len(staleTurns)),
+			zap.Int("total_so_far", totalRecovered))
+
+		// sessionStatusCache avoids repeated DB queries for sessions with multiple
+		// stale turns. Key: sessionID string, Value: session status string.
+		sessionStatusCache := make(map[string]string)
+		sessionIDs := make(map[string]bool)
+
+		for _, turn := range staleTurns {
+			sessionID := turn.SessionID.String()
+
+			if s.handleClosedSessionTurn(ctx, turn, sessionID, sessionStatusCache) {
+				continue
+			}
+
+			sessionIDs[sessionID] = true
+			s.markAndPublishStaleTurn(ctx, turn, sessionID)
+		}
+
+		s.cleanupGhostWorksAndLocks(ctx, sessionIDs)
+		totalRecovered += len(staleTurns)
+
+		// If we got fewer than batchSize, we've processed all stale turns.
+		if len(staleTurns) < recoveryBatchSize {
+			break
+		}
 	}
 
-	s.cleanupGhostWorksAndLocks(ctx, sessionIDs)
+	if totalRecovered > 0 {
+		logger.Info(ctx, "[Server] recoverStaleTurns: completed",
+			zap.Int("total_recovered", totalRecovered))
+	}
 }
 
 // handleClosedSessionTurn checks if the session for a stale turn is closed.

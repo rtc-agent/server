@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -372,10 +373,13 @@ func (t *updateMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	}
 	span.SetAttributes(attribute.Int("memory.field_count", len(fields)))
 
-	if err := t.helpers.deps.MemoryRepo.Update(ctx, memoryID, fields); err != nil {
+	if err := t.helpers.deps.MemoryRepo.Update(ctx, memoryID, fields, existing.UpdatedAt); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "update_failed")
-		errMsg := fmt.Sprintf("Error: update memory: %v", err)
+		errMsg := "Error: update memory: " + err.Error()
+		if errors.Is(err, memory.ErrOptimisticLock) {
+			errMsg = "Error: memory was modified by another process, please retry"
+		}
 		t.persistError(ctx, argumentsInJSON, errMsg)
 		return errMsg, nil
 	}

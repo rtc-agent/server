@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -195,14 +196,28 @@ func (r *memoryRepo) Search(ctx context.Context, scope memory.ScopeType, scopeID
 
 // ─── Update ───
 
-func (r *memoryRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]any) error {
-	result := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&memory.Memory{}).Where("id = ?", id).Updates(fields)
+func (r *memoryRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]any, expectedUpdatedAt ...time.Time) error {
+	query := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&memory.Memory{}).Where("id = ?", id)
+
+	// Apply optimistic lock if expectedUpdatedAt is provided.
+	if len(expectedUpdatedAt) > 0 && !expectedUpdatedAt[0].IsZero() {
+		query = query.Where("updated_at = ?", expectedUpdatedAt[0])
+	}
+
+	result := query.Updates(fields)
 	if result.Error != nil {
 		return fmt.Errorf("update memory %s: %w", id, result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return memory.ErrNotFound
+		// Check if the record exists to distinguish between "not found" and "lock conflict".
+		var existing memory.Memory
+		err := DBFromContext(ctx, r.db).WithContext(ctx).First(&existing, "id = ?", id).Error
+		if err != nil {
+			return memory.ErrNotFound
+		}
+		// Record exists but was not updated — optimistic lock conflict.
+		return memory.ErrOptimisticLock
 	}
 	return nil
 }

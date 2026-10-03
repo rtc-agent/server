@@ -133,6 +133,18 @@ func (e *APIError) SafeMessage() string {
 	return e.Error()
 }
 
+// ErrorCode returns the machine-readable error code.
+// Used by the svc layer for structured error responses.
+func (e *APIError) ErrorCode() string {
+	return e.Code
+}
+
+// ErrorMessage returns the human-readable error message.
+// Used by the svc layer for structured error responses.
+func (e *APIError) ErrorMessage() string {
+	return e.Message
+}
+
 // ========== HandleRPC ==========
 
 // HandleRPC is the RPC routing dispatch entry point.

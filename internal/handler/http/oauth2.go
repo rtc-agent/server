@@ -19,6 +19,7 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/infra/httputil"
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/repo"
@@ -53,6 +54,7 @@ type OAuth2Handler struct {
 	stateStore     StateStore
 	providerClient ProviderClient
 	authConfig     config.AuthConfig
+	ipRateLimiter  *middleware.IPRateLimiter // Optional: for protecting public endpoints
 }
 
 // NewOAuth2Handler creates a new OAuth2 endpoint handler.
@@ -66,11 +68,30 @@ func NewOAuth2Handler(svcCtx *svc.ServiceContext, signer TokenSigner, stateStore
 	}
 }
 
+// SetIPRateLimiter sets the IP rate limiter for protecting public endpoints.
+func (h *OAuth2Handler) SetIPRateLimiter(limiter *middleware.IPRateLimiter) {
+	h.ipRateLimiter = limiter
+}
+
 // RegisterRoutes registers OAuth2 routes to the HTTP ServeMux.
+// Public endpoints (/oauth2/token, /oauth2/refresh, /oauth2/authorize) are
+// protected by IP rate limiting if configured.
 func (h *OAuth2Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /oauth2/authorize", h.handleAuthorize)
-	mux.HandleFunc("POST /oauth2/token", h.handleToken)
-	mux.HandleFunc("POST /oauth2/refresh", h.handleRefresh)
+	// Public endpoints - apply IP rate limiting if configured
+	authorizeHandler := http.HandlerFunc(h.handleAuthorize)
+	tokenHandler := http.HandlerFunc(h.handleToken)
+	refreshHandler := http.HandlerFunc(h.handleRefresh)
+
+	if h.ipRateLimiter != nil {
+		authorizeHandler = h.ipRateLimiter.WrapHandlerFunc(authorizeHandler)
+		tokenHandler = h.ipRateLimiter.WrapHandlerFunc(tokenHandler)
+		refreshHandler = h.ipRateLimiter.WrapHandlerFunc(refreshHandler)
+	}
+
+	mux.Handle("GET /oauth2/authorize", authorizeHandler)
+	mux.Handle("POST /oauth2/token", tokenHandler)
+	mux.Handle("POST /oauth2/refresh", refreshHandler)
+	// /oauth2/providers is a read-only endpoint, no rate limiting needed
 	mux.HandleFunc("GET /oauth2/providers", h.handleProviders)
 }
 
@@ -135,9 +156,21 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Store in StateStore (key=state, value=provider, TTL=10min).
+	// Store in StateStore (key=state, value=JSON{provider, redirect_uri}, TTL=10min).
+	// The redirect_uri is bound to the state to prevent redirect_uri substitution attacks
+	// per RFC 6749 Section 10.6.
 	ctx := r.Context()
-	if err := h.stateStore.Set(ctx, state, provider, h.authConfig.OAuth2StateTTL); err != nil {
+	stateData := map[string]string{
+		"provider":     provider,
+		"redirect_uri": redirectURI,
+	}
+	stateJSON, err := json.Marshal(stateData)
+	if err != nil {
+		logger.Error(ctx, "failed to marshal state data", zap.Error(err))
+		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to store state")
+		return
+	}
+	if err := h.stateStore.Set(ctx, state, string(stateJSON), h.authConfig.OAuth2StateTTL); err != nil {
 		logger.Error(ctx, "failed to store state", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to store state")
 		return
@@ -170,10 +203,26 @@ func (h *OAuth2Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Request, req *protocol.OAuth2TokenExchangeRequest) {
 	ctx := r.Context()
 
-	// 1. Validate state from StateStore (retrieve associated provider), then delete.
-	provider, err := h.stateStore.GetDel(ctx, req.State)
+	// 1. Validate state from StateStore (retrieve associated provider and redirect_uri), then delete.
+	stateValue, err := h.stateStore.GetDel(ctx, req.State)
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "state is invalid or expired")
+		return
+	}
+
+	// Parse state data (JSON format with provider and redirect_uri).
+	var stateData map[string]string
+	if err := json.Unmarshal([]byte(stateValue), &stateData); err != nil {
+		// Backward compatibility: if not JSON, treat as plain provider string.
+		stateData = map[string]string{"provider": stateValue}
+	}
+	provider := stateData["provider"]
+	storedRedirectURI := stateData["redirect_uri"]
+
+	// Validate redirect_uri matches the one from authorization request (RFC 6749 Section 10.6).
+	// This prevents authorization code injection attacks.
+	if storedRedirectURI != "" && req.RedirectUri != storedRedirectURI {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri does not match authorization request")
 		return
 	}
 
@@ -213,6 +262,8 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 }
 
 // handleRefresh handles POST /oauth2/refresh.
+// Implements refresh token rotation: the old refresh token is revoked and a new
+// token pair is issued. This limits the damage of a leaked refresh token.
 func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	req, err := parseRefreshRequest(w, r)
 	if err != nil {
@@ -242,6 +293,9 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Check not expired and not revoked.
 	if rt.Revoked {
+		// Potential token reuse detection: if a revoked token is used, it may indicate
+		// that the token was stolen. In a production system, you might want to revoke
+		// all tokens for this user/device here.
 		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has been revoked")
 		return
 	}
@@ -250,18 +304,28 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Issue new access_token.
-	accessToken, expiresAt, err := h.signer.SignAccessToken(rt.UserID, rt.DeviceID)
+	// 3. Revoke the old refresh token (token rotation).
+	if err := h.svcCtx.RefreshTokenRepo.Revoke(ctx, rt.ID); err != nil {
+		logger.Error(ctx, "failed to revoke old refresh_token", zap.Error(err))
+		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to rotate token")
+		return
+	}
+
+	// 4. Issue new token pair (access_token + new refresh_token).
+	resp, err := h.issueTokenPair(ctx, rt.UserID, rt.DeviceID)
 	if err != nil {
-		logger.Error(ctx, "failed to sign access_token", zap.Error(err))
+		logger.Error(ctx, "failed to issue new token pair", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to issue token")
 		return
 	}
 
-	logger.Info(ctx, "refresh_token refresh succeeded", zap.String("user_id", rt.UserID.String()))
-	httputil.WriteJSON(w, http.StatusOK, protocol.OAuth2TokenRefreshResponse{
-		AccessToken: accessToken,
-		ExpiresIn:   int64(time.Until(expiresAt).Seconds()),
+	logger.Info(ctx, "refresh_token rotation succeeded", zap.String("user_id", rt.UserID.String()))
+	// Return the new token pair. The response includes both access_token and refresh_token.
+	httputil.WriteJSON(w, http.StatusOK, protocol.OAuth2TokenExchangeResponse{
+		AccessToken:  resp.AccessToken,
+		RefreshToken: resp.RefreshToken,
+		ExpiresIn:    resp.ExpiresIn,
+		UserId:       resp.UserId,
 	})
 }
 

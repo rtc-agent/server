@@ -102,10 +102,10 @@ func (h *OSS3Handler) handleCopyObject(
 	// If false at function exit, the defer releases the pending reservation.
 	// If true, quota is either committed or will be reconciled later.
 	uploadSucceeded := false
-	// Bug #15 fix: Use Background context to avoid cancellation issues.
+	// Bug #15 fix: Use WithoutCancel to preserve tracing context while avoiding cancellation.
 	defer func() {
 		if !uploadSucceeded && quotaRequestID != "" {
-			h.oss3UC.ReleaseQuota(context.Background(), userID, quotaRequestID)
+			h.oss3UC.ReleaseQuota(context.WithoutCancel(r.Context()), userID, quotaRequestID)
 		}
 	}()
 
