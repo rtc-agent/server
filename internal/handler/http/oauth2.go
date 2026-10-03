@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/infra/config"
@@ -22,8 +21,7 @@ import (
 	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
-	"github.com/rtc-agent/server/internal/svc"
-	"github.com/rtc-agent/server/internal/usecase/primitives"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 )
@@ -42,14 +40,14 @@ type StateStore interface {
 
 // ProviderClient is the OAuth2 provider client interface.
 type ProviderClient interface {
-	GetAuthorizationURL(provider string, state string, redirectURI string) (string, error)
-	ExchangeCode(ctx context.Context, provider string, code string, redirectURI string) (*oauth.ProviderUserInfo, error)
+	GetAuthorizationURL(provider string, state string, redirectURI string, codeChallenge string, codeChallengeMethod string) (string, error)
+	ExchangeCode(ctx context.Context, provider string, code string, redirectURI string, codeVerifier string) (*oauth.ProviderUserInfo, error)
 	GetProviders() []string
 }
 
 // OAuth2Handler handles OAuth2 endpoints.
 type OAuth2Handler struct {
-	svcCtx         *svc.ServiceContext
+	authUsecase    *usecase.AuthUsecase
 	signer         TokenSigner
 	stateStore     StateStore
 	providerClient ProviderClient
@@ -58,9 +56,9 @@ type OAuth2Handler struct {
 }
 
 // NewOAuth2Handler creates a new OAuth2 endpoint handler.
-func NewOAuth2Handler(svcCtx *svc.ServiceContext, signer TokenSigner, stateStore StateStore, providerClient ProviderClient, authCfg config.AuthConfig) *OAuth2Handler {
+func NewOAuth2Handler(authUsecase *usecase.AuthUsecase, signer TokenSigner, stateStore StateStore, providerClient ProviderClient, authCfg config.AuthConfig) *OAuth2Handler {
 	return &OAuth2Handler{
-		svcCtx:         svcCtx,
+		authUsecase:    authUsecase,
 		signer:         signer,
 		stateStore:     stateStore,
 		providerClient: providerClient,
@@ -128,6 +126,13 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	}
 	redirectURI := r.URL.Query().Get("redirect_uri")
 
+	// PKCE parameters (RFC 7636)
+	codeChallenge := r.URL.Query().Get("code_challenge")
+	codeChallengeMethod := r.URL.Query().Get("code_challenge_method")
+	if codeChallengeMethod == "" {
+		codeChallengeMethod = "S256" // Default to S256
+	}
+
 	// Validate redirect_uri to prevent Open Redirect attacks
 	if redirectURI != "" {
 		parsed, err := url.Parse(redirectURI)
@@ -150,19 +155,21 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Build provider authorization URL (also validates provider existence).
-	redirectURL, err := h.providerClient.GetAuthorizationURL(provider, state, redirectURI)
+	redirectURL, err := h.providerClient.GetAuthorizationURL(provider, state, redirectURI, codeChallenge, codeChallengeMethod)
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("unsupported provider: %s", provider))
 		return
 	}
 
-	// Store in StateStore (key=state, value=JSON{provider, redirect_uri}, TTL=10min).
+	// Store in StateStore (key=state, value=JSON{provider, redirect_uri, code_challenge}, TTL=10min).
 	// The redirect_uri is bound to the state to prevent redirect_uri substitution attacks
-	// per RFC 6749 Section 10.6.
+	// per RFC 6749 Section 10.6. The code_challenge is bound for PKCE validation per RFC 7636.
 	ctx := r.Context()
 	stateData := map[string]string{
-		"provider":     provider,
-		"redirect_uri": redirectURI,
+		"provider":              provider,
+		"redirect_uri":          redirectURI,
+		"code_challenge":        codeChallenge,
+		"code_challenge_method": codeChallengeMethod,
 	}
 	stateJSON, err := json.Marshal(stateData)
 	if err != nil {
@@ -210,7 +217,7 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 		return
 	}
 
-	// Parse state data (JSON format with provider and redirect_uri).
+	// Parse state data (JSON format with provider, redirect_uri, and PKCE challenge).
 	var stateData map[string]string
 	if err := json.Unmarshal([]byte(stateValue), &stateData); err != nil {
 		// Backward compatibility: if not JSON, treat as plain provider string.
@@ -218,6 +225,11 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 	}
 	provider := stateData["provider"]
 	storedRedirectURI := stateData["redirect_uri"]
+	storedCodeChallenge := stateData["code_challenge"]
+	storedCodeChallengeMethod := stateData["code_challenge_method"]
+	if storedCodeChallengeMethod == "" {
+		storedCodeChallengeMethod = "S256"
+	}
 
 	// Validate redirect_uri matches the one from authorization request (RFC 6749 Section 10.6).
 	// This prevents authorization code injection attacks.
@@ -226,39 +238,65 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 		return
 	}
 
+	// Validate PKCE code_verifier if code_challenge was provided during authorization (RFC 7636).
+	if storedCodeChallenge != "" {
+		if req.CodeVerifier == nil || *req.CodeVerifier == "" {
+			httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "code_verifier is required")
+			return
+		}
+		if !verifyCodeChallenge(storedCodeChallenge, storedCodeChallengeMethod, *req.CodeVerifier) {
+			httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "code_verifier does not match code_challenge")
+			return
+		}
+	}
+
 	// 2. Exchange authorization code for user info.
-	userInfo, err := h.providerClient.ExchangeCode(ctx, provider, req.Code, req.RedirectUri)
+	codeVerifier := ""
+	if req.CodeVerifier != nil {
+		codeVerifier = *req.CodeVerifier
+	}
+	userInfo, err := h.providerClient.ExchangeCode(ctx, provider, req.Code, req.RedirectUri, codeVerifier)
 	if err != nil {
 		logger.Error(ctx, "ExchangeCode failed", zap.String("provider", provider), zap.Error(err))
 		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "authorization code exchange failed")
 		return
 	}
 
-	// 3. Find or create OAuth2User.
-	user, err := h.findOrCreateUser(ctx, provider, userInfo)
+	// 3. Find or create OAuth2User via Usecase.
+	userResult, err := h.authUsecase.FindOrCreateUser(ctx, provider, userInfo)
 	if err != nil {
 		logger.Error(ctx, "failed to find or create user", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "authentication failed")
 		return
 	}
 
-	// 4. Find or update Device.
+	// 4. Find or update Device via Usecase.
 	if req.DeviceId != "" {
-		if err := h.upsertDevice(ctx, user.ID, req); err != nil {
+		if err := h.authUsecase.UpsertDevice(ctx, &usecase.UpsertDeviceInput{
+			UserID:    userResult.UserID,
+			DeviceID:  req.DeviceId,
+			Name:      model.DerefStr(req.DeviceName),
+			UserAgent: model.DerefStr(req.UserAgent),
+		}); err != nil {
 			logger.Warn(ctx, "failed to update device info", zap.Error(err))
 		}
 	}
 
-	// 5. Issue token pair.
-	resp, err := h.issueTokenPair(ctx, user.ID, req.DeviceId)
+	// 5. Issue token pair via Usecase.
+	resp, err := h.authUsecase.IssueTokenPair(ctx, userResult.UserID, req.DeviceId)
 	if err != nil {
 		logger.Error(ctx, "failed to issue token", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to issue token")
 		return
 	}
 
-	logger.Info(ctx, "authorization_code authentication succeeded", zap.String("provider", provider), zap.String("user_id", user.ID.String()))
-	httputil.WriteJSON(w, http.StatusOK, *resp)
+	logger.Info(ctx, "authorization_code authentication succeeded", zap.String("provider", provider), zap.String("user_id", userResult.UserID.String()))
+	httputil.WriteJSON(w, http.StatusOK, protocol.OAuth2TokenExchangeResponse{
+		AccessToken:  resp.AccessToken,
+		RefreshToken: resp.RefreshToken,
+		ExpiresIn:    resp.ExpiresIn,
+		UserId:       resp.UserID.String(),
+	})
 }
 
 // handleRefresh handles POST /oauth2/refresh.
@@ -278,54 +316,38 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// 1. Look up by hashed token.
-	rtHash := hashRefreshToken(req.RefreshToken)
-	rt, err := h.svcCtx.RefreshTokenRepo.FindByHash(ctx, rtHash)
+	// 1. Validate refresh token (lookup + check + revoke) via Usecase.
+	rtInfo, err := h.authUsecase.ValidateRefreshToken(ctx, req.RefreshToken)
 	if err != nil {
-		if primitives.IsNotFound(err) {
+		switch err {
+		case usecase.ErrInvalidRefreshToken:
 			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token is invalid")
-		} else {
-			logger.Error(ctx, "failed to find refresh_token", zap.Error(err))
+		case usecase.ErrRefreshTokenRevoked:
+			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has been revoked")
+		case usecase.ErrRefreshTokenExpired:
+			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has expired")
+		default:
+			logger.Error(ctx, "failed to validate refresh_token", zap.Error(err))
 			httputil.WriteError(w, http.StatusInternalServerError, "server_error", "internal error")
 		}
 		return
 	}
 
-	// 2. Check not expired and not revoked.
-	if rt.Revoked {
-		// Potential token reuse detection: if a revoked token is used, it may indicate
-		// that the token was stolen. In a production system, you might want to revoke
-		// all tokens for this user/device here.
-		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has been revoked")
-		return
-	}
-	if time.Now().After(rt.ExpiresAt) {
-		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has expired")
-		return
-	}
-
-	// 3. Revoke the old refresh token (token rotation).
-	if err := h.svcCtx.RefreshTokenRepo.Revoke(ctx, rt.ID); err != nil {
-		logger.Error(ctx, "failed to revoke old refresh_token", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to rotate token")
-		return
-	}
-
-	// 4. Issue new token pair (access_token + new refresh_token).
-	resp, err := h.issueTokenPair(ctx, rt.UserID, rt.DeviceID)
+	// 2. Issue new token pair (access_token + new refresh_token).
+	resp, err := h.authUsecase.IssueTokenPair(ctx, rtInfo.UserID, rtInfo.DeviceID)
 	if err != nil {
 		logger.Error(ctx, "failed to issue new token pair", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to issue token")
 		return
 	}
 
-	logger.Info(ctx, "refresh_token rotation succeeded", zap.String("user_id", rt.UserID.String()))
+	logger.Info(ctx, "refresh_token rotation succeeded", zap.String("user_id", rtInfo.UserID.String()))
 	// Return the new token pair. The response includes both access_token and refresh_token.
 	httputil.WriteJSON(w, http.StatusOK, protocol.OAuth2TokenExchangeResponse{
 		AccessToken:  resp.AccessToken,
 		RefreshToken: resp.RefreshToken,
 		ExpiresIn:    resp.ExpiresIn,
-		UserId:       resp.UserId,
+		UserId:       resp.UserID.String(),
 	})
 }
 
@@ -375,101 +397,6 @@ func parseRefreshRequest(w http.ResponseWriter, r *http.Request) (*protocol.OAut
 	return &req, nil
 }
 
-// findOrCreateUser finds or creates an OAuth2 user using a "lookup + unique
-// constraint fallback" pattern.
-//
-// Concurrency safe: when two requests with the same provider+sub arrive
-// simultaneously, one Create succeeds and the other triggers a unique
-// constraint violation (23505), falling back to re-lookup.
-func (h *OAuth2Handler) findOrCreateUser(ctx context.Context, provider string, userInfo *oauth.ProviderUserInfo) (*model.OAuth2User, error) {
-	user, err := h.svcCtx.OAuth2UserRepo.FindByProvider(ctx, provider, userInfo.ProviderUserID)
-	if err != nil {
-		if !primitives.IsNotFound(err) {
-			return nil, fmt.Errorf("find user by provider: %w", err)
-		}
-		// Record does not exist, create it.
-		user = &model.OAuth2User{
-			Provider:  provider,
-			Sub:       userInfo.ProviderUserID,
-			Name:      userInfo.Username,
-			Email:     userInfo.Email,
-			AvatarURL: userInfo.AvatarURL,
-		}
-		if err := h.svcCtx.OAuth2UserRepo.Create(ctx, user); err != nil {
-			// Unique constraint violation → concurrent creation → re-lookup.
-			if isDuplicateKeyError(err) {
-				logger.Info(ctx, "findOrCreateUser: concurrent create detected, re-fetching",
-					zap.String("provider", provider))
-				return h.svcCtx.OAuth2UserRepo.FindByProvider(ctx, provider, userInfo.ProviderUserID)
-			}
-			return nil, fmt.Errorf("create user: %w", err)
-		}
-		return user, nil
-	}
-	// Already exists, update user info.
-	user.Name = userInfo.Username
-	user.Email = userInfo.Email
-	user.AvatarURL = userInfo.AvatarURL
-	if err := h.svcCtx.OAuth2UserRepo.Update(ctx, user); err != nil {
-		logger.Warn(ctx, "failed to update user info", zap.Error(err))
-	}
-	return user, nil
-}
-
-// isDuplicateKeyError checks whether the error is a PostgreSQL unique
-// constraint violation (code 23505).
-func isDuplicateKeyError(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23505"
-	}
-	return false
-}
-
-// upsertDevice finds or updates device information.
-func (h *OAuth2Handler) upsertDevice(ctx context.Context, userID uuid.UUID, req *protocol.OAuth2TokenExchangeRequest) error {
-	device := &model.Device{
-		UserID:       userID,
-		DeviceID:     req.DeviceId,
-		Name:         model.DerefStr(req.DeviceName),
-		UserAgent:    model.DerefStr(req.UserAgent),
-		LastActiveAt: time.Now(),
-	}
-	return h.svcCtx.DeviceRepo.Upsert(ctx, device)
-}
-
-// issueTokenPair issues an access_token + refresh_token pair.
-func (h *OAuth2Handler) issueTokenPair(ctx context.Context, userID uuid.UUID, deviceID string) (*protocol.OAuth2TokenExchangeResponse, error) {
-	accessToken, expiresAt, err := h.signer.SignAccessToken(userID, deviceID)
-	if err != nil {
-		return nil, fmt.Errorf("sign access token: %w", err)
-	}
-
-	rtPlain, err := generateRefreshToken()
-	if err != nil {
-		return nil, fmt.Errorf("generate refresh token: %w", err)
-	}
-	rtHash := hashRefreshToken(rtPlain)
-
-	rt := &model.RefreshToken{
-		TokenHash: rtHash,
-		UserID:    userID,
-		DeviceID:  deviceID,
-		ExpiresAt: expiresAt.Add(h.authConfig.RefreshTokenTTL),
-		Revoked:   false,
-	}
-	if err := h.svcCtx.RefreshTokenRepo.Create(ctx, rt); err != nil {
-		return nil, fmt.Errorf("store refresh token: %w", err)
-	}
-
-	return &protocol.OAuth2TokenExchangeResponse{
-		AccessToken:  accessToken,
-		RefreshToken: rtPlain,
-		ExpiresIn:    int64(h.signer.AccessTTL().Seconds()),
-		UserId:       userID.String(),
-	}, nil
-}
-
 // generateState generates a random state string.
 func generateState() (string, error) {
 	b := make([]byte, 16)
@@ -479,17 +406,18 @@ func generateState() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// generateRefreshToken generates an opaque refresh_token.
-func generateRefreshToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+// verifyCodeChallenge validates a PKCE code_verifier against a stored code_challenge.
+// Supports S256 (SHA-256 + base64url) and plain methods per RFC 7636.
+func verifyCodeChallenge(codeChallenge, codeChallengeMethod, codeVerifier string) bool {
+	switch codeChallengeMethod {
+	case "S256":
+		// SHA-256 hash the verifier, then base64url encode (no padding)
+		h := sha256.Sum256([]byte(codeVerifier))
+		computed := base64.RawURLEncoding.EncodeToString(h[:])
+		return computed == codeChallenge
+	case "plain":
+		return codeVerifier == codeChallenge
+	default:
+		return false
 	}
-	return "rt_" + hex.EncodeToString(b), nil
-}
-
-// hashRefreshToken computes the SHA-256 hash of a refresh_token.
-func hashRefreshToken(token string) string {
-	h := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(h[:])
 }

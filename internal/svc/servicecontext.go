@@ -73,9 +73,16 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		logger.Fatal(context.Background(), "init JWT signer", zap.Error(err))
 	}
 
+	// Set default ClientQueueMaxSize to 50MB if not configured
+	clientQueueMaxSize := cfg.Server.ClientQueueMaxSize
+	if clientQueueMaxSize == 0 {
+		clientQueueMaxSize = 50 * 1024 * 1024 // 50MB
+	}
+
 	node, err := centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelInfo,
-		LogHandler: createCentrifugeLogHandler(),
+		LogLevel:           centrifuge.LogLevelInfo,
+		LogHandler:         createCentrifugeLogHandler(),
+		ClientQueueMaxSize: clientQueueMaxSize,
 	})
 	if err != nil {
 		logger.Fatal(context.Background(), "create centrifuge node", zap.Error(err))
