@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -40,7 +41,10 @@ func init() {
 	for _, cidr := range cidrs {
 		_, network, err := net.ParseCIDR(cidr)
 		if err != nil {
-			panic(fmt.Sprintf("invalid CIDR in privateIPNetworks: %q: %v", cidr, err))
+			// CIDRs are hardcoded; parse failure indicates a programming error.
+			// Log and skip rather than panic to allow the application to start.
+			log.Printf("[webfetch] WARNING: invalid CIDR %q skipped: %v", cidr, err)
+			continue
 		}
 		privateIPNetworks = append(privateIPNetworks, network)
 	}

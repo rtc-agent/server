@@ -86,7 +86,7 @@ func (s *Server) handleClosedSessionTurn(ctx context.Context, turn *model.Turn, 
 		return false
 	}
 
-	logger.Info(ctx, "[Server] recoverStaleTurns: skip closed session",
+	logger.Debug(ctx, "[Server] recoverStaleTurns: skip closed session",
 		zap.String("turn_id", turn.ID.String()),
 		zap.String("session_id", sessionID))
 
@@ -118,7 +118,7 @@ func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, 
 	// If the turn is already interrupted, it's waiting for external input.
 	// Do NOT publish a submit — the application will resume it explicitly.
 	if turn.Status == string(model.TurnStatusInterrupted) {
-		logger.Info(ctx, "[Server] recoverStaleTurns: skip already-interrupted turn",
+		logger.Debug(ctx, "[Server] recoverStaleTurns: skip already-interrupted turn",
 			zap.String("turn_id", turn.ID.String()),
 			zap.String("session_id", sessionID))
 		return
@@ -143,14 +143,21 @@ func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, 
 
 	// Use submit payload (not resume) — see function docstring for rationale.
 	// Priority matches ResumeWorkPriority (same as runtime scanner's submit recovery).
-	payload := string(turnagent.MarshalSubmitPayload(sessionID, userID, 0))
+	payloadData, err := turnagent.MarshalSubmitPayload(sessionID, userID, 0)
+	if err != nil {
+		logger.Error(ctx, "[Server] recoverStaleTurns: marshal submit payload",
+			zap.String("turn_id", turn.ID.String()),
+			zap.Error(err))
+		return
+	}
+	payload := string(payloadData)
 	if _, err := s.queue.Publish(ctx, sessionID, payload, rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[Server] recoverStaleTurns: publish submit",
 			zap.String("turn_id", turn.ID.String()),
 			zap.String("user_id", userID),
 			zap.Error(err))
 	} else {
-		logger.Info(ctx, "[Server] recoverStaleTurns: published submit",
+		logger.Debug(ctx, "[Server] recoverStaleTurns: published submit",
 			zap.String("turn_id", turn.ID.String()),
 			zap.String("session_id", sessionID),
 			zap.String("user_id", userID))
@@ -173,9 +180,11 @@ func (s *Server) cleanupGhostWorksAndLocks(ctx context.Context, sessionIDs map[s
 	if err != nil {
 		logger.Warn(ctx, "[Server] recoverStaleTurns: batch requeue ghost works",
 			zap.Error(err))
-	} else {
+	} else if len(requeued) > 0 {
+		logger.Info(ctx, "[Server] recoverStaleTurns: requeued ghost works",
+			zap.Int("count", len(requeued)))
 		for sid, workID := range requeued {
-			logger.Info(ctx, "[Server] recoverStaleTurns: requeued ghost work",
+			logger.Debug(ctx, "[Server] recoverStaleTurns: requeued ghost work",
 				zap.String("session_id", sid),
 				zap.String("work_id", workID))
 		}
@@ -189,7 +198,7 @@ func (s *Server) cleanupGhostWorksAndLocks(ctx context.Context, sessionIDs map[s
 		// The runtime scanner (periodicRecoverStaleTurns) performs the same
 		// check via isWorkerAliveForSession.
 		if s.isWorkerAliveForSession(ctx, sessionID) {
-			logger.Info(ctx, "[Server] recoverStaleTurns: skip lock release — worker alive",
+			logger.Debug(ctx, "[Server] recoverStaleTurns: skip lock release — worker alive",
 				zap.String("session_id", sessionID))
 			continue
 		}
@@ -201,7 +210,7 @@ func (s *Server) cleanupGhostWorksAndLocks(ctx context.Context, sessionIDs map[s
 				zap.String("session_id", sessionID),
 				zap.Error(err))
 		} else {
-			logger.Info(ctx, "[Server] recoverStaleTurns: released session lock",
+			logger.Debug(ctx, "[Server] recoverStaleTurns: released session lock",
 				zap.String("session_id", sessionID))
 		}
 	}
@@ -387,7 +396,14 @@ func (s *Server) publishRecoveryWorkItem(ctx context.Context, turn *model.Turn) 
 		userID = session.OwnerRefID
 	}
 
-	payload := string(turnagent.MarshalSubmitPayload(turn.SessionID.String(), userID, 0))
+	payloadData, err := turnagent.MarshalSubmitPayload(turn.SessionID.String(), userID, 0)
+	if err != nil {
+		logger.Error(ctx, "[Server] publishRecoveryWorkItem: marshal submit payload",
+			zap.String("turn_id", turn.ID.String()),
+			zap.Error(err))
+		return err
+	}
+	payload := string(payloadData)
 	if _, err := s.queue.Publish(ctx, turn.SessionID.String(), payload, rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[Server] publishRecoveryWorkItem: publish failed",
 			zap.String("turn_id", turn.ID.String()),

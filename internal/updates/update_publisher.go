@@ -246,7 +246,9 @@ func (u *UpdatePublisher) RunAndPublish(
 	defer func() {
 		if r := recover(); r != nil {
 			_ = tx.Rollback()
-			panic(r)
+			// Log the panic instead of re-panicking; callers can handle the error.
+			logger.Error(ctx, "[UpdatePublisher] RunAndPublish panic recovered",
+				zap.Any("panic", r))
 		}
 	}()
 	txCtx := repo.WithTx(ctx, tx)

@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,8 +12,10 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/oauth"
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // mockOAuth2Cmd is the Mock OAuth2 server command.
@@ -50,6 +51,9 @@ func init() {
 
 // runMockOAuth2 starts the Mock OAuth2 server.
 func runMockOAuth2(configPath string) {
+	// Initialize logger for mock OAuth2 server.
+	logger.Init("info")
+
 	// Load config (independent viper instance).
 	v := viper.New()
 	v.SetConfigFile(configPath)
@@ -58,7 +62,7 @@ func runMockOAuth2(configPath string) {
 	v.SetDefault("client_secret", "test-client-secret")
 
 	if err := v.ReadInConfig(); err != nil {
-		log.Fatalf("failed to read config: %v", err)
+		logger.Fatal(context.Background(), "failed to read config", zap.Error(err))
 	}
 
 	// Create Mock OAuth2 Provider.
@@ -101,12 +105,14 @@ func runMockOAuth2(configPath string) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("Mock OAuth2 Server panic: %v\n%s", r, debug.Stack())
+				logger.Error(context.Background(), "Mock OAuth2 Server panic",
+					zap.Any("panic", r),
+					zap.String("stack", string(debug.Stack())))
 			}
 		}()
-		log.Printf("Mock OAuth2 Server listening on :%s", port)
+		logger.Info(context.Background(), fmt.Sprintf("Mock OAuth2 Server listening on :%s", port))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen failed: %v", err)
+			logger.Fatal(context.Background(), "listen failed", zap.Error(err))
 		}
 	}()
 
@@ -115,15 +121,15 @@ func runMockOAuth2(configPath string) {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Mock OAuth2 Server shutting down...")
+	logger.Info(context.Background(), "Mock OAuth2 Server shutting down...")
 
 	// Graceful shutdown.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("server shutdown failed: %v", err)
+		logger.Error(context.Background(), "server shutdown failed", zap.Error(err))
 		return
 	}
 
-	log.Println("Mock OAuth2 Server exited")
+	logger.Info(context.Background(), "Mock OAuth2 Server exited")
 }

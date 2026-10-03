@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -595,7 +596,11 @@ func toZapFields(kv []any) []zap.Field {
 }
 
 func provideStateStore(redisClient redis.UniversalClient) *oauth.RedisStore {
-	return oauth.NewRedisStore(redisClient)
+	store, err := oauth.NewRedisStore(redisClient)
+	if err != nil {
+		panic(fmt.Sprintf("failed to create redis state store: %v", err))
+	}
+	return store
 }
 
 func provideOAuth2ProviderClient(cfg *config.Config) *oauth.Client {

@@ -138,7 +138,11 @@ func (p *Provider) handleAuthorizeConfirm(w http.ResponseWriter, r *http.Request
 	}
 
 	// Generate authorization code.
-	code := generateCode()
+	code, err := generateCode()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	p.mu.Lock()
 	p.codes[code] = &authCodeData{
@@ -258,14 +262,12 @@ func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret
 }
 
 // generateCode generates a random authorization code.
-func generateCode() string {
+func generateCode() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// rand.Read failure means the system entropy source is exhausted;
-		// secure random numbers cannot be generated.
-		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
+		return "", fmt.Errorf("crypto/rand.Read: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 // isValidRedirectURI validates redirect_uri format to prevent open redirect

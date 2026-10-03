@@ -100,7 +100,10 @@ func TestIsPromptTooLongError(t *testing.T) {
 func TestMarshalSubmitPayload(t *testing.T) {
 	sessionID := "550e8400-e29b-41d4-a716-446655440000"
 	userID := "user-123"
-	data := MarshalSubmitPayload(sessionID, userID, 1)
+	data, err := MarshalSubmitPayload(sessionID, userID, 1)
+	if err != nil {
+		t.Fatalf("MarshalSubmitPayload: %v", err)
+	}
 
 	// Should be valid JSON.
 	var payload WorkPayload
@@ -120,7 +123,10 @@ func TestMarshalSubmitPayload(t *testing.T) {
 }
 
 func TestMarshalSubmitPayload_EmptySessionID(t *testing.T) {
-	data := MarshalSubmitPayload("", "", 0)
+	data, err := MarshalSubmitPayload("", "", 0)
+	if err != nil {
+		t.Fatalf("MarshalSubmitPayload: %v", err)
+	}
 	var payload WorkPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
