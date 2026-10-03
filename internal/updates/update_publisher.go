@@ -343,6 +343,24 @@ func (u *UpdatePublisher) Publish(ctx context.Context, items ...UpdatePublishIte
 	return allUpdates, nil
 }
 
+// save persists updates to the database and allocates offsets.
+//
+// **Design Note on Offset Allocation:**
+// Offsets are allocated from Redis (line 374: BatchIncrOffset) BEFORE the DB
+// transaction commits. If the DB transaction fails and rolls back, the allocated
+// offsets are permanently consumed, creating gaps in the offset sequence.
+//
+// This is an intentional design tradeoff:
+//   - Offsets provide MONOTONIC ORDERING, not gap-free sequence
+//   - Clients use offsets for cursor-based pagination (ORDER BY offset)
+//   - Missing messages are recovered via Centrifuge history on reconnect
+//   - Moving Redis allocation after DB commit would require a second round-trip
+//     and introduce a window where updates exist in DB but have no offset
+//
+// If offset continuity becomes a business requirement in the future, consider:
+//  1. Allocating offsets after DB commit (adds latency, creates recovery window)
+//  2. Using DB auto-increment instead of Redis (loses cross-channel atomicity)
+//  3. Implementing offset "reclaim" for failed transactions (adds complexity)
 func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) ([]*model.UserUpdate, error) {
 	channelItemsMap := make(map[string][]UpdatePublishItem)
 	for _, item := range items {
