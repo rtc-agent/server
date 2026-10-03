@@ -183,7 +183,10 @@ func (t *saveMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 			"resource": fmt.Sprintf("rtc-agent://session/%s", t.session.ID.String()),
 		},
 	}
-	metadataJSON, _ := json.Marshal(metadataMap)
+	metadataJSON, err := json.Marshal(metadataMap)
+	if err != nil {
+		return "", fmt.Errorf("marshal metadata: %w", err)
+	}
 
 	descStr := ""
 	if args.Description != nil {

@@ -2,18 +2,35 @@ package centrifugeplus
 
 import (
 	"fmt"
-
-	"go.uber.org/zap"
 )
 
-// pkgLogger is a dedicated logger instance for this package.
-var pkgLogger = zap.NewNop().Named("centrifuge-plus")
+// LogFunc is the signature for logging functions injected from the application.
+type LogFunc func(msg string, fields ...any)
 
-// SetLogger replaces the package-level logger. Call this after logger.Init
-// to route centrifuge-plus logs through the application's zap logger.
-func SetLogger(l *zap.Logger) {
-	if l != nil {
-		pkgLogger = l.Named("centrifuge-plus")
+// logFuncs holds the injected logging functions.
+// Defaults to no-op; call SetLogFuncs after logger.Init to enable logging.
+var logFuncs = struct {
+	Info  LogFunc
+	Warn  LogFunc
+	Error LogFunc
+}{
+	Info:  func(msg string, fields ...any) {},
+	Warn:  func(msg string, fields ...any) {},
+	Error: func(msg string, fields ...any) {},
+}
+
+// SetLogFuncs injects logging functions from the application's logger.
+// Call this after logger.Init so that centrifuge-plus logs are routed
+// through the application's smart caller resolution.
+func SetLogFuncs(info, warn, err LogFunc) {
+	if info != nil {
+		logFuncs.Info = info
+	}
+	if warn != nil {
+		logFuncs.Warn = warn
+	}
+	if err != nil {
+		logFuncs.Error = err
 	}
 }
 
@@ -27,13 +44,13 @@ type Logger interface {
 type defaultLogger struct{}
 
 func (defaultLogger) Info(msg string, args ...any) {
-	pkgLogger.Info(fmt.Sprintf(msg, args...))
+	logFuncs.Info(fmt.Sprintf(msg, args...))
 }
 
 func (defaultLogger) Warn(msg string, args ...any) {
-	pkgLogger.Warn(fmt.Sprintf(msg, args...))
+	logFuncs.Warn(fmt.Sprintf(msg, args...))
 }
 
 func (defaultLogger) Error(msg string, args ...any) {
-	pkgLogger.Error(fmt.Sprintf(msg, args...))
+	logFuncs.Error(fmt.Sprintf(msg, args...))
 }

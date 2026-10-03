@@ -58,6 +58,9 @@ type Server struct {
 
 	// OSS3 cleanup scheduler
 	cleanupCancel context.CancelFunc // cancels the cleanup goroutine
+
+	// IP rate limiter cleanup
+	ipRateLimiterCancel context.CancelFunc // cancels the IP rate limiter cleanup goroutine
 }
 
 // BuildProviderClients constructs the Provider list from config.
@@ -266,6 +269,11 @@ func (s *Server) Stop() {
 		s.cleanupCancel()
 	}
 
+	// Stop IP rate limiter cleanup goroutine
+	if s.ipRateLimiterCancel != nil {
+		s.ipRateLimiterCancel()
+	}
+
 	// Stop goroutine metrics collector
 	if s.goroutineCancel != nil {
 		s.goroutineCancel()
@@ -321,13 +329,22 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	s.oauth2Handler.RegisterRoutes(mux)
 
 	// Start IP rate limiter cleanup goroutine to prevent memory growth.
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			ipRateLimiter.Cleanup()
-		}
-	}()
+	{
+		ctx, cancel := context.WithCancel(context.Background())
+		s.ipRateLimiterCancel = cancel
+		logger.SafeGo("ip-rate-limiter-cleanup", func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					ipRateLimiter.Cleanup()
+				}
+			}
+		})
+	}
 
 	// Interrupt endpoints (frontend submits interrupt answers).
 	isDevInterrupt := s.cfg.Server.Env == "development"

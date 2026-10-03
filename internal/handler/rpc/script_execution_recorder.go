@@ -64,10 +64,20 @@ func (r *scriptExecutionRecorder) submit(ctx context.Context, rtc *model.Rtc, re
 	}
 }
 
-// shutdown gracefully shuts down, waiting for all workers to finish.
+// shutdown gracefully shuts down, waiting for all workers to finish with a timeout.
 func (r *scriptExecutionRecorder) shutdown() {
 	close(r.quit)
-	r.wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// All workers finished.
+	case <-time.After(30 * time.Second):
+		logger.Warn(context.Background(), "[scriptExecutionRecorder] shutdown timeout, some workers may not have finished")
+	}
 }
 
 // worker is the recorder's work loop.

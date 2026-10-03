@@ -170,7 +170,11 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 			UserID:   claims.UserID,
 			DeviceID: claims.DeviceID,
 		}
-		info, _ := json.Marshal(ci)
+		info, err := json.Marshal(ci)
+		if err != nil {
+			logger.Warn(ctx, "[Centrifuge] marshal client info failed", zap.Error(err))
+			info = []byte("{}")
+		}
 
 		logger.Info(ctx, "[Centrifuge] OnConnecting succeeded",
 			zap.String("user_id", claims.UserID.String()),

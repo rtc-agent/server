@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/infra/cache"
@@ -25,6 +27,9 @@ import (
 //     lookup failures. This matches the runtime scanner's recovery approach.
 //   - Performs ghost-work cleanup and session-lock release (runtime scanner does not).
 func (s *Server) recoverStaleTurns(ctx context.Context) {
+	ctx, span := otel.Tracer("server.recovery").Start(ctx, "recoverStaleTurns")
+	defer span.End()
+
 	// Process stale turns in batches to avoid loading too many into memory at once.
 	// After a prolonged outage, there could be thousands of stale turns.
 	const recoveryBatchSize = 500
@@ -71,6 +76,7 @@ func (s *Server) recoverStaleTurns(ctx context.Context) {
 	}
 
 	if totalRecovered > 0 {
+		span.SetAttributes(attribute.Int("total_recovered", totalRecovered))
 		logger.Info(ctx, "[Server] recoverStaleTurns: completed",
 			zap.Int("total_recovered", totalRecovered))
 	}
@@ -284,6 +290,9 @@ func (s *Server) staleTurnScanner(ctx context.Context) {
 //   - Records Prometheus metrics and syncs session status after recovery.
 //   - Uses LIMIT 100 (startup uses no limit).
 func (s *Server) periodicRecoverStaleTurns(ctx context.Context) {
+	ctx, span := otel.Tracer("server.recovery").Start(ctx, "periodicRecoverStaleTurns")
+	defer span.End()
+
 	const (
 		runningThreshold     = 10 * time.Minute
 		pendingThreshold     = 2 * time.Minute
