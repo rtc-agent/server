@@ -47,11 +47,17 @@ func (uc *OSS3Usecase) IssueTemporaryCredentials(ctx context.Context, userID str
 		return nil, fmt.Errorf("encrypt session token: %w", err)
 	}
 
+	// Encrypt SecretAccessKey for database storage (plaintext must never be persisted).
+	encryptedSecret, err := uc.encryptString(secretKey)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt secret key: %w", err)
+	}
+
 	cred := &model.TemporaryCredential{
 		ID:              uuid.New(),
 		UserID:          userID,
 		AccessKeyID:     accessKeyID,
-		SecretAccessKey: secretKey,
+		SecretAccessKey: encryptedSecret,
 		SessionToken:    encryptedToken,
 		ExpiresAt:       expiresAt,
 	}

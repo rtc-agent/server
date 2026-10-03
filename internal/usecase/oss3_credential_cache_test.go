@@ -80,6 +80,8 @@ func newCredCacheTestUsecase(t *testing.T, mock *mockCredRepo, mr *miniredis.Min
 }
 
 // validTestCredential returns a credential that expires in 1 hour.
+// Note: SecretAccessKey is returned in plaintext for test assertions.
+// The caller must encrypt it before storing in the mock DB.
 func validTestCredential(accessKeyID string) *model.TemporaryCredential {
 	return &model.TemporaryCredential{
 		ID:              uuid.New(),
@@ -89,6 +91,17 @@ func validTestCredential(accessKeyID string) *model.TemporaryCredential {
 		SessionToken:    "session-token",
 		ExpiresAt:       time.Now().Add(1 * time.Hour),
 	}
+}
+
+// encryptTestCredential encrypts the SecretAccessKey for DB storage in tests.
+// It modifies the credential in place via the pointer.
+func encryptTestCredential(t *testing.T, uc *OSS3Usecase, cred *model.TemporaryCredential) {
+	t.Helper()
+	encrypted, err := uc.encryptString(cred.SecretAccessKey)
+	if err != nil {
+		t.Fatalf("encrypt secret key: %v", err)
+	}
+	cred.SecretAccessKey = encrypted
 }
 
 // ---------- Tests ----------
@@ -106,6 +119,7 @@ func TestLookupCredential_ContextCancelled_DBQueryContinues(t *testing.T) {
 		unblock: make(chan struct{}),
 	}
 	uc := newCredCacheTestUsecase(t, mock, mr)
+	encryptTestCredential(t, uc, cred)
 
 	// Request 1 (leader): cancellable context.
 	ctx1, cancel1 := context.WithCancel(context.Background())
@@ -178,6 +192,7 @@ func TestLookupCredential_Success(t *testing.T) {
 	cred := validTestCredential("AK_TEST_OK")
 	mock := &mockCredRepo{cred: cred}
 	uc := newCredCacheTestUsecase(t, mock, mr)
+	encryptTestCredential(t, uc, cred)
 
 	ctx := context.Background()
 	result, err := uc.LookupCredential(ctx, "AK_TEST_OK")
@@ -205,6 +220,7 @@ func TestLookupCredential_CacheHit(t *testing.T) {
 	cred := validTestCredential("AK_TEST_CACHE")
 	mock := &mockCredRepo{cred: cred}
 	uc := newCredCacheTestUsecase(t, mock, mr)
+	encryptTestCredential(t, uc, cred)
 
 	ctx := context.Background()
 
@@ -278,17 +294,19 @@ func TestLookupCredential_NotFoundInDB(t *testing.T) {
 // in the DB is treated as not found.
 func TestLookupCredential_ExpiredInDB(t *testing.T) {
 	mr := miniredis.RunT(t)
+	cred := &model.TemporaryCredential{
+		ID:              uuid.New(),
+		UserID:          "user-test",
+		AccessKeyID:     "AK_TEST_EXPIRED",
+		SecretAccessKey: "secret",
+		SessionToken:    "token",
+		ExpiresAt:       time.Now().Add(-1 * time.Hour), // already expired
+	}
 	mock := &mockCredRepo{
-		cred: &model.TemporaryCredential{
-			ID:              uuid.New(),
-			UserID:          "user-test",
-			AccessKeyID:     "AK_TEST_EXPIRED",
-			SecretAccessKey: "secret",
-			SessionToken:    "token",
-			ExpiresAt:       time.Now().Add(-1 * time.Hour), // already expired
-		},
+		cred: cred,
 	}
 	uc := newCredCacheTestUsecase(t, mock, mr)
+	encryptTestCredential(t, uc, cred)
 
 	ctx := context.Background()
 	result, err := uc.LookupCredential(ctx, "AK_TEST_EXPIRED")
@@ -312,6 +330,7 @@ func TestLookupCredential_MultipleWaiters_AllGetResult(t *testing.T) {
 		unblock: make(chan struct{}),
 	}
 	uc := newCredCacheTestUsecase(t, mock, mr)
+	encryptTestCredential(t, uc, cred)
 
 	const numWaiters = 5
 	ctxLeader, cancelLeader := context.WithCancel(context.Background())

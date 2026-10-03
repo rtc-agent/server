@@ -385,7 +385,7 @@ func (uc *OSS3Usecase) deleteUploadInTx(ctx context.Context, tx *gorm.DB, upload
 	txCtx := repo.WithTx(ctx, tx)
 	upload, err := uc.uploadRepo.GetByUploadID(txCtx, uploadID)
 	if err != nil {
-		return err
+		return fmt.Errorf("get upload %s: %w", uploadID, err)
 	}
 	if upload == nil {
 		return nil
