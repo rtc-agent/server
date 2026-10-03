@@ -129,15 +129,6 @@ var (
 		[]string{},
 	)
 
-	// oss3QuotaDriftBytes tracks the absolute drift between Redis quota counter
-	// and DB truth, updated by ReconcileQuota.
-	oss3QuotaDriftBytes = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "rtc_oss3_quota_drift_bytes",
-			Help: "Absolute drift between Redis quota counter and DB truth (latest reconciliation)",
-		},
-	)
-
 	// oss3QuotaCommitRetryTotal tracks the number of quota commit retries.
 	oss3QuotaCommitRetryTotal = promauto.NewCounter(
 		prometheus.CounterOpts{

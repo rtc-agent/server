@@ -245,7 +245,7 @@ func (p *ProxyPool) pingProxy(ctx context.Context, proxy *Proxy, timeout time.Du
 	if err != nil {
 		return fmt.Errorf("execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("health check failed: status %d", resp.StatusCode)

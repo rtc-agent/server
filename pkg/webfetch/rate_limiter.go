@@ -61,12 +61,3 @@ func (r *WebFetchRateLimiter) Allow(domain string) bool {
 
 	return limiter.Allow()
 }
-
-// cleanup removes idle domain limiters. Called periodically.
-func (r *WebFetchRateLimiter) cleanup() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	// For now, we keep all domain limiters since rate.Limiter doesn't
-	// expose its last-use time. In the future, consider using an LRU
-	// or tracking last-access timestamps.
-}

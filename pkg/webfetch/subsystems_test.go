@@ -1,6 +1,7 @@
 package webfetch
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -122,22 +123,22 @@ func TestWebFetchManager_StartStop(t *testing.T) {
 	}
 
 	// Test Start
-	if err := m.Start(nil); err != nil {
+	if err := m.Start(context.TODO()); err != nil {
 		t.Errorf("Start failed: %v", err)
 	}
 
 	// Test double Start
-	if err := m.Start(nil); err == nil {
+	if err := m.Start(context.TODO()); err == nil {
 		t.Error("expected error on double Start")
 	}
 
 	// Test Stop
-	if err := m.Stop(nil); err != nil {
+	if err := m.Stop(context.TODO()); err != nil {
 		t.Errorf("Stop failed: %v", err)
 	}
 
 	// Test double Stop (should be no-op)
-	if err := m.Stop(nil); err != nil {
+	if err := m.Stop(context.TODO()); err != nil {
 		t.Errorf("double Stop failed: %v", err)
 	}
 }
@@ -212,14 +213,14 @@ startxref
 
 func TestLLMResultCache_NilCache(t *testing.T) {
 	var cache *LLMResultCache
-	_, ok := cache.Get(nil, "content", "prompt")
+	_, ok := cache.Get(context.TODO(), "content", "prompt")
 	if ok {
 		t.Error("expected cache miss for nil cache")
 	}
 
 	// Should not panic
-	cache.Set(nil, "content", "prompt", "result")
-	cache.Delete(nil, "content", "prompt")
+	cache.Set(context.TODO(), "content", "prompt", "result")
+	cache.Delete(context.TODO(), "content", "prompt")
 }
 
 func TestLLMResultCache_BuildCacheKey(t *testing.T) {

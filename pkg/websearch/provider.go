@@ -56,6 +56,7 @@ type SearchResult struct {
 // TimeRange defines time-based filtering
 type TimeRange string
 
+// Time-range filter values for search queries.
 const (
 	TimeRangeDay   TimeRange = "day"
 	TimeRangeWeek  TimeRange = "week"

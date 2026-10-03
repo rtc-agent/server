@@ -146,11 +146,11 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 	var logsList, warningsList, errorsList model.StringArray
 
 	if len(req.Result) > 0 {
-		// req.Result 是 json.RawMessage（[]byte），直接使用
+		// req.Result is json.RawMessage ([]byte) — use directly.
 		resultBytes := req.Result
 		resultSize = int64(len(resultBytes))
 
-		// 解析 JSON 以提取字段
+		// Parse JSON to extract fields.
 		var resultData map[string]interface{}
 		if err := json.Unmarshal(resultBytes, &resultData); err == nil {
 			if v, ok := resultData["duration_ms"]; ok {

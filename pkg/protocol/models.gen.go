@@ -465,7 +465,7 @@ type ErrorContent struct {
 	Title string `json:"title"`
 }
 
-// FileAttachment 文件附件（预留）
+// FileAttachment 文件附件
 type FileAttachment struct {
 	// Extra 扩展字段（如文件名、大小等）
 	Extra *map[string]interface{} `json:"extra,omitempty"`
@@ -1199,9 +1199,9 @@ type UpdateSessionResult struct {
 // UpdateType defines model for UpdateType.
 type UpdateType string
 
-// UserMessageContent 用户消息内容（支持文本 + 场景 + 文件预留）
+// UserMessageContent 用户消息内容（支持文本 + 场景 + 文件附件）
 type UserMessageContent struct {
-	// Files 文件附件列表（预留字段，暂不实现）
+	// Files 文件附件列表
 	Files *[]FileAttachment `json:"files,omitempty"`
 
 	// Scenarios 场景列表（包含完整内容，无需再读取文件）

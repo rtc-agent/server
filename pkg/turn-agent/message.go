@@ -273,9 +273,10 @@ func toEinoMessage(m *Message) *schema.Message {
 		em.Extra = newExtra
 	}
 
-	// 传递排序元数据到 Extra，供 MergeAssistantMiddleware 使用
-	// 这对确保合并后的消息表示与内存中的表示一致至关重要
-	// 注意：使用 RFC3339 字符串格式，避免 time.Time 序列化问题
+	// Propagate ordering metadata to Extra for MergeAssistantMiddleware.
+	// This is critical for ensuring the merged message representation matches
+	// the in-memory representation.
+	// Note: use RFC3339 string format to avoid time.Time serialization issues.
 	if !m.CreatedAt.IsZero() {
 		if em.Extra == nil {
 			em.Extra = make(map[string]any)
@@ -283,16 +284,21 @@ func toEinoMessage(m *Message) *schema.Message {
 		em.Extra["_rtc_created_at"] = m.CreatedAt.Format(time.RFC3339Nano)
 	}
 
-	// 多模态内容映射
-	// 关键：如果同时有 Content 和 MultiContent，需要将 Content 作为 Text part
-	// 加入 MultiContent，否则 Claude 适配器会静默丢弃 Content（eino-ext 的
-	// Claude 适配器使用 else if 逻辑，UserInputMultiContent 存在时忽略 Content）。
+	// Multimodal content mapping.
+	// Important: if both Content and MultiContent are present, Content must be
+	// added to MultiContent as a Text part, otherwise the Claude adapter will
+	// silently drop Content (the eino-ext Claude adapter uses else-if logic
+	// and ignores Content when UserInputMultiContent is present).
 	//
-	// TODO: 这个设计是脆弱的 — em.Content 和 em.UserInputMultiContent 中的第一个
-	// Text part 包含相同的文本。这依赖于 Claude 适配器的特定行为（UserInputMultiContent
-	// 存在时忽略 Content）。如果未来使用其他适配器（如 OpenAI），可能导致文本重复。
-	// 更好的方案是清空 em.Content，但这需要验证 Claude 适配器在 UserInputMultiContent
-	// 为空时是否能正确回退到 Content。当前方案仅在 Claude 适配器经过充分测试的环境中使用。
+	// TODO: This design is fragile — em.Content and the first Text part of
+	// em.UserInputMultiContent contain the same text. This relies on a
+	// Claude-adapter-specific behavior (ignoring Content when
+	// UserInputMultiContent is present). Using a different adapter (e.g.,
+	// OpenAI) in the future could cause text duplication. A better approach
+	// would be to clear em.Content, but that requires verifying that the
+	// Claude adapter correctly falls back to Content when
+	// UserInputMultiContent is empty. The current approach is only used in
+	// environments where the Claude adapter has been thoroughly tested.
 	if len(m.MultiContent) > 0 {
 		var parts []schema.MessageInputPart
 		if m.Content != "" {
@@ -303,7 +309,8 @@ func toEinoMessage(m *Message) *schema.Message {
 		}
 		parts = append(parts, m.MultiContent...)
 		em.UserInputMultiContent = parts
-		// Content 保留原值（不影响 Claude 适配器，但保持向后兼容）
+		// Content keeps its original value (no effect on Claude adapter;
+		// maintains backward compatibility).
 	}
 
 	return em

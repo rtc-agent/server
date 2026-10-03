@@ -135,7 +135,7 @@ func (p *tavilyProvider) Search(ctx context.Context, req *SearchRequest) (*Searc
 	if err != nil {
 		return nil, fmt.Errorf("execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -173,24 +173,22 @@ func (p *tavilyProvider) Search(ctx context.Context, req *SearchRequest) (*Searc
 
 func (p *tavilyProvider) HealthCheck(ctx context.Context) error {
 	// Simple health check: search for a common term
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.tavily.com/search", nil)
-	if err != nil {
-		return err
-	}
-
 	body, _ := json.Marshal(tavilySearchRequest{
 		APIKey:     p.config.APIKey,
 		Query:      "test",
 		MaxResults: 1,
 	})
-	req, _ = http.NewRequestWithContext(ctx, "POST", "https://api.tavily.com/search", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.tavily.com/search", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("health check failed: status %d", resp.StatusCode)

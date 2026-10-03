@@ -281,9 +281,12 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 
 	// === First-call path ===
 	result, err := r.handleRtcFirstCall(ctx, toolName, argumentsInJSON)
-	// handleRtcFirstCall always returns an error (the interrupt), so record it unconditionally.
-	span.RecordError(err)
-	span.SetStatus(codes.Error, "first_call_interrupted")
+	// handleRtcFirstCall returns an interrupt (expected control flow, not an error)
+	span.AddEvent("first_call_interrupted", trace.WithAttributes(
+		attribute.String("interrupt_type", "first_call"),
+		attribute.String("tool_name", toolName),
+	))
+	span.SetStatus(codes.Ok, "interrupted_for_user_input")
 	return result, err
 }
 
@@ -312,8 +315,10 @@ func (r *rtcToolBase) handleRtcResume(ctx context.Context, state rtcInterruptSta
 		if r.formatResult != nil {
 			toolOutput = r.formatResult(dbRtc)
 		} else {
-			// 方案 C：从 output message (TEXT 列) 读取工具结果，而不是从 rtcs.result (JSONB 列)
-			// 这确保 resume 路径和 loadMessages 路径使用完全相同的数据源，避免 PostgreSQL JSONB 规范化差异
+			// Option C: read tool result from the output message (TEXT column)
+			// instead of rtcs.result (JSONB column).
+			// This ensures resume and loadMessages paths use the exact same data
+			// source, avoiding PostgreSQL JSONB normalization differences.
 			if dbRtc.OutputMessageID != nil {
 				outputMsg, err := r.helpers.deps.MessageRepo.GetByID(ctx, *dbRtc.OutputMessageID)
 				if err == nil && outputMsg != nil {
@@ -321,15 +326,15 @@ func (r *rtcToolBase) handleRtcResume(ctx context.Context, state rtcInterruptSta
 					if parseErr == nil && toolCall.Output != nil {
 						toolOutput = *toolCall.Output
 					} else {
-						// Fallback: 解析失败，使用 rtcs.result
+						// Fallback: parse failed, use rtcs.result.
 						toolOutput = string(dbRtc.Result)
 					}
 				} else {
-					// Fallback: output message 不存在，使用 rtcs.result
+					// Fallback: output message does not exist, use rtcs.result.
 					toolOutput = string(dbRtc.Result)
 				}
 			} else {
-				// Fallback: OutputMessageID 不存在（旧数据），使用 rtcs.result
+				// Fallback: OutputMessageID absent (legacy data), use rtcs.result.
 				toolOutput = string(dbRtc.Result)
 			}
 
@@ -543,8 +548,9 @@ func parseToolArgsWithPersist(
 		})
 		errMsg := formatParseError(err.Error(), argPreview)
 
-		// 持久化错误消息到 DB，确保 checkpoint resume 时消息结构一致
-		// 这对 LLM 缓存命中至关重要
+		// Persist the error message to DB so that the message structure is
+		// consistent on checkpoint resume.
+		// This is critical for LLM cache hit rate.
 		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
 			Helpers:         h,
 			SessionID:       sessionID,

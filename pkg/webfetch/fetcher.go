@@ -455,7 +455,7 @@ func (m *WebFetchManager) executeHTTPRequest(ctx context.Context, req *FetchRequ
 		}
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		if resp.StatusCode >= 500 {
@@ -511,7 +511,7 @@ func (m *WebFetchManager) processContent(ctx context.Context, req *FetchRequest,
 
 	// LLM extraction decision.
 	llmMined := false
-	result := markdown
+	var result string
 	host := parsedURL.Hostname()
 	isPreApproved := m.security.IsPreApproved(host)
 
@@ -697,7 +697,7 @@ func (m *WebFetchManager) logAudit(ctx context.Context, req *FetchRequest, resp 
 func FormatFetchResponse(resp *FetchResponse) string {
 	var sb strings.Builder
 	if resp.Cached || resp.LLMMined {
-		sb.WriteString(fmt.Sprintf("URL: %s", resp.URL))
+		fmt.Fprintf(&sb, "URL: %s", resp.URL)
 		if resp.Cached {
 			sb.WriteString(" [cached]")
 		}

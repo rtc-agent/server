@@ -31,10 +31,10 @@ func init() {
 		"240.0.0.0/4",        // Reserved
 		"255.255.255.255/32", // Broadcast
 		// IPv6
-		"::1/128",    // IPv6 loopback
-		"fc00::/7",   // IPv6 unique local
-		"fe80::/10",  // IPv6 link-local
-		"::/128",     // IPv6 unspecified
+		"::1/128",   // IPv6 loopback
+		"fc00::/7",  // IPv6 unique local
+		"fe80::/10", // IPv6 link-local
+		"::/128",    // IPv6 unspecified
 	}
 	privateIPNetworks = make([]*net.IPNet, 0, len(cidrs))
 	for _, cidr := range cidrs {
@@ -317,4 +317,3 @@ func (p *redirectPolicy) CheckRedirect(req *http.Request, via []*http.Request) e
 func stripWWW(host string) string {
 	return strings.TrimPrefix(strings.ToLower(host), "www.")
 }
-

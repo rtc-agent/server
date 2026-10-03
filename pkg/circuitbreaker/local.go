@@ -11,6 +11,7 @@ import (
 // CircuitState represents the state of a circuit breaker
 type CircuitState = gobreaker.State
 
+// Circuit breaker states.
 const (
 	StateClosed   = gobreaker.StateClosed
 	StateOpen     = gobreaker.StateOpen

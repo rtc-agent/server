@@ -94,14 +94,15 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 
 	var resultJSON *string
 	if len(req.Result) > 0 {
-		// req.Result 是 json.RawMessage，保留原始 JSON 字段顺序
-		// 验证是否是合法 JSON
+		// req.Result is json.RawMessage — preserve original JSON field order.
+		// Validate that it is legal JSON.
 		if !json.Valid(req.Result) {
 			span.SetStatus(codes.Error, "invalid JSON in result")
 			return nil, &APIError{Code: "rtc.invalid_result", Message: "result is not valid JSON"}
 		}
-		// 转换为紧凑格式（移除多余空格），但保留 JSON key 的原始顺序
-		// json.Compact 只移除空白字符，不改变 key 顺序
+		// Convert to compact form (remove extra whitespace) while preserving
+		// the original JSON key order. json.Compact only strips whitespace;
+		// it does not change key order.
 		var buf bytes.Buffer
 		if err := json.Compact(&buf, req.Result); err != nil {
 			span.SetStatus(codes.Error, "failed to compact result JSON")

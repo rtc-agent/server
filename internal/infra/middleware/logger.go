@@ -63,8 +63,22 @@ func RequestLogger(next http.Handler) http.Handler {
 
 		start := time.Now()
 
+		// Normalize route path to avoid high cardinality span names.
+		// For S3 routes: /s3/{bucket}/{key} → /s3/{bucket}/{key}
+		spanName := r.Method + " " + r.URL.Path
+		if strings.HasPrefix(r.URL.Path, "/s3/") {
+			parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/s3/"), "/", 2)
+			if len(parts) >= 1 {
+				if len(parts) == 1 {
+					spanName = r.Method + " /s3/{bucket}"
+				} else {
+					spanName = r.Method + " /s3/{bucket}/{key}"
+				}
+			}
+		}
+
 		// Create trace span.
-		ctx, span := tracer.Start(r.Context(), r.Method+" "+r.URL.Path,
+		ctx, span := tracer.Start(r.Context(), spanName,
 			trace.WithAttributes(
 				attribute.String("http.method", r.Method),
 				attribute.String("http.path", r.URL.Path),

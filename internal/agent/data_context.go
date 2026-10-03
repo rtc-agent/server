@@ -50,7 +50,8 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	//
 	// Exception: prompt-type messages are always preserved regardless of
 	// position, because they contain persistent system instructions that
-	// must survive compaction (design principle: "系统提示词应该一直存在于上下文中").
+	// must survive compaction (design principle: "system prompts must
+	// always remain present in the context").
 	summaryIdx := -1
 	for i := len(dbMsgs) - 1; i >= 0; i-- {
 		contentData, parseErr := primitives.ParseContentData(dbMsgs[i].Content)

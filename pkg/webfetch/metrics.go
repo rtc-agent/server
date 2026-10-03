@@ -9,18 +9,18 @@ import (
 
 // FetchMetrics holds all Prometheus metrics for the webfetch subsystem.
 type FetchMetrics struct {
-	fetchTotal           *prometheus.CounterVec   // labels: status
-	fetchErrors          *prometheus.CounterVec   // labels: error_type
-	fetchDuration        *prometheus.HistogramVec // labels: domain_type
-	cacheHits            prometheus.Counter
-	cacheMisses          prometheus.Counter
-	concurrencyCurrent   prometheus.Gauge
-	concurrencyLimit     *prometheus.CounterVec // labels: type (global/domain)
-	llmExtractTotal      *prometheus.CounterVec // labels: status
-	llmExtractDuration   *prometheus.HistogramVec
-	contentSize          *prometheus.HistogramVec // labels: content_type
-	redirectTotal        *prometheus.CounterVec   // labels: type
-	ssrfBlocked          prometheus.Counter
+	fetchTotal         *prometheus.CounterVec   // labels: status
+	fetchErrors        *prometheus.CounterVec   // labels: error_type
+	fetchDuration      *prometheus.HistogramVec // labels: domain_type
+	cacheHits          prometheus.Counter
+	cacheMisses        prometheus.Counter
+	concurrencyCurrent prometheus.Gauge
+	concurrencyLimit   *prometheus.CounterVec // labels: type (global/domain)
+	llmExtractTotal    *prometheus.CounterVec // labels: status
+	llmExtractDuration *prometheus.HistogramVec
+	contentSize        *prometheus.HistogramVec // labels: content_type
+	redirectTotal      *prometheus.CounterVec   // labels: type
+	ssrfBlocked        prometheus.Counter
 }
 
 var (
@@ -94,28 +94,36 @@ func newFetchMetrics() *FetchMetrics {
 
 // Convenience recording methods.
 
+// RecordSuccess records a successful fetch with its duration.
 func (m *FetchMetrics) RecordSuccess(domainType string, durationMs int64) {
 	m.fetchTotal.WithLabelValues("success").Inc()
 	m.fetchDuration.WithLabelValues(domainType).Observe(float64(durationMs) / 1000)
 }
 
+// RecordError records a failed fetch by error type.
 func (m *FetchMetrics) RecordError(errorType string) {
 	m.fetchTotal.WithLabelValues("error").Inc()
 	m.fetchErrors.WithLabelValues(errorType).Inc()
 }
 
-func (m *FetchMetrics) RecordCacheHit()  { m.cacheHits.Inc() }
+// RecordCacheHit increments the LLM result cache hit counter.
+func (m *FetchMetrics) RecordCacheHit() { m.cacheHits.Inc() }
+
+// RecordCacheMiss increments the LLM result cache miss counter.
 func (m *FetchMetrics) RecordCacheMiss() { m.cacheMisses.Inc() }
 
+// RecordSSRFBlocked records a blocked SSRF attempt.
 func (m *FetchMetrics) RecordSSRFBlocked() {
 	m.ssrfBlocked.Inc()
 	m.fetchTotal.WithLabelValues("blocked").Inc()
 }
 
+// RecordConcurrencyLimit records a concurrency limit hit by type.
 func (m *FetchMetrics) RecordConcurrencyLimit(t string) {
 	m.concurrencyLimit.WithLabelValues(t).Inc()
 }
 
+// RecordRateLimited records a rate-limited fetch attempt.
 func (m *FetchMetrics) RecordRateLimited() {
 	m.fetchTotal.WithLabelValues("rate_limited").Inc()
 }

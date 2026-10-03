@@ -120,8 +120,8 @@ func (r *RedisClient) Stop() {
 			r.internalCancel()
 		}
 		r.wg.Wait()
-		// Close Redis client here
-		r.client.Close()
+		// Close Redis client here.
+		_ = r.client.Close()
 	})
 }
 

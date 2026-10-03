@@ -75,7 +75,7 @@ func (r *RobotsChecker) IsAllowed(rawURL string, userAgent string) (bool, error)
 		r.cacheEntry(host, &robotsEntry{allowAll: true, fetchedAt: time.Now()})
 		return true, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		// No robots.txt → allow all.
@@ -105,7 +105,6 @@ func (r *RobotsChecker) IsAllowed(rawURL string, userAgent string) (bool, error)
 // This is a simplified parser that handles the most common directives.
 func (r *RobotsChecker) parseRobotsTxt(content, userAgent string) *robotsEntry {
 	lines := strings.Split(content, "\n")
-	var currentGroupUserAgents []string
 	var relevantRules []robotsRule
 	inRelevantGroup := false
 
@@ -133,7 +132,6 @@ func (r *RobotsChecker) parseRobotsTxt(content, userAgent string) *robotsEntry {
 			valueLower := strings.ToLower(value)
 			if valueLower == "*" || strings.Contains(userAgentLower, valueLower) {
 				inRelevantGroup = true
-				currentGroupUserAgents = append(currentGroupUserAgents, valueLower)
 			} else {
 				inRelevantGroup = false
 			}
@@ -165,7 +163,7 @@ func (r *RobotsChecker) checkPath(entry *robotsEntry, path, userAgent string) bo
 	}
 	// Check exact match first, then prefix matches (longest match wins).
 	var bestMatch string
-	var bestMatchAllowed bool = true
+	var bestMatchAllowed = true
 	for rulePath, allowed := range entry.allowed {
 		if path == rulePath || strings.HasPrefix(path, rulePath) {
 			if len(rulePath) > len(bestMatch) {

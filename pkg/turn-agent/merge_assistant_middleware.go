@@ -380,13 +380,14 @@ func mergeAssistantSchemaMessages(prev, curr *schema.Message) {
 
 // mergeAssistantContent merges curr's Content/MultiContent into prev using AssistantGenMultiContent.
 func mergeAssistantContent(prev, curr *schema.Message) {
-	// 特殊情况：prev 有 Content，curr 只有 ToolCalls（无 Content/MultiContent）
-	// 保持 Content 字段不变，避免不必要的 MultiContent 转换
-	// 这对 LLM 缓存命中至关重要：DB 加载合并后与内存直接累积的表示必须一致
+	// Special case: prev has Content, curr only has ToolCalls (no Content/MultiContent).
+	// Keep the Content field unchanged to avoid unnecessary MultiContent conversion.
+	// This is critical for LLM cache hit rate: the merged representation from DB
+	// must match the in-memory accumulated representation.
 	if prev.Content != "" && prev.AssistantGenMultiContent == nil &&
 		curr.Content == "" && len(curr.AssistantGenMultiContent) == 0 && len(curr.ToolCalls) > 0 {
-		// 无需修改 Content/MultiContent
-		// Content 保持不变，ToolCalls 会在 mergeAssistantToolCalls 中合并
+		// No need to modify Content/MultiContent.
+		// Content stays as-is; ToolCalls will be merged in mergeAssistantToolCalls.
 		return
 	}
 

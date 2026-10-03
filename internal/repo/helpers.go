@@ -125,36 +125,3 @@ func updateWithAutoTimestamp(
 	}
 	return nil
 }
-
-// listByCategory is a generic category-scoped query.
-// scopeCol: scope column name, e.g. "session_id" or "user_id".
-// orderClause: ORDER BY clause, e.g. "created_at DESC".
-// extraWhere: additional WHERE conditions, e.g. "AND deleted_at IS NULL"; empty to skip.
-func listByCategory[T any](
-	ctx context.Context,
-	db *gorm.DB,
-	scopeCol string,
-	scopeID uuid.UUID,
-	category string,
-	limit int,
-	orderClause string,
-	extraWhere string,
-	entityName string,
-) ([]*T, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	var items []*T
-	where := scopeCol + " = ? AND category = ?"
-	if extraWhere != "" {
-		where += " " + extraWhere
-	}
-	if err := DBFromContext(ctx, db).WithContext(ctx).
-		Where(where, scopeID, category).
-		Order(orderClause).
-		Limit(limit).
-		Find(&items).Error; err != nil {
-		return nil, fmt.Errorf("list %s by category %s: %w", entityName, category, err)
-	}
-	return items, nil
-}

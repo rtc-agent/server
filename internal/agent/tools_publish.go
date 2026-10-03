@@ -48,8 +48,9 @@ func publishToolMessages(ctx context.Context, in publishToolMessagesInput) error
 		return fmt.Errorf("%s: turn UUID is nil", in.ToolName)
 	}
 
-	// 规范化 ArgumentsInJSON：空字符串或 "null" 统一为 "{}"
-	// 这确保 DB 存储和 eino 内存中的表示一致，避免缓存失效
+	// Normalize ArgumentsInJSON: unify empty strings and "null" to "{}".
+	// This ensures consistent representation between DB storage and eino
+	// in-memory state, preventing cache invalidation.
 	argumentsInJSON := normalizeToolArguments(in.ArgumentsInJSON)
 
 	inputToolCall := protocol.ToolCall{
@@ -155,7 +156,7 @@ func publishOutputOnly(ctx context.Context, in publishOutputOnlyInput) error {
 		return fmt.Errorf("%s: tool_call_id not set in context", in.ToolName)
 	}
 
-	// 规范化 ArgumentsInJSON：空字符串或 "null" 统一为 "{}"
+	// Normalize ArgumentsInJSON: unify empty strings and "null" to "{}".
 	argumentsInJSON := normalizeToolArguments(in.ArgumentsInJSON)
 
 	outputToolCall := protocol.ToolCall{

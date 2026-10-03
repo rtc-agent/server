@@ -39,16 +39,16 @@ type Publisher interface {
 // Contains only repos and infrastructure — no business logic.
 // Constructed and injected by the server layer at startup.
 type Dependencies struct {
-	DB                *gorm.DB
-	Redis             redis.UniversalClient
-	SessionRepo       repo.SessionRepo
-	MessageRepo       repo.MessageRepo
-	TurnRepo          repo.TurnRepo
-	RtcRepo           repo.RtcRepo
-	GoalRepo          repo.GoalRepo
-	LoopRepo          repo.LoopRepo
-	MemoryRepo        memory.Repository // unified Memory storage (OKF spec)
-	UpdatePublisher   Publisher
+	DB              *gorm.DB
+	Redis           redis.UniversalClient
+	SessionRepo     repo.SessionRepo
+	MessageRepo     repo.MessageRepo
+	TurnRepo        repo.TurnRepo
+	RtcRepo         repo.RtcRepo
+	GoalRepo        repo.GoalRepo
+	LoopRepo        repo.LoopRepo
+	MemoryRepo      memory.Repository // unified Memory storage (OKF spec)
+	UpdatePublisher Publisher
 
 	// ChatModel is the eino ChatModel for LLM interactions.
 	// Required for agent execution in turn-loop sessions.

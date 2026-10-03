@@ -88,8 +88,8 @@ func (h *helpers) convertDBMessage(ctx context.Context, msg *model.Message) ([]*
 		}}, nil
 
 	case protocol.ContentTypeToolCallInput:
-		// 使用原始 JSON 解析，保留 tool input 的 JSON key 顺序
-		// 这对 LLM 缓存命中至关重要
+		// Use raw JSON parsing to preserve the JSON key order of tool input.
+		// This is critical for LLM cache hit rate.
 		toolCall, err := primitives.ParseContentDataToolCallRaw(msg.Content)
 		if err != nil {
 			return nil, fmt.Errorf("parse tool call input: %w", err)
@@ -107,8 +107,8 @@ func (h *helpers) convertDBMessage(ctx context.Context, msg *model.Message) ([]*
 		}}, nil
 
 	case protocol.ContentTypeToolCallOutput:
-		// 使用原始 JSON 解析，保留 tool output 的 JSON key 顺序
-		// 这对 LLM 缓存命中至关重要
+		// Use raw JSON parsing to preserve the JSON key order of tool output.
+		// This is critical for LLM cache hit rate.
 		toolCall, err := primitives.ParseContentDataToolCallRaw(msg.Content)
 		if err != nil {
 			return nil, fmt.Errorf("parse tool call output: %w", err)

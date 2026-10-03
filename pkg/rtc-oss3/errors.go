@@ -130,13 +130,13 @@ var (
 	ErrRequestTimeTooSkewed = &S3Error{"RequestTimeTooSkewed", "The difference between the request time and the server's time is too large", http.StatusForbidden} // R10 M3
 
 	// Additional errors for 1E-3 basic operations
-	ErrInvalidURI           = &S3Error{"InvalidURI", "The specified URI is invalid", http.StatusBadRequest}
-	ErrNotImplemented       = &S3Error{"NotImplemented", "A parameter you provided is not yet implemented", http.StatusNotImplemented}
-	ErrMissingContentLength = &S3Error{"MissingContentLength", "You must provide the Content-Length HTTP header", http.StatusLengthRequired}
-	ErrInvalidRange         = &S3Error{"InvalidRange", "The requested range is not satisfiable", http.StatusRequestedRangeNotSatisfiable}
-	ErrInvalidCopySource    = &S3Error{"InvalidCopySource", "The specified copy source is not valid", http.StatusBadRequest}
-	ErrRateLimitExceeded    = &S3Error{"RateLimitExceeded", "You have exceeded your request rate limit", http.StatusTooManyRequests}
-	ErrInvalidKeyFormat     = &S3Error{"InvalidKeyFormat", "The specified key does not match the required format", http.StatusBadRequest}
+	ErrInvalidURI             = &S3Error{"InvalidURI", "The specified URI is invalid", http.StatusBadRequest}
+	ErrNotImplemented         = &S3Error{"NotImplemented", "A parameter you provided is not yet implemented", http.StatusNotImplemented}
+	ErrMissingContentLength   = &S3Error{"MissingContentLength", "You must provide the Content-Length HTTP header", http.StatusLengthRequired}
+	ErrInvalidRange           = &S3Error{"InvalidRange", "The requested range is not satisfiable", http.StatusRequestedRangeNotSatisfiable}
+	ErrInvalidCopySource      = &S3Error{"InvalidCopySource", "The specified copy source is not valid", http.StatusBadRequest}
+	ErrRateLimitExceeded      = &S3Error{"RateLimitExceeded", "You have exceeded your request rate limit", http.StatusTooManyRequests}
+	ErrInvalidKeyFormat       = &S3Error{"InvalidKeyFormat", "The specified key does not match the required format", http.StatusBadRequest}
 	ErrUnsupportedContentType = &S3Error{"UnsupportedContentType", "The specified Content-Type is not allowed. Only image/* and text/* types are permitted", http.StatusBadRequest}
 
 	// Additional errors for 1E-4 multipart operations
