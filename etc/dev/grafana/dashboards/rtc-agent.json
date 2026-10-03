@@ -281,6 +281,256 @@
         "expr": "sum by (action) (rtc_script_executions_total{job=\"rtc-agent-server\"})",
         "legendFormat": "{{action}}"
       }]
+    },
+    {
+      "type": "row",
+      "title": "WebSocket / Centrifuge",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 77 },
+      "collapsed": false
+    },
+    {
+      "title": "Centrifuge 连接数",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 78 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(rtc_centrifuge_connections_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{status}}"
+      }]
+    },
+    {
+      "title": "断连原因分布",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 78 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "slow" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+        { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
+      ] },
+      "targets": [{
+        "expr": "rate(rtc_centrifuge_disconnect_reason_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{reason}}"
+      }]
+    },
+    {
+      "title": "RPC 调用速率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 86 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(rtc_centrifuge_rpc_requests_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{method}} {{status}}"
+      }]
+    },
+    {
+      "title": "RPC 延迟 p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 86 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(rtc_centrifuge_rpc_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, rate(rtc_centrifuge_rpc_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, rate(rtc_centrifuge_rpc_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "title": "订阅数 & JWT 验证延迟",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 94 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum by (channel_type) (rtc_centrifuge_subscriptions_total{job=\"rtc-agent-server\"})", "legendFormat": "subs:{{channel_type}}" },
+        { "expr": "histogram_quantile(0.95, rate(rtc_centrifuge_connecting_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "jwt_p95" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Queue 生命周期",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 102 },
+      "collapsed": false
+    },
+    {
+      "title": "Queue 操作速率 (publish / claim / complete)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 103 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "expr": "rate(rtc_queue_publish_total{job=\"rtc-agent-server\"}[5m])", "legendFormat": "publish {{status}}" },
+        { "expr": "rate(rtc_queue_claim_total{job=\"rtc-agent-server\"}[5m])", "legendFormat": "claim {{status}}" },
+        { "expr": "rate(rtc_queue_complete_total{job=\"rtc-agent-server\"}[5m])", "legendFormat": "complete {{status}}" }
+      ]
+    },
+    {
+      "title": "Queue 等待时间 p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 103 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(rtc_queue_wait_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, rate(rtc_queue_wait_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, rate(rtc_queue_wait_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "title": "Queue 处理时间 p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 111 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(rtc_queue_processing_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, rate(rtc_queue_processing_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, rate(rtc_queue_processing_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "title": "Queue 取消速率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 111 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+      ] },
+      "targets": [{
+        "expr": "rate(rtc_queue_cancel_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{reason}}"
+      }]
+    },
+    {
+      "type": "row",
+      "title": "Auth & Security",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 119 },
+      "collapsed": false
+    },
+    {
+      "title": "认证失败速率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 120 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+      ] },
+      "targets": [{
+        "expr": "rate(rtc_auth_failures_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{type}} {{reason}}"
+      }]
+    },
+    {
+      "title": "认证失败累计 & 按类型分布",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 120 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{
+        "expr": "sum by (type) (rtc_auth_failures_total{job=\"rtc-agent-server\"})",
+        "legendFormat": "{{type}}"
+      }]
+    },
+    {
+      "type": "row",
+      "title": "Circuit Breaker",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 128 },
+      "collapsed": false
+    },
+    {
+      "title": "熔断器当前状态",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 129 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 2 }] } }, "overrides": [] },
+      "targets": [{
+        "expr": "rtc_circuitbreaker_state{job=\"rtc-agent-server\"}",
+        "legendFormat": "{{name}}:{{state}}"
+      }]
+    },
+    {
+      "title": "熔断器状态转换事件",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 129 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "events" }, "overrides": [
+        { "matcher": { "id": "byRegexp", "options": ".*closed.*open.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+      ] },
+      "targets": [{
+        "expr": "rate(rtc_circuitbreaker_state_changes_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{name}}:{{from_state}}→{{to_state}}"
+      }]
+    },
+    {
+      "type": "row",
+      "title": "Database",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 137 },
+      "collapsed": false
+    },
+    {
+      "title": "DB 查询速率 (by operation)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 138 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(rtc_db_queries_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{operation}} {{status}}"
+      }]
+    },
+    {
+      "title": "DB 查询延迟 p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 138 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(rtc_db_query_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, rate(rtc_db_query_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, rate(rtc_db_query_duration_seconds_bucket{job=\"rtc-agent-server\"}[5m]))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "title": "DB 错误率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 146 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [
+        { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+      ] },
+      "targets": [{
+        "expr": "sum(rate(rtc_db_queries_total{job=\"rtc-agent-server\",status=\"error\"}[5m])) / sum(rate(rtc_db_queries_total{job=\"rtc-agent-server\"}[5m]))",
+        "legendFormat": "error rate"
+      }]
+    },
+    {
+      "type": "row",
+      "title": "Business Events",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 154 },
+      "collapsed": false
+    },
+    {
+      "title": "Session 创建 / 关闭速率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 155 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "expr": "rate(rtc_session_created_total{job=\"rtc-agent-server\"}[5m])", "legendFormat": "created" },
+        { "expr": "rate(rtc_session_closed_total{job=\"rtc-agent-server\"}[5m])", "legendFormat": "closed {{reason}}" }
+      ]
+    },
+    {
+      "title": "消息发送速率 (by type)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 155 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [{
+        "expr": "rate(rtc_messages_sent_total{job=\"rtc-agent-server\"}[5m])",
+        "legendFormat": "{{type}}"
+      }]
     }
   ],
   "refresh": "10s",
