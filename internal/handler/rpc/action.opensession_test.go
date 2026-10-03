@@ -370,7 +370,7 @@ func TestOpenSession_PermissionDenied(t *testing.T) {
 	req := &protocol.OpenSessionRequest{SessionId: session.ID.String()}
 
 	_, err := h.OpenSession(ctx, req)
-	assertAPIError(t, err, "permission_denied")
+	assertAPIError(t, err, ErrorCodePermissionDenied)
 }
 
 func TestOpenSession_NotFound(t *testing.T) {
@@ -391,7 +391,7 @@ func TestOpenSession_NotFound(t *testing.T) {
 	req := &protocol.OpenSessionRequest{SessionId: sessionID.String()}
 
 	_, err := h.OpenSession(ctx, req)
-	assertAPIError(t, err, "session.not_found")
+	assertAPIError(t, err, ErrorCodeSessionNotFound)
 }
 
 func TestOpenSession_Unauthorized(t *testing.T) {
@@ -406,7 +406,7 @@ func TestOpenSession_Unauthorized(t *testing.T) {
 	req := &protocol.OpenSessionRequest{SessionId: uuid.New().String()}
 
 	_, err := h.OpenSession(ctx, req)
-	assertAPIError(t, err, "unauthorized")
+	assertAPIError(t, err, ErrorCodeUnauthorized)
 }
 
 func TestOpenSession_InvalidSessionId(t *testing.T) {
@@ -433,7 +433,7 @@ func TestOpenSession_InvalidSessionId(t *testing.T) {
 			t.Parallel()
 			req := &protocol.OpenSessionRequest{SessionId: tt.sessionID}
 			_, err := h.OpenSession(ctx, req)
-			assertAPIError(t, err, "invalid_argument")
+			assertAPIError(t, err, ErrorCodeInvalidArgument)
 		})
 	}
 }
