@@ -5,10 +5,21 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/time/rate"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/infra/httputil"
+)
+
+// rateLimitRejected counts HTTP requests rejected due to per-user rate limiting.
+// Enables alerting on rate limit pressure and identification of abusive clients.
+var rateLimitRejected = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "rtc_ratelimit_rejected_total",
+		Help: "Total HTTP requests rejected by per-user rate limiter (429 responses).",
+	},
 )
 
 // RateLimiter implements per-user token bucket rate limiting.
@@ -64,6 +75,7 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 			}
 			limiter := rl.getLimiter(userID.String())
 			if !limiter.Allow() {
+				rateLimitRejected.Inc()
 				httputil.WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many requests")
 				return
 			}

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -101,7 +102,7 @@ func HTTPMetrics() func(http.Handler) http.Handler {
 			code := wrapped.Code
 			written := wrapped.Written
 			duration := time.Since(start).Seconds()
-			handler := r.URL.Path
+			handler := normalizeHandlerPath(r.Method, r.URL.Path)
 			codeStr := strconv.Itoa(code)
 
 			// Request count.
@@ -116,4 +117,43 @@ func HTTPMetrics() func(http.Handler) http.Handler {
 			}
 		})
 	}
+}
+
+// uuidSegment matches a UUID-like path segment (8-4-4-4-12 hex digits).
+var uuidSegment = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// normalizeHandlerPath normalizes a request path into a low-cardinality handler label.
+//
+// Rules:
+//   - /s3/{bucket}/{key...} → "/s3/{bucket}/{key}"
+//   - Path segments matching UUID format → "{id}"
+//   - All other paths returned as-is
+//
+// This prevents cardinality explosion from dynamic path segments (object keys,
+// UUIDs) that would otherwise create unbounded Prometheus time series.
+func normalizeHandlerPath(method, path string) string {
+	// S3 path-style routes: /s3/{bucket}/{key}
+	if strings.HasPrefix(path, "/s3/") {
+		trimmed := strings.TrimPrefix(path, "/s3/")
+		parts := strings.SplitN(trimmed, "/", 2)
+		if len(parts) == 1 {
+			return method + " /s3/{bucket}"
+		}
+		return method + " /s3/{bucket}/{key}"
+	}
+
+	// Normalize UUID segments in other paths.
+	segments := strings.Split(path, "/")
+	normalized := false
+	for i, seg := range segments {
+		if uuidSegment.MatchString(seg) {
+			segments[i] = "{id}"
+			normalized = true
+		}
+	}
+	if normalized {
+		return method + " " + strings.Join(segments, "/")
+	}
+
+	return method + " " + path
 }

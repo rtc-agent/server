@@ -42,6 +42,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// llmStartTimeKey is the context key for storing the LLM call start time.
+// Stored in context by OnStart, retrieved by OnEnd/OnEndWithStreamOutput to compute latency.
+type llmStartTimeKey struct{}
+
 // newTokenUsageCallbackHandler builds an eino callbacks.Handler that captures
 // token usage from both streaming and non-streaming ChatModel calls.
 //
@@ -51,6 +55,13 @@ import (
 func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 	return ucb.NewHandlerHelper().
 		ChatModel(&ucb.ModelCallbackHandler{
+			// OnStart fires before the ChatModel begins processing (both streaming
+			// and non-streaming paths). Record the start time so OnEnd and
+			// OnEndWithStreamOutput can compute the total call latency.
+			OnStart: func(ctx context.Context, info *callbacks.RunInfo, input *model.CallbackInput) context.Context {
+				return context.WithValue(ctx, llmStartTimeKey{}, time.Now())
+			},
+
 			// Non-streaming path: OnEnd fires with the complete CallbackOutput.
 			OnEnd: func(ctx context.Context, info *callbacks.RunInfo, output *model.CallbackOutput) context.Context {
 				modelName := ""
@@ -59,7 +70,8 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 				}
 				fullUsage := h.extractFullUsage(output)
 				if fullUsage != nil {
-					h.reportLLMCall(ctx, fullUsage, modelName)
+					latencyMs := latencyFromContext(ctx)
+					h.reportLLMCall(ctx, fullUsage, modelName, latencyMs)
 				}
 				return ctx
 			},
@@ -77,6 +89,7 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 			// WithTimeout (60s) prevents the goroutine from hanging indefinitely
 			// if the stream stalls.
 			OnEndWithStreamOutput: func(ctx context.Context, info *callbacks.RunInfo, output *schema.StreamReader[*model.CallbackOutput]) context.Context {
+				startTime := startTimeFromContext(ctx)
 				bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 				go func() {
 					defer cancel()
@@ -92,7 +105,7 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 							)
 						}
 					}()
-					h.drainStreamAndReport(bgCtx, output)
+					h.drainStreamAndReport(bgCtx, output, startTime)
 				}()
 				return ctx
 			},
@@ -100,9 +113,27 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 		Handler()
 }
 
+// latencyFromContext extracts the LLM call start time from context and returns
+// the elapsed duration in milliseconds. Returns 0 if the start time is absent.
+func latencyFromContext(ctx context.Context) int64 {
+	startTime := startTimeFromContext(ctx)
+	if startTime.IsZero() {
+		return 0
+	}
+	return time.Since(startTime).Milliseconds()
+}
+
+// startTimeFromContext extracts the LLM call start time from context.
+// Returns the zero value if absent (OnStart was not invoked).
+func startTimeFromContext(ctx context.Context) time.Time {
+	v, _ := ctx.Value(llmStartTimeKey{}).(time.Time)
+	return v
+}
+
 // reportLLMCall is the shared sink for both streaming and non-streaming paths.
 // It performs the full token data flow: extract -> cost -> SQL accumulate -> estimate -> publish -> metrics/log.
-func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, modelName string) {
+// latencyMs is the total LLM API call duration in milliseconds (from OnStart to OnEnd/stream drain complete).
+func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, modelName string, latencyMs int64) {
 	sessionIDStr := turnagent.SessionIDFromContext(ctx)
 	turnIDStr := turnagent.TurnIDFromContext(ctx)
 
@@ -149,6 +180,7 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 			TotalTokens:     int(fullUsage.TotalTokens),
 			CachedTokens:    int(fullUsage.CachedReadTokens),
 			ReasoningTokens: int(fullUsage.ReasoningTokens),
+			LatencyMs:       latencyMs,
 		})
 	}
 
@@ -370,7 +402,11 @@ func mergeTokenUsageMax(dst *model.TokenUsage, src *model.TokenUsage) {
 //  3. The stream type (*model.CallbackOutput) differs from the main LLM stream
 //     (*schema.Message), so the existing RecvWithTimeout cannot be reused
 //     without a generic version — the complexity is not justified given (1).
-func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.StreamReader[*model.CallbackOutput]) {
+//
+// startTime is the LLM call start time captured by OnStart. The latency
+// reported to metrics is computed as time.Since(startTime) after drain completes,
+// covering both the time-to-first-byte and the full stream consumption.
+func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.StreamReader[*model.CallbackOutput], startTime time.Time) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Use the original ctx (not context.Background()) to preserve trace context in panic logs.
@@ -413,7 +449,11 @@ func (h *helpers) drainStreamAndReport(ctx context.Context, output *schema.Strea
 	fullUsage := h.extractFullUsage(fullOutput)
 	if fullUsage != nil {
 		applyCachedWriteOverride(fullUsage, cachedWriteTokens)
-		h.reportLLMCall(ctx, fullUsage, modelName)
+		latencyMs := int64(0)
+		if !startTime.IsZero() {
+			latencyMs = time.Since(startTime).Milliseconds()
+		}
+		h.reportLLMCall(ctx, fullUsage, modelName, latencyMs)
 	}
 }
 
