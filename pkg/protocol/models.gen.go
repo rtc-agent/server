@@ -383,6 +383,24 @@ func (e UpdateType) Valid() bool {
 	}
 }
 
+// Defines values for GetOAuth2RedirectUrlParamsCodeChallengeMethod.
+const (
+	Plain GetOAuth2RedirectUrlParamsCodeChallengeMethod = "plain"
+	S256  GetOAuth2RedirectUrlParamsCodeChallengeMethod = "S256"
+)
+
+// Valid indicates whether the value is a known member of the GetOAuth2RedirectUrlParamsCodeChallengeMethod enum.
+func (e GetOAuth2RedirectUrlParamsCodeChallengeMethod) Valid() bool {
+	switch e {
+	case Plain:
+		return true
+	case S256:
+		return true
+	default:
+		return false
+	}
+}
+
 // CloseSessionRequest defines model for CloseSessionRequest.
 type CloseSessionRequest struct {
 	// ClientId 客户端生成的幂等 ID
@@ -620,8 +638,8 @@ type MessageGetResponse struct {
 
 // MessageListRequest 获取消息列表请求
 type MessageListRequest struct {
-	// Cursor 分页游标（上一页最后一条的 global_offset）
-	Cursor *uint32 `json:"cursor,omitempty"`
+	// Cursor 分页游标（上一页最后一条消息的 global_offset 字符串形式）
+	Cursor *string `json:"cursor,omitempty"`
 
 	// Limit 每页数量，默认 50
 	Limit *int `json:"limit,omitempty"`
@@ -634,8 +652,8 @@ type MessageListRequest struct {
 type MessageListResponse struct {
 	Items []Message `json:"items"`
 
-	// NextCursor 下一页游标
-	NextCursor *uint32 `json:"next_cursor,omitempty"`
+	// NextCursor 下一页游标（最后一条消息的 global_offset 字符串形式，为空表示没有更多数据）
+	NextCursor *string `json:"next_cursor,omitempty"`
 }
 
 // MessageRole defines model for MessageRole.
@@ -670,6 +688,9 @@ type OAuth2Error struct {
 type OAuth2TokenExchangeRequest struct {
 	// Code OAuth2 授权码，由授权回调 URL 的 query 参数携带
 	Code string `json:"code"`
+
+	// CodeVerifier PKCE code_verifier (RFC 7636)，授权请求时传入 code_challenge，交换时传入原始 verifier
+	CodeVerifier *string `json:"code_verifier,omitempty"`
 
 	// DeviceId 前端生成的设备 UUID，用于标识客户端设备
 	DeviceId string `json:"device_id"`
@@ -1218,7 +1239,16 @@ type GetOAuth2RedirectUrlParams struct {
 
 	// RedirectUri 客户端回调地址（Provider 授权完成后重定向到此地址）
 	RedirectUri string `form:"redirect_uri" json:"redirect_uri"`
+
+	// CodeChallenge PKCE code_challenge (RFC 7636)，由 code_verifier 经 SHA-256 + base64url 编码得到
+	CodeChallenge *string `form:"code_challenge,omitempty" json:"code_challenge,omitempty"`
+
+	// CodeChallengeMethod PKCE challenge 方法，推荐 S256
+	CodeChallengeMethod *GetOAuth2RedirectUrlParamsCodeChallengeMethod `form:"code_challenge_method,omitempty" json:"code_challenge_method,omitempty"`
 }
+
+// GetOAuth2RedirectUrlParamsCodeChallengeMethod defines parameters for GetOAuth2RedirectUrl.
+type GetOAuth2RedirectUrlParamsCodeChallengeMethod string
 
 // Oauth2TokenRefreshJSONRequestBody defines body for Oauth2TokenRefresh for application/json ContentType.
 type Oauth2TokenRefreshJSONRequestBody = OAuth2TokenRefreshRequest
