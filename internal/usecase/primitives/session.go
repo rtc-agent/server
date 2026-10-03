@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/protocol"
 
@@ -29,8 +28,8 @@ func PrepareSession(
 	if sessionID != nil {
 		existing, err := deps.SessionRepo.GetByID(ctx, *sessionID)
 		if err != nil {
-			if repo.IsNotFound(err) {
-				return nil, false, fmt.Errorf("session %s not found: %w", *sessionID, repo.ErrSessionNotFound)
+			if IsNotFound(err) {
+				return nil, false, fmt.Errorf("session %s not found: %w", *sessionID, ErrSessionNotFound)
 			}
 			return nil, false, fmt.Errorf("get session: %w", err)
 		}
@@ -91,8 +90,8 @@ func UpdateSessionFields(
 	fields map[string]any,
 ) error {
 	if err := deps.SessionRepo.UpdateFieldsActive(txCtx, sessionID, fields); err != nil {
-		if errors.Is(err, repo.ErrSessionClosedOrNotFound) {
-			return fmt.Errorf("session %s is closed: %w", sessionID, repo.ErrSessionClosed)
+		if errors.Is(err, ErrSessionClosedOrNotFound) {
+			return fmt.Errorf("session %s is closed: %w", sessionID, ErrSessionClosed)
 		}
 		return fmt.Errorf("update session fields: %w", err)
 	}

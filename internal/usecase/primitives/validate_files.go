@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/protocol"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 )
@@ -37,7 +36,7 @@ var fileIDPattern = regexp.MustCompile(`^[a-f0-9]{32}\.[a-zA-Z0-9]{1,10}$`)
 //   - len(files) > MaxFilesPerMessage (too many files)
 //   - any file ID has invalid format
 //   - any file is not found in the database
-func ValidateFilesExist(ctx context.Context, fileRepo repo.FileRepo, files []protocol.FileAttachment, userID uuid.UUID) error {
+func ValidateFilesExist(ctx context.Context, fileRepo FileRepo, files []protocol.FileAttachment, userID uuid.UUID) error {
 	if len(files) == 0 {
 		return nil
 	}
