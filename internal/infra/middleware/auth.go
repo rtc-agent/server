@@ -6,8 +6,10 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/contextx"
+	"github.com/rtc-agent/server/pkg/logger"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // JWTAuth creates a JWT authentication middleware.
@@ -23,7 +25,9 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool) func(http.Handler) htt
 			if token := extractBearerToken(r); token != "" {
 				claims, err := signer.ParseAccessToken(token)
 				if err != nil {
-					// Auth failure already recorded by ParseAccessToken
+					logger.Warn(r.Context(), "JWT validation failed",
+						zap.Error(err),
+						zap.String("remote_addr", r.RemoteAddr))
 					http.Error(w, "unauthorized: invalid token", http.StatusUnauthorized)
 					return
 				}
@@ -31,6 +35,10 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool) func(http.Handler) htt
 				deviceID = claims.DeviceID
 			} else if allowDevBypass {
 				// 2. Dev fallback: read directly from headers (must be explicitly enabled).
+				// Log a warning every time dev bypass is used for audit trail.
+				logger.Warn(r.Context(), "DEV BYPASS: JWT authentication skipped",
+					zap.String("remote_addr", r.RemoteAddr),
+					zap.String("user_id_header", r.Header.Get("X-User-ID")))
 				uidStr := r.Header.Get("X-User-ID")
 				did := r.Header.Get("X-Device-ID")
 				if uidStr == "" || did == "" {

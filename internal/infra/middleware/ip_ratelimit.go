@@ -32,10 +32,11 @@ var ipRateLimitRejected = promauto.NewCounter(
 // The limiter uses a sync.Map for lock-free concurrent access. Limiters are
 // lazily created on first request and have a TTL for automatic cleanup.
 type IPRateLimiter struct {
-	limiters sync.Map // map[string]*ipLimiterEntry
-	r        rate.Limit
-	burst    int
-	ttl      time.Duration
+	limiters       sync.Map // map[string]*ipLimiterEntry
+	r              rate.Limit
+	burst          int
+	ttl            time.Duration
+	trustedProxies []*net.IPNet // CIDR ranges of trusted proxies; if empty, headers are not trusted
 }
 
 type ipLimiterEntry struct {
@@ -50,6 +51,36 @@ type ipLimiterEntry struct {
 // ttl: duration after which an unused limiter is eligible for cleanup
 func NewIPRateLimiter(r rate.Limit, burst int, ttl time.Duration) *IPRateLimiter {
 	return &IPRateLimiter{r: r, burst: burst, ttl: ttl}
+}
+
+// SetTrustedProxies configures CIDR ranges of trusted reverse proxies.
+// When set, X-Forwarded-For and X-Real-IP headers are only trusted if the
+// request's RemoteAddr is within one of these ranges. This prevents IP spoofing
+// when the service is exposed directly to the internet without a proxy.
+func (rl *IPRateLimiter) SetTrustedProxies(cidrs []string) error {
+	var nets []*net.IPNet
+	for _, cidr := range cidrs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return err
+		}
+		nets = append(nets, ipNet)
+	}
+	rl.trustedProxies = nets
+	return nil
+}
+
+// isTrustedProxy checks if the given IP is within a trusted proxy range.
+func (rl *IPRateLimiter) isTrustedProxy(ip net.IP) bool {
+	if len(rl.trustedProxies) == 0 {
+		return false
+	}
+	for _, n := range rl.trustedProxies {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // getLimiter returns the rate limiter for the given IP,
@@ -82,39 +113,51 @@ func (rl *IPRateLimiter) Cleanup() {
 }
 
 // extractClientIP extracts the client IP from the request.
-// It checks X-Forwarded-For and X-Real-IP headers first (for proxied requests),
-// then falls back to RemoteAddr.
-func extractClientIP(r *http.Request) string {
-	// Check X-Forwarded-For first (may contain multiple IPs, take the first)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// X-Forwarded-For: client, proxy1, proxy2
-		if idx := net.ParseIP(xff); idx != nil {
-			return idx.String()
-		}
-		// Multiple IPs - take the first one
-		for i := 0; i < len(xff); i++ {
-			if xff[i] == ',' {
-				if ip := net.ParseIP(xff[:i]); ip != nil {
-					return ip.String()
+// It only trusts X-Forwarded-For and X-Real-IP headers if the request comes
+// from a trusted proxy (configured via SetTrustedProxies). Otherwise, it falls
+// back to RemoteAddr to prevent IP spoofing.
+func (rl *IPRateLimiter) extractClientIP(r *http.Request) string {
+	// Parse RemoteAddr to determine if the request comes from a trusted proxy.
+	remoteIP := parseRemoteIP(r)
+
+	// Only trust forwarding headers if the request comes from a trusted proxy.
+	if rl.isTrustedProxy(remoteIP) {
+		// Check X-Forwarded-For first (may contain multiple IPs, take the first)
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// X-Forwarded-For: client, proxy1, proxy2
+			if idx := net.ParseIP(xff); idx != nil {
+				return idx.String()
+			}
+			// Multiple IPs - take the first one
+			for i := 0; i < len(xff); i++ {
+				if xff[i] == ',' {
+					if ip := net.ParseIP(xff[:i]); ip != nil {
+						return ip.String()
+					}
+					break
 				}
-				break
+			}
+		}
+
+		// Check X-Real-IP
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			if ip := net.ParseIP(xri); ip != nil {
+				return ip.String()
 			}
 		}
 	}
 
-	// Check X-Real-IP
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		if ip := net.ParseIP(xri); ip != nil {
-			return ip.String()
-		}
-	}
-
 	// Fall back to RemoteAddr
+	return remoteIP.String()
+}
+
+// parseRemoteIP extracts the IP from the request's RemoteAddr.
+func parseRemoteIP(r *http.Request) net.IP {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr // No port
+		return net.ParseIP(r.RemoteAddr)
 	}
-	return host
+	return net.ParseIP(host)
 }
 
 // Middleware returns an HTTP middleware that enforces per-IP rate limiting.
@@ -125,7 +168,7 @@ func extractClientIP(r *http.Request) string {
 func (rl *IPRateLimiter) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := extractClientIP(r)
+			ip := rl.extractClientIP(r)
 			limiter := rl.getLimiter(ip)
 			if !limiter.Allow() {
 				ipRateLimitRejected.Inc()
