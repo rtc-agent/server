@@ -79,7 +79,7 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 	existingFile, err := h.oss3UC.GetFileRecord(ctx, userID, key)
 	if err != nil {
 		// Database error — fail fast
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		rtcoss3.WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
 		return
@@ -134,7 +134,7 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 	etag, err := h.oss3UC.CompleteMultipartUploadWithComp(
 		r.Context(), userID, bucket, key, uploadID, parts)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "backend_error")
 		span.RecordError(err)
 		rtcoss3.WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return

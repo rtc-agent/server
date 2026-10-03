@@ -65,7 +65,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 				Message: fmt.Sprintf("session %s not found", req.SessionId),
 			}
 		}
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}

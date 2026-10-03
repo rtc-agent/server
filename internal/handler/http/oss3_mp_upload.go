@@ -57,7 +57,7 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 	const uploadPartLockTTL = 30 * time.Second
 	lockHolder, acquired, lockErr := h.oss3UC.AcquireUploadPartLock(r.Context(), uploadID, uploadPartLockTTL)
 	if lockErr != nil {
-		span.SetStatus(codes.Error, lockErr.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(lockErr)
 		rtcoss3.WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
 		return
@@ -72,7 +72,7 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 	// Check if part with this number already exists to prevent data overwrite
 	existingParts, err := h.oss3UC.Backend().ListParts(r.Context(), bucket, key, uploadID)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "backend_error")
 		span.RecordError(err)
 		rtcoss3.WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
@@ -124,7 +124,7 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 	etag, err := h.oss3UC.Backend().UploadPart(
 		r.Context(), bucket, key, uploadID, partNumber, r.Body, contentLength)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "backend_error")
 		span.RecordError(err)
 		rtcoss3.WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return

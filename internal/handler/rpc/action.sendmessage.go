@@ -114,7 +114,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	content := extractMessageContent(ctx, req.ContentData)
 
 	if err := primitives.ValidateCreateMessageRequest(content); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "validation_error")
 		return nil, &APIError{Code: "invalid_argument", Message: err.Error()}
 	}
 
@@ -144,7 +144,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	initialTitle := primitives.TruncateTitle(content, 50)
 	session, isNew, err := primitives.PrepareSession(ctx, h.deps.Deps, sessionUUIDPtr, req.ClientSessionId, creator, initialTitle)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
@@ -154,7 +154,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	}
 	if !isNew {
 		if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, session.ID, creator); err != nil {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "permission_denied")
 			return nil, h.ownershipError(ctx, err)
 		}
 	}

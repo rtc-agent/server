@@ -98,9 +98,6 @@ type tracingCallbacks struct {
 func (cb *tracingCallbacks) before(operation string) func(*gorm.DB) {
 	return func(db *gorm.DB) {
 		ctx := cb.getCtx(db)
-		// Check if context has a span (for debugging)
-		spanCtx := trace.SpanContextFromContext(ctx)
-		_ = spanCtx // Just for debugging
 
 		ctx, span := cb.tracer.Start(ctx, operation,
 			trace.WithAttributes(

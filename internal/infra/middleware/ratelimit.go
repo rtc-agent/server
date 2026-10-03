@@ -7,10 +7,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/infra/httputil"
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // rateLimitRejected counts HTTP requests rejected due to per-user rate limiting.
@@ -76,6 +78,9 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 			limiter := rl.getLimiter(userID.String())
 			if !limiter.Allow() {
 				rateLimitRejected.Inc()
+				logger.Warn(r.Context(), "rate limit exceeded",
+					zap.String("user_id", userID.String()),
+				)
 				httputil.WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many requests")
 				return
 			}

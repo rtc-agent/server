@@ -84,7 +84,7 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(
 	// Create multipart upload in backend
 	result, err := h.oss3UC.Backend().CreateMultipartUpload(r.Context(), bucket, key, contentType)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "backend_error")
 		span.RecordError(err)
 		rtcoss3.WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return

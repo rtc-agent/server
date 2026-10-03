@@ -43,6 +43,9 @@ func init() {
 		if err != nil {
 			// CIDRs are hardcoded; parse failure indicates a programming error.
 			// Log and skip rather than panic to allow the application to start.
+			// NOTE: log.Printf is used here because the structured logger may not
+			// be initialized during init(). This path only fires on programmer error
+			// in hardcoded CIDRs, so standard log is acceptable.
 			log.Printf("[webfetch] WARNING: invalid CIDR %q skipped: %v", cidr, err)
 			continue
 		}

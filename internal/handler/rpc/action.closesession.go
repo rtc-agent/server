@@ -57,7 +57,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 			span.SetStatus(codes.Error, "session.not_found")
 			return nil, &APIError{Code: "session.not_found", Message: fmt.Sprintf("session %s not found", req.SessionId)}
 		}
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}

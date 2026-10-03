@@ -4,13 +4,16 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 
 	"github.com/rtc-agent/server/internal/infra/httputil"
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // ipRateLimitRejected counts HTTP requests rejected due to per-IP rate limiting.
@@ -37,7 +40,7 @@ type IPRateLimiter struct {
 
 type ipLimiterEntry struct {
 	limiter  *rate.Limiter
-	lastSeen time.Time
+	lastSeen atomic.Int64 // Unix nano, accessed atomically to avoid data races
 }
 
 // NewIPRateLimiter creates an IPRateLimiter with the given rate, burst, and TTL.
@@ -55,11 +58,12 @@ func (rl *IPRateLimiter) getLimiter(ip string) *rate.Limiter {
 	now := time.Now()
 	if v, ok := rl.limiters.Load(ip); ok {
 		entry := v.(*ipLimiterEntry)
-		entry.lastSeen = now
+		entry.lastSeen.Store(now.UnixNano())
 		return entry.limiter
 	}
 	limiter := rate.NewLimiter(rl.r, rl.burst)
-	entry := &ipLimiterEntry{limiter: limiter, lastSeen: now}
+	entry := &ipLimiterEntry{limiter: limiter}
+	entry.lastSeen.Store(now.UnixNano())
 	actual, _ := rl.limiters.LoadOrStore(ip, entry)
 	return actual.(*ipLimiterEntry).limiter
 }
@@ -67,10 +71,10 @@ func (rl *IPRateLimiter) getLimiter(ip string) *rate.Limiter {
 // Cleanup removes entries that haven't been seen within the TTL.
 // Should be called periodically (e.g., every minute) to prevent memory growth.
 func (rl *IPRateLimiter) Cleanup() {
-	cutoff := time.Now().Add(-rl.ttl)
+	cutoff := time.Now().Add(-rl.ttl).UnixNano()
 	rl.limiters.Range(func(key, value any) bool {
 		entry := value.(*ipLimiterEntry)
-		if entry.lastSeen.Before(cutoff) {
+		if entry.lastSeen.Load() < cutoff {
 			rl.limiters.Delete(key)
 		}
 		return true
@@ -125,6 +129,9 @@ func (rl *IPRateLimiter) Middleware() func(http.Handler) http.Handler {
 			limiter := rl.getLimiter(ip)
 			if !limiter.Allow() {
 				ipRateLimitRejected.Inc()
+				logger.Warn(r.Context(), "IP rate limit exceeded",
+					zap.String("remote_addr", r.RemoteAddr),
+					zap.String("client_ip", ip))
 				httputil.WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many requests from your IP")
 				return
 			}

@@ -260,7 +260,7 @@ func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.D
 		setupSubscribeHandler(client, broker, clientCtx, metrics)
 		setupHistoryHandler(client, clientCtx)
 		setupRPCHandler(client, userID, ci.DeviceID, rpcTimeout, clientCtx, metrics)
-		setupDisconnectHandler(client, userID, ci.DeviceID, clientSpan, metrics)
+		setupDisconnectHandler(client, userID, ci.DeviceID, clientSpan, clientCtx, metrics)
 
 		logger.Info(stdcontext.Background(), "[Centrifuge] client connected",
 			zap.String("client_id", client.ID()),
@@ -271,7 +271,7 @@ func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.D
 
 // setupDisconnectHandler registers the disconnect callback: ends the client span
 // and records slow disconnects as errors so they appear in Jaeger.
-func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, clientSpan trace.Span, metrics *centrifugeMetrics) {
+func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, clientSpan trace.Span, clientCtx stdcontext.Context, metrics *centrifugeMetrics) {
 	client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 		reason := e.Reason
 		code := e.Code
@@ -284,7 +284,7 @@ func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceI
 			clientSpan.RecordError(fmt.Errorf("client disconnected: slow (code %d)", code))
 			clientSpan.SetStatus(codes.Error, "slow disconnect")
 
-			logger.Error(stdcontext.Background(), "[Centrifuge] client disconnected: slow",
+			logger.Error(clientCtx, "[Centrifuge] client disconnected: slow",
 				zap.String("client_id", client.ID()),
 				zap.String("user_id", userID.String()),
 				zap.String("device_id", deviceID),
@@ -299,7 +299,7 @@ func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceI
 		// Record disconnect metrics
 		metrics.recordDisconnected(reasonLabel)
 
-		logger.Info(stdcontext.Background(), "[Centrifuge] client disconnected",
+		logger.Info(clientCtx, "[Centrifuge] client disconnected",
 			zap.String("client_id", client.ID()),
 			zap.String("user_id", userID.String()),
 			zap.String("reason", reason),

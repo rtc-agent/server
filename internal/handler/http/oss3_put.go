@@ -78,7 +78,7 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	instantResult, err := h.oss3UC.CheckInstantUpload(ctx, userID, bucket, key)
 	if err != nil {
 		// Database error — fail fast
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		rtcoss3.WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
 		return
@@ -162,7 +162,7 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	etag, err := h.oss3UC.Backend().PutObject(
 		r.Context(), bucket, key, r.Body, contentLength, contentType)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "backend_error")
 		span.RecordError(err)
 		// Check if the error is due to request body being too large
 		if strings.Contains(err.Error(), "http: request body too large") {
@@ -195,7 +195,7 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	err = h.oss3UC.PutObjectWithComp(
 		r.Context(), userID, bucket, key, contentLength, contentType, etag)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		rtcoss3.WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
 		return

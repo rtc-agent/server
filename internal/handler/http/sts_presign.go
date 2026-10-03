@@ -90,7 +90,7 @@ func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.
 
 	var req presignRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writePresignError(w, r, http.StatusBadRequest, "presign.invalid_request", "invalid request body: "+err.Error())
+		writePresignError(w, r, http.StatusBadRequest, "presign.invalid_request", "invalid request body")
 		return
 	}
 

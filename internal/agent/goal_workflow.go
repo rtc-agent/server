@@ -7,6 +7,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/repo"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"go.opentelemetry.io/otel/attribute"
@@ -128,7 +129,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 
 	goal, err := g.helpers.deps.GoalRepo.FindActive(ctx, ctx.SessionID)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		g.helpers.logger.Warn(ctx, "goalWorkflow.find_active_failed", map[string]any{
 			"session_id": ctx.SessionID.String(),
@@ -155,13 +156,14 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	if newTurns > goal.MaxTurns {
 		span.SetAttributes(attribute.String("goal.status", "exhausted"))
 		err = g.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
-			return g.helpers.deps.GoalRepo.Update(ctx, goal.ID, map[string]any{
+			txCtx := repo.WithTx(ctx.Context, tx)
+			return g.helpers.deps.GoalRepo.Update(txCtx, goal.ID, map[string]any{
 				"status":          model.GoalStatusExhausted,
 				"completed_turns": newTurns,
 			})
 		})
 		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			g.helpers.logger.Warn(ctx, "goalWorkflow.update_exhausted_failed", map[string]any{
 				"goal_id": goal.ID.String(),
@@ -180,12 +182,13 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	}
 
 	err = g.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
-		return g.helpers.deps.GoalRepo.Update(ctx, goal.ID, map[string]any{
+		txCtx := repo.WithTx(ctx.Context, tx)
+		return g.helpers.deps.GoalRepo.Update(txCtx, goal.ID, map[string]any{
 			"completed_turns": newTurns,
 		})
 	})
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		g.helpers.logger.Warn(ctx, "goalWorkflow.update_goal_failed", map[string]any{
 			"goal_id": goal.ID.String(),
@@ -203,7 +206,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	// Use log+degrade pattern: notification failure should not interrupt the main flow.
 	prompt := buildGoalTaskNotificationPrompt(goal)
 	if err := createNotificationMessage(ctx, g.helpers.deps, ctx.SessionID, prompt); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		g.helpers.logger.Warn(ctx, "goalWorkflow.create_notification_failed", map[string]any{
 			"goal_id": goal.ID.String(),

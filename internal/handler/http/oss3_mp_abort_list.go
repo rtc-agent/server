@@ -40,7 +40,7 @@ func (h *OSS3MultipartHandler) handleAbortMultipartUpload(
 
 	// Abort multipart upload in backend
 	if err := h.oss3UC.Backend().AbortMultipartUpload(r.Context(), bucket, key, uploadID); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "backend_error")
 		span.RecordError(err)
 		rtcoss3.WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
@@ -99,7 +99,7 @@ func (h *OSS3MultipartHandler) handleListParts(
 	// List all parts from backend (backend handles its own pagination internally)
 	allParts, err := h.oss3UC.Backend().ListParts(r.Context(), bucket, key, uploadID)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "backend_error")
 		span.RecordError(err)
 		rtcoss3.WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return

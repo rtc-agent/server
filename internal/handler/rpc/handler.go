@@ -106,7 +106,6 @@ func dispatch[Req any, Resp any](fn func(context.Context, *Req) (*Resp, error)) 
 			return nil, &APIError{
 				Code:    "invalid_request",
 				Message: "failed to parse request body",
-				Details: err.Error(),
 			}
 		}
 		return fn(ctx, &req)
