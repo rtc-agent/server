@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rtc-agent/server/internal/infra/config"
+	dbmetrics "github.com/rtc-agent/server/internal/infra/db"
 	"github.com/rtc-agent/server/internal/infra/tracing"
 	"github.com/rtc-agent/server/pkg/logger"
 
@@ -108,6 +109,11 @@ func runServe(cmd *cobra.Command, args []string) {
 	// Register GORM tracing plugin for OpenTelemetry spans on SQL operations.
 	if err := db.Use(logger.NewTracingPlugin()); err != nil {
 		logger.Fatal(context.Background(), "Failed to register GORM tracing plugin", zap.Error(err))
+	}
+
+	// Register GORM metrics plugin for Prometheus query metrics.
+	if err := db.Use(dbmetrics.NewMetricsPlugin()); err != nil {
+		logger.Fatal(context.Background(), "Failed to register GORM metrics plugin", zap.Error(err))
 	}
 
 	// Configure database connection pool.
