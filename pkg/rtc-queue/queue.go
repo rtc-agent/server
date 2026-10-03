@@ -52,7 +52,7 @@ func (q *Queue) Client() *redis.Client { return q.rdb }
 // session:new channel so idle workers can wake up and try to claim it.
 // All three writes are performed atomically by a single Lua script.
 func (q *Queue) Publish(ctx context.Context, sessionID, data string, priority int64) (string, error) {
-	ctx, span := queueTracer().Start(ctx, "Queue.Publish",
+	ctx, span := queueTracer().Start(ctx, "queue.publish",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.Int64("work.priority", priority),
@@ -77,9 +77,11 @@ func (q *Queue) Publish(ctx context.Context, sessionID, data string, priority in
 		workID, sessionID, data, priority, now, now,
 		ChannelSessionNew, sessionID,
 	).Err(); err != nil {
+		globalQueueMetrics.recordPublish("error")
 		span.SetStatus(codes.Error, err.Error())
 		return "", fmt.Errorf("rtcqueue: publish: %w", err)
 	}
+	globalQueueMetrics.recordPublish("success")
 	return workID, nil
 }
 
@@ -88,7 +90,7 @@ func (q *Queue) Publish(ctx context.Context, sessionID, data string, priority in
 // by another worker, or its queue is empty, Claim returns nil with a
 // nil error.
 func (q *Queue) Claim(ctx context.Context, sessionID, workerID string) (*ClaimResult, error) {
-	ctx, span := queueTracer().Start(ctx, "Queue.Claim",
+	ctx, span := queueTracer().Start(ctx, "queue.claim",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.String("worker.id", workerID),
@@ -109,26 +111,31 @@ func (q *Queue) Claim(ctx context.Context, sessionID, workerID string) (*ClaimRe
 	}, workerID, DefaultLockTTLSeconds, now).Result()
 	if errors.Is(err, redis.Nil) {
 		span.SetAttributes(attribute.Bool("queue.claimed", false))
+		globalQueueMetrics.recordClaim("empty")
 		return nil, nil
 	}
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
+		globalQueueMetrics.recordClaim("error")
 		return nil, fmt.Errorf("rtcqueue: claim: %w", err)
 	}
 	arr, ok := res.([]interface{})
 	if !ok || len(arr) == 0 {
 		span.SetAttributes(attribute.Bool("queue.claimed", false))
+		globalQueueMetrics.recordClaim("empty")
 		return nil, nil
 	}
 	workID, ok := arr[0].(string)
 	if !ok {
 		span.SetStatus(codes.Error, fmt.Sprintf("unexpected work_id type %T", arr[0]))
+		globalQueueMetrics.recordClaim("error")
 		return nil, fmt.Errorf("rtcqueue: claim: unexpected work_id type %T", arr[0])
 	}
 	span.SetAttributes(
 		attribute.Bool("queue.claimed", true),
 		attribute.String("work.id", workID),
 	)
+	globalQueueMetrics.recordClaim("success")
 	return &ClaimResult{SessionID: sessionID, WorkID: workID}, nil
 }
 
@@ -145,7 +152,7 @@ func (q *Queue) Claim(ctx context.Context, sessionID, workerID string) (*ClaimRe
 // This design ensures that only the worker who first claimed the session can
 // continue processing its work items, preventing other workers from interfering.
 func (q *Queue) ClaimWithCredential(ctx context.Context, sessionID, workerID, credential string) (*ClaimResult, error) {
-	ctx, span := queueTracer().Start(ctx, "Queue.ClaimWithCredential",
+	ctx, span := queueTracer().Start(ctx, "queue.claim_with_credential",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.String("worker.id", workerID),
@@ -172,31 +179,37 @@ func (q *Queue) ClaimWithCredential(ctx context.Context, sessionID, workerID, cr
 	}, workerID, credential, DefaultLockTTLSeconds, now).Result()
 	if errors.Is(err, redis.Nil) {
 		span.SetAttributes(attribute.Bool("queue.claimed", false))
+		globalQueueMetrics.recordClaim("empty")
 		return nil, nil
 	}
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
+		globalQueueMetrics.recordClaim("error")
 		return nil, fmt.Errorf("rtcqueue: claim with credential: %w", err)
 	}
 	arr, ok := res.([]interface{})
 	if !ok || len(arr) < 2 {
 		span.SetAttributes(attribute.Bool("queue.claimed", false))
+		globalQueueMetrics.recordClaim("empty")
 		return nil, nil
 	}
 	workID, ok := arr[0].(string)
 	if !ok {
 		span.SetStatus(codes.Error, fmt.Sprintf("unexpected work_id type %T", arr[0]))
+		globalQueueMetrics.recordClaim("error")
 		return nil, fmt.Errorf("rtcqueue: claim: unexpected work_id type %T", arr[0])
 	}
 	cred, ok := arr[1].(string)
 	if !ok {
 		span.SetStatus(codes.Error, fmt.Sprintf("unexpected credential type %T", arr[1]))
+		globalQueueMetrics.recordClaim("error")
 		return nil, fmt.Errorf("rtcqueue: claim: unexpected credential type %T", arr[1])
 	}
 	span.SetAttributes(
 		attribute.Bool("queue.claimed", true),
 		attribute.String("work.id", workID),
 	)
+	globalQueueMetrics.recordClaim("success")
 	return &ClaimResult{
 		SessionID:  sessionID,
 		WorkID:     workID,
@@ -207,7 +220,7 @@ func (q *Queue) ClaimWithCredential(ctx context.Context, sessionID, workerID, cr
 // LoadWork fetches a Work item by id. Returns nil, nil when the key is
 // absent.
 func (q *Queue) LoadWork(ctx context.Context, workID string) (*Work, error) {
-	ctx, span := queueTracer().Start(ctx, "Queue.LoadWork",
+	ctx, span := queueTracer().Start(ctx, "queue.load_work",
 		trace.WithAttributes(
 			attribute.String("work.id", workID),
 		),
@@ -236,7 +249,7 @@ func (q *Queue) LoadWork(ctx context.Context, workID string) (*Work, error) {
 // completing someone else's work will yank the lock out from under the
 // processing worker. This contract is not enforced server-side.
 func (q *Queue) Complete(ctx context.Context, workID string) error {
-	ctx, span := queueTracer().Start(ctx, "Queue.Complete",
+	ctx, span := queueTracer().Start(ctx, "queue.complete",
 		trace.WithAttributes(
 			attribute.String("work.id", workID),
 		),
@@ -248,13 +261,16 @@ func (q *Queue) Complete(ctx context.Context, workID string) error {
 		ChannelSessionNew,
 	).Int()
 	if err != nil {
+		globalQueueMetrics.recordComplete("error")
 		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("rtcqueue: complete: %w", err)
 	}
 	if n == 0 {
+		globalQueueMetrics.recordComplete("error")
 		span.SetAttributes(attribute.Bool("work.found", false))
 		return fmt.Errorf("rtcqueue: work %s not found", workID)
 	}
+	globalQueueMetrics.recordComplete("success")
 	return nil
 }
 
@@ -266,7 +282,7 @@ func (q *Queue) Complete(ctx context.Context, workID string) error {
 // This is different from Complete, which releases the lock and allows other
 // workers to claim the next work item.
 func (q *Queue) CompleteWork(ctx context.Context, workID string) error {
-	ctx, span := queueTracer().Start(ctx, "Queue.CompleteWork",
+	ctx, span := queueTracer().Start(ctx, "queue.complete_work",
 		trace.WithAttributes(
 			attribute.String("work.id", workID),
 		),
@@ -290,12 +306,15 @@ func (q *Queue) CompleteWork(ctx context.Context, workID string) error {
 		keyActive(work.SessionID),
 	}, time.Now().Unix()).Int()
 	if err != nil {
+		globalQueueMetrics.recordComplete("error")
 		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("rtcqueue: complete work: %w", err)
 	}
 	if n == 0 {
+		globalQueueMetrics.recordComplete("error")
 		return fmt.Errorf("rtcqueue: work %s not found", workID)
 	}
+	globalQueueMetrics.recordComplete("success")
 	return nil
 }
 
@@ -311,7 +330,7 @@ func (q *Queue) CompleteWork(ctx context.Context, workID string) error {
 // session:cancel:<session_id> and stop. Do not expose this method to
 // untrusted callers.
 func (q *Queue) Cancel(ctx context.Context, workID, reason string) error {
-	ctx, span := queueTracer().Start(ctx, "Queue.Cancel",
+	ctx, span := queueTracer().Start(ctx, "queue.cancel",
 		trace.WithAttributes(
 			attribute.String("work.id", workID),
 			attribute.String("cancel.reason", reason),
@@ -335,17 +354,21 @@ func (q *Queue) Cancel(ctx context.Context, workID, reason string) error {
 		string(payload),
 	).Int()
 	if err != nil {
+		globalQueueMetrics.recordCancel("error")
 		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("rtcqueue: cancel: %w", err)
 	}
 	if n == 0 {
+		globalQueueMetrics.recordCancel("not_found")
 		span.SetAttributes(attribute.Bool("work.found", false))
 		return fmt.Errorf("rtcqueue: work %s not found", workID)
 	}
 	if n < 0 {
+		globalQueueMetrics.recordCancel("already_terminal")
 		span.SetAttributes(attribute.Bool("work.already_terminal", true))
 		return ErrAlreadyTerminal
 	}
+	globalQueueMetrics.recordCancel(reason)
 	return nil
 }
 
@@ -358,7 +381,7 @@ func (q *Queue) Cancel(ctx context.Context, workID, reason string) error {
 // The method is safe to call even if no work is pending or processing: it
 // returns nil in that case.
 func (q *Queue) CancelSession(ctx context.Context, sessionID, reason string) error {
-	ctx, span := queueTracer().Start(ctx, "Queue.CancelSession",
+	ctx, span := queueTracer().Start(ctx, "queue.cancel_session",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.String("cancel.reason", reason),
@@ -410,7 +433,7 @@ func (q *Queue) CancelSession(ctx context.Context, sessionID, reason string) err
 // by another worker — extending that other worker's hold would corrupt
 // ownership.
 func (q *Queue) RenewLock(ctx context.Context, sessionID, workerID string) (bool, error) {
-	ctx, span := queueTracer().Start(ctx, "Queue.RenewLock",
+	ctx, span := queueTracer().Start(ctx, "queue.renew_lock",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.String("worker.id", workerID),
@@ -437,7 +460,7 @@ func (q *Queue) RenewLock(ctx context.Context, sessionID, workerID string) (bool
 // hash-based locks used in "hold lock" mode. Returns false if the lock
 // is no longer held by this worker with the correct credential.
 func (q *Queue) RenewLockWithCredential(ctx context.Context, sessionID, workerID, credential string) (bool, error) {
-	ctx, span := queueTracer().Start(ctx, "Queue.RenewLockWithCredential",
+	ctx, span := queueTracer().Start(ctx, "queue.renew_lock_with_credential",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.String("worker.id", workerID),
@@ -474,7 +497,7 @@ func (q *Queue) RenewLockWithCredential(ctx context.Context, sessionID, workerID
 // Returns (*ClaimResult, nil) when the next work item was successfully claimed.
 // Returns (nil, error) on Redis or data errors.
 func (q *Queue) CompleteWorkAndClaimNext(ctx context.Context, currentWorkID, workerID, credential string) (*ClaimResult, error) {
-	ctx, span := queueTracer().Start(ctx, "Queue.CompleteWorkAndClaimNext",
+	ctx, span := queueTracer().Start(ctx, "queue.complete_work_and_claim_next",
 		trace.WithAttributes(
 			attribute.String("work.id", currentWorkID),
 			attribute.String("worker.id", workerID),
@@ -548,7 +571,7 @@ func (q *Queue) CompleteWorkAndClaimNext(ctx context.Context, currentWorkID, wor
 // Returns (false, nil) if the lock is missing or owned by someone else.
 // Returns (false, err) on Redis errors.
 func (q *Queue) ReleaseSession(ctx context.Context, sessionID, workerID, credential string) (bool, error) {
-	ctx, span := queueTracer().Start(ctx, "Queue.ReleaseSession",
+	ctx, span := queueTracer().Start(ctx, "queue.release_session",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.String("worker.id", workerID),
@@ -578,7 +601,7 @@ func (q *Queue) ReleaseSession(ctx context.Context, sessionID, workerID, credent
 // WARNING: This method can cause split-brain if called while a worker
 // legitimately holds the lock. Use ReleaseSession for normal operation.
 func (q *Queue) ForceReleaseSession(ctx context.Context, sessionID string) error {
-	ctx, span := queueTracer().Start(ctx, "Queue.ForceReleaseSession",
+	ctx, span := queueTracer().Start(ctx, "queue.force_release_session",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.String("release.mode", "force"),
@@ -603,7 +626,7 @@ func (q *Queue) ForceReleaseSession(ctx context.Context, sessionID string) error
 // Implemented as a single Lua script to avoid N+1 Redis round-trips
 // (ZRange + per-item HGet) and ensure atomicity.
 func (q *Queue) HasPendingWorkByKind(ctx context.Context, sessionID string, kind string) (bool, error) {
-	ctx, span := queueTracer().Start(ctx, "Queue.HasPendingWorkByKind",
+	ctx, span := queueTracer().Start(ctx, "queue.has_pending_work_by_kind",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.String("work.kind", kind),
@@ -626,7 +649,7 @@ func (q *Queue) HasPendingWorkByKind(ctx context.Context, sessionID string, kind
 // SubscribeNew returns a Pub/Sub subscribed to the session:new channel.
 // Callers are responsible for closing it.
 func (q *Queue) SubscribeNew(ctx context.Context) *redis.PubSub {
-	_, span := queueTracer().Start(ctx, "Queue.SubscribeNew")
+	_, span := queueTracer().Start(ctx, "queue.subscribe_new")
 	defer span.End()
 	return q.rdb.Subscribe(ctx, ChannelSessionNew)
 }
@@ -634,7 +657,7 @@ func (q *Queue) SubscribeNew(ctx context.Context) *redis.PubSub {
 // SubscribeCancel returns a Pub/Sub subscribed to the cancel channel of
 // a specific session.
 func (q *Queue) SubscribeCancel(ctx context.Context, sessionID string) *redis.PubSub {
-	_, span := queueTracer().Start(ctx, "Queue.SubscribeCancel",
+	_, span := queueTracer().Start(ctx, "queue.subscribe_cancel",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 		),

@@ -23,6 +23,7 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool) func(http.Handler) htt
 			if token := extractBearerToken(r); token != "" {
 				claims, err := signer.ParseAccessToken(token)
 				if err != nil {
+					// Auth failure already recorded by ParseAccessToken
 					http.Error(w, "unauthorized: invalid token", http.StatusUnauthorized)
 					return
 				}
@@ -33,17 +34,20 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool) func(http.Handler) htt
 				uidStr := r.Header.Get("X-User-ID")
 				did := r.Header.Get("X-Device-ID")
 				if uidStr == "" || did == "" {
+					auth.RecordFailure("http", "missing")
 					http.Error(w, "unauthorized", http.StatusUnauthorized)
 					return
 				}
 				parsed, err := uuid.Parse(uidStr)
 				if err != nil {
+					auth.RecordFailure("http", "invalid")
 					http.Error(w, "unauthorized: invalid user id", http.StatusUnauthorized)
 					return
 				}
 				userID = parsed
 				deviceID = did
 			} else {
+				auth.RecordFailure("http", "missing")
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
