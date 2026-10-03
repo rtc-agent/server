@@ -60,7 +60,7 @@ func (c *Config) Validate() error {
 	}
 	// Security: reject weak/default JWT secrets in production.
 	const weakJWTSecrets = "rtc-agent-dev-jwt-secret-change-me-in-production"
-	if c.Auth.JWTSecret == weakJWTSecrets {
+	if c.Server.Env == "production" && c.Auth.JWTSecret == weakJWTSecrets {
 		return fmt.Errorf("auth.jwt_secret must not use the default development value in production: generate a secure random string")
 	}
 	if c.Auth.AccessTokenTTLSeconds <= 0 {
