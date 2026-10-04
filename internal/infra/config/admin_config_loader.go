@@ -9,19 +9,20 @@ import (
 
 // LoadAdminConfig loads admin-server configuration from file.
 func LoadAdminConfig(cfgFile string) (*AdminConfig, error) {
+	v := viper.New()
 	if cfgFile != "" {
 		if _, err := os.Stat(cfgFile); os.IsNotExist(err) {
 			return nil, fmt.Errorf("admin config file not found: %s", cfgFile)
 		}
-		viper.SetConfigFile(cfgFile)
+		v.SetConfigFile(cfgFile)
 	}
 
-	if err := viper.ReadInConfig(); err != nil {
+	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read admin config: %w", err)
 	}
 
 	var cfg AdminConfig
-	if err := viper.Unmarshal(&cfg); err != nil {
+	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal admin config: %w", err)
 	}
 

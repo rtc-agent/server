@@ -1,0 +1,32 @@
+# RTC Agent Admin Server Docker 部署配置
+# 用于 docker-compose.yml，挂载到 /app/etc/admin.yaml
+# Docker 内部服务名替代 localhost（postgres/redis）
+
+server:
+  host: "0.0.0.0"
+  port: 8081
+  env: "development"  # WARNING: Set to "production" in production deployments
+
+database:
+  dsn: "postgres://rtc_agent:rtc_agent@postgres:5432/rtc_agent_admin?sslmode=disable"
+  auto_migrate: true
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+
+log:
+  level: "debug"
+
+jwt:
+  algorithm: "RS256"
+  issuer: "http://admin-server:8081"  # Docker 内部服务名
+  audience: "http://server-1:8888"    # RTC Agent Server 标识
+  private_key_path: "/app/etc/keys/admin-private.pem"
+  public_key_path: "/app/etc/keys/admin-public.pem"
+  access_token_ttl: 3600      # 1 hour
+  refresh_token_ttl: 604800   # 7 days
+
+cors:
+  allow_origins: ["http://localhost:23001", "http://localhost:5173"]  # Grafana, Vite dev server

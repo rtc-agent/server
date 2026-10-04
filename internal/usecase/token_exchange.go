@@ -326,32 +326,19 @@ func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 		return nil, fmt.Errorf("convert jwk to public key: %w", err)
 	}
 
-	// Build allowed algorithms list.
+	// Build allowed algorithms list, falling back to common asymmetric algorithms.
 	allowedAlgs := issuerCfg.AllowedAlgorithms
 	if len(allowedAlgs) == 0 {
 		allowedAlgs = []string{"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}
 	}
 
-	// Verify the JWT.
 	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (any, error) {
-		// Check algorithm.
-		alg := t.Method.Alg()
-		allowed := false
-		for _, a := range allowedAlgs {
-			if a == alg {
-				allowed = true
-				break
-			}
+		if !isAllowedAlgorithm(t.Method.Alg(), allowedAlgs) {
+			return nil, fmt.Errorf("unexpected signing algorithm: %s", t.Method.Alg())
 		}
-		if !allowed {
-			return nil, fmt.Errorf("unexpected signing algorithm: %s", alg)
-		}
-
-		// Verify key type matches algorithm.
 		if err := validateKeyType(t.Method, pubKey); err != nil {
 			return nil, err
 		}
-
 		return pubKey, nil
 	},
 		jwt.WithIssuer(issuerCfg.Issuer),
@@ -401,38 +388,26 @@ func (uc *TokenExchangeUsecase) extractUserInfo(claims jwt.MapClaims, issuerCfg 
 		info.sub = sub
 	}
 
-	// Build reverse mapping: target field -> source claim name.
+	// Build effective mapping: target field -> source claim name.
 	// Default mapping: email->email, name->name, picture->avatar_url.
-	defaultMapping := map[string]string{
+	// Custom claims_mapping overrides defaults.
+	mapping := map[string]string{
 		"email":      "email",
 		"name":       "name",
 		"avatar_url": "picture",
-	}
-
-	// Apply custom claims_mapping (overrides defaults).
-	mapping := make(map[string]string)
-	for k, v := range defaultMapping {
-		mapping[k] = v
 	}
 	for k, v := range issuerCfg.ClaimsMapping {
 		mapping[k] = v
 	}
 
-	// Extract mapped fields.
-	if sourceClaim, ok := mapping["email"]; ok {
-		if v, ok := claims[sourceClaim].(string); ok {
-			info.email = v
-		}
+	if v, ok := claims[mapping["email"]].(string); ok {
+		info.email = v
 	}
-	if sourceClaim, ok := mapping["name"]; ok {
-		if v, ok := claims[sourceClaim].(string); ok {
-			info.name = v
-		}
+	if v, ok := claims[mapping["name"]].(string); ok {
+		info.name = v
 	}
-	if sourceClaim, ok := mapping["avatar_url"]; ok {
-		if v, ok := claims[sourceClaim].(string); ok {
-			info.avatarURL = v
-		}
+	if v, ok := claims[mapping["avatar_url"]].(string); ok {
+		info.avatarURL = v
 	}
 
 	return info
@@ -501,4 +476,14 @@ func validateKeyType(method jwt.SigningMethod, pubKey crypto.PublicKey) error {
 		return fmt.Errorf("unsupported signing method: %v", method)
 	}
 	return nil
+}
+
+// isAllowedAlgorithm checks whether the given algorithm name is in the allowed list.
+func isAllowedAlgorithm(alg string, allowed []string) bool {
+	for _, a := range allowed {
+		if a == alg {
+			return true
+		}
+	}
+	return false
 }

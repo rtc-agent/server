@@ -193,6 +193,32 @@ services:
     restart: "no"
 
   # ===========================================================================
+  # Admin Server（后台管理系统）
+  # ===========================================================================
+
+  admin-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rtc-full-admin-server
+    env_file:
+      - .env
+    environment:
+      DEBUG__ENABLED: "true"
+    expose:
+      - "8081"
+    volumes:
+      - ./etc/admin.docker.yaml:/app/etc/admin.yaml:ro
+      - ./etc/keys:/app/etc/keys:ro  # JWT 密钥对
+      - admin-ui-dist:/app/web/admin:ro  # admin-ui 构建产物
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ===========================================================================
   # Server 集群（2 实例，验证分布式部署）
   # ===========================================================================
 
@@ -284,3 +310,4 @@ volumes:
   full-grafana-data:
   full-alertmanager-data:
   full-promtail-positions:
+  admin-ui-dist:
