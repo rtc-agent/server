@@ -21,7 +21,6 @@ services:
       - "25432:5432"
     volumes:
       - full-postgres-data:/var/lib/postgresql/data
-      - ./etc/dev/postgres/init-multiple-databases.sh:/docker-entrypoint-initdb.d/init-multiple-databases.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rtc_agent"]
       interval: 5s
@@ -215,6 +214,8 @@ services:
       - ./etc/admin.docker.yaml:/app/etc/admin.yaml:ro
       - full-admin-server-keys:/app/etc/keys  # JWT 密钥对（自动生成）
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:

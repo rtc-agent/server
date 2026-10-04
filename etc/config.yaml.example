@@ -1,3 +1,9 @@
+# RTC Agent Server Configuration
+#
+# Local development:  copy to config.yaml
+# Docker deployment:  use config.docker.yaml
+# Admin-server:       use admin.yaml / admin.docker.yaml
+
 # RTC Agent 本地开发配置模板
 # 复制此文件为 config.yaml 并修改: cp etc/config.yaml.example etc/config.yaml
 #

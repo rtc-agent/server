@@ -57,6 +57,14 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("auto migrate: %w", err)
 	}
 
+	// Migrate admin-server tables
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.AdminRefreshToken{},
+	); err != nil {
+		return fmt.Errorf("admin auto migrate: %w", err)
+	}
+
 	if err := model.MigrateOwnerStages1And2(db); err != nil {
 		return fmt.Errorf("migrate owner stages 1+2: %w", err)
 	}
