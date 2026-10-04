@@ -39,8 +39,11 @@ func NewAdminAuthHandler(
 
 // RegisterRoutes registers admin auth routes to the Gin router.
 func (h *AdminAuthHandler) RegisterRoutes(r *gin.Engine) {
-	// Public routes
+	// Public routes (no JWT required)
 	r.POST("/api/auth/login", h.Login)
+	// Refresh is public: the client needs to exchange a refresh_token for a new
+	// access_token even when the original access_token has expired.
+	r.POST("/api/auth/refresh", h.RefreshToken)
 	r.GET("/.well-known/jwks.json", h.JWKS)
 	r.GET("/health", h.Health)
 
@@ -49,7 +52,6 @@ func (h *AdminAuthHandler) RegisterRoutes(r *gin.Engine) {
 	auth.Use(h.JWTAuthMiddleware())
 	{
 		auth.GET("/me", h.GetCurrentUser)
-		auth.POST("/refresh", h.RefreshToken)
 		auth.POST("/logout", h.Logout)
 	}
 }
@@ -231,7 +233,7 @@ func (h *AdminAuthHandler) Logout(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "logout successful"})
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 // JWKS handles GET /.well-known/jwks.json

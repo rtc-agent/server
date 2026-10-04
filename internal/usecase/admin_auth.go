@@ -65,6 +65,11 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password string) (
 	user, err := uc.userRepo.GetByEmail(ctx, email)
 	if err != nil {
 		if repo.IsNotFound(err) {
+			// SECURITY: Run bcrypt even when user not found to prevent timing-based
+			// email enumeration. An attacker should not be able to distinguish between
+			// "user not found" and "wrong password" based on response time.
+			// We hash a dummy value to match the cost of a real comparison.
+			_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
 			logger.Info(ctx, "login failed: user not found", zap.String("email", email))
 			return nil, ErrInvalidCredentials
 		}
@@ -78,7 +83,7 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password string) (
 	}
 
 	// 3. Sign access token
-	accessToken, accessExpiresAt, err := uc.signer.SignAccessToken(user.ID, user.Email, user.Name)
+	accessToken, _, err := uc.signer.SignAccessToken(user.ID, user.Email, user.Name)
 	if err != nil {
 		return nil, fmt.Errorf("sign access token: %w", err)
 	}
@@ -86,7 +91,7 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password string) (
 	// 4. Generate and store refresh token
 	refreshPlain := generateRefreshTokenPlain()
 	refreshHash := hashRefreshToken(refreshPlain)
-	refreshExpiresAt := accessExpiresAt.Add(uc.signer.RefreshTTL())
+	refreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
 
 	rt := &model.RefreshToken{
 		TokenHash: refreshHash,
@@ -166,7 +171,7 @@ func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain 
 	}
 
 	// 6. Sign new access token
-	accessToken, accessExpiresAt, err := uc.signer.SignAccessToken(user.ID, user.Email, user.Name)
+	accessToken, _, err := uc.signer.SignAccessToken(user.ID, user.Email, user.Name)
 	if err != nil {
 		return nil, fmt.Errorf("sign new access token: %w", err)
 	}
@@ -174,7 +179,7 @@ func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain 
 	// 7. Generate and store new refresh token
 	newRefreshPlain := generateRefreshTokenPlain()
 	newRefreshHash := hashRefreshToken(newRefreshPlain)
-	newRefreshExpiresAt := accessExpiresAt.Add(uc.signer.RefreshTTL())
+	newRefreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
 
 	newRT := &model.RefreshToken{
 		TokenHash: newRefreshHash,
@@ -317,6 +322,15 @@ var (
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrUserNotFound       = errors.New("user not found")
 )
+
+// dummyPasswordHash is a pre-computed bcrypt hash used during login when the user
+// is not found. This ensures constant-time authentication responses regardless of
+// whether the email exists in the database, preventing timing-based email enumeration.
+// Generated with bcrypt cost 12 (matching the production cost factor).
+var dummyPasswordHash = func() []byte {
+	h, _ := bcrypt.GenerateFromPassword([]byte("dummy"), 12)
+	return h
+}()
 
 // generateRefreshTokenPlain generates an opaque refresh token.
 func generateRefreshTokenPlain() string {

@@ -109,11 +109,6 @@ func (h *TokenExchangeHandler) HandleTokenExchange(w http.ResponseWriter, r *htt
 		return
 	}
 
-	logger.Info(ctx, "token exchange completed",
-		zap.String("user_id", result.UserID.String()),
-		zap.Int64("expires_in", result.ExpiresIn),
-	)
-
 	httputil.WriteJSON(w, http.StatusOK, tokenExchangeResponse{
 		AccessToken:     result.AccessToken,
 		IssuedTokenType: result.IssuedTokenType,
@@ -124,7 +119,7 @@ func (h *TokenExchangeHandler) HandleTokenExchange(w http.ResponseWriter, r *htt
 
 // parseRequest parses the Token Exchange request from JSON or form-encoded body.
 func (h *TokenExchangeHandler) parseRequest(w http.ResponseWriter, r *http.Request) (*tokenExchangeRequest, error) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit.
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestBodySize)
 	var req tokenExchangeRequest
 
 	contentType := r.Header.Get("Content-Type")

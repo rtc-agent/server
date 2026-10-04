@@ -37,6 +37,11 @@ var (
 	ErrJWKSInvalidResponse = errors.New("jwks invalid response")
 )
 
+// safeReleaseLua is a Lua script for safe distributed lock release.
+// Only deletes the key if the current holder matches, preventing one client
+// from accidentally releasing another client's lock.
+const safeReleaseLua = `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end`
+
 // JWKSClientConfig holds configuration for a JWKS client.
 type JWKSClientConfig struct {
 	// HTTPClient is the HTTP client used for fetching JWKS. Defaults to a 10s timeout client.
@@ -189,7 +194,14 @@ func (c *JWKSClient) RefreshKey(ctx context.Context, issuer, jwksURI, kid string
 
 	if !acquired {
 		// Another instance is refreshing; wait briefly and try cache again.
-		time.Sleep(200 * time.Millisecond)
+		// Use a context-aware timer so the wait can be cancelled on shutdown.
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 		cachedKey, cacheErr := c.getCachedKey(ctx, issuer, kid)
 		if cacheErr == nil && cachedKey != nil {
 			return cachedKey, nil
@@ -200,8 +212,7 @@ func (c *JWKSClient) RefreshKey(ctx context.Context, issuer, jwksURI, kid string
 	// Ensure lock is released after we're done.
 	defer func() {
 		// Only delete if we are the holder (Lua script for safety).
-		luaScript := `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end`
-		_ = c.redis.Eval(ctx, luaScript, []string{lockKey}, holderUUID).Err()
+		_ = c.redis.Eval(ctx, safeReleaseLua, []string{lockKey}, holderUUID).Err()
 	}()
 
 	// Fetch fresh JWKS.
