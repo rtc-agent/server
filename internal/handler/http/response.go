@@ -23,9 +23,12 @@ func Success(c *gin.Context, data interface{}) {
 	})
 }
 
-// Error 错误响应
+// Error 错误响应 - 始终返回 200 状态码，通过响应体字段表示错误
+// 这样前端的 response interceptor 能够正常拦截和处理错误
+// 前端通过 success=false 和 errorCode 来判断错误类型
 func Error(c *gin.Context, statusCode int, errorCode, errorMessage string) {
-	c.JSON(statusCode, ResponseStructure{
+	// 始终返回 200 状态码，让前端的 response interceptor 能够处理
+	c.JSON(http.StatusOK, ResponseStructure{
 		Success:      false,
 		ErrorCode:    errorCode,
 		ErrorMessage: errorMessage,

@@ -95,8 +95,8 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// 登录成功直接返回数据（符合 Ant Design Pro mock 约定）
-	c.JSON(http.StatusOK, LoginResponse{
+	// 登录成功返回统一格式的响应
+	Success(c, LoginResponse{
 		AccessToken:  result.AccessToken,
 		RefreshToken: result.RefreshToken,
 		ExpiresIn:    int(result.ExpiresIn),
