@@ -79,10 +79,7 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, OAuthError{
-			Error:            "invalid_request",
-			ErrorDescription: sanitizeBindingError(err),
-		})
+		Error(c, http.StatusBadRequest, "invalid_request", sanitizeBindingError(err))
 		return
 	}
 
@@ -90,20 +87,15 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 	result, err := h.adminAuthUsecase.Login(ctx, req.Email, req.Password)
 	if err != nil {
 		if errors.Is(err, usecase.ErrInvalidCredentials) {
-			c.JSON(http.StatusUnauthorized, OAuthError{
-				Error:            "invalid_credentials",
-				ErrorDescription: "Email or password is incorrect",
-			})
+			Error(c, http.StatusUnauthorized, "invalid_credentials", "邮箱或密码错误")
 			return
 		}
 		logger.Error(ctx, "admin_auth.login_failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, OAuthError{
-			Error:            "server_error",
-			ErrorDescription: "internal server error",
-		})
+		Error(c, http.StatusInternalServerError, "server_error", "服务器内部错误")
 		return
 	}
 
+	// 登录成功直接返回数据（符合 Ant Design Pro mock 约定）
 	c.JSON(http.StatusOK, LoginResponse{
 		AccessToken:  result.AccessToken,
 		RefreshToken: result.RefreshToken,
@@ -122,29 +114,20 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, OAuthError{
-			Error:            "unauthorized",
-			ErrorDescription: "user not authenticated",
-		})
+		Error(c, http.StatusUnauthorized, "unauthorized", "用户未认证")
 		return
 	}
 
 	// Convert userID from string to uuid.UUID
 	userIDStr, ok := userID.(string)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, OAuthError{
-			Error:            "unauthorized",
-			ErrorDescription: "invalid user ID",
-		})
+		Error(c, http.StatusUnauthorized, "unauthorized", "无效的用户 ID")
 		return
 	}
 
 	userUUID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, OAuthError{
-			Error:            "unauthorized",
-			ErrorDescription: "invalid user ID format",
-		})
+		Error(c, http.StatusUnauthorized, "unauthorized", "用户 ID 格式错误")
 		return
 	}
 
@@ -152,21 +135,15 @@ func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 	user, err := h.adminAuthUsecase.GetCurrentUser(ctx, userUUID)
 	if err != nil {
 		if errors.Is(err, usecase.ErrUserNotFound) {
-			c.JSON(http.StatusNotFound, OAuthError{
-				Error:            "user_not_found",
-				ErrorDescription: "user not found",
-			})
+			Error(c, http.StatusNotFound, "user_not_found", "用户不存在")
 			return
 		}
 		logger.Error(ctx, "admin_auth.get_current_user_failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, OAuthError{
-			Error:            "server_error",
-			ErrorDescription: "internal server error",
-		})
+		Error(c, http.StatusInternalServerError, "server_error", "服务器内部错误")
 		return
 	}
 
-	c.JSON(http.StatusOK, UserResponse{
+	Success(c, UserResponse{
 		ID:        user.ID.String(),
 		Email:     user.Email,
 		Name:      user.Name,
@@ -179,10 +156,7 @@ func (h *AdminAuthHandler) RefreshToken(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req RefreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, OAuthError{
-			Error:            "invalid_request",
-			ErrorDescription: sanitizeBindingError(err),
-		})
+		Error(c, http.StatusBadRequest, "invalid_request", sanitizeBindingError(err))
 		return
 	}
 
@@ -191,31 +165,19 @@ func (h *AdminAuthHandler) RefreshToken(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrInvalidRefreshToken):
-			c.JSON(http.StatusUnauthorized, OAuthError{
-				Error:            "invalid_grant",
-				ErrorDescription: "refresh token is invalid",
-			})
+			Error(c, http.StatusUnauthorized, "invalid_grant", "刷新令牌无效")
 		case errors.Is(err, usecase.ErrRefreshTokenRevoked):
-			c.JSON(http.StatusUnauthorized, OAuthError{
-				Error:            "invalid_grant",
-				ErrorDescription: "refresh token has been revoked",
-			})
+			Error(c, http.StatusUnauthorized, "invalid_grant", "刷新令牌已被撤销")
 		case errors.Is(err, usecase.ErrRefreshTokenExpired):
-			c.JSON(http.StatusUnauthorized, OAuthError{
-				Error:            "invalid_grant",
-				ErrorDescription: "refresh token has expired",
-			})
+			Error(c, http.StatusUnauthorized, "invalid_grant", "刷新令牌已过期")
 		default:
 			logger.Error(ctx, "admin_auth.refresh_token_failed", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, OAuthError{
-				Error:            "server_error",
-				ErrorDescription: "internal server error",
-			})
+			Error(c, http.StatusInternalServerError, "server_error", "服务器内部错误")
 		}
 		return
 	}
 
-	c.JSON(http.StatusOK, RefreshResponse{
+	Success(c, RefreshResponse{
 		AccessToken:  result.AccessToken,
 		RefreshToken: result.RefreshToken,
 		ExpiresIn:    int(result.ExpiresIn),
@@ -228,24 +190,18 @@ func (h *AdminAuthHandler) Logout(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req LogoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, OAuthError{
-			Error:            "invalid_request",
-			ErrorDescription: sanitizeBindingError(err),
-		})
+		Error(c, http.StatusBadRequest, "invalid_request", sanitizeBindingError(err))
 		return
 	}
 
 	ctx := c.Request.Context()
 	if err := h.adminAuthUsecase.Logout(ctx, req.RefreshToken); err != nil {
 		logger.Error(ctx, "admin_auth.logout_failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, OAuthError{
-			Error:            "server_error",
-			ErrorDescription: "internal server error",
-		})
+		Error(c, http.StatusInternalServerError, "server_error", "服务器内部错误")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	Success(c, gin.H{"status": "ok"})
 }
 
 // JWKS handles GET /.well-known/jwks.json
@@ -253,10 +209,7 @@ func (h *AdminAuthHandler) JWKS(c *gin.Context) {
 	jwks, err := h.jwtSigner.GetJWKS()
 	if err != nil {
 		logger.Error(c.Request.Context(), "admin_auth.jwks_generation_failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, OAuthError{
-			Error:            "server_error",
-			ErrorDescription: "failed to generate JWKS",
-		})
+		Error(c, http.StatusInternalServerError, "server_error", "生成 JWKS 失败")
 		return
 	}
 
@@ -264,10 +217,7 @@ func (h *AdminAuthHandler) JWKS(c *gin.Context) {
 	jwksJSON, err := json.Marshal(jwks)
 	if err != nil {
 		logger.Error(c.Request.Context(), "admin_auth.jwks_serialization_failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, OAuthError{
-			Error:            "server_error",
-			ErrorDescription: "failed to serialize JWKS",
-		})
+		Error(c, http.StatusInternalServerError, "server_error", "序列化 JWKS 失败")
 		return
 	}
 
@@ -281,24 +231,24 @@ func (h *AdminAuthHandler) Health(c *gin.Context) {
 	sqlDB, err := h.db.DB()
 	if err != nil {
 		logger.Error(c.Request.Context(), "admin_auth.health_db_unavailable", zap.Error(err))
-		c.JSON(http.StatusServiceUnavailable, HealthResponse{
-			Status:    "error",
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Error:     "database unavailable",
+		c.JSON(http.StatusServiceUnavailable, ResponseStructure{
+			Success:      false,
+			ErrorCode:    "database_unavailable",
+			ErrorMessage: "数据库不可用",
 		})
 		return
 	}
 	if err := sqlDB.Ping(); err != nil {
 		logger.Error(c.Request.Context(), "admin_auth.health_ping_failed", zap.Error(err))
-		c.JSON(http.StatusServiceUnavailable, HealthResponse{
-			Status:    "error",
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Error:     "database unavailable",
+		c.JSON(http.StatusServiceUnavailable, ResponseStructure{
+			Success:      false,
+			ErrorCode:    "database_unavailable",
+			ErrorMessage: "数据库不可用",
 		})
 		return
 	}
 
-	c.JSON(http.StatusOK, HealthResponse{
+	Success(c, HealthResponse{
 		Status:    "ok",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	})
@@ -309,20 +259,16 @@ func (h *AdminAuthHandler) JWTAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, OAuthError{
-				Error:            "unauthorized",
-				ErrorDescription: "missing Authorization header",
-			})
+			Error(c, http.StatusUnauthorized, "unauthorized", "缺少 Authorization 头")
+			c.Abort()
 			return
 		}
 
 		// Extract token from "Bearer <token>"
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, OAuthError{
-				Error:            "unauthorized",
-				ErrorDescription: "invalid Authorization header format",
-			})
+			Error(c, http.StatusUnauthorized, "unauthorized", "Authorization 头格式错误")
+			c.Abort()
 			return
 		}
 
@@ -333,10 +279,8 @@ func (h *AdminAuthHandler) JWTAuthMiddleware() gin.HandlerFunc {
 			// flooding logs with malformed token attempts. Do NOT log the token value.
 			logger.Info(c.Request.Context(), "admin_auth.jwt_rejected",
 				zap.String("error", err.Error()))
-			c.AbortWithStatusJSON(http.StatusUnauthorized, OAuthError{
-				Error:            "unauthorized",
-				ErrorDescription: "invalid or expired token",
-			})
+			Error(c, http.StatusUnauthorized, "unauthorized", "令牌无效或已过期")
+			c.Abort()
 			return
 		}
 

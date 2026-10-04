@@ -58,20 +58,10 @@ type LogoutRequest struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
 }
 
-// OAuthError OAuth error response following RFC 6749 Section 5.2
-type OAuthError struct {
-	// Error error code (e.g. "invalid_request", "invalid_grant")
-	Error string `json:"error"`
-	// ErrorDescription human-readable error description
-	ErrorDescription string `json:"error_description,omitempty"`
-}
-
 // HealthResponse health check response for admin-server
 type HealthResponse struct {
 	// Status health status ("ok" or "error")
 	Status string `json:"status"`
 	// Timestamp server timestamp in RFC3339 format
 	Timestamp string `json:"timestamp,omitempty"`
-	// Error error message when status is "error"
-	Error string `json:"error,omitempty"`
 }
