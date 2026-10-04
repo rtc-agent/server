@@ -345,10 +345,9 @@ type ServerConfig struct {
 	ClientQueueMaxSize int `mapstructure:"client_queue_max_size"`
 }
 
-// DatabaseConfig holds database connection and migration configuration.
+// DatabaseConfig holds database connection configuration.
 type DatabaseConfig struct {
-	DSN         string `mapstructure:"dsn"`
-	AutoMigrate bool   `mapstructure:"auto_migrate"`
+	DSN string `mapstructure:"dsn"`
 }
 
 // LogConfig holds log level configuration.

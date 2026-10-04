@@ -11,6 +11,8 @@ type AdminConfig struct {
 	Redis AdminRedisConfig `mapstructure:"redis"`
 	// JWT configuration for admin authentication tokens
 	JWT AdminJWTConfig `mapstructure:"jwt"`
+	// CORS configuration for admin-server
+	CORS AdminCORSConfig `mapstructure:"cors"`
 }
 
 // AdminRedisConfig Redis connection settings for admin-server
@@ -31,10 +33,6 @@ type AdminServerConfig struct {
 	Port int `mapstructure:"port"`
 	// Environment name (development, staging, production)
 	Env string `mapstructure:"env"`
-	// AllowedOrigins is the list of origins allowed for CORS.
-	// Empty means all origins are allowed (development only).
-	// Production deployments MUST specify explicit origins.
-	AllowedOrigins []string `mapstructure:"allowed_origins"`
 }
 
 // AdminJWTConfig JWT token generation and validation settings for admin-server
@@ -53,4 +51,12 @@ type AdminJWTConfig struct {
 	AccessTokenTTL int `mapstructure:"access_token_ttl"`
 	// RefreshTokenTTL refresh token lifetime in seconds
 	RefreshTokenTTL int `mapstructure:"refresh_token_ttl"`
+}
+
+// AdminCORSConfig CORS settings for admin-server
+type AdminCORSConfig struct {
+	// AllowedOrigins is the list of origins allowed for CORS.
+	// Empty means all origins are allowed (development only).
+	// Production deployments MUST specify explicit origins.
+	AllowedOrigins []string `mapstructure:"allowed_origins"`
 }

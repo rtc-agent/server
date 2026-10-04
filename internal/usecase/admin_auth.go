@@ -36,14 +36,14 @@ const bcryptCost = 12
 // AdminAuthUsecase handles admin authentication operations.
 type AdminAuthUsecase struct {
 	userRepo         repo.UserRepo
-	refreshTokenRepo repo.RefreshTokenRepo
+	refreshTokenRepo repo.AdminRefreshTokenRepo
 	signer           AdminTokenSigner
 }
 
 // NewAdminAuthUsecase creates a new AdminAuthUsecase.
 func NewAdminAuthUsecase(
 	userRepo repo.UserRepo,
-	refreshTokenRepo repo.RefreshTokenRepo,
+	refreshTokenRepo repo.AdminRefreshTokenRepo,
 	signer AdminTokenSigner,
 ) *AdminAuthUsecase {
 	return &AdminAuthUsecase{
@@ -95,7 +95,7 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password string) (
 	refreshHash := hashRefreshToken(refreshPlain)
 	refreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
 
-	rt := &model.RefreshToken{
+	rt := &model.AdminRefreshToken{
 		TokenHash: refreshHash,
 		UserID:    user.ID,
 		ExpiresAt: refreshExpiresAt,
@@ -183,7 +183,7 @@ func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain 
 	newRefreshHash := hashRefreshToken(newRefreshPlain)
 	newRefreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
 
-	newRT := &model.RefreshToken{
+	newRT := &model.AdminRefreshToken{
 		TokenHash: newRefreshHash,
 		UserID:    user.ID,
 		ExpiresAt: newRefreshExpiresAt,

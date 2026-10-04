@@ -101,6 +101,11 @@ linters:
         linters:
           - dupl
 
+      # Refresh token repos have similar structure but operate on different models/tables
+      - path: internal/repo/(admin_)?refresh_token_repo\.go
+        linters:
+          - dupl
+
 issues:
   # Maximum issues count per one linter
   max-issues-per-linter: 50

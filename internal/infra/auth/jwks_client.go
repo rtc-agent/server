@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -104,11 +105,30 @@ func NewJWKSClient(cfg JWKSClientConfig) (*JWKSClient, error) {
 // FetchJWKS fetches the JWKS from the given URI and returns the key set.
 // Keys are cached in Redis; on cache miss, the full JWKS is fetched.
 //
-// Security: only HTTPS URIs are allowed. Response size is capped at MaxResponseSize.
+// Security: HTTPS is required for external hosts. HTTP is allowed for:
+// - localhost, 127.0.0.1
+// - .local, .orb.local domains
+// - Docker internal service names (hostnames without dots)
+// Response size is capped at MaxResponseSize.
 func (c *JWKSClient) FetchJWKS(ctx context.Context, jwksURI string) (jwk.Set, error) {
-	// Security: enforce HTTPS to prevent MITM cache poisoning.
+	// Security: enforce HTTPS for external hosts to prevent MITM cache poisoning.
+	// Allow HTTP for local/Docker internal services in development.
 	if !strings.HasPrefix(jwksURI, "https://") {
-		return nil, fmt.Errorf("jwks URI must use HTTPS: %s", jwksURI)
+		u, err := url.Parse(jwksURI)
+		if err != nil {
+			return nil, fmt.Errorf("invalid jwks URI: %w", err)
+		}
+		if u.Scheme != "http" {
+			return nil, fmt.Errorf("jwks URI must use HTTP or HTTPS: %s", jwksURI)
+		}
+		// Allow HTTP only for local/Docker internal services
+		host := u.Hostname()
+		isLocal := host == "localhost" || host == "127.0.0.1" ||
+			strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".orb.local")
+		hasNoDots := !strings.Contains(host, ".") // Docker internal services
+		if !isLocal && !hasNoDots {
+			return nil, fmt.Errorf("jwks URI must use HTTPS for external hosts: %s", jwksURI)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURI, nil)

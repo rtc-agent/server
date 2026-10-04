@@ -20,7 +20,6 @@ import (
 	httphandler "github.com/rtc-agent/server/internal/handler/http"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -62,13 +61,6 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Fatal(context.Background(), "admin.database_connection_failed", zap.Error(err))
 	}
 
-	// Auto-migrate schema if configured
-	if cfg.Database.AutoMigrate {
-		if err := autoMigrate(db); err != nil {
-			logger.Fatal(context.Background(), "admin.database_migration_failed", zap.Error(err))
-		}
-	}
-
 	// Init Redis (optional -- JWKS caching and distributed rate limiting require it).
 	// In development, Redis may be unavailable; only connect when address is configured.
 	// TODO(PineappleBond): wire rdb to JWKSClient and rate limiter once those subsystems are integrated.
@@ -107,7 +99,7 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	// Init repositories
 	userRepo := repo.NewUserRepo(db)
-	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
+	refreshTokenRepo := repo.NewAdminRefreshTokenRepo(db)
 
 	// Init usecase
 	adminAuthUsecase := usecase.NewAdminAuthUsecase(userRepo, refreshTokenRepo, jwtSigner)
@@ -116,7 +108,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	adminAuthHandler := httphandler.NewAdminAuthHandler(adminAuthUsecase, jwtSigner, db)
 
 	// Setup router
-	router := setupRouter(adminAuthHandler, cfg.Server.AllowedOrigins)
+	router := setupRouter(adminAuthHandler, cfg.CORS.AllowedOrigins)
 
 	// Create HTTP server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -208,14 +200,4 @@ func setupRouter(adminAuthHandler *httphandler.AdminAuthHandler, allowedOrigins 
 	ServeStaticFiles(router)
 
 	return router
-}
-
-// autoMigrate runs database migrations for admin-server models
-func autoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(
-		&model.User{},
-		&model.RefreshToken{},
-		&model.OAuth2User{},
-		&model.Device{},
-	)
 }

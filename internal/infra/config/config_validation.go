@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 // Validate checks required configuration fields, returning the first error found.
@@ -122,8 +123,19 @@ func (c *TokenExchangeConfig) Validate() error {
 			return fmt.Errorf("token_exchange.external_issuers[%d].jwks_uri is invalid: %w", i, err)
 		}
 		// Security: require HTTPS for JWKS endpoints in production to prevent MITM cache poisoning.
+		// Allow HTTP in development environment for:
+		// - localhost, 127.0.0.1
+		// - .local, .orb.local domains
+		// - Docker internal service names (no dots in hostname)
 		if u.Scheme != "https" {
-			return fmt.Errorf("token_exchange.external_issuers[%d].jwks_uri must use HTTPS, got %q", i, u.Scheme)
+			host := u.Hostname()
+			isLocal := host == "localhost" || host == "127.0.0.1" ||
+				strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".orb.local")
+			// Allow hostnames without dots (Docker internal services like "admin-server")
+			hasNoDots := !strings.Contains(host, ".")
+			if !isLocal && !hasNoDots {
+				return fmt.Errorf("token_exchange.external_issuers[%d].jwks_uri must use HTTPS for external hosts, got %q", i, u.Scheme)
+			}
 		}
 	}
 	return nil
