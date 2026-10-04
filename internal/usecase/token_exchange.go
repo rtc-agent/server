@@ -16,7 +16,6 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -215,7 +214,7 @@ func (uc *TokenExchangeUsecase) ExchangeToken(
 			LastActiveAt: time.Now(),
 		}
 		if err := uc.deviceRepo.Upsert(ctx, device); err != nil {
-			logger.Warn(ctx, "token exchange: failed to upsert device",
+			logger.Warn(ctx, "token_exchange.device_upsert_failed",
 				zap.String("device_id", deviceID), zap.Error(err))
 		}
 	}
@@ -226,7 +225,7 @@ func (uc *TokenExchangeUsecase) ExchangeToken(
 		return nil, fmt.Errorf("token exchange sign access token: %w", err)
 	}
 
-	logger.Info(ctx, "token exchange succeeded",
+	logger.Info(ctx, "token_exchange.succeeded",
 		zap.String("issuer", issClaim),
 		zap.String("provider", issuerCfg.Name),
 		zap.String("user_id", createdUser.ID.String()),
@@ -255,7 +254,7 @@ func (uc *TokenExchangeUsecase) verifyJWTWithJWKS(
 		return claims, nil
 	}
 
-	logger.Info(ctx, "token exchange: initial verification failed, refreshing JWKS",
+	logger.Info(ctx, "token_exchange.initial_verify_failed_refreshing_jwks",
 		zap.String("issuer", issuerCfg.Issuer), zap.Error(err))
 
 	// Second attempt: refresh JWKS and retry.
@@ -453,7 +452,7 @@ func (uc *TokenExchangeUsecase) syncUserProfile(ctx context.Context, user *model
 	}
 	if updated {
 		if err := uc.oauth2UserRepo.Update(ctx, user); err != nil {
-			logger.Warn(ctx, "token exchange: failed to update user info",
+			logger.Warn(ctx, "token_exchange.user_profile_sync_failed",
 				zap.String("user_id", user.ID.String()), zap.Error(err))
 		}
 	}
@@ -461,12 +460,6 @@ func (uc *TokenExchangeUsecase) syncUserProfile(ctx context.Context, user *model
 
 // extractKidFromToken extracts the "kid" from the JWT header without full verification.
 func extractKidFromToken(tokenString string) string {
-	parts := strings.SplitN(tokenString, ".", 4)
-	if len(parts) < 3 {
-		return ""
-	}
-
-	// Parse just the header.
 	token, _, err := jwt.NewParser().ParseUnverified(tokenString, jwt.MapClaims{})
 	if err != nil {
 		return ""

@@ -3,6 +3,7 @@ package httphandler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -48,11 +49,11 @@ func (h *AdminAuthHandler) RegisterRoutes(r *gin.Engine) {
 	r.GET("/health", h.Health)
 
 	// Protected routes (require JWT authentication)
-	auth := r.Group("/api/auth")
-	auth.Use(h.JWTAuthMiddleware())
+	protected := r.Group("/api/auth")
+	protected.Use(h.JWTAuthMiddleware())
 	{
-		auth.GET("/me", h.GetCurrentUser)
-		auth.POST("/logout", h.Logout)
+		protected.GET("/me", h.GetCurrentUser)
+		protected.POST("/logout", h.Logout)
 	}
 }
 
@@ -75,19 +76,18 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 	ctx := c.Request.Context()
 	result, err := h.adminAuthUsecase.Login(ctx, req.Email, req.Password)
 	if err != nil {
-		switch err {
-		case usecase.ErrInvalidCredentials:
+		if errors.Is(err, usecase.ErrInvalidCredentials) {
 			c.JSON(http.StatusUnauthorized, OAuthError{
 				Error:            "invalid_credentials",
 				ErrorDescription: "Email or password is incorrect",
 			})
-		default:
-			logger.Error(ctx, "login failed", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, OAuthError{
-				Error:            "server_error",
-				ErrorDescription: "internal server error",
-			})
+			return
 		}
+		logger.Error(ctx, "admin_auth.login_failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, OAuthError{
+			Error:            "server_error",
+			ErrorDescription: "internal server error",
+		})
 		return
 	}
 
@@ -138,19 +138,18 @@ func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 	ctx := c.Request.Context()
 	user, err := h.adminAuthUsecase.GetCurrentUser(ctx, userUUID)
 	if err != nil {
-		switch err {
-		case usecase.ErrUserNotFound:
+		if errors.Is(err, usecase.ErrUserNotFound) {
 			c.JSON(http.StatusNotFound, OAuthError{
 				Error:            "user_not_found",
 				ErrorDescription: "user not found",
 			})
-		default:
-			logger.Error(ctx, "get current user failed", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, OAuthError{
-				Error:            "server_error",
-				ErrorDescription: "internal server error",
-			})
+			return
 		}
+		logger.Error(ctx, "admin_auth.get_current_user_failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, OAuthError{
+			Error:            "server_error",
+			ErrorDescription: "internal server error",
+		})
 		return
 	}
 
@@ -177,24 +176,24 @@ func (h *AdminAuthHandler) RefreshToken(c *gin.Context) {
 	ctx := c.Request.Context()
 	result, err := h.adminAuthUsecase.RefreshToken(ctx, req.RefreshToken)
 	if err != nil {
-		switch err {
-		case usecase.ErrInvalidRefreshToken:
+		switch {
+		case errors.Is(err, usecase.ErrInvalidRefreshToken):
 			c.JSON(http.StatusUnauthorized, OAuthError{
 				Error:            "invalid_grant",
 				ErrorDescription: "refresh token is invalid",
 			})
-		case usecase.ErrRefreshTokenRevoked:
+		case errors.Is(err, usecase.ErrRefreshTokenRevoked):
 			c.JSON(http.StatusUnauthorized, OAuthError{
 				Error:            "invalid_grant",
 				ErrorDescription: "refresh token has been revoked",
 			})
-		case usecase.ErrRefreshTokenExpired:
+		case errors.Is(err, usecase.ErrRefreshTokenExpired):
 			c.JSON(http.StatusUnauthorized, OAuthError{
 				Error:            "invalid_grant",
 				ErrorDescription: "refresh token has expired",
 			})
 		default:
-			logger.Error(ctx, "refresh token failed", zap.Error(err))
+			logger.Error(ctx, "admin_auth.refresh_token_failed", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, OAuthError{
 				Error:            "server_error",
 				ErrorDescription: "internal server error",
@@ -225,7 +224,7 @@ func (h *AdminAuthHandler) Logout(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	if err := h.adminAuthUsecase.Logout(ctx, req.RefreshToken); err != nil {
-		logger.Error(ctx, "logout failed", zap.Error(err))
+		logger.Error(ctx, "admin_auth.logout_failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, OAuthError{
 			Error:            "server_error",
 			ErrorDescription: "internal server error",
@@ -240,7 +239,7 @@ func (h *AdminAuthHandler) Logout(c *gin.Context) {
 func (h *AdminAuthHandler) JWKS(c *gin.Context) {
 	jwks, err := h.jwtSigner.GetJWKS()
 	if err != nil {
-		logger.Error(c.Request.Context(), "get JWKS failed", zap.Error(err))
+		logger.Error(c.Request.Context(), "admin_auth.jwks_generation_failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, OAuthError{
 			Error:            "server_error",
 			ErrorDescription: "failed to generate JWKS",
@@ -251,7 +250,7 @@ func (h *AdminAuthHandler) JWKS(c *gin.Context) {
 	// Convert JWK set to JSON
 	jwksJSON, err := json.Marshal(jwks)
 	if err != nil {
-		logger.Error(c.Request.Context(), "marshal JWKS failed", zap.Error(err))
+		logger.Error(c.Request.Context(), "admin_auth.jwks_serialization_failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, OAuthError{
 			Error:            "server_error",
 			ErrorDescription: "failed to serialize JWKS",
@@ -268,7 +267,7 @@ func (h *AdminAuthHandler) Health(c *gin.Context) {
 	// Check database connectivity via a lightweight query.
 	sqlDB, err := h.db.DB()
 	if err != nil {
-		logger.Error(c.Request.Context(), "health check: failed to get underlying db", zap.Error(err))
+		logger.Error(c.Request.Context(), "admin_auth.health_db_unavailable", zap.Error(err))
 		c.JSON(http.StatusServiceUnavailable, HealthResponse{
 			Status:    "error",
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
@@ -277,7 +276,7 @@ func (h *AdminAuthHandler) Health(c *gin.Context) {
 		return
 	}
 	if err := sqlDB.Ping(); err != nil {
-		logger.Error(c.Request.Context(), "health check: database ping failed", zap.Error(err))
+		logger.Error(c.Request.Context(), "admin_auth.health_ping_failed", zap.Error(err))
 		c.JSON(http.StatusServiceUnavailable, HealthResponse{
 			Status:    "error",
 			Timestamp: time.Now().UTC().Format(time.RFC3339),

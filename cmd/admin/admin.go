@@ -30,6 +30,10 @@ var (
 	adminCfgFile string
 )
 
+// shutdownTimeout is the maximum duration to wait for in-flight requests
+// to complete before forcing the server to shut down.
+const shutdownTimeout = 5 * time.Second
+
 // adminCmd represents the admin command
 var adminCmd = &cobra.Command{
 	Use:   "admin",
@@ -66,26 +70,26 @@ func runAdmin(cmd *cobra.Command, args []string) {
 	logger.Init("info", "")
 	defer logger.Sync()
 
-	logger.Info(context.Background(), "Starting RTC Agent admin server...")
+	logger.Info(context.Background(), "admin.starting")
 
 	// Init database
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
 		Logger: logger.NewGormLogger(true, 200*time.Millisecond),
 	})
 	if err != nil {
-		logger.Fatal(context.Background(), "Failed to connect database", zap.Error(err))
+		logger.Fatal(context.Background(), "admin.database_connection_failed", zap.Error(err))
 	}
 
 	// Auto-migrate schema if configured
 	if cfg.Database.AutoMigrate {
 		if err := autoMigrate(db); err != nil {
-			logger.Fatal(context.Background(), "Failed to auto-migrate database", zap.Error(err))
+			logger.Fatal(context.Background(), "admin.database_migration_failed", zap.Error(err))
 		}
 	}
 
-	// Init Redis (optional — JWKS caching and distributed rate limiting require it).
+	// Init Redis (optional -- JWKS caching and distributed rate limiting require it).
 	// In development, Redis may be unavailable; only connect when address is configured.
-	// TODO: pass rdb to JWKSClient and rate limiter once those subsystems are wired up.
+	// TODO(PineappleBond): wire rdb to JWKSClient and rate limiter once those subsystems are integrated.
 	if cfg.Redis.Addr != "" {
 		rdb := redis.NewClient(&redis.Options{
 			Addr:     cfg.Redis.Addr,
@@ -95,14 +99,14 @@ func runAdmin(cmd *cobra.Command, args []string) {
 		defer func() { _ = rdb.Close() }()
 		// Verify connectivity at startup; fail fast if Redis is unreachable.
 		if err := rdb.Ping(context.Background()).Err(); err != nil {
-			logger.Warn(context.Background(), "Redis configured but unreachable — continuing without distributed cache",
+			logger.Warn(context.Background(), "admin.redis_unreachable_continuing_without_cache",
 				zap.String("addr", cfg.Redis.Addr), zap.Error(err))
 		} else {
-			logger.Info(context.Background(), "Redis connected",
+			logger.Info(context.Background(), "admin.redis_connected",
 				zap.String("addr", cfg.Redis.Addr))
 		}
 	} else {
-		logger.Info(context.Background(), "Redis not configured — JWKS caching and distributed rate limiting disabled")
+		logger.Info(context.Background(), "admin.redis_not_configured_jwks_caching_disabled")
 	}
 
 	// Init JWT signer
@@ -116,7 +120,7 @@ func runAdmin(cmd *cobra.Command, args []string) {
 		RefreshTTL:     time.Duration(cfg.JWT.RefreshTokenTTL) * time.Second,
 	})
 	if err != nil {
-		logger.Fatal(context.Background(), "Failed to initialize JWT signer", zap.Error(err))
+		logger.Fatal(context.Background(), "admin.jwt_signer_init_failed", zap.Error(err))
 	}
 
 	// Init repositories
@@ -141,11 +145,11 @@ func runAdmin(cmd *cobra.Command, args []string) {
 
 	// Start server
 	logger.SafeGo("admin-http-server", func() {
-		logger.Info(context.Background(), "Admin server listening",
+		logger.Info(context.Background(), "admin.server_listening",
 			zap.String("addr", addr),
 			zap.String("env", cfg.Server.Env))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error(context.Background(), "Admin server failed", zap.Error(err))
+			logger.Error(context.Background(), "admin.server_failed", zap.Error(err))
 			_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
 		}
 	})
@@ -155,16 +159,16 @@ func runAdmin(cmd *cobra.Command, args []string) {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	logger.Info(context.Background(), "Shutting down admin server...")
+	logger.Info(context.Background(), "admin.server_shutting_down")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		logger.Error(context.Background(), "Admin server forced to shutdown", zap.Error(err))
+		logger.Error(context.Background(), "admin.server_forced_shutdown", zap.Error(err))
 	}
 
-	logger.Info(context.Background(), "Admin server exited")
+	logger.Info(context.Background(), "admin.server_exited")
 }
 
 // setupRouter creates and configures the Gin router

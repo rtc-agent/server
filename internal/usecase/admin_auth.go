@@ -29,12 +29,15 @@ type AdminTokenSigner interface {
 	RefreshTTL() time.Duration
 }
 
+// bcryptCost is the computational cost factor for password hashing.
+// Higher values increase security but also increase CPU time for hashing.
+const bcryptCost = 12
+
 // AdminAuthUsecase handles admin authentication operations.
 type AdminAuthUsecase struct {
 	userRepo         repo.UserRepo
 	refreshTokenRepo repo.RefreshTokenRepo
 	signer           AdminTokenSigner
-	bcryptCost       int
 }
 
 // NewAdminAuthUsecase creates a new AdminAuthUsecase.
@@ -47,7 +50,6 @@ func NewAdminAuthUsecase(
 		userRepo:         userRepo,
 		refreshTokenRepo: refreshTokenRepo,
 		signer:           signer,
-		bcryptCost:       12,
 	}
 }
 
@@ -70,22 +72,22 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password string) (
 			// "user not found" and "wrong password" based on response time.
 			// We hash a dummy value to match the cost of a real comparison.
 			_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
-			logger.Info(ctx, "login failed: user not found", zap.String("email", email))
+			logger.Info(ctx, "admin_auth.login_user_not_found", zap.String("email", email))
 			return nil, ErrInvalidCredentials
 		}
-		return nil, fmt.Errorf("get user by email: %w", err)
+		return nil, fmt.Errorf("admin auth get user by email: %w", err)
 	}
 
 	// 2. Verify password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		logger.Info(ctx, "login failed: invalid password", zap.String("email", email))
+		logger.Info(ctx, "admin_auth.login_invalid_password", zap.String("email", email))
 		return nil, ErrInvalidCredentials
 	}
 
 	// 3. Sign access token
 	accessToken, _, err := uc.signer.SignAccessToken(user.ID, user.Email, user.Name)
 	if err != nil {
-		return nil, fmt.Errorf("sign access token: %w", err)
+		return nil, fmt.Errorf("admin auth sign access token: %w", err)
 	}
 
 	// 4. Generate and store refresh token
@@ -100,10 +102,10 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password string) (
 		Revoked:   false,
 	}
 	if err := uc.refreshTokenRepo.Create(ctx, rt); err != nil {
-		return nil, fmt.Errorf("store refresh token: %w", err)
+		return nil, fmt.Errorf("admin auth store refresh token: %w", err)
 	}
 
-	logger.Info(ctx, "login succeeded",
+	logger.Info(ctx, "admin_auth.login_succeeded",
 		zap.String("user_id", user.ID.String()),
 		zap.String("email", email))
 
@@ -122,7 +124,7 @@ func (uc *AdminAuthUsecase) GetCurrentUser(ctx context.Context, userID uuid.UUID
 		if repo.IsNotFound(err) {
 			return nil, ErrUserNotFound
 		}
-		return nil, fmt.Errorf("get user by ID: %w", err)
+		return nil, fmt.Errorf("admin auth get current user: %w", err)
 	}
 	return user, nil
 }
@@ -144,13 +146,13 @@ func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain 
 		if repo.IsNotFound(err) {
 			return nil, ErrInvalidRefreshToken
 		}
-		return nil, fmt.Errorf("find refresh token: %w", err)
+		return nil, fmt.Errorf("admin auth find refresh token: %w", err)
 	}
 
 	// 2. Check if token is revoked
 	if rt.Revoked {
-		logger.Warn(ctx, "refresh token reuse detected",
-			zap.String("token_hash", refreshHash[:16]+"..."))
+		logger.Warn(ctx, "admin_auth.refresh_token_reuse_detected",
+			zap.String("token_hash_prefix", refreshHash[:16]))
 		return nil, ErrRefreshTokenRevoked
 	}
 
@@ -161,19 +163,19 @@ func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain 
 
 	// 4. Revoke the old refresh token (rotation)
 	if err := uc.refreshTokenRepo.Revoke(ctx, rt.ID); err != nil {
-		return nil, fmt.Errorf("revoke old refresh token: %w", err)
+		return nil, fmt.Errorf("admin auth revoke old refresh token: %w", err)
 	}
 
 	// 5. Get user info
 	user, err := uc.userRepo.GetByID(ctx, rt.UserID)
 	if err != nil {
-		return nil, fmt.Errorf("get user for refresh: %w", err)
+		return nil, fmt.Errorf("admin auth get user for refresh: %w", err)
 	}
 
 	// 6. Sign new access token
 	accessToken, _, err := uc.signer.SignAccessToken(user.ID, user.Email, user.Name)
 	if err != nil {
-		return nil, fmt.Errorf("sign new access token: %w", err)
+		return nil, fmt.Errorf("admin auth sign new access token: %w", err)
 	}
 
 	// 7. Generate and store new refresh token
@@ -188,10 +190,10 @@ func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain 
 		Revoked:   false,
 	}
 	if err := uc.refreshTokenRepo.Create(ctx, newRT); err != nil {
-		return nil, fmt.Errorf("store new refresh token: %w", err)
+		return nil, fmt.Errorf("admin auth store new refresh token: %w", err)
 	}
 
-	logger.Info(ctx, "token refresh succeeded",
+	logger.Info(ctx, "admin_auth.token_refresh_succeeded",
 		zap.String("user_id", user.ID.String()))
 
 	return &RefreshTokenResult{
@@ -209,11 +211,11 @@ func (uc *AdminAuthUsecase) Logout(ctx context.Context, refreshTokenPlain string
 	if err != nil {
 		if repo.IsNotFound(err) {
 			// Token not found, but we don't expose this to the client
-			logger.Info(ctx, "logout: refresh token not found",
-				zap.String("token_hash", refreshHash[:16]+"..."))
+			logger.Info(ctx, "admin_auth.logout_token_not_found",
+				zap.String("token_hash_prefix", refreshHash[:16]))
 			return nil
 		}
-		return fmt.Errorf("find refresh token: %w", err)
+		return fmt.Errorf("admin auth find refresh token: %w", err)
 	}
 
 	if rt.Revoked {
@@ -222,10 +224,10 @@ func (uc *AdminAuthUsecase) Logout(ctx context.Context, refreshTokenPlain string
 	}
 
 	if err := uc.refreshTokenRepo.Revoke(ctx, rt.ID); err != nil {
-		return fmt.Errorf("revoke refresh token: %w", err)
+		return fmt.Errorf("admin auth revoke refresh token: %w", err)
 	}
 
-	logger.Info(ctx, "logout succeeded",
+	logger.Info(ctx, "admin_auth.logout_succeeded",
 		zap.String("user_id", rt.UserID.String()))
 
 	return nil
@@ -248,15 +250,15 @@ func (uc *AdminAuthUsecase) FindOrCreateUser(ctx context.Context, provider, sub,
 	user, err := uc.userRepo.GetByEmail(ctx, email)
 	if err != nil {
 		if !repo.IsNotFound(err) {
-			return nil, fmt.Errorf("get user by email: %w", err)
+			return nil, fmt.Errorf("admin auth get user by email: %w", err)
 		}
 
 		// User not found, create new user
 		// Generate a random password hash (OAuth users don't use password login)
 		randomPassword := generateRandomPassword()
-		passwordHash, err := bcrypt.GenerateFromPassword([]byte(randomPassword), uc.bcryptCost)
+		passwordHash, err := bcrypt.GenerateFromPassword([]byte(randomPassword), bcryptCost)
 		if err != nil {
-			return nil, fmt.Errorf("hash password: %w", err)
+			return nil, fmt.Errorf("admin auth hash oauth password: %w", err)
 		}
 
 		user = &model.User{
@@ -271,14 +273,14 @@ func (uc *AdminAuthUsecase) FindOrCreateUser(ctx context.Context, provider, sub,
 				// Concurrent creation, try to find again
 				user, err = uc.userRepo.GetByEmail(ctx, email)
 				if err != nil {
-					return nil, fmt.Errorf("re-find user after concurrent create: %w", err)
+					return nil, fmt.Errorf("admin auth re-find user after concurrent create: %w", err)
 				}
 				return user, nil
 			}
-			return nil, fmt.Errorf("create user: %w", err)
+			return nil, fmt.Errorf("admin auth create user: %w", err)
 		}
 
-		logger.Info(ctx, "created new admin user from OAuth",
+		logger.Info(ctx, "admin_auth.oauth_user_created",
 			zap.String("user_id", user.ID.String()),
 			zap.String("provider", provider),
 			zap.String("email", email))
@@ -299,7 +301,7 @@ func (uc *AdminAuthUsecase) FindOrCreateUser(ctx context.Context, provider, sub,
 
 	if updated {
 		if err := uc.userRepo.Update(ctx, user); err != nil {
-			logger.Warn(ctx, "failed to update user OAuth info",
+			logger.Warn(ctx, "admin_auth.oauth_info_update_failed",
 				zap.Error(err),
 				zap.String("user_id", user.ID.String()))
 		}
@@ -310,7 +312,7 @@ func (uc *AdminAuthUsecase) FindOrCreateUser(ctx context.Context, provider, sub,
 
 // HashPassword hashes a password using bcrypt.
 func HashPassword(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
 		return "", fmt.Errorf("hash password: %w", err)
 	}
