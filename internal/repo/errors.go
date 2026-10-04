@@ -5,7 +5,11 @@
 // in errors.go; callers can use errors.Is to determine error types.
 package repo
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/jackc/pgx/v5/pgconn"
+)
 
 // Sentinel errors for callers to check via errors.Is.
 var (
@@ -71,4 +75,16 @@ func IsNotFound(err error) bool {
 		errors.Is(err, ErrScriptExecutionNotFound) ||
 		errors.Is(err, ErrFileNotFound) ||
 		errors.Is(err, ErrMultipartUploadNotFound)
+}
+
+// isDuplicateKeyError checks whether the error is a PostgreSQL unique
+// constraint violation (code 23505).
+// Shared by user_repo, oauth2_user_repo, and other repos that need to
+// detect concurrent inserts on unique indexes.
+func isDuplicateKeyError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return false
 }

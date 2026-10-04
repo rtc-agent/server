@@ -230,5 +230,7 @@ func autoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&model.User{},
 		&model.RefreshToken{},
+		&model.OAuth2User{},
+		&model.Device{},
 	)
 }

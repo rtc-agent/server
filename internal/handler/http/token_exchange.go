@@ -97,14 +97,14 @@ func (h *TokenExchangeHandler) HandleTokenExchange(w http.ResponseWriter, r *htt
 	if err != nil {
 		var teErr *usecase.TokenExchangeError
 		if errors.As(err, &teErr) {
-			logger.Info(ctx, "token exchange rejected",
+			logger.Info(ctx, "token_exchange.exchange_rejected",
 				zap.String("error", teErr.Code),
 				zap.String("description", teErr.Description),
 			)
 			httputil.WriteError(w, teErr.HTTPStatus, teErr.Code, teErr.Description)
 			return
 		}
-		logger.Error(ctx, "token exchange internal error", zap.Error(err))
+		logger.Error(ctx, "token_exchange.internal_error", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, usecase.ErrServerError, "internal server error")
 		return
 	}

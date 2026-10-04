@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rtc-agent/server/internal/model"
 
 	"gorm.io/gorm"
@@ -90,7 +89,7 @@ func (r *oauth2UserRepo) FindOrCreate(ctx context.Context, user *model.OAuth2Use
 	// Not found: attempt to create.
 	if err := r.Create(ctx, user); err != nil {
 		// Check for unique constraint violation (PostgreSQL 23505).
-		if isDuplicateKey(err) {
+		if isDuplicateKeyError(err) {
 			// Concurrent creation: re-lookup.
 			existing, err = r.FindByProvider(ctx, user.Provider, user.Sub)
 			if err != nil {
@@ -101,13 +100,4 @@ func (r *oauth2UserRepo) FindOrCreate(ctx context.Context, user *model.OAuth2Use
 		return nil, false, fmt.Errorf("findOrCreate create oauth2 user: %w", err)
 	}
 	return user, true, nil
-}
-
-// isDuplicateKey checks whether the error wraps a PostgreSQL unique constraint violation (23505).
-func isDuplicateKey(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23505"
-	}
-	return false
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rtc-agent/server/internal/model"
 
 	"gorm.io/gorm"
@@ -45,16 +44,6 @@ func (r *userRepo) Create(ctx context.Context, user *model.User) error {
 		return fmt.Errorf("create user: %w", err)
 	}
 	return nil
-}
-
-// isDuplicateKeyError checks whether the error is a PostgreSQL unique
-// constraint violation (code 23505).
-func isDuplicateKeyError(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23505"
-	}
-	return false
 }
 
 func (r *userRepo) GetByEmail(ctx context.Context, email string) (*model.User, error) {

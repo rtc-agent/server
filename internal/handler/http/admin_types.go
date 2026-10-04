@@ -58,40 +58,6 @@ type LogoutRequest struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
 }
 
-// TokenExchangeRequest Token Exchange request following RFC 8693
-type TokenExchangeRequest struct {
-	// GrantType must be "urn:ietf:params:oauth:grant-type:token-exchange"
-	GrantType string `form:"grant_type" binding:"required"`
-	// SubjectToken the token to be exchanged
-	SubjectToken string `form:"subject_token" binding:"required"`
-	// SubjectTokenType type of the subject token (e.g. "urn:ietf:params:oauth:token-type:access_token")
-	SubjectTokenType string `form:"subject_token_type" binding:"required"`
-	// DeviceID client device identifier
-	DeviceID string `form:"device_id" binding:"required"`
-	// RequestedTokenType desired type of the issued token (optional)
-	RequestedTokenType string `form:"requested_token_type"`
-	// Audience intended audience for the issued token (optional)
-	Audience string `form:"audience"`
-	// Resource target resource for the issued token (optional)
-	Resource string `form:"resource"`
-	// Scope requested scope for the issued token (optional)
-	Scope string `form:"scope"`
-}
-
-// TokenExchangeResponse Token Exchange success response
-type TokenExchangeResponse struct {
-	// AccessToken the issued access token
-	AccessToken string `json:"access_token"`
-	// IssuedTokenType type of the issued token
-	IssuedTokenType string `json:"issued_token_type"`
-	// TokenType token type (always "Bearer")
-	TokenType string `json:"token_type"`
-	// ExpiresIn issued token lifetime in seconds
-	ExpiresIn int `json:"expires_in"`
-	// Scope granted scope (optional)
-	Scope string `json:"scope,omitempty"`
-}
-
 // OAuthError OAuth error response following RFC 6749 Section 5.2
 type OAuthError struct {
 	// Error error code (e.g. "invalid_request", "invalid_grant")
