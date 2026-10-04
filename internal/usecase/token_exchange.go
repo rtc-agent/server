@@ -39,9 +39,7 @@ const (
 // RFC 6749 Section 5.2 error codes.
 const (
 	ErrInvalidRequest         = "invalid_request"
-	ErrInvalidClient          = "invalid_client"
 	ErrInvalidGrant           = "invalid_grant"
-	ErrUnsupportedGrantType   = "unsupported_grant_type"
 	ErrServerError            = "server_error"
 	ErrTemporarilyUnavailable = "temporarily_unavailable"
 )
