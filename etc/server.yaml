@@ -1,0 +1,14 @@
+# Token Exchange configuration for external JWT issuers (RFC 8693)
+# Add this section to the existing config.yaml.example or server.yaml
+token_exchange:
+  external_issuers:
+    - name: "admin-server"
+      issuer: "https://admin.example.com"
+      jwks_uri: "https://admin.example.com/.well-known/jwks.json"
+      allowed_algorithms: ["RS256", "ES256"]
+      cache_ttl: 3600
+      claims_mapping:
+        sub: "sub"
+        email: "email"
+        name: "name"
+        avatar_url: "picture"

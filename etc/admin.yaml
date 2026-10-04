@@ -1,0 +1,17 @@
+server:
+  host: "0.0.0.0"
+  port: 8081
+  env: "development"
+
+database:
+  dsn: "postgres://localhost:5432/rtc_agent_admin?sslmode=disable"
+  auto_migrate: true
+
+jwt:
+  algorithm: "RS256"
+  issuer: "https://admin.example.com"
+  audience: "https://rtc.example.com"
+  private_key_path: "./etc/keys/admin-private.pem"
+  public_key_path: "./etc/keys/admin-public.pem"
+  access_token_ttl: 3600      # 1 hour
+  refresh_token_ttl: 604800   # 7 days
