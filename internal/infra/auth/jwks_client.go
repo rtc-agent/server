@@ -209,11 +209,13 @@ func (c *JWKSClient) RefreshKey(ctx context.Context, issuer, jwksURI, kid string
 		// Lock holder may have failed; proceed with fetch anyway.
 	}
 
-	// Ensure lock is released after we're done.
-	defer func() {
-		// Only delete if we are the holder (Lua script for safety).
-		_ = c.redis.Eval(ctx, safeReleaseLua, []string{lockKey}, holderUUID).Err()
-	}()
+	// Release the distributed lock after we're done (only if we successfully acquired it).
+	// The Lua script ensures we only delete our own lock, never another instance's.
+	if acquired {
+		defer func() {
+			_ = c.redis.Eval(ctx, safeReleaseLua, []string{lockKey}, holderUUID).Err()
+		}()
+	}
 
 	// Fetch fresh JWKS.
 	set, err := c.FetchJWKS(ctx, jwksURI)

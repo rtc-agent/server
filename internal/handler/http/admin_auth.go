@@ -61,6 +61,19 @@ func (h *AdminAuthHandler) RegisterRoutes(r *gin.Engine) {
 // Prevents malicious clients from sending oversized payloads that could exhaust memory.
 const maxAdminRequestBodySize = 1 << 20 // 1MB
 
+// sanitizeBindingError converts a Gin binding error into a safe, user-facing message.
+// Internal struct field names (e.g. "LoginRequest.Password") are intentionally omitted
+// to avoid leaking API implementation details to potential attackers.
+func sanitizeBindingError(err error) string {
+	msg := err.Error()
+	// JSON syntax errors are safe to surface (they describe the malformed input, not the schema).
+	if strings.Contains(msg, "json:") || strings.Contains(msg, "unmarshal") {
+		return "invalid JSON format"
+	}
+	// Validation errors (binding:"required,min=6,...") would expose field names; use a generic message.
+	return "request validation failed"
+}
+
 // Login handles POST /api/auth/login
 func (h *AdminAuthHandler) Login(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
@@ -68,7 +81,7 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, OAuthError{
 			Error:            "invalid_request",
-			ErrorDescription: "invalid request body: " + err.Error(),
+			ErrorDescription: sanitizeBindingError(err),
 		})
 		return
 	}
@@ -168,7 +181,7 @@ func (h *AdminAuthHandler) RefreshToken(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, OAuthError{
 			Error:            "invalid_request",
-			ErrorDescription: "invalid request body: " + err.Error(),
+			ErrorDescription: sanitizeBindingError(err),
 		})
 		return
 	}
@@ -217,7 +230,7 @@ func (h *AdminAuthHandler) Logout(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, OAuthError{
 			Error:            "invalid_request",
-			ErrorDescription: "invalid request body: " + err.Error(),
+			ErrorDescription: sanitizeBindingError(err),
 		})
 		return
 	}
@@ -316,6 +329,10 @@ func (h *AdminAuthHandler) JWTAuthMiddleware() gin.HandlerFunc {
 		tokenString := parts[1]
 		claims, err := h.jwtSigner.ParseAccessToken(tokenString)
 		if err != nil {
+			// SECURITY: log at Info level to detect brute-force patterns without
+			// flooding logs with malformed token attempts. Do NOT log the token value.
+			logger.Info(c.Request.Context(), "admin_auth.jwt_rejected",
+				zap.String("error", err.Error()))
 			c.AbortWithStatusJSON(http.StatusUnauthorized, OAuthError{
 				Error:            "unauthorized",
 				ErrorDescription: "invalid or expired token",

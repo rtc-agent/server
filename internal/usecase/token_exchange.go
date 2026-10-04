@@ -160,6 +160,9 @@ func (uc *TokenExchangeUsecase) ExchangeToken(
 		}
 	}
 
+	// Extract kid from the token header once, to avoid re-parsing in verifyJWTWithJWKS.
+	kid, _ := unverified.Header["kid"].(string)
+
 	// Look up issuer config.
 	issuerCfg, ok := uc.issuerMap[issClaim]
 	if !ok {
@@ -171,7 +174,7 @@ func (uc *TokenExchangeUsecase) ExchangeToken(
 	}
 
 	// Verify the JWT with JWKS.
-	verifiedClaims, err := uc.verifyJWTWithJWKS(ctx, subjectToken, issuerCfg)
+	verifiedClaims, err := uc.verifyJWTWithJWKS(ctx, subjectToken, kid, issuerCfg)
 	if err != nil {
 		var teErr *TokenExchangeError
 		if errors.As(err, &teErr) {
@@ -243,13 +246,15 @@ func (uc *TokenExchangeUsecase) ExchangeToken(
 
 // verifyJWTWithJWKS verifies a JWT using the JWKS from the issuer.
 // On verification failure, it automatically refreshes the JWKS cache.
+// The kid parameter is the key ID extracted from the JWT header by the caller.
 func (uc *TokenExchangeUsecase) verifyJWTWithJWKS(
 	ctx context.Context,
 	tokenString string,
+	kid string,
 	issuerCfg *config.ExternalIssuerConfig,
 ) (jwt.MapClaims, error) {
 	// First attempt: use cached keys.
-	claims, err := uc.verifyWithCachedKeys(ctx, tokenString, issuerCfg)
+	claims, err := uc.verifyWithCachedKeys(ctx, tokenString, kid, issuerCfg)
 	if err == nil {
 		return claims, nil
 	}
@@ -258,8 +263,6 @@ func (uc *TokenExchangeUsecase) verifyJWTWithJWKS(
 		zap.String("issuer", issuerCfg.Issuer), zap.Error(err))
 
 	// Second attempt: refresh JWKS and retry.
-	// Extract kid from the token header for targeted refresh.
-	kid := extractKidFromToken(tokenString)
 	if kid == "" {
 		// No kid in header; re-fetch full JWKS.
 		return nil, &TokenExchangeError{
@@ -287,7 +290,7 @@ func (uc *TokenExchangeUsecase) verifyJWTWithJWKS(
 	}
 
 	// Retry verification with fresh keys.
-	claims, err = uc.verifyWithCachedKeys(ctx, tokenString, issuerCfg)
+	claims, err = uc.verifyWithCachedKeys(ctx, tokenString, kid, issuerCfg)
 	if err != nil {
 		return nil, &TokenExchangeError{
 			Code:        ErrInvalidGrant,
@@ -300,12 +303,13 @@ func (uc *TokenExchangeUsecase) verifyJWTWithJWKS(
 }
 
 // verifyWithCachedKeys verifies a JWT using cached JWKS keys.
+// The kid parameter is the key ID extracted from the JWT header by the caller.
 func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 	ctx context.Context,
 	tokenString string,
+	kid string,
 	issuerCfg *config.ExternalIssuerConfig,
 ) (jwt.MapClaims, error) {
-	kid := extractKidFromToken(tokenString)
 	if kid == "" {
 		return nil, fmt.Errorf("JWT header missing kid")
 	}
@@ -456,17 +460,6 @@ func (uc *TokenExchangeUsecase) syncUserProfile(ctx context.Context, user *model
 				zap.String("user_id", user.ID.String()), zap.Error(err))
 		}
 	}
-}
-
-// extractKidFromToken extracts the "kid" from the JWT header without full verification.
-func extractKidFromToken(tokenString string) string {
-	token, _, err := jwt.NewParser().ParseUnverified(tokenString, jwt.MapClaims{})
-	if err != nil {
-		return ""
-	}
-
-	kid, _ := token.Header["kid"].(string)
-	return kid
 }
 
 // jwkToPublicKey converts a JWK to a crypto.PublicKey.
