@@ -38,7 +38,7 @@ func NewUserRepo(db *gorm.DB) UserRepo {
 func (r *userRepo) Create(ctx context.Context, user *model.User) error {
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(user).Error; err != nil {
 		// Check for unique constraint violation (duplicate email)
-		if isDuplicateKeyError(err) {
+		if IsDuplicateKeyError(err) {
 			return fmt.Errorf("create user: %w", ErrDuplicateEmail)
 		}
 		return fmt.Errorf("create user: %w", err)

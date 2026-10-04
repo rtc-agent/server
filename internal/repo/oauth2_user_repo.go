@@ -89,7 +89,7 @@ func (r *oauth2UserRepo) FindOrCreate(ctx context.Context, user *model.OAuth2Use
 	// Not found: attempt to create.
 	if err := r.Create(ctx, user); err != nil {
 		// Check for unique constraint violation (PostgreSQL 23505).
-		if isDuplicateKeyError(err) {
+		if IsDuplicateKeyError(err) {
 			// Concurrent creation: re-lookup.
 			existing, err = r.FindByProvider(ctx, user.Provider, user.Sub)
 			if err != nil {

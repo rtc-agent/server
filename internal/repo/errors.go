@@ -77,11 +77,11 @@ func IsNotFound(err error) bool {
 		errors.Is(err, ErrMultipartUploadNotFound)
 }
 
-// isDuplicateKeyError checks whether the error is a PostgreSQL unique
+// IsDuplicateKeyError checks whether the error is a PostgreSQL unique
 // constraint violation (code 23505).
 // Shared by user_repo, oauth2_user_repo, and other repos that need to
 // detect concurrent inserts on unique indexes.
-func isDuplicateKeyError(err error) bool {
+func IsDuplicateKeyError(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		return pgErr.Code == "23505"

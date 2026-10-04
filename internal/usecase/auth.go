@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
@@ -80,7 +79,7 @@ func (uc *AuthUsecase) FindOrCreateUser(ctx context.Context, provider string, us
 		}
 		if err := uc.oauth2UserRepo.Create(ctx, user); err != nil {
 			// Unique constraint violation → concurrent creation → re-lookup.
-			if isDuplicateKeyError(err) {
+			if repo.IsDuplicateKeyError(err) {
 				logger.Info(ctx, "findOrCreateUser: concurrent create detected, re-fetching",
 					zap.String("provider", provider))
 				user, err = uc.oauth2UserRepo.FindByProvider(ctx, provider, userInfo.ProviderUserID)
@@ -210,16 +209,6 @@ var (
 	ErrRefreshTokenRevoked = errors.New("refresh_token has been revoked")
 	ErrRefreshTokenExpired = errors.New("refresh_token has expired")
 )
-
-// isDuplicateKeyError checks whether the error is a PostgreSQL unique
-// constraint violation (code 23505).
-func isDuplicateKeyError(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23505"
-	}
-	return false
-}
 
 // generateRefreshToken generates an opaque refresh_token.
 func generateRefreshToken() (string, error) {
