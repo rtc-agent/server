@@ -21,6 +21,7 @@ services:
       - "25432:5432"
     volumes:
       - full-postgres-data:/var/lib/postgresql/data
+      - ./etc/dev/postgres/init-multiple-databases.sh:/docker-entrypoint-initdb.d/init-multiple-databases.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rtc_agent"]
       interval: 5s
@@ -201,16 +202,18 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: rtc-full-admin-server
+    command: ["./rtc-agent", "admin", "serve"]
     env_file:
       - .env
     environment:
       DEBUG__ENABLED: "true"
     expose:
       - "8081"
+    ports:
+      - "28081:8081"
     volumes:
       - ./etc/admin.docker.yaml:/app/etc/admin.yaml:ro
-      - ./etc/keys:/app/etc/keys:ro  # JWT 密钥对
-      - admin-ui-dist:/app/web/admin:ro  # admin-ui 构建产物
+      - full-admin-server-keys:/app/etc/keys  # JWT 密钥对（自动生成）
     depends_on:
       postgres:
         condition: service_healthy
@@ -310,4 +313,4 @@ volumes:
   full-grafana-data:
   full-alertmanager-data:
   full-promtail-positions:
-  admin-ui-dist:
+  full-admin-server-keys:

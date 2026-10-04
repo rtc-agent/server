@@ -29,6 +29,7 @@ func init() {
 	// Add subcommands
 	adminCmd.AddCommand(serveCmd)
 	adminCmd.AddCommand(accountCmd)
+	adminCmd.AddCommand(keygenCmd)
 }
 
 // GetCommand returns the admin cobra command
