@@ -4,6 +4,7 @@ package auth
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -37,7 +38,7 @@ type AdminClaims struct {
 	jwt.RegisteredClaims
 }
 
-// AdminJWTSigner is an RSA/ECDSA based token signer for admin-server.
+// AdminJWTSigner is an RSA/ECDSA/Ed25519 based token signer for admin-server.
 type AdminJWTSigner struct {
 	privateKey crypto.PrivateKey
 	publicKey  crypto.PublicKey
@@ -258,6 +259,8 @@ func (s *AdminJWTSigner) getSigningMethod() jwt.SigningMethod {
 		return jwt.SigningMethodES384
 	case "ES512":
 		return jwt.SigningMethodES512
+	case "EdDSA":
+		return jwt.SigningMethodEdDSA
 	default:
 		return jwt.SigningMethodRS256
 	}
@@ -299,7 +302,7 @@ func loadKeys(privateKeyPath, publicKeyPath, algorithm string) (crypto.PrivateKe
 }
 
 // parseKeyPair parses PEM-encoded private and public keys, validating that they
-// match the expected algorithm family (RSA or ECDSA).
+// match the expected algorithm family (RSA, ECDSA, or Ed25519).
 func parseKeyPair(privBlock, pubBlock *pem.Block, algorithm string) (crypto.PrivateKey, crypto.PublicKey, error) {
 	privKey, err := x509.ParsePKCS8PrivateKey(privBlock.Bytes)
 	if err != nil {
@@ -333,6 +336,17 @@ func parseKeyPair(privBlock, pubBlock *pem.Block, algorithm string) (crypto.Priv
 			return nil, nil, errors.New("public key is not ECDSA")
 		}
 		return ecPriv, ecPub, nil
+
+	case "EdDSA":
+		edPriv, ok := privKey.(ed25519.PrivateKey)
+		if !ok {
+			return nil, nil, errors.New("private key is not Ed25519")
+		}
+		edPub, ok := pubKey.(ed25519.PublicKey)
+		if !ok {
+			return nil, nil, errors.New("public key is not Ed25519")
+		}
+		return edPriv, edPub, nil
 
 	default:
 		return nil, nil, fmt.Errorf("unsupported algorithm: %s", algorithm)
@@ -369,6 +383,13 @@ func generateKeys(algorithm string) (crypto.PrivateKey, crypto.PublicKey, error)
 			return nil, nil, fmt.Errorf("generate ECDSA P521 key: %w", err)
 		}
 		return privateKey, &privateKey.PublicKey, nil
+
+	case "EdDSA":
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, nil, fmt.Errorf("generate Ed25519 key: %w", err)
+		}
+		return priv, pub, nil
 
 	default:
 		return nil, nil, fmt.Errorf("unsupported algorithm: %s", algorithm)

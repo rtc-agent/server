@@ -42,7 +42,6 @@ const (
 	ErrInvalidClient          = "invalid_client"
 	ErrInvalidGrant           = "invalid_grant"
 	ErrUnsupportedGrantType   = "unsupported_grant_type"
-	ErrInvalidToken           = "invalid_token"
 	ErrServerError            = "server_error"
 	ErrTemporarilyUnavailable = "temporarily_unavailable"
 )

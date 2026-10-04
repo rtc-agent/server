@@ -59,6 +59,23 @@ auth:
   #   - "http://localhost:3000/callback"
 
 # ===========================================================================
+# Token Exchange 配置（RFC 8693）
+# 用于验证外部 JWT issuer（如 admin-server）签发的 JWT
+# ===========================================================================
+token_exchange:
+  # external_issuers:
+  #   - name: "admin-server"                    # issuer 名称
+  #     issuer: "https://admin.example.com"     # JWT 的 iss claim
+  #     jwks_uri: "https://admin.example.com/.well-known/jwks.json"  # JWKS 端点
+  #     allowed_algorithms: ["RS256", "ES256"]  # 允许的签名算法
+  #     cache_ttl: 3600                         # JWKS 公钥缓存时间（秒）
+  #     claims_mapping:                         # JWT claims 字段映射（可选）
+  #       sub: "sub"
+  #       email: "email"
+  #       name: "name"
+  #       avatar_url: "picture"
+
+# ===========================================================================
 # OAuth2 Providers (至少启用一个)
 # ===========================================================================
 providers:

@@ -68,10 +68,10 @@ func (c *AdminConfig) Validate() error {
 
 	// Validate JWT algorithm
 	switch c.JWT.Algorithm {
-	case "RS256", "RS384", "RS512", "ES256", "ES384", "ES512":
+	case "RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "EdDSA":
 		// Valid algorithm
 	default:
-		return fmt.Errorf("jwt.algorithm must be one of: RS256, RS384, RS512, ES256, ES384, ES512")
+		return fmt.Errorf("jwt.algorithm must be one of: RS256, RS384, RS512, ES256, ES384, ES512, EdDSA")
 	}
 
 	// Validate JWT TTL
