@@ -226,6 +226,17 @@ const (
 	// Value: "1"; TTL: 24h (covers retry window).
 	// SETNX before commit prevents duplicate quota increments on network retries.
 	PrefixOSS3QuotaCommitMarker = "oss3:quota_commit:"
+
+	// PrefixJWKS is the JWKS public key cache prefix.
+	// Full key: jwks:{issuer}:{kid}
+	// Value: JSON-encoded JWK; TTL: configurable (default 1 hour).
+	PrefixJWKS = "jwks:"
+
+	// PrefixJWKSLock is the distributed lock prefix for JWKS cache refresh.
+	// Full key: jwks:lock:{issuer}
+	// Value: holder UUID; TTL: 10 seconds (covers fetch duration).
+	// Prevents multiple instances from simultaneously refreshing the same issuer's JWKS.
+	PrefixJWKSLock = "jwks:lock:"
 )
 
 // ========== Constructor functions ==========
@@ -400,4 +411,16 @@ func OSS3Lock(resource string) string { return PrefixOSS3Lock + resource }
 // OSS3QuotaCommitMarker returns the Redis key for quota commit idempotency marker.
 func OSS3QuotaCommitMarker(userID, requestID string) string {
 	return PrefixOSS3QuotaCommitMarker + userID + ":" + requestID
+}
+
+// ========== JWKS cache ==========
+
+// JWKSKey returns the Redis key for a cached JWKS public key.
+func JWKSKey(issuer, kid string) string {
+	return PrefixJWKS + issuer + ":" + kid
+}
+
+// JWKSLockKey returns the Redis key for the JWKS refresh distributed lock.
+func JWKSLockKey(issuer string) string {
+	return PrefixJWKSLock + issuer
 }

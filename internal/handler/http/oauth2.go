@@ -1,6 +1,7 @@
 package httphandler
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -8,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -53,6 +55,7 @@ type OAuth2Handler struct {
 	providerClient ProviderClient
 	authConfig     config.AuthConfig
 	ipRateLimiter  *middleware.IPRateLimiter // Optional: for protecting public endpoints
+	tokenExchange  *TokenExchangeHandler     // RFC 8693 Token Exchange handler (nil if not configured)
 }
 
 // NewOAuth2Handler creates a new OAuth2 endpoint handler.
@@ -69,6 +72,12 @@ func NewOAuth2Handler(authUsecase *usecase.AuthUsecase, signer TokenSigner, stat
 // SetIPRateLimiter sets the IP rate limiter for protecting public endpoints.
 func (h *OAuth2Handler) SetIPRateLimiter(limiter *middleware.IPRateLimiter) {
 	h.ipRateLimiter = limiter
+}
+
+// SetTokenExchangeHandler sets the RFC 8693 Token Exchange handler.
+// When set, POST /oauth2/token dispatches to token exchange when grant_type matches.
+func (h *OAuth2Handler) SetTokenExchangeHandler(te *TokenExchangeHandler) {
+	h.tokenExchange = te
 }
 
 // RegisterRoutes registers OAuth2 routes to the HTTP ServeMux.
@@ -191,7 +200,25 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 
 // handleToken handles POST /oauth2/token.
 // Supports both JSON and application/x-www-form-urlencoded Content-Types.
+// Dispatches based on grant_type:
+//   - "urn:ietf:params:oauth:grant-type:token-exchange" -> RFC 8693 Token Exchange
+//   - Otherwise -> Authorization Code Grant (existing flow)
 func (h *OAuth2Handler) handleToken(w http.ResponseWriter, r *http.Request) {
+	// Peek at grant_type to dispatch.
+	grantType := PeekGrantType(r)
+
+	// RFC 8693 Token Exchange dispatch.
+	if grantType == GrantTypeTokenExchange {
+		if h.tokenExchange != nil {
+			h.tokenExchange.HandleTokenExchange(w, r)
+			return
+		}
+		httputil.WriteError(w, http.StatusBadRequest, "unsupported_grant_type",
+			"token exchange is not configured")
+		return
+	}
+
+	// Default: Authorization Code Grant.
 	req, err := parseTokenExchangeRequest(w, r)
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "failed to parse request")
@@ -352,6 +379,37 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------- Internal helper methods ----------
+
+// PeekGrantType reads the grant_type from the request body without consuming it.
+// The body is restored via io.NopCloser so downstream handlers can re-read it.
+// Supports both JSON and form-encoded Content-Types.
+// Exported for testing; used internally by handleToken.
+func PeekGrantType(r *http.Request) string {
+	// Read the body.
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB limit.
+	if err != nil {
+		return ""
+	}
+	// Restore the body for downstream handlers.
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+	contentType := r.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "application/json") {
+		var peek struct {
+			GrantType string `json:"grant_type"`
+		}
+		if json.Unmarshal(bodyBytes, &peek) == nil {
+			return peek.GrantType
+		}
+		return ""
+	}
+
+	// Form-encoded: parse values.
+	if vals, err := url.ParseQuery(string(bodyBytes)); err == nil {
+		return vals.Get("grant_type")
+	}
+	return ""
+}
 
 // parseRequestBody parses the request body, supporting application/json and
 // form-urlencoded. JSON is decoded directly into target; form calls ParseForm

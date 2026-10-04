@@ -662,7 +662,32 @@ func provideOAuth2Handler(
 		jwtSigner,
 		cfg.Auth.RefreshTokenTTL,
 	)
-	return httphandler.NewOAuth2Handler(authUC, jwtSigner, stateStore, providerClient, cfg.Auth)
+	handler := httphandler.NewOAuth2Handler(authUC, jwtSigner, stateStore, providerClient, cfg.Auth)
+
+	// Wire Token Exchange (RFC 8693) if external issuers are configured.
+	if len(cfg.TokenExchange.ExternalIssuers) > 0 {
+		jwksClient, err := auth.NewJWKSClient(auth.JWKSClientConfig{
+			RedisClient:     svcCtx.Redis,
+			DefaultCacheTTL: time.Hour,
+			LockTTL:         10 * time.Second,
+		})
+		if err != nil {
+			logger.Fatal(context.Background(), "init JWKS client", zap.Error(err))
+		}
+		teUC := usecase.NewTokenExchangeUsecase(
+			svcCtx.OAuth2UserRepo,
+			svcCtx.DeviceRepo,
+			jwtSigner,
+			jwksClient,
+			cfg.TokenExchange,
+		)
+		teHandler := httphandler.NewTokenExchangeHandler(teUC)
+		handler.SetTokenExchangeHandler(teHandler)
+		logger.Info(context.Background(), "token exchange enabled",
+			zap.Int("external_issuers", len(cfg.TokenExchange.ExternalIssuers)))
+	}
+
+	return handler
 }
 
 func provideInterruptHandler(

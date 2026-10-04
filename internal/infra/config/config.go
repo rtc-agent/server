@@ -6,23 +6,24 @@ import (
 
 // Config is the top-level application configuration, aggregating all sub-module configs.
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	Redis     RedisConfig     `mapstructure:"redis"`
-	Log       LogConfig       `mapstructure:"log"`
-	Auth      AuthConfig      `mapstructure:"auth"`
-	Providers ProvidersConfig `mapstructure:"providers"`
-	CORS      CORSConfig      `mapstructure:"cors"`
-	Worker    WorkerConfig    `mapstructure:"worker"`
-	LLM       LLMConfig       `mapstructure:"llm"`
-	API       APIConfig       `mapstructure:"api"`
-	Tracing   TracingConfig   `mapstructure:"tracing"`
-	Asynq     AsynqConfig     `mapstructure:"asynq"`
-	Metrics   MetricsConfig   `mapstructure:"metrics"`
-	Debug     DebugConfig     `mapstructure:"debug"`
-	WebSearch WebSearchConfig `mapstructure:"web_search"`
-	WebFetch  WebFetchConfig  `mapstructure:"web_fetch"`
-	Storage   StorageConfig   `mapstructure:"storage"`
+	Server        ServerConfig        `mapstructure:"server"`
+	Database      DatabaseConfig      `mapstructure:"database"`
+	Redis         RedisConfig         `mapstructure:"redis"`
+	Log           LogConfig           `mapstructure:"log"`
+	Auth          AuthConfig          `mapstructure:"auth"`
+	Providers     ProvidersConfig     `mapstructure:"providers"`
+	CORS          CORSConfig          `mapstructure:"cors"`
+	Worker        WorkerConfig        `mapstructure:"worker"`
+	LLM           LLMConfig           `mapstructure:"llm"`
+	API           APIConfig           `mapstructure:"api"`
+	Tracing       TracingConfig       `mapstructure:"tracing"`
+	Asynq         AsynqConfig         `mapstructure:"asynq"`
+	Metrics       MetricsConfig       `mapstructure:"metrics"`
+	Debug         DebugConfig         `mapstructure:"debug"`
+	WebSearch     WebSearchConfig     `mapstructure:"web_search"`
+	WebFetch      WebFetchConfig      `mapstructure:"web_fetch"`
+	Storage       StorageConfig       `mapstructure:"storage"`
+	TokenExchange TokenExchangeConfig `mapstructure:"token_exchange"`
 }
 
 // MetricsConfig holds Prometheus /metrics endpoint authentication configuration.

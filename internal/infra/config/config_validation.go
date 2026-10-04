@@ -95,6 +95,37 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate token exchange configuration (only when external issuers are configured).
+	if err := c.TokenExchange.Validate(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Validate checks TokenExchangeConfig fields.
+// Each external issuer must have a valid name, issuer, and JWKS URI.
+// JWKS URIs must use HTTPS in production to prevent cache poisoning.
+func (c *TokenExchangeConfig) Validate() error {
+	for i, iss := range c.ExternalIssuers {
+		if iss.Name == "" {
+			return fmt.Errorf("token_exchange.external_issuers[%d].name is required", i)
+		}
+		if iss.Issuer == "" {
+			return fmt.Errorf("token_exchange.external_issuers[%d].issuer is required", i)
+		}
+		if iss.JWKSURI == "" {
+			return fmt.Errorf("token_exchange.external_issuers[%d].jwks_uri is required", i)
+		}
+		u, err := url.Parse(iss.JWKSURI)
+		if err != nil {
+			return fmt.Errorf("token_exchange.external_issuers[%d].jwks_uri is invalid: %w", i, err)
+		}
+		// Security: require HTTPS for JWKS endpoints in production to prevent MITM cache poisoning.
+		if u.Scheme != "https" {
+			return fmt.Errorf("token_exchange.external_issuers[%d].jwks_uri must use HTTPS, got %q", i, u.Scheme)
+		}
+	}
 	return nil
 }
 

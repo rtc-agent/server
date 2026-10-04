@@ -240,15 +240,15 @@ func provideJWTSigner(cfg *config.Config) (*auth.JWTSigner, error) {
 }
 
 func provideCentrifugeNode(cfg *config.Config) (*centrifuge.Node, error) {
-	// Set default ClientQueueMaxSize to 50MB if not configured
+
 	clientQueueMaxSize := cfg.Server.ClientQueueMaxSize
 	if clientQueueMaxSize == 0 {
-		clientQueueMaxSize = 50 * 1024 * 1024 // 50MB
+		clientQueueMaxSize = 50 * 1024 * 1024
 	}
 
 	return centrifuge.New(centrifuge.Config{
-		LogLevel:         centrifuge.LogLevelDebug,
-		LogHandler:       newCentrifugeLogHandler(),
+		LogLevel:           centrifuge.LogLevelDebug,
+		LogHandler:         newCentrifugeLogHandler(),
 		ClientQueueMaxSize: clientQueueMaxSize,
 	})
 }
@@ -731,7 +731,30 @@ func provideOAuth2Handler(
 		jwtSigner,
 		cfg.Auth.RefreshTokenTTL,
 	)
-	return httphandler.NewOAuth2Handler(authUC, jwtSigner, stateStore, providerClient, cfg.Auth)
+	handler := httphandler.NewOAuth2Handler(authUC, jwtSigner, stateStore, providerClient, cfg.Auth)
+
+	if len(cfg.TokenExchange.ExternalIssuers) > 0 {
+		jwksClient, err := auth.NewJWKSClient(auth.JWKSClientConfig{
+			RedisClient:     svcCtx.Redis,
+			DefaultCacheTTL: time.Hour,
+			LockTTL:         10 * time.Second,
+		})
+		if err != nil {
+			logger.Fatal(context.Background(), "init JWKS client", zap.Error(err))
+		}
+		teUC := usecase.NewTokenExchangeUsecase(
+			svcCtx.OAuth2UserRepo,
+			svcCtx.DeviceRepo,
+			jwtSigner,
+			jwksClient,
+			cfg.TokenExchange,
+		)
+		teHandler := httphandler.NewTokenExchangeHandler(teUC)
+		handler.SetTokenExchangeHandler(teHandler)
+		logger.Info(context.Background(), "token exchange enabled", zap.Int("external_issuers", len(cfg.TokenExchange.ExternalIssuers)))
+	}
+
+	return handler
 }
 
 func provideInterruptHandler(

@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/rtc-agent/server/cmd/admin"
 )
 
 var cfgFile string
@@ -25,4 +27,7 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file path (default etc/config.yaml)")
+
+	// Register admin subcommand
+	rootCmd.AddCommand(admin.GetCommand())
 }

@@ -244,3 +244,100 @@ func TestConfig_Validate_EncryptionConfig(t *testing.T) {
 		t.Errorf("expected no error when storage is disabled, got: %v", err)
 	}
 }
+
+func TestTokenExchangeConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name            string
+		config          TokenExchangeConfig
+		wantErr         bool
+		wantErrContains string
+	}{
+		{
+			name:   "empty config is valid",
+			config: TokenExchangeConfig{},
+		},
+		{
+			name: "valid issuer config",
+			config: TokenExchangeConfig{
+				ExternalIssuers: []ExternalIssuerConfig{
+					{
+						Name:    "google",
+						Issuer:  "https://accounts.google.com",
+						JWKSURI: "https://www.googleapis.com/oauth2/v3/certs",
+					},
+				},
+			},
+		},
+		{
+			name: "missing issuer name",
+			config: TokenExchangeConfig{
+				ExternalIssuers: []ExternalIssuerConfig{
+					{
+						Issuer:  "https://accounts.google.com",
+						JWKSURI: "https://www.googleapis.com/oauth2/v3/certs",
+					},
+				},
+			},
+			wantErr:         true,
+			wantErrContains: "name is required",
+		},
+		{
+			name: "missing issuer claim",
+			config: TokenExchangeConfig{
+				ExternalIssuers: []ExternalIssuerConfig{
+					{
+						Name:    "google",
+						JWKSURI: "https://www.googleapis.com/oauth2/v3/certs",
+					},
+				},
+			},
+			wantErr:         true,
+			wantErrContains: "issuer is required",
+		},
+		{
+			name: "missing jwks_uri",
+			config: TokenExchangeConfig{
+				ExternalIssuers: []ExternalIssuerConfig{
+					{
+						Name:   "google",
+						Issuer: "https://accounts.google.com",
+					},
+				},
+			},
+			wantErr:         true,
+			wantErrContains: "jwks_uri is required",
+		},
+		{
+			name: "non-HTTPS jwks_uri rejected",
+			config: TokenExchangeConfig{
+				ExternalIssuers: []ExternalIssuerConfig{
+					{
+						Name:    "test",
+						Issuer:  "https://test.example.com",
+						JWKSURI: "http://test.example.com/jwks",
+					},
+				},
+			},
+			wantErr:         true,
+			wantErrContains: "must use HTTPS",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Errorf("error = %q, want to contain %q", err.Error(), tt.wantErrContains)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("expected no error, got: %v", err)
+				}
+			}
+		})
+	}
+}
