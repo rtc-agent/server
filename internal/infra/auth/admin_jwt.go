@@ -19,6 +19,16 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 )
 
+// Clock abstracts time retrieval for testability.
+type Clock interface {
+	Now() time.Time
+}
+
+// realClock is the default Clock implementation using system time.
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }
+
 // AdminClaims is the JWT payload for admin tokens.
 type AdminClaims struct {
 	UserID uuid.UUID `json:"sub"`
@@ -37,6 +47,7 @@ type AdminJWTSigner struct {
 	audience   string
 	accessTTL  time.Duration
 	refreshTTL time.Duration
+	clock      Clock
 }
 
 // AdminJWTConfig holds the configuration for AdminJWTSigner.
@@ -48,6 +59,8 @@ type AdminJWTConfig struct {
 	PublicKeyPath  string
 	AccessTTL      time.Duration
 	RefreshTTL     time.Duration
+	// Clock allows injecting a custom clock for testing. If nil, uses real time.
+	Clock Clock
 }
 
 // NewAdminJWTSigner creates an admin JWT signer from configuration.
@@ -60,6 +73,9 @@ func NewAdminJWTSigner(cfg AdminJWTConfig) (*AdminJWTSigner, error) {
 	}
 	if cfg.RefreshTTL <= 0 {
 		cfg.RefreshTTL = 7 * 24 * time.Hour
+	}
+	if cfg.Clock == nil {
+		cfg.Clock = realClock{}
 	}
 
 	var privateKey crypto.PrivateKey
@@ -92,19 +108,21 @@ func NewAdminJWTSigner(cfg AdminJWTConfig) (*AdminJWTSigner, error) {
 		audience:   cfg.Audience,
 		accessTTL:  cfg.AccessTTL,
 		refreshTTL: cfg.RefreshTTL,
+		clock:      cfg.Clock,
 	}, nil
 }
 
 // SignAccessToken signs an access token with user information.
 func (s *AdminJWTSigner) SignAccessToken(userID uuid.UUID, email, name string) (string, time.Time, error) {
-	expiresAt := time.Now().Add(s.accessTTL)
+	now := s.clock.Now()
+	expiresAt := now.Add(s.accessTTL)
 	claims := AdminClaims{
 		UserID: userID,
 		Email:  email,
 		Name:   name,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			IssuedAt:  jwt.NewNumericDate(now),
 			Issuer:    s.issuer,
 			Audience:  jwt.ClaimStrings{s.audience},
 			ID:        uuid.New().String(),
@@ -123,12 +141,13 @@ func (s *AdminJWTSigner) SignAccessToken(userID uuid.UUID, email, name string) (
 
 // SignRefreshToken signs a refresh token.
 func (s *AdminJWTSigner) SignRefreshToken(userID uuid.UUID) (string, time.Time, error) {
-	expiresAt := time.Now().Add(s.refreshTTL)
+	now := s.clock.Now()
+	expiresAt := now.Add(s.refreshTTL)
 	claims := AdminClaims{
 		UserID: userID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			IssuedAt:  jwt.NewNumericDate(now),
 			Issuer:    s.issuer,
 			Audience:  jwt.ClaimStrings{s.audience},
 			ID:        uuid.New().String(),

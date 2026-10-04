@@ -8,16 +8,23 @@ import (
 	"gorm.io/gorm"
 )
 
-// User is the database model for an admin user with password-based authentication.
+// User is the database model for an admin user.
+//
+// Supports two authentication methods:
+//   - Local password-based auth: PasswordHash is set.
+//   - OAuth2/OIDC: Provider and ProviderSubject are set; PasswordHash may be empty.
 type User struct {
-	ID           uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	Email        string     `gorm:"size:255;not null;uniqueIndex" json:"email"`
-	Name         string     `gorm:"size:100" json:"name,omitempty"`
-	AvatarURL    string     `gorm:"size:500" json:"avatar_url,omitempty"`
-	PasswordHash string     `gorm:"size:60;not null" json:"-"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	DeletedAt    *time.Time `gorm:"index" json:"-"`
+	ID           uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+	Email        string    `gorm:"size:255;not null;uniqueIndex" json:"email"`
+	Name         string    `gorm:"size:100" json:"name,omitempty"`
+	AvatarURL    string    `gorm:"size:500" json:"avatar_url,omitempty"`
+	PasswordHash string    `gorm:"size:60" json:"-"`
+	// OAuth2 fields: empty for local-only users.
+	Provider        string     `gorm:"size:50;uniqueIndex:idx_provider_subject" json:"-"`
+	ProviderSubject string     `gorm:"size:255;uniqueIndex:idx_provider_subject" json:"-"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	DeletedAt       *time.Time `gorm:"index" json:"-"`
 }
 
 // TableName specifies the database table name for User.

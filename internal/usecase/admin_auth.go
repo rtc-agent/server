@@ -244,51 +244,81 @@ type OAuthUserInfo struct {
 
 // FindOrCreateUser finds or creates a user from OAuth provider information.
 // This is used for OAuth-based admin authentication.
+//
+// Lookup order:
+//  1. By (provider, subject) — primary key for OAuth identity.
+//  2. By email — links OAuth login to an existing local user.
+//  3. Create a new user if neither matches.
 func (uc *AdminAuthUsecase) FindOrCreateUser(ctx context.Context, provider, sub, email, name, avatarURL string) (*model.User, error) {
-	// For admin-server, we use email as the unique identifier
-	// Try to find existing user by email
-	user, err := uc.userRepo.GetByEmail(ctx, email)
-	if err != nil {
-		if !repo.IsNotFound(err) {
-			return nil, fmt.Errorf("admin auth get user by email: %w", err)
-		}
+	// 1. Try to find by OAuth provider + subject.
+	user, err := uc.userRepo.GetByProviderAndSubject(ctx, provider, sub)
+	if err == nil {
+		// Found — update profile fields if they changed.
+		uc.updateOAuthProfile(ctx, user, name, avatarURL)
+		return user, nil
+	}
+	if !repo.IsNotFound(err) {
+		return nil, fmt.Errorf("admin auth get user by provider/subject: %w", err)
+	}
 
-		// User not found, create new user
-		// Generate a random password hash (OAuth users don't use password login)
-		randomPassword := generateRandomPassword()
-		passwordHash, err := bcrypt.GenerateFromPassword([]byte(randomPassword), bcryptCost)
-		if err != nil {
-			return nil, fmt.Errorf("admin auth hash oauth password: %w", err)
-		}
+	// 2. Fall back to email lookup (link OAuth to an existing local user).
+	user, err = uc.userRepo.GetByEmail(ctx, email)
+	if err != nil && !repo.IsNotFound(err) {
+		return nil, fmt.Errorf("admin auth get user by email: %w", err)
+	}
 
-		user = &model.User{
-			Email:        email,
-			Name:         name,
-			AvatarURL:    avatarURL,
-			PasswordHash: string(passwordHash),
+	if err == nil {
+		// Existing user found by email — attach OAuth identity.
+		user.Provider = provider
+		user.ProviderSubject = sub
+		if name != "" {
+			user.Name = name
 		}
-
-		if err := uc.userRepo.Create(ctx, user); err != nil {
-			if errors.Is(err, repo.ErrDuplicateEmail) {
-				// Concurrent creation, try to find again
-				user, err = uc.userRepo.GetByEmail(ctx, email)
-				if err != nil {
-					return nil, fmt.Errorf("admin auth re-find user after concurrent create: %w", err)
-				}
-				return user, nil
-			}
-			return nil, fmt.Errorf("admin auth create user: %w", err)
+		if avatarURL != "" {
+			user.AvatarURL = avatarURL
 		}
-
-		logger.Info(ctx, "admin_auth.oauth_user_created",
+		if err := uc.userRepo.Update(ctx, user); err != nil {
+			return nil, fmt.Errorf("admin auth attach oauth to existing user: %w", err)
+		}
+		logger.Info(ctx, "admin_auth.oauth_linked_to_existing_user",
 			zap.String("user_id", user.ID.String()),
 			zap.String("provider", provider),
 			zap.String("email", email))
-
 		return user, nil
 	}
 
-	// User exists, update OAuth info if needed
+	// 3. Create a new user.
+	// OAuth-only users have an empty PasswordHash; they cannot log in locally.
+	user = &model.User{
+		Email:           email,
+		Name:            name,
+		AvatarURL:       avatarURL,
+		Provider:        provider,
+		ProviderSubject: sub,
+	}
+
+	if err := uc.userRepo.Create(ctx, user); err != nil {
+		if errors.Is(err, repo.ErrDuplicateEmail) {
+			// Concurrent creation — re-find by email.
+			user, err = uc.userRepo.GetByEmail(ctx, email)
+			if err != nil {
+				return nil, fmt.Errorf("admin auth re-find user after concurrent create: %w", err)
+			}
+			return user, nil
+		}
+		return nil, fmt.Errorf("admin auth create user: %w", err)
+	}
+
+	logger.Info(ctx, "admin_auth.oauth_user_created",
+		zap.String("user_id", user.ID.String()),
+		zap.String("provider", provider),
+		zap.String("email", email))
+
+	return user, nil
+}
+
+// updateOAuthProfile updates mutable profile fields for an existing OAuth user.
+func (uc *AdminAuthUsecase) updateOAuthProfile(ctx context.Context, user *model.User, name, avatarURL string) {
 	updated := false
 	if name != "" && user.Name != name {
 		user.Name = name
@@ -298,16 +328,13 @@ func (uc *AdminAuthUsecase) FindOrCreateUser(ctx context.Context, provider, sub,
 		user.AvatarURL = avatarURL
 		updated = true
 	}
-
 	if updated {
 		if err := uc.userRepo.Update(ctx, user); err != nil {
-			logger.Warn(ctx, "admin_auth.oauth_info_update_failed",
+			logger.Warn(ctx, "admin_auth.oauth_profile_update_failed",
 				zap.Error(err),
 				zap.String("user_id", user.ID.String()))
 		}
 	}
-
-	return user, nil
 }
 
 // HashPassword hashes a password using bcrypt.
@@ -342,15 +369,6 @@ func generateRefreshTokenPlain() string {
 		panic(fmt.Sprintf("failed to generate random bytes: %v", err))
 	}
 	return "rt_" + hex.EncodeToString(b)
-}
-
-// generateRandomPassword generates a random password for OAuth users.
-func generateRandomPassword() string {
-	b := make([]byte, 32)
-	if _, err := randRead(b); err != nil {
-		panic(fmt.Sprintf("failed to generate random password: %v", err))
-	}
-	return hex.EncodeToString(b)
 }
 
 // randRead is a variable for testing purposes.

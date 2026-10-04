@@ -21,6 +21,8 @@ type UserRepo interface {
 	GetByEmail(ctx context.Context, email string) (*model.User, error)
 	// GetByID looks up a user by ID.
 	GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
+	// GetByProviderAndSubject looks up a user by OAuth2 provider and subject ID.
+	GetByProviderAndSubject(ctx context.Context, provider, subject string) (*model.User, error)
 	// Update persists changes to a user record.
 	Update(ctx context.Context, user *model.User) error
 }
@@ -75,6 +77,21 @@ func (r *userRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.User, erro
 			return nil, fmt.Errorf("get user %s: %w", id, ErrNotFound)
 		}
 		return nil, fmt.Errorf("get user %s: %w", id, err)
+	}
+	return &user, nil
+}
+
+// GetByProviderAndSubject looks up a user by OAuth2 provider and subject ID.
+func (r *userRepo) GetByProviderAndSubject(ctx context.Context, provider, subject string) (*model.User, error) {
+	var user model.User
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("provider = ? AND provider_subject = ?", provider, subject).
+		First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("get user by provider %s subject %s: %w", provider, subject, ErrNotFound)
+		}
+		return nil, fmt.Errorf("get user by provider %s subject %s: %w", provider, subject, err)
 	}
 	return &user, nil
 }
