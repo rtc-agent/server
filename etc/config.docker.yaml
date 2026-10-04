@@ -30,6 +30,21 @@ auth:
   jwt_secret: "${AUTH__JWT_SECRET}"  # 通过环境变量 AUTH__JWT_SECRET 配置
   access_token_ttl_seconds: 3600
 
+# Token Exchange 配置（RFC 8693）
+# 用于验证外部 JWT issuer（如 admin-server）签发的 JWT
+token_exchange:
+  external_issuers:
+    - name: "admin-server"
+      issuer: "http://admin-server:8081"  # Docker 内部服务名
+      jwks_uri: "http://admin-server:8081/.well-known/jwks.json"
+      allowed_algorithms: ["RS256", "ES256"]
+      cache_ttl: 3600
+      claims_mapping:
+        sub: "sub"
+        email: "email"
+        name: "name"
+        avatar_url: "picture"
+
 providers:
   mock:
     enabled: false
