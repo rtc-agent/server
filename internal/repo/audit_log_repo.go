@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -17,15 +16,9 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
-// AuditLogFilter defines optional filters for listing audit logs.
-type AuditLogFilter struct {
-	OperatorID   *uuid.UUID
-	ResourceType string
-	EventType    string
-	ResourceID   *uuid.UUID
-	StartTime    *time.Time
-	EndTime      *time.Time
-}
+// AuditLogFilter is an alias for model.AuditLogFilter for backward compatibility.
+// New code should use model.AuditLogFilter directly.
+type AuditLogFilter = model.AuditLogFilter
 
 // AuditLogRepo provides audit log persistence operations.
 type AuditLogRepo interface {

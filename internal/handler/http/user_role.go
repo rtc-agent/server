@@ -10,29 +10,41 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo" //nolint:depguard // TODO: refactor to use usecase layer
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
+)
 
-	"github.com/rtc-agent/server/internal/usecase"
+// Handler-local interfaces for data access (depguard: handlers cannot import repo).
+// The actual implementations from repo package satisfy these via Go's implicit interfaces.
+type (
+	userRoleLister interface {
+		ListByUserID(ctx context.Context, userID uuid.UUID) ([]model.UserRole, error)
+	}
+	roleLookup interface {
+		GetByID(ctx context.Context, id uuid.UUID) (*model.Role, error)
+	}
+	userLookup interface {
+		GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
+	}
 )
 
 // UserRoleHandler handles user-role association endpoints.
 type UserRoleHandler struct {
 	userRoleUsecase *usecase.UserRoleUsecase
 	// Retained for GetCurrentUserWithRoles (called from AdminAuthHandler)
-	userRepo     repo.UserRepo
-	roleRepo     repo.RoleRepo
-	userRoleRepo repo.UserRoleRepo
+	userRepo     userLookup
+	roleRepo     roleLookup
+	userRoleRepo userRoleLister
 	enforcer     *auth.CasbinEnforcer
 }
 
 // NewUserRoleHandler creates a new UserRoleHandler.
 func NewUserRoleHandler(
 	userRoleUsecase *usecase.UserRoleUsecase,
-	userRepo repo.UserRepo,
-	roleRepo repo.RoleRepo,
-	userRoleRepo repo.UserRoleRepo,
+	userRepo userLookup,
+	roleRepo roleLookup,
+	userRoleRepo userRoleLister,
 	enforcer *auth.CasbinEnforcer,
 ) *UserRoleHandler {
 	return &UserRoleHandler{
@@ -120,9 +132,9 @@ func (h *UserRoleHandler) AssignRoles(c *gin.Context) {
 		switch {
 		case errors.Is(err, usecase.ErrUserNotFound):
 			Error(c, "user_not_found", "用户不存在")
-		case errors.Is(err, repo.ErrRoleNotFound):
+		case errors.Is(err, usecase.ErrRoleNotFound):
 			Error(c, "role_not_found", "角色不存在")
-		case errors.Is(err, repo.ErrRoleDisabled):
+		case errors.Is(err, usecase.ErrRoleDisabled):
 			Error(c, "role_disabled", "角色已禁用")
 		default:
 			logger.Error(ctx, "user_role.assign_failed", zap.Error(err))
@@ -159,11 +171,11 @@ func (h *UserRoleHandler) RemoveRole(c *gin.Context) {
 		RoleID: roleID,
 	}, operatorID, operatorIP); err != nil {
 		switch {
-		case errors.Is(err, repo.ErrRoleNotFound):
+		case errors.Is(err, usecase.ErrRoleNotFound):
 			Error(c, "role_not_found", "角色不存在")
-		case errors.Is(err, repo.ErrCannotRemoveLastAdmin):
+		case errors.Is(err, usecase.ErrCannotRemoveLastAdmin):
 			Error(c, "cannot_remove_last_admin", "不能移除最后一个管理员角色")
-		case errors.Is(err, repo.ErrCannotRemoveSelfAdmin):
+		case errors.Is(err, usecase.ErrCannotRemoveSelfAdmin):
 			Error(c, "cannot_remove_self_admin", "不能移除自己的管理员角色")
 		default:
 			logger.Error(ctx, "user_role.remove_failed", zap.Error(err))
@@ -196,7 +208,7 @@ func (h *UserRoleHandler) ListRoleUsers(c *gin.Context) {
 	users, err := h.userRoleUsecase.ListRoleUsers(ctx, roleID)
 	if err != nil {
 		switch {
-		case errors.Is(err, repo.ErrRoleNotFound):
+		case errors.Is(err, usecase.ErrRoleNotFound):
 			Error(c, "role_not_found", "角色不存在")
 		default:
 			Error(c, "server_error", "查询角色用户失败")
@@ -222,8 +234,8 @@ func (h *UserRoleHandler) ListRoleUsers(c *gin.Context) {
 func GetCurrentUserWithRoles(
 	ctx context.Context,
 	user *model.User,
-	userRoleRepo repo.UserRoleRepo,
-	roleRepo repo.RoleRepo,
+	userRoleRepo userRoleLister,
+	roleRepo roleLookup,
 	enforcer *auth.CasbinEnforcer,
 ) (*UserWithRolesResponse, error) {
 	resp := &UserWithRolesResponse{
@@ -249,7 +261,7 @@ func GetCurrentUserWithRoles(
 	for _, ur := range urs {
 		role, err := roleRepo.GetByID(ctx, ur.RoleID)
 		if err != nil {
-			if errors.Is(err, repo.ErrRoleNotFound) {
+			if errors.Is(err, usecase.ErrRoleNotFound) {
 				continue
 			}
 			return nil, err

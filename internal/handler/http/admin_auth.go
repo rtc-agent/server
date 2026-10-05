@@ -14,7 +14,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/infra/auth"
-	"github.com/rtc-agent/server/internal/repo" //nolint:depguard // TODO: refactor to use usecase layer
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 )
@@ -24,8 +23,8 @@ type AdminAuthHandler struct {
 	adminAuthUsecase        *usecase.AdminAuthUsecase
 	jwtSigner               *auth.AdminJWTSigner
 	db                      *gorm.DB
-	roleRepo                repo.RoleRepo
-	userRoleRepo            repo.UserRoleRepo
+	roleRepo                roleLookup
+	userRoleRepo            userRoleLister
 	enforcer                *auth.CasbinEnforcer
 	permissionSystemEnabled bool
 }
@@ -46,8 +45,8 @@ func NewAdminAuthHandler(
 // SetPermissionDeps injects permission system dependencies into the handler.
 // This must be called before RegisterRoutes if the permission system is enabled.
 func (h *AdminAuthHandler) SetPermissionDeps(
-	roleRepo repo.RoleRepo,
-	userRoleRepo repo.UserRoleRepo,
+	roleRepo roleLookup,
+	userRoleRepo userRoleLister,
 	enforcer *auth.CasbinEnforcer,
 	permissionSystemEnabled bool,
 ) {

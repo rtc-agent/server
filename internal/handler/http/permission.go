@@ -7,7 +7,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/rtc-agent/server/internal/repo" //nolint:depguard // TODO: refactor to use usecase layer
 	"github.com/rtc-agent/server/internal/usecase"
 )
 
@@ -102,8 +101,12 @@ func (h *PermissionHandler) Create(c *gin.Context) {
 		Resource: req.Resource,
 		Action:   req.Action,
 	}, operatorID, operatorIP); err != nil {
-		if errors.Is(err, repo.ErrRoleNotFound) {
+		if errors.Is(err, usecase.ErrRoleNotFound) {
 			Error(c, "role_not_found", "角色不存在")
+			return
+		}
+		if errors.Is(err, usecase.ErrPermissionExists) {
+			Error(c, "permission_exists", "权限策略已存在")
 			return
 		}
 		Error(c, "server_error", "创建权限策略失败")

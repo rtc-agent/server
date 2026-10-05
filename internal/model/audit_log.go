@@ -36,3 +36,15 @@ func (a *AuditLog) BeforeCreate(tx *gorm.DB) error {
 	}
 	return nil
 }
+
+// AuditLogFilter defines optional filters for listing audit logs.
+// Defined in the model package so both repo and handler layers can share it
+// without creating a handler → repo dependency.
+type AuditLogFilter struct {
+	OperatorID   *uuid.UUID
+	ResourceType string
+	EventType    string
+	ResourceID   *uuid.UUID
+	StartTime    *time.Time
+	EndTime      *time.Time
+}
