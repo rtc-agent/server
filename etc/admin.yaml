@@ -27,6 +27,3 @@ security:
   rate_limit_per_minute: 100   # Max requests per minute per IP
   login_max_attempts: 5        # Max failed login attempts before lockout
   login_lock_duration: 900     # Lockout duration in seconds (15 minutes)
-
-features:
-  permission_system: true      # Enable Casbin RBAC permission system
