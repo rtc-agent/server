@@ -40,6 +40,7 @@ var routeResourceMap = []routeResourceMapping{
 	{"POST", "/api/permissions/check", "permission", "read"},
 
 	// User-role management
+	{"GET", "/api/users", "user", "read"},
 	{"GET", "/api/users/:id/roles", "user_role", "read"},
 	{"POST", "/api/users/:id/roles", "user_role", "write"},
 	{"DELETE", "/api/users/:id/roles/:roleId", "user_role", "delete"},

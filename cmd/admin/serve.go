@@ -176,6 +176,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	roleUsecase := usecase.NewRoleUsecase(roleRepo, userRoleRepo, auditLogRepo, enforcer)
 	permissionUsecase := usecase.NewPermissionUsecase(roleRepo, enforcer, auditLogRepo)
 	userRoleUsecase := usecase.NewUserRoleUsecase(userRepo, roleRepo, userRoleRepo, enforcer, auditLogRepo)
+	userUsecase := usecase.NewUserUsecase(userRepo)
 
 	// Inject policy publisher for multi-instance sync (P0 #1 fix)
 	if policyWatcher != nil {
@@ -193,6 +194,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	permissionHandler := httphandler.NewPermissionHandler(permissionUsecase)
 	userRoleHandler := httphandler.NewUserRoleHandler(userRoleUsecase, userRepo, roleRepo, userRoleRepo, enforcer)
 	auditLogHandler := httphandler.NewAuditLogHandler(auditLogRepo)
+	userHandler := httphandler.NewUserHandler(userUsecase)
 
 	// Wire permission system deps to auth handler
 	permissionSystemEnabled := cfg.Features.PermissionSystem
@@ -205,6 +207,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		permissionHandler: permissionHandler,
 		userRoleHandler:   userRoleHandler,
 		auditLogHandler:   auditLogHandler,
+		userHandler:       userHandler,
 		enforcer:          enforcer,
 		permissionEnabled: permissionSystemEnabled,
 		allowedOrigins:    cfg.CORS.AllowedOrigins,
@@ -254,6 +257,7 @@ type routerDeps struct {
 	permissionHandler *httphandler.PermissionHandler
 	userRoleHandler   *httphandler.UserRoleHandler
 	auditLogHandler   *httphandler.AuditLogHandler
+	userHandler       *httphandler.UserHandler
 	enforcer          *auth.CasbinEnforcer
 	permissionEnabled bool
 	allowedOrigins    []string
@@ -324,6 +328,7 @@ func setupRouter(deps routerDeps) *gin.Engine {
 	deps.permissionHandler.RegisterRoutes(apiGroup)
 	deps.userRoleHandler.RegisterRoutes(apiGroup)
 	deps.auditLogHandler.RegisterRoutes(apiGroup)
+	deps.userHandler.RegisterRoutes(apiGroup)
 
 	// Register static file server for admin-ui (SPA)
 	ServeStaticFiles(router)
