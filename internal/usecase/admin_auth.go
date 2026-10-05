@@ -38,6 +38,7 @@ type AdminAuthUsecase struct {
 	userRepo         repo.UserRepo
 	refreshTokenRepo repo.AdminRefreshTokenRepo
 	signer           AdminTokenSigner
+	loginProtection  LoginProtectionInterface // optional brute-force protection (may be nil)
 }
 
 // NewAdminAuthUsecase creates a new AdminAuthUsecase.
@@ -53,6 +54,11 @@ func NewAdminAuthUsecase(
 	}
 }
 
+// SetLoginProtection injects optional login brute-force protection.
+func (uc *AdminAuthUsecase) SetLoginProtection(lp LoginProtectionInterface) {
+	uc.loginProtection = lp
+}
+
 // LoginResult holds the result of a successful login.
 type LoginResult struct {
 	AccessToken  string
@@ -62,7 +68,19 @@ type LoginResult struct {
 }
 
 // Login authenticates a user with email and password.
-func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password string) (*LoginResult, error) {
+// clientIP is used for brute-force login protection tracking.
+func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password, clientIP string) (*LoginResult, error) {
+	// 0. Check login protection (IP + email dual lockout)
+	if uc.loginProtection != nil {
+		if err := uc.loginProtection.CheckLoginAllowed(clientIP, email); err != nil {
+			logger.Warn(ctx, "admin_auth.login_blocked_by_protection",
+				zap.String("email", email),
+				zap.String("ip", clientIP),
+				zap.Error(err))
+			return nil, fmt.Errorf("%w: %v", ErrLoginLocked, err)
+		}
+	}
+
 	// 1. Find user by email
 	user, err := uc.userRepo.GetByEmail(ctx, email)
 	if err != nil {
@@ -72,6 +90,10 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password string) (
 			// "user not found" and "wrong password" based on response time.
 			// We hash a dummy value to match the cost of a real comparison.
 			_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
+			// Record failed attempt even for unknown user (email enumeration countermeasure)
+			if uc.loginProtection != nil {
+				uc.loginProtection.RecordFailedLogin(clientIP, email)
+			}
 			logger.Info(ctx, "admin_auth.login_user_not_found", zap.String("email", email))
 			return nil, ErrInvalidCredentials
 		}
@@ -80,6 +102,9 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password string) (
 
 	// 2. Verify password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		if uc.loginProtection != nil {
+			uc.loginProtection.RecordFailedLogin(clientIP, email)
+		}
 		logger.Info(ctx, "admin_auth.login_invalid_password", zap.String("email", email))
 		return nil, ErrInvalidCredentials
 	}
@@ -103,6 +128,11 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password string) (
 	}
 	if err := uc.refreshTokenRepo.Create(ctx, rt); err != nil {
 		return nil, fmt.Errorf("admin auth store refresh token: %w", err)
+	}
+
+	// Reset login protection counters on success
+	if uc.loginProtection != nil {
+		uc.loginProtection.ResetLoginAttempts(clientIP, email)
 	}
 
 	logger.Info(ctx, "admin_auth.login_succeeded",
@@ -350,6 +380,7 @@ func HashPassword(password string) (string, error) {
 var (
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrUserNotFound       = errors.New("user not found")
+	ErrLoginLocked        = errors.New("login temporarily locked due to too many failed attempts")
 )
 
 // dummyPasswordHash is a pre-computed bcrypt hash used during login when the user

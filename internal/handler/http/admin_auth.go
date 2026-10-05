@@ -14,15 +14,20 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/internal/repo" //nolint:depguard // TODO: refactor to use usecase layer
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // AdminAuthHandler handles admin authentication endpoints.
 type AdminAuthHandler struct {
-	adminAuthUsecase *usecase.AdminAuthUsecase
-	jwtSigner        *auth.AdminJWTSigner
-	db               *gorm.DB
+	adminAuthUsecase        *usecase.AdminAuthUsecase
+	jwtSigner               *auth.AdminJWTSigner
+	db                      *gorm.DB
+	roleRepo                repo.RoleRepo
+	userRoleRepo            repo.UserRoleRepo
+	enforcer                *auth.CasbinEnforcer
+	permissionSystemEnabled bool
 }
 
 // NewAdminAuthHandler creates a new AdminAuthHandler.
@@ -36,6 +41,20 @@ func NewAdminAuthHandler(
 		jwtSigner:        jwtSigner,
 		db:               db,
 	}
+}
+
+// SetPermissionDeps injects permission system dependencies into the handler.
+// This must be called before RegisterRoutes if the permission system is enabled.
+func (h *AdminAuthHandler) SetPermissionDeps(
+	roleRepo repo.RoleRepo,
+	userRoleRepo repo.UserRoleRepo,
+	enforcer *auth.CasbinEnforcer,
+	permissionSystemEnabled bool,
+) {
+	h.roleRepo = roleRepo
+	h.userRoleRepo = userRoleRepo
+	h.enforcer = enforcer
+	h.permissionSystemEnabled = permissionSystemEnabled
 }
 
 // RegisterRoutes registers admin auth routes to the Gin router.
@@ -79,19 +98,24 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Error(c, http.StatusBadRequest, "invalid_request", sanitizeBindingError(err))
+		Error(c, "invalid_request", sanitizeBindingError(err))
 		return
 	}
 
 	ctx := c.Request.Context()
-	result, err := h.adminAuthUsecase.Login(ctx, req.Email, req.Password)
+	clientIP := c.ClientIP()
+	result, err := h.adminAuthUsecase.Login(ctx, req.Email, req.Password, clientIP)
 	if err != nil {
 		if errors.Is(err, usecase.ErrInvalidCredentials) {
-			Error(c, http.StatusUnauthorized, "invalid_credentials", "邮箱或密码错误")
+			Error(c, "invalid_credentials", "邮箱或密码错误")
+			return
+		}
+		if errors.Is(err, usecase.ErrLoginLocked) {
+			Error(c, "login_locked", err.Error())
 			return
 		}
 		logger.Error(ctx, "admin_auth.login_failed", zap.Error(err))
-		Error(c, http.StatusInternalServerError, "server_error", "服务器内部错误")
+		Error(c, "server_error", "服务器内部错误")
 		return
 	}
 
@@ -114,20 +138,20 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		Error(c, http.StatusUnauthorized, "unauthorized", "用户未认证")
+		Error(c, "unauthorized", "用户未认证")
 		return
 	}
 
 	// Convert userID from string to uuid.UUID
 	userIDStr, ok := userID.(string)
 	if !ok {
-		Error(c, http.StatusUnauthorized, "unauthorized", "无效的用户 ID")
+		Error(c, "unauthorized", "无效的用户 ID")
 		return
 	}
 
 	userUUID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		Error(c, http.StatusUnauthorized, "unauthorized", "用户 ID 格式错误")
+		Error(c, "unauthorized", "用户 ID 格式错误")
 		return
 	}
 
@@ -135,19 +159,39 @@ func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 	user, err := h.adminAuthUsecase.GetCurrentUser(ctx, userUUID)
 	if err != nil {
 		if errors.Is(err, usecase.ErrUserNotFound) {
-			Error(c, http.StatusNotFound, "user_not_found", "用户不存在")
+			Error(c, "user_not_found", "用户不存在")
 			return
 		}
 		logger.Error(ctx, "admin_auth.get_current_user_failed", zap.Error(err))
-		Error(c, http.StatusInternalServerError, "server_error", "服务器内部错误")
+		Error(c, "server_error", "服务器内部错误")
 		return
 	}
 
+	// If permission system is enabled and deps are injected, include roles and permissions
+	if h.permissionSystemEnabled && h.roleRepo != nil && h.enforcer != nil {
+		resp, err := GetCurrentUserWithRoles(ctx, user, h.userRoleRepo, h.roleRepo, h.enforcer)
+		if err != nil {
+			logger.Error(ctx, "admin_auth.get_current_user_roles_failed", zap.Error(err))
+			Error(c, "server_error", "服务器内部错误")
+			return
+		}
+		Success(c, resp)
+		return
+	}
+
+	// Permission system disabled: return user with default admin role
+	// This ensures frontend knows the user has full access
 	Success(c, UserResponse{
 		ID:        user.ID.String(),
 		Email:     user.Email,
 		Name:      user.Name,
 		AvatarURL: user.AvatarURL,
+		Roles: []RoleInfo{
+			{
+				Name:        "admin",
+				DisplayName: "管理员",
+			},
+		},
 	})
 }
 
@@ -156,7 +200,7 @@ func (h *AdminAuthHandler) RefreshToken(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req RefreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Error(c, http.StatusBadRequest, "invalid_request", sanitizeBindingError(err))
+		Error(c, "invalid_request", sanitizeBindingError(err))
 		return
 	}
 
@@ -165,14 +209,14 @@ func (h *AdminAuthHandler) RefreshToken(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrInvalidRefreshToken):
-			Error(c, http.StatusUnauthorized, "invalid_grant", "刷新令牌无效")
+			Error(c, "invalid_grant", "刷新令牌无效")
 		case errors.Is(err, usecase.ErrRefreshTokenRevoked):
-			Error(c, http.StatusUnauthorized, "invalid_grant", "刷新令牌已被撤销")
+			Error(c, "invalid_grant", "刷新令牌已被撤销")
 		case errors.Is(err, usecase.ErrRefreshTokenExpired):
-			Error(c, http.StatusUnauthorized, "invalid_grant", "刷新令牌已过期")
+			Error(c, "invalid_grant", "刷新令牌已过期")
 		default:
 			logger.Error(ctx, "admin_auth.refresh_token_failed", zap.Error(err))
-			Error(c, http.StatusInternalServerError, "server_error", "服务器内部错误")
+			Error(c, "server_error", "服务器内部错误")
 		}
 		return
 	}
@@ -190,14 +234,14 @@ func (h *AdminAuthHandler) Logout(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req LogoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Error(c, http.StatusBadRequest, "invalid_request", sanitizeBindingError(err))
+		Error(c, "invalid_request", sanitizeBindingError(err))
 		return
 	}
 
 	ctx := c.Request.Context()
 	if err := h.adminAuthUsecase.Logout(ctx, req.RefreshToken); err != nil {
 		logger.Error(ctx, "admin_auth.logout_failed", zap.Error(err))
-		Error(c, http.StatusInternalServerError, "server_error", "服务器内部错误")
+		Error(c, "server_error", "服务器内部错误")
 		return
 	}
 
@@ -209,7 +253,7 @@ func (h *AdminAuthHandler) JWKS(c *gin.Context) {
 	jwks, err := h.jwtSigner.GetJWKS()
 	if err != nil {
 		logger.Error(c.Request.Context(), "admin_auth.jwks_generation_failed", zap.Error(err))
-		Error(c, http.StatusInternalServerError, "server_error", "生成 JWKS 失败")
+		Error(c, "server_error", "生成 JWKS 失败")
 		return
 	}
 
@@ -217,7 +261,7 @@ func (h *AdminAuthHandler) JWKS(c *gin.Context) {
 	jwksJSON, err := json.Marshal(jwks)
 	if err != nil {
 		logger.Error(c.Request.Context(), "admin_auth.jwks_serialization_failed", zap.Error(err))
-		Error(c, http.StatusInternalServerError, "server_error", "序列化 JWKS 失败")
+		Error(c, "server_error", "序列化 JWKS 失败")
 		return
 	}
 
@@ -259,7 +303,7 @@ func (h *AdminAuthHandler) JWTAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			Error(c, http.StatusUnauthorized, "unauthorized", "缺少 Authorization 头")
+			Error(c, "unauthorized", "缺少 Authorization 头")
 			c.Abort()
 			return
 		}
@@ -267,7 +311,7 @@ func (h *AdminAuthHandler) JWTAuthMiddleware() gin.HandlerFunc {
 		// Extract token from "Bearer <token>"
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			Error(c, http.StatusUnauthorized, "unauthorized", "Authorization 头格式错误")
+			Error(c, "unauthorized", "Authorization 头格式错误")
 			c.Abort()
 			return
 		}
@@ -279,7 +323,7 @@ func (h *AdminAuthHandler) JWTAuthMiddleware() gin.HandlerFunc {
 			// flooding logs with malformed token attempts. Do NOT log the token value.
 			logger.Info(c.Request.Context(), "admin_auth.jwt_rejected",
 				zap.String("error", err.Error()))
-			Error(c, http.StatusUnauthorized, "unauthorized", "令牌无效或已过期")
+			Error(c, "unauthorized", "令牌无效或已过期")
 			c.Abort()
 			return
 		}

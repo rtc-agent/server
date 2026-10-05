@@ -58,6 +58,19 @@ var (
 
 	// Permission
 	ErrPermissionDenied = errors.New("permission denied")
+	ErrPermissionExists = errors.New("permission policy already exists")
+
+	// Role
+	ErrRoleNotFound           = errors.New("role not found")
+	ErrRoleNameExists         = errors.New("role name already exists")
+	ErrDuplicateName          = ErrRoleNameExists // alias for ErrRoleNameExists per spec
+	ErrCannotDeleteSystemRole = errors.New("cannot delete system role")
+	ErrCannotRemoveLastAdmin  = errors.New("cannot remove the last admin role assignment")
+	ErrCannotRemoveSelfAdmin  = errors.New("cannot remove your own admin role")
+	ErrRoleDisabled           = errors.New("role is disabled")
+
+	// Concurrency
+	ErrConflict = errors.New("optimistic lock conflict")
 )
 
 // IsNotFound checks whether the error is a "not found" variant.
@@ -74,7 +87,8 @@ func IsNotFound(err error) bool {
 		errors.Is(err, ErrLoopNotFound) ||
 		errors.Is(err, ErrScriptExecutionNotFound) ||
 		errors.Is(err, ErrFileNotFound) ||
-		errors.Is(err, ErrMultipartUploadNotFound)
+		errors.Is(err, ErrMultipartUploadNotFound) ||
+		errors.Is(err, ErrRoleNotFound)
 }
 
 // IsDuplicateKeyError checks whether the error is a PostgreSQL unique

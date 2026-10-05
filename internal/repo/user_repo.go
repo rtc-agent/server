@@ -24,6 +24,8 @@ type UserRepo interface {
 	GetByProviderAndSubject(ctx context.Context, provider, subject string) (*model.User, error)
 	// Update persists changes to a user record.
 	Update(ctx context.Context, user *model.User) error
+	// GetByIDs returns users matching the given IDs. Missing IDs are silently omitted.
+	GetByIDs(ctx context.Context, ids []uuid.UUID) ([]*model.User, error)
 }
 
 type userRepo struct {
@@ -90,6 +92,17 @@ func (r *userRepo) Update(ctx context.Context, user *model.User) error {
 		return fmt.Errorf("update user %s: %w", user.ID, err)
 	}
 	return nil
+}
+
+func (r *userRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]*model.User, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var users []*model.User
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).Where("id IN ?", ids).Find(&users).Error; err != nil {
+		return nil, fmt.Errorf("get users by ids: %w", err)
+	}
+	return users, nil
 }
 
 // ErrDuplicateEmail is returned when attempting to create a user with an email that already exists.
