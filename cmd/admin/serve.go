@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -51,36 +52,40 @@ func runServe(cmd *cobra.Command, args []string) {
 	logger.Init("info", "")
 	defer logger.Sync()
 
-	logger.Info(context.Background(), "admin.starting")
+	ctx := context.Background()
+	logger.Info(ctx, "admin.starting")
 
 	// Init database
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
 		Logger: logger.NewGormLogger(true, 200*time.Millisecond),
 	})
 	if err != nil {
-		logger.Fatal(context.Background(), "admin.database_connection_failed", zap.Error(err))
+		logger.Fatal(ctx, "admin.database_connection_failed", zap.Error(err))
 	}
 
-	// Init Redis (optional -- JWKS caching and distributed rate limiting require it).
-	// In development, Redis may be unavailable; only connect when address is configured.
-	// TODO(PineappleBond): wire rdb to JWKSClient and rate limiter once those subsystems are integrated.
+	// Init Redis (optional -- JWKS caching, distributed rate limiting, and policy sync require it).
+	var rdb *redis.Client
 	if cfg.Redis.Addr != "" {
-		rdb := redis.NewClient(&redis.Options{
+		rdb = redis.NewClient(&redis.Options{
 			Addr:     cfg.Redis.Addr,
 			Password: cfg.Redis.Password,
 			DB:       cfg.Redis.DB,
 		})
-		defer func() { _ = rdb.Close() }()
-		// Verify connectivity at startup; fail fast if Redis is unreachable.
-		if err := rdb.Ping(context.Background()).Err(); err != nil {
-			logger.Warn(context.Background(), "admin.redis_unreachable_continuing_without_cache",
+		defer func() {
+			if rdb != nil {
+				_ = rdb.Close()
+			}
+		}()
+		if err := rdb.Ping(ctx).Err(); err != nil {
+			logger.Warn(ctx, "admin.redis_unreachable_continuing_without_cache",
 				zap.String("addr", cfg.Redis.Addr), zap.Error(err))
+			rdb = nil
 		} else {
-			logger.Info(context.Background(), "admin.redis_connected",
+			logger.Info(ctx, "admin.redis_connected",
 				zap.String("addr", cfg.Redis.Addr))
 		}
 	} else {
-		logger.Info(context.Background(), "admin.redis_not_configured_jwks_caching_disabled")
+		logger.Info(ctx, "admin.redis_not_configured_jwks_caching_disabled")
 	}
 
 	// Init JWT signer
@@ -94,21 +99,117 @@ func runServe(cmd *cobra.Command, args []string) {
 		RefreshTTL:     time.Duration(cfg.JWT.RefreshTokenTTL) * time.Second,
 	})
 	if err != nil {
-		logger.Fatal(context.Background(), "admin.jwt_signer_init_failed", zap.Error(err))
+		logger.Fatal(ctx, "admin.jwt_signer_init_failed", zap.Error(err))
+	}
+
+	// Init Casbin enforcer
+	enforcer, err := auth.NewCasbinEnforcer(db)
+	if err != nil {
+		logger.Fatal(ctx, "admin.casbin_enforcer_init_failed", zap.Error(err))
+	}
+
+	// Init Redis policy watcher for multi-instance sync (P0 #1)
+	var policyWatcher *auth.PolicyWatcher
+	if rdb != nil {
+		instanceID := uuid.New().String()
+		policyWatcher, err = auth.NewPolicyWatcher(enforcer, rdb, instanceID)
+		if err != nil {
+			// Policy watcher initialization failed - this is critical for multi-instance deployments
+			// Log as error but continue (degraded mode: single-instance behavior)
+			logger.Error(ctx, "admin.policy_watcher_init_failed_multi_instance_sync_disabled",
+				zap.String("instance_id", instanceID),
+				zap.Error(err))
+			// Don't set policyWatcher to nil explicitly, it's already nil from declaration
+		} else {
+			defer func() { _ = policyWatcher.Close() }()
+			logger.Info(ctx, "admin.policy_watcher_started", zap.String("instance_id", instanceID))
+		}
 	}
 
 	// Init repositories
 	userRepo := repo.NewUserRepo(db)
 	refreshTokenRepo := repo.NewAdminRefreshTokenRepo(db)
+	roleRepo := repo.NewRoleRepo(db)
+	userRoleRepo := repo.NewUserRoleRepo(db)
+	auditLogRepo := repo.NewAuditLogRepo(db)
 
-	// Init usecase
+	// Bootstrap default roles and policies (idempotent, transactional) (P0 #4)
+	// If bootstrap fails, log error but continue - server can still function in degraded mode
+	if err := usecase.BootstrapAdmin(ctx, db, roleRepo, enforcer); err != nil {
+		logger.Error(ctx, "admin.bootstrap_admin_failed_default_roles_may_be_missing",
+			zap.Error(err))
+		// Don't exit - allow server to start even if bootstrap failed
+		// Admin can manually fix issues or restart after resolving DB problems
+	}
+
+	// Init rate limiter — prefer Redis-backed for multi-instance deployments
+	var rateLimiter httphandler.RateLimiterInterface
+	if rdb != nil {
+		rateLimiter = httphandler.NewRedisRateLimiter(rdb, cfg.Security.RateLimitPerMinute)
+		logger.Info(ctx, "admin.redis_rate_limiter_enabled")
+	} else {
+		memLimiter := httphandler.NewRateLimiter(httphandler.RateLimitConfig{
+			MaxRequestsPerMinute: cfg.Security.RateLimitPerMinute,
+		})
+		defer memLimiter.Stop()
+		rateLimiter = memLimiter
+		logger.Info(ctx, "admin.memory_rate_limiter_enabled_single_instance_only")
+	}
+
+	// Init login protection — prefer Redis-backed for multi-instance deployments
+	var loginProtection usecase.LoginProtectionInterface
+	lpCfg := usecase.LoginProtectionConfig{
+		MaxAttempts:  cfg.Security.LoginMaxAttempts,
+		LockDuration: time.Duration(cfg.Security.LoginLockDuration) * time.Second,
+	}
+	if rdb != nil {
+		loginProtection = usecase.NewRedisLoginProtection(rdb, lpCfg)
+		logger.Info(ctx, "admin.redis_login_protection_enabled")
+	} else {
+		loginProtection = usecase.NewLoginProtection(lpCfg)
+		logger.Info(ctx, "admin.memory_login_protection_enabled_single_instance_only")
+	}
+
+	// Init usecases
 	adminAuthUsecase := usecase.NewAdminAuthUsecase(userRepo, refreshTokenRepo, jwtSigner)
+	adminAuthUsecase.SetLoginProtection(loginProtection)
+	roleUsecase := usecase.NewRoleUsecase(roleRepo, userRoleRepo, auditLogRepo, enforcer)
+	permissionUsecase := usecase.NewPermissionUsecase(roleRepo, enforcer, auditLogRepo)
+	userRoleUsecase := usecase.NewUserRoleUsecase(userRepo, roleRepo, userRoleRepo, enforcer, auditLogRepo)
 
-	// Init handler
+	// Inject policy publisher for multi-instance sync (P0 #1 fix)
+	if policyWatcher != nil {
+		roleUsecase.SetPolicyPublisher(policyWatcher)
+		permissionUsecase.SetPolicyPublisher(policyWatcher)
+		userRoleUsecase.SetPolicyPublisher(policyWatcher)
+		logger.Info(ctx, "admin.policy_publisher_enabled_for_all_usecases")
+	} else {
+		logger.Info(ctx, "admin.policy_publisher_disabled_single_instance_mode")
+	}
+
+	// Init handlers
 	adminAuthHandler := httphandler.NewAdminAuthHandler(adminAuthUsecase, jwtSigner, db)
+	roleHandler := httphandler.NewRoleHandler(roleUsecase)
+	permissionHandler := httphandler.NewPermissionHandler(permissionUsecase)
+	userRoleHandler := httphandler.NewUserRoleHandler(userRoleUsecase, userRepo, roleRepo, userRoleRepo, enforcer)
+	auditLogHandler := httphandler.NewAuditLogHandler(auditLogRepo)
+
+	// Wire permission system deps to auth handler
+	permissionSystemEnabled := cfg.Features.PermissionSystem
+	adminAuthHandler.SetPermissionDeps(roleRepo, userRoleRepo, enforcer, permissionSystemEnabled)
 
 	// Setup router
-	router := setupRouter(adminAuthHandler, cfg.CORS.AllowedOrigins)
+	router := setupRouter(routerDeps{
+		adminAuthHandler:  adminAuthHandler,
+		roleHandler:       roleHandler,
+		permissionHandler: permissionHandler,
+		userRoleHandler:   userRoleHandler,
+		auditLogHandler:   auditLogHandler,
+		enforcer:          enforcer,
+		permissionEnabled: permissionSystemEnabled,
+		allowedOrigins:    cfg.CORS.AllowedOrigins,
+		rateLimiter:       rateLimiter,
+	})
 
 	// Create HTTP server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -119,11 +220,12 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	// Start server
 	logger.SafeGo("admin-http-server", func() {
-		logger.Info(context.Background(), "admin.server_listening",
+		logger.Info(ctx, "admin.server_listening",
 			zap.String("addr", addr),
-			zap.String("env", cfg.Server.Env))
+			zap.String("env", cfg.Server.Env),
+			zap.Bool("permission_system", permissionSystemEnabled))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error(context.Background(), "admin.server_failed", zap.Error(err))
+			logger.Error(ctx, "admin.server_failed", zap.Error(err))
 			_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
 		}
 	})
@@ -133,20 +235,33 @@ func runServe(cmd *cobra.Command, args []string) {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	logger.Info(context.Background(), "admin.server_shutting_down")
+	logger.Info(ctx, "admin.server_shutting_down")
 
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Error(context.Background(), "admin.server_forced_shutdown", zap.Error(err))
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error(ctx, "admin.server_forced_shutdown", zap.Error(err))
 	}
 
-	logger.Info(context.Background(), "admin.server_exited")
+	logger.Info(ctx, "admin.server_exited")
 }
 
-// setupRouter creates and configures the Gin router
-func setupRouter(adminAuthHandler *httphandler.AdminAuthHandler, allowedOrigins []string) *gin.Engine {
+// routerDeps groups all dependencies needed to configure the Gin router.
+type routerDeps struct {
+	adminAuthHandler  *httphandler.AdminAuthHandler
+	roleHandler       *httphandler.RoleHandler
+	permissionHandler *httphandler.PermissionHandler
+	userRoleHandler   *httphandler.UserRoleHandler
+	auditLogHandler   *httphandler.AuditLogHandler
+	enforcer          *auth.CasbinEnforcer
+	permissionEnabled bool
+	allowedOrigins    []string
+	rateLimiter       httphandler.RateLimiterInterface
+}
+
+// setupRouter creates and configures the Gin router with all routes and middleware.
+func setupRouter(deps routerDeps) *gin.Engine {
 	if os.Getenv("GIN_MODE") == "" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -159,17 +274,20 @@ func setupRouter(adminAuthHandler *httphandler.AdminAuthHandler, allowedOrigins 
 	// Logger middleware
 	router.Use(gin.Logger())
 
-	// CORS middleware — restrict origins in production, allow all in development.
-	// When allowedOrigins is empty, all origins are permitted (development convenience).
-	// Production deployments MUST configure explicit origins to prevent cross-origin attacks.
+	// Security headers middleware (P0 #8)
+	router.Use(httphandler.SecurityHeadersMiddleware())
+
+	// Rate limiting middleware (P0 #2) — applied globally
+	router.Use(httphandler.AdminRateLimitMiddleware(deps.rateLimiter))
+
+	// CORS middleware
 	router.Use(func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 		allowed := false
-		if len(allowedOrigins) == 0 {
-			// Development mode: allow all origins
+		if len(deps.allowedOrigins) == 0 {
 			allowed = true
 		} else {
-			for _, o := range allowedOrigins {
+			for _, o := range deps.allowedOrigins {
 				if o == origin {
 					allowed = true
 					break
@@ -180,7 +298,7 @@ func setupRouter(adminAuthHandler *httphandler.AdminAuthHandler, allowedOrigins 
 		if allowed {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
 			c.Writer.Header().Set("Vary", "Origin")
-			c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
@@ -193,8 +311,19 @@ func setupRouter(adminAuthHandler *httphandler.AdminAuthHandler, allowedOrigins 
 		c.Next()
 	})
 
-	// Register admin auth routes
-	adminAuthHandler.RegisterRoutes(router)
+	// Register admin auth routes (public + protected)
+	deps.adminAuthHandler.RegisterRoutes(router)
+
+	// Protected API routes with JWT + Casbin middleware
+	apiGroup := router.Group("/api")
+	apiGroup.Use(deps.adminAuthHandler.JWTAuthMiddleware())
+	apiGroup.Use(httphandler.CasbinMiddleware(deps.enforcer, deps.permissionEnabled))
+
+	// Register management routes
+	deps.roleHandler.RegisterRoutes(apiGroup)
+	deps.permissionHandler.RegisterRoutes(apiGroup)
+	deps.userRoleHandler.RegisterRoutes(apiGroup)
+	deps.auditLogHandler.RegisterRoutes(apiGroup)
 
 	// Register static file server for admin-ui (SPA)
 	ServeStaticFiles(router)

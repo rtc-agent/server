@@ -32,6 +32,18 @@ type UserResponse struct {
 	Name string `json:"name,omitempty"`
 	// AvatarURL URL to user avatar image (optional)
 	AvatarURL string `json:"avatar_url,omitempty"`
+	// Roles user's assigned roles (empty when permission system is disabled)
+	Roles []RoleInfo `json:"roles,omitempty"`
+}
+
+// RoleInfo basic role information
+type RoleInfo struct {
+	// ID role ID (optional, for backward compatibility)
+	ID string `json:"id,omitempty"`
+	// Name role name
+	Name string `json:"name"`
+	// DisplayName role display name
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 // RefreshRequest request payload for refreshing an access token

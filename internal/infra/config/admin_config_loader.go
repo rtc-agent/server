@@ -27,13 +27,13 @@ func LoadAdminConfig(cfgFile string) (*AdminConfig, error) {
 	}
 
 	// Set defaults
-	cfg.setDefaults()
+	cfg.setDefaults(v)
 
 	return &cfg, nil
 }
 
 // setDefaults sets default values for AdminConfig.
-func (c *AdminConfig) setDefaults() {
+func (c *AdminConfig) setDefaults(v *viper.Viper) {
 	if c.Server.Host == "" {
 		c.Server.Host = "0.0.0.0"
 	}
@@ -57,6 +57,21 @@ func (c *AdminConfig) setDefaults() {
 	}
 	if c.JWT.RefreshTokenTTL == 0 {
 		c.JWT.RefreshTokenTTL = 604800 // 7 days
+	}
+	// Security defaults
+	if c.Security.RateLimitPerMinute <= 0 {
+		c.Security.RateLimitPerMinute = 100
+	}
+	if c.Security.LoginMaxAttempts <= 0 {
+		c.Security.LoginMaxAttempts = 5
+	}
+	if c.Security.LoginLockDuration <= 0 {
+		c.Security.LoginLockDuration = 900 // 15 minutes
+	}
+	// Features: permission_system defaults to true per spec section 8.2.
+	// Only set default if not explicitly configured in the config file.
+	if !v.IsSet("features.permission_system") {
+		c.Features.PermissionSystem = true
 	}
 }
 

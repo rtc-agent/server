@@ -4,7 +4,9 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -122,7 +124,18 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, roleRepo repo.RoleRepo, en
 
 	// Add policies AFTER the transaction commits (Casbin adapter uses its own DB session).
 	// If this fails, the next restart will detect the missing policies and add them.
-	return addAllPolicies(ctx, enforcer, createdAdminID, createdOperatorID, createdViewerID)
+	if err := addAllPolicies(ctx, enforcer, createdAdminID, createdOperatorID, createdViewerID); err != nil {
+		return err
+	}
+
+	// Auto-assign admin role to the first user if no one has admin role yet.
+	// This ensures out-of-box experience: the first user created via CLI gets admin access.
+	if err := autoAssignAdminRole(ctx, db, enforcer, createdAdminID); err != nil {
+		// Log but don't fail — admin can manually assign roles later
+		logger.Warn(ctx, "bootstrap.auto_assign_admin_failed", zap.Error(err))
+	}
+
+	return nil
 }
 
 // addAllPolicies adds all default Casbin policies for the three default roles.
@@ -220,4 +233,73 @@ func hasAllExpectedPolicies(existing [][]string, expected [][]string) bool {
 	}
 
 	return true
+}
+
+// autoAssignAdminRole automatically assigns the admin role to the first user if no one has it.
+// This ensures out-of-box experience: the first user created via CLI gets admin access immediately.
+//
+// Logic:
+//  1. Check if any user already has the admin role (via Casbin grouping policies)
+//  2. If yes, do nothing
+//  3. If no, find the first user in the database
+//  4. Assign admin role to that user (both in user_roles table and Casbin)
+func autoAssignAdminRole(
+	ctx context.Context,
+	db *gorm.DB,
+	enforcer *auth.CasbinEnforcer,
+	adminRoleID string,
+) error {
+	// Check if any user already has admin role
+	// GetGroupingPolicy returns ([][]string, error)
+	allGroupingPolicies, err := enforcer.Enforcer().GetGroupingPolicy()
+	if err != nil {
+		return fmt.Errorf("get grouping policies: %w", err)
+	}
+	for _, policy := range allGroupingPolicies {
+		if len(policy) >= 2 && policy[1] == adminRoleID {
+			// At least one user has admin role — nothing to do
+			logger.Info(ctx, "bootstrap.admin_role_already_assigned",
+				zap.String("user_id", policy[0]))
+			return nil
+		}
+	}
+
+	// No user has admin role — find the first user
+	var firstUser model.User
+	if err := db.WithContext(ctx).First(&firstUser).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			// No users exist yet — nothing to do
+			logger.Info(ctx, "bootstrap.no_users_exist_skipping_admin_assignment")
+			return nil
+		}
+		return fmt.Errorf("find first user: %w", err)
+	}
+
+	// Assign admin role to the first user
+	userID := firstUser.ID.String()
+	logger.Info(ctx, "bootstrap.auto_assigning_admin_role",
+		zap.String("user_id", userID),
+		zap.String("user_email", firstUser.Email),
+		zap.String("admin_role_id", adminRoleID))
+
+	// 1. Create user_roles record
+	userRole := &model.UserRole{
+		UserID:     firstUser.ID,
+		RoleID:     uuid.MustParse(adminRoleID),
+		AssignedAt: time.Now(),
+	}
+	if err := db.WithContext(ctx).Create(userRole).Error; err != nil {
+		return fmt.Errorf("create user_role record: %w", err)
+	}
+
+	// 2. Add Casbin grouping policy
+	if err := enforcer.AddGroupingPolicy(ctx, userID, adminRoleID); err != nil {
+		return fmt.Errorf("add casbin grouping policy: %w", err)
+	}
+
+	logger.Info(ctx, "bootstrap.admin_role_auto_assigned",
+		zap.String("user_id", userID),
+		zap.String("user_email", firstUser.Email))
+
+	return nil
 }

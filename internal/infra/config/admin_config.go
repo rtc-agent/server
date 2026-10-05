@@ -13,6 +13,31 @@ type AdminConfig struct {
 	JWT AdminJWTConfig `mapstructure:"jwt"`
 	// CORS configuration for admin-server
 	CORS AdminCORSConfig `mapstructure:"cors"`
+	// Security configuration for rate limiting and login protection
+	Security AdminSecurityConfig `mapstructure:"security"`
+	// Features configuration for feature flags
+	Features AdminFeaturesConfig `mapstructure:"features"`
+}
+
+// AdminSecurityConfig security settings for admin-server.
+type AdminSecurityConfig struct {
+	// RateLimitPerMinute is the maximum number of requests allowed per minute per IP.
+	// Defaults to 100 if not set.
+	RateLimitPerMinute int `mapstructure:"rate_limit_per_minute"`
+	// LoginMaxAttempts is the maximum number of failed login attempts before lockout.
+	// Applies to both IP and email independently. Defaults to 5.
+	LoginMaxAttempts int `mapstructure:"login_max_attempts"`
+	// LoginLockDuration is the lockout duration in seconds after exceeding max attempts.
+	// Defaults to 900 (15 minutes).
+	LoginLockDuration int `mapstructure:"login_lock_duration"`
+}
+
+// AdminFeaturesConfig controls feature flags for the admin server.
+type AdminFeaturesConfig struct {
+	// PermissionSystem enables the Casbin RBAC permission system.
+	// When false, all authenticated users have full admin access (legacy behavior).
+	// Default: true (per spec section 8.2)
+	PermissionSystem bool `mapstructure:"permission_system"`
 }
 
 // AdminRedisConfig Redis connection settings for admin-server

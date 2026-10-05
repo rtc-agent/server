@@ -9,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/rtc-agent/server/internal/repo" //nolint:depguard // TODO: refactor to use usecase layer
 	"github.com/rtc-agent/server/internal/usecase"
 )
 
@@ -110,7 +109,7 @@ func (h *RoleHandler) Get(c *gin.Context) {
 	ctx := c.Request.Context()
 	role, err := h.roleUsecase.GetRole(ctx, id)
 	if err != nil {
-		if repo.IsNotFound(err) {
+		if usecase.IsNotFound(err) {
 			Error(c, "role_not_found", "角色不存在")
 			return
 		}
@@ -162,7 +161,7 @@ func (h *RoleHandler) Create(c *gin.Context) {
 		Description: req.Description,
 	}, operatorID, operatorIP)
 	if err != nil {
-		if errors.Is(err, repo.ErrRoleNameExists) {
+		if errors.Is(err, usecase.ErrRoleNameExists) {
 			Error(c, "role_name_exists", "角色名称已存在")
 			return
 		}
@@ -213,11 +212,11 @@ func (h *RoleHandler) Update(c *gin.Context) {
 		IsEnabled:   req.IsEnabled,
 	}, operatorID, operatorIP)
 	if err != nil {
-		if repo.IsNotFound(err) {
+		if usecase.IsNotFound(err) {
 			Error(c, "role_not_found", "角色不存在")
 			return
 		}
-		if errors.Is(err, repo.ErrConflict) {
+		if errors.Is(err, usecase.ErrConflict) {
 			Error(c, "conflict", "角色已被其他用户修改，请刷新后重试")
 			return
 		}
@@ -251,11 +250,11 @@ func (h *RoleHandler) Delete(c *gin.Context) {
 
 	if err := h.roleUsecase.DeleteRole(ctx, id, operatorID, operatorIP); err != nil {
 		switch {
-		case errors.Is(err, repo.ErrCannotDeleteSystemRole):
+		case errors.Is(err, usecase.ErrCannotDeleteSystemRole):
 			Error(c, "cannot_delete_system_role", "系统内置角色不可删除")
-		case errors.Is(err, repo.ErrCannotRemoveLastAdmin):
+		case errors.Is(err, usecase.ErrCannotRemoveLastAdmin):
 			Error(c, "cannot_remove_last_admin", "不能删除最后一个管理员角色")
-		case repo.IsNotFound(err):
+		case usecase.IsNotFound(err):
 			Error(c, "role_not_found", "角色不存在")
 		default:
 			Error(c, "server_error", "删除角色失败")
@@ -278,7 +277,7 @@ func (h *RoleHandler) GetPolicies(c *gin.Context) {
 	ctx := c.Request.Context()
 	policies, err := h.roleUsecase.GetRolePolicies(ctx, id)
 	if err != nil {
-		if repo.IsNotFound(err) {
+		if usecase.IsNotFound(err) {
 			Error(c, "role_not_found", "角色不存在")
 			return
 		}

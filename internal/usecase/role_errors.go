@@ -21,3 +21,8 @@ var (
 	ErrConflict               = repo.ErrConflict
 	ErrPermissionExists       = repo.ErrPermissionExists
 )
+
+// IsNotFound checks whether the error is a "not found" variant.
+func IsNotFound(err error) bool {
+	return repo.IsNotFound(err)
+}

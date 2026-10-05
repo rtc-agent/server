@@ -9,8 +9,11 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 
 	"github.com/spf13/cobra"
@@ -61,10 +64,29 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	if err := db.AutoMigrate(
 		&model.User{},
 		&model.AdminRefreshToken{},
+		&model.Role{},
+		&model.UserRole{},
+		&model.AuditLog{},
 	); err != nil {
 		return fmt.Errorf("admin auto migrate: %w", err)
 	}
 
+	// Bootstrap default roles and Casbin policies (idempotent).
+	// This ensures default roles exist even when only `migrate` is run without `serve`.
+	// If Casbin enforcer initialization fails (e.g., table not yet created), we skip
+	// bootstrap here — the serve command will retry on startup.
+	ctx := context.Background()
+	enforcer, err := auth.NewCasbinEnforcer(db)
+	if err != nil {
+		logger.Warn(ctx, "casbin_enforcer_init_failed_skipping_bootstrap", zap.Error(err))
+	} else {
+		roleRepo := repo.NewRoleRepo(db)
+		if err := usecase.BootstrapAdmin(ctx, db, roleRepo, enforcer); err != nil {
+			logger.Warn(ctx, "bootstrap_admin_failed_will_retry_on_serve", zap.Error(err))
+		}
+	}
+
+	// Run owner migration stages
 	if err := model.MigrateOwnerStages1And2(db); err != nil {
 		return fmt.Errorf("migrate owner stages 1+2: %w", err)
 	}
