@@ -14,15 +14,15 @@ type AuditLog struct {
 	OperatorID   uuid.UUID      `gorm:"type:uuid;not null;index" json:"operator_id"`
 	OperatorIP   string         `gorm:"size:45" json:"operator_ip,omitempty"`
 	EventType    string         `gorm:"size:50;not null;index" json:"event_type"`
-	ResourceType string         `gorm:"size:50;not null;index:idx_audit_logs_resource,priority:1" json:"resource_type"`
-	ResourceID   uuid.UUID      `gorm:"type:uuid;index:idx_audit_logs_resource,priority:2" json:"resource_id,omitempty"`
+	ResourceType string         `gorm:"size:50;not null;index:idx_admin_audit_logs_resource,priority:1" json:"resource_type"`
+	ResourceID   uuid.UUID      `gorm:"type:uuid;index:idx_admin_audit_logs_resource,priority:2" json:"resource_id,omitempty"`
 	Details      datatypes.JSON `gorm:"type:jsonb" json:"details,omitempty"`
-	CreatedAt    time.Time      `gorm:"not null;index:idx_audit_logs_created_at,sort:desc" json:"created_at"`
+	CreatedAt    time.Time      `gorm:"not null;index:idx_admin_audit_logs_created_at,sort:desc" json:"created_at"`
 }
 
 // TableName specifies the database table name for AuditLog.
 func (AuditLog) TableName() string {
-	return "audit_logs"
+	return "admin_audit_logs"
 }
 
 // BeforeCreate generates a UUID v7 identifier if one is not already set.

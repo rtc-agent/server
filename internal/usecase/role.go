@@ -20,32 +20,32 @@ const (
 	SystemRoleAdmin = "admin" // Admin role name - cannot be deleted
 )
 
-// RoleUsecase handles role management operations.
-type RoleUsecase struct {
-	roleRepo        repo.RoleRepo
-	userRoleRepo    repo.UserRoleRepo
-	auditLogRepo    repo.AuditLogRepo
-	enforcer        *auth.CasbinEnforcer
-	policyPublisher PolicyPublisher // optional multi-instance sync (may be nil)
+// AdminRoleUsecase handles admin role management operations.
+type AdminRoleUsecase struct {
+	adminRoleRepo     repo.AdminRoleRepo
+	adminUserRoleRepo repo.AdminUserRoleRepo
+	auditLogRepo      repo.AuditLogRepo
+	enforcer          *auth.CasbinEnforcer
+	policyPublisher   PolicyPublisher // optional multi-instance sync (may be nil)
 }
 
-// NewRoleUsecase creates a new RoleUsecase.
-func NewRoleUsecase(
-	roleRepo repo.RoleRepo,
-	userRoleRepo repo.UserRoleRepo,
+// NewAdminRoleUsecase creates a new AdminRoleUsecase.
+func NewAdminRoleUsecase(
+	adminRoleRepo repo.AdminRoleRepo,
+	adminUserRoleRepo repo.AdminUserRoleRepo,
 	auditLogRepo repo.AuditLogRepo,
 	enforcer *auth.CasbinEnforcer,
-) *RoleUsecase {
-	return &RoleUsecase{
-		roleRepo:     roleRepo,
-		userRoleRepo: userRoleRepo,
-		auditLogRepo: auditLogRepo,
-		enforcer:     enforcer,
+) *AdminRoleUsecase {
+	return &AdminRoleUsecase{
+		adminRoleRepo:     adminRoleRepo,
+		adminUserRoleRepo: adminUserRoleRepo,
+		auditLogRepo:      auditLogRepo,
+		enforcer:          enforcer,
 	}
 }
 
 // SetPolicyPublisher injects optional policy publisher for multi-instance sync.
-func (uc *RoleUsecase) SetPolicyPublisher(pp PolicyPublisher) {
+func (uc *AdminRoleUsecase) SetPolicyPublisher(pp PolicyPublisher) {
 	uc.policyPublisher = pp
 }
 
@@ -57,8 +57,8 @@ type CreateRoleInput struct {
 }
 
 // CreateRole creates a new role.
-func (uc *RoleUsecase) CreateRole(ctx context.Context, input CreateRoleInput, operatorID uuid.UUID, operatorIP string) (*model.Role, error) {
-	role := &model.Role{
+func (uc *AdminRoleUsecase) CreateRole(ctx context.Context, input CreateRoleInput, operatorID uuid.UUID, operatorIP string) (*model.AdminRole, error) {
+	role := &model.AdminRole{
 		Name:        input.Name,
 		DisplayName: input.DisplayName,
 		Description: input.Description,
@@ -66,7 +66,7 @@ func (uc *RoleUsecase) CreateRole(ctx context.Context, input CreateRoleInput, op
 		IsEnabled:   true,
 	}
 
-	if err := uc.roleRepo.Create(ctx, role); err != nil {
+	if err := uc.adminRoleRepo.Create(ctx, role); err != nil {
 		if errors.Is(err, repo.ErrRoleNameExists) {
 			return nil, err
 		}
@@ -92,8 +92,8 @@ type UpdateRoleInput struct {
 }
 
 // UpdateRole updates an existing role.
-func (uc *RoleUsecase) UpdateRole(ctx context.Context, roleID uuid.UUID, input UpdateRoleInput, operatorID uuid.UUID, operatorIP string) (*model.Role, error) {
-	role, err := uc.roleRepo.GetByID(ctx, roleID)
+func (uc *AdminRoleUsecase) UpdateRole(ctx context.Context, roleID uuid.UUID, input UpdateRoleInput, operatorID uuid.UUID, operatorIP string) (*model.AdminRole, error) {
+	role, err := uc.adminRoleRepo.GetByID(ctx, roleID)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func (uc *RoleUsecase) UpdateRole(ctx context.Context, roleID uuid.UUID, input U
 		role.IsEnabled = *input.IsEnabled
 	}
 
-	if err := uc.roleRepo.Update(ctx, role); err != nil {
+	if err := uc.adminRoleRepo.Update(ctx, role); err != nil {
 		if errors.Is(err, repo.ErrRoleNameExists) {
 			return nil, err
 		}
@@ -131,10 +131,10 @@ func (uc *RoleUsecase) UpdateRole(ctx context.Context, roleID uuid.UUID, input U
 // Per spec, this performs:
 //  1. System role protection (is_system=true cannot be deleted)
 //  2. Soft delete: set is_enabled=false
-//  3. Cascade delete: remove all user_roles assignments for this role
+//  3. Cascade delete: remove all admin_user_roles assignments for this role
 //  4. Remove Casbin p policies (role permissions) and g policies (user-role groupings)
-func (uc *RoleUsecase) DeleteRole(ctx context.Context, roleID uuid.UUID, operatorID uuid.UUID, operatorIP string) error {
-	role, err := uc.roleRepo.GetByID(ctx, roleID)
+func (uc *AdminRoleUsecase) DeleteRole(ctx context.Context, roleID uuid.UUID, operatorID uuid.UUID, operatorIP string) error {
+	role, err := uc.adminRoleRepo.GetByID(ctx, roleID)
 	if err != nil {
 		return err
 	}
@@ -154,13 +154,13 @@ func (uc *RoleUsecase) DeleteRole(ctx context.Context, roleID uuid.UUID, operato
 		return fmt.Errorf("remove casbin g policies for role: %w", err)
 	}
 
-	// Step 3: Cascade delete user_roles assignments for this role
-	if err := uc.userRoleRepo.DeleteByRoleID(ctx, roleID); err != nil {
-		return fmt.Errorf("cascade delete user_roles for role: %w", err)
+	// Step 3: Cascade delete admin_user_roles assignments for this role
+	if err := uc.adminUserRoleRepo.DeleteByRoleID(ctx, roleID); err != nil {
+		return fmt.Errorf("cascade delete admin_user_roles for role: %w", err)
 	}
 
 	// Step 4: Soft delete the role (set is_enabled=false)
-	if err := uc.roleRepo.Delete(ctx, roleID); err != nil {
+	if err := uc.adminRoleRepo.Delete(ctx, roleID); err != nil {
 		return fmt.Errorf("soft delete role: %w", err)
 	}
 
@@ -186,24 +186,24 @@ func (uc *RoleUsecase) DeleteRole(ctx context.Context, roleID uuid.UUID, operato
 }
 
 // GetRole returns a role by ID.
-func (uc *RoleUsecase) GetRole(ctx context.Context, roleID uuid.UUID) (*model.Role, error) {
-	return uc.roleRepo.GetByID(ctx, roleID)
+func (uc *AdminRoleUsecase) GetRole(ctx context.Context, roleID uuid.UUID) (*model.AdminRole, error) {
+	return uc.adminRoleRepo.GetByID(ctx, roleID)
 }
 
 // ListRoles returns all roles.
-func (uc *RoleUsecase) ListRoles(ctx context.Context) ([]*model.Role, error) {
-	return uc.roleRepo.List(ctx)
+func (uc *AdminRoleUsecase) ListRoles(ctx context.Context) ([]*model.AdminRole, error) {
+	return uc.adminRoleRepo.List(ctx)
 }
 
 // ListRolesPaginated returns roles with pagination support.
 // Returns (roles, total, error).
-func (uc *RoleUsecase) ListRolesPaginated(ctx context.Context, page, pageSize int) ([]*model.Role, int64, error) {
-	return uc.roleRepo.ListPaginated(ctx, page, pageSize)
+func (uc *AdminRoleUsecase) ListRolesPaginated(ctx context.Context, page, pageSize int) ([]*model.AdminRole, int64, error) {
+	return uc.adminRoleRepo.ListPaginated(ctx, page, pageSize)
 }
 
 // GetRolePolicies returns all permission policies for a role.
-func (uc *RoleUsecase) GetRolePolicies(ctx context.Context, roleID uuid.UUID) ([][]string, error) {
-	_, err := uc.roleRepo.GetByID(ctx, roleID)
+func (uc *AdminRoleUsecase) GetRolePolicies(ctx context.Context, roleID uuid.UUID) ([][]string, error) {
+	_, err := uc.adminRoleRepo.GetByID(ctx, roleID)
 	if err != nil {
 		return nil, err
 	}

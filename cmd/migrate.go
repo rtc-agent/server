@@ -62,10 +62,10 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 	// Migrate admin-server tables
 	if err := db.AutoMigrate(
-		&model.User{},
+		&model.AdminUser{},
 		&model.AdminRefreshToken{},
-		&model.Role{},
-		&model.UserRole{},
+		&model.AdminRole{},
+		&model.AdminUserRole{},
 		&model.AuditLog{},
 	); err != nil {
 		return fmt.Errorf("admin auto migrate: %w", err)
@@ -80,7 +80,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		logger.Warn(ctx, "casbin_enforcer_init_failed_skipping_bootstrap", zap.Error(err))
 	} else {
-		roleRepo := repo.NewRoleRepo(db)
+		roleRepo := repo.NewAdminRoleRepo(db)
 		if err := usecase.BootstrapAdmin(ctx, db, roleRepo, enforcer); err != nil {
 			logger.Warn(ctx, "bootstrap_admin_failed_will_retry_on_serve", zap.Error(err))
 		}

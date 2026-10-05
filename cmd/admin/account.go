@@ -38,8 +38,8 @@ var createCmd = &cobra.Command{
 // bindRoleCmd represents the bind-role command
 var bindRoleCmd = &cobra.Command{
 	Use:   "bind-role",
-	Short: "Bind a role to a user",
-	Long:  `Bind a role (e.g., admin, operator, viewer) to an existing user by email`,
+	Short: "Bind a role to an admin user",
+	Long:  `Bind a role (e.g., admin, operator, viewer) to an existing admin user by email`,
 	Run:   runBindRole,
 }
 
@@ -92,11 +92,11 @@ func runCreate(cmd *cobra.Command, args []string) {
 		logger.Fatal(context.Background(), "admin.database_connection_failed", zap.Error(err))
 	}
 
-	// Check if user already exists
+	// Check if admin user already exists
 	var count int64
-	db.Model(&model.User{}).Where("email = ?", createEmail).Count(&count)
+	db.Model(&model.AdminUser{}).Where("email = ?", createEmail).Count(&count)
 	if count > 0 {
-		logger.Error(context.Background(), "admin.user_already_exists", zap.String("email", createEmail))
+		logger.Error(context.Background(), "admin.admin_user_already_exists", zap.String("email", createEmail))
 		os.Exit(1)
 	}
 
@@ -106,47 +106,47 @@ func runCreate(cmd *cobra.Command, args []string) {
 		logger.Fatal(context.Background(), "admin.password_hash_failed", zap.Error(err))
 	}
 
-	// Create user
-	user := &model.User{
+	// Create admin user
+	adminUser := &model.AdminUser{
 		Email:        createEmail,
 		Name:         createName,
 		PasswordHash: string(passwordHash),
 	}
 
-	if err := db.Create(user).Error; err != nil {
-		logger.Fatal(context.Background(), "admin.user_creation_failed", zap.Error(err))
+	if err := db.Create(adminUser).Error; err != nil {
+		logger.Fatal(context.Background(), "admin.admin_user_creation_failed", zap.Error(err))
 	}
 
-	logger.Info(context.Background(), "admin.user_created_successfully",
+	logger.Info(context.Background(), "admin.admin_user_created_successfully",
 		zap.String("email", createEmail),
 		zap.String("name", createName),
-		zap.String("id", user.ID.String()))
+		zap.String("id", adminUser.ID.String()))
 
-	fmt.Printf("✅ User created successfully!\n")
+	fmt.Printf("✅ Admin user created successfully!\n")
 	fmt.Printf("   Email: %s\n", createEmail)
 	fmt.Printf("   Name:  %s\n", createName)
-	fmt.Printf("   ID:    %s\n", user.ID.String())
+	fmt.Printf("   ID:    %s\n", adminUser.ID.String())
 
 	// Bind role if specified
 	if createRole != "" {
 		fmt.Printf("\n🔗 Binding role: %s\n", createRole)
 
 		// Find role
-		roleRepo := repo.NewRoleRepo(db)
+		roleRepo := repo.NewAdminRoleRepo(db)
 		role, err := roleRepo.GetByName(context.Background(), createRole)
 		if err != nil {
 			fmt.Printf("⚠️  Role not found: %s (user created without role)\n", createRole)
 			return
 		}
 
-		// Create user_role record
-		userRole := &model.UserRole{
-			UserID:     user.ID,
+		// Create admin_user_role record
+		userRole := &model.AdminUserRole{
+			UserID:     adminUser.ID,
 			RoleID:     role.ID,
 			AssignedAt: time.Now(),
 		}
 		if err := db.Create(userRole).Error; err != nil {
-			fmt.Printf("⚠️  Failed to bind role: %v (user created without role)\n", err)
+			fmt.Printf("⚠️  Failed to bind role: %v (admin user created without role)\n", err)
 			return
 		}
 
@@ -157,7 +157,7 @@ func runCreate(cmd *cobra.Command, args []string) {
 			return
 		}
 
-		if err := enforcer.AddGroupingPolicy(context.Background(), user.ID.String(), role.ID.String()); err != nil {
+		if err := enforcer.AddGroupingPolicy(context.Background(), adminUser.ID.String(), role.ID.String()); err != nil {
 			fmt.Printf("⚠️  Failed to add Casbin policy: %v (role bound in DB but not in Casbin)\n", err)
 			return
 		}
@@ -189,22 +189,22 @@ func runBindRole(cmd *cobra.Command, args []string) {
 		logger.Fatal(context.Background(), "admin.database_connection_failed", zap.Error(err))
 	}
 
-	// Find user
-	var user model.User
-	if err := db.Where("email = ?", bindRoleEmail).First(&user).Error; err != nil {
+	// Find admin user
+	var adminUser model.AdminUser
+	if err := db.Where("email = ?", bindRoleEmail).First(&adminUser).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			logger.Error(context.Background(), "admin.user_not_found", zap.String("email", bindRoleEmail))
-			fmt.Fprintf(os.Stderr, "❌ User not found: %s\n", bindRoleEmail)
+			logger.Error(context.Background(), "admin.admin_user_not_found", zap.String("email", bindRoleEmail))
+			fmt.Fprintf(os.Stderr, "❌ Admin user not found: %s\n", bindRoleEmail)
 			os.Exit(1)
 		}
-		logger.Error(context.Background(), "admin.find_user_failed", zap.Error(err))
-		fmt.Fprintf(os.Stderr, "❌ Failed to find user: %v\n", err)
+		logger.Error(context.Background(), "admin.find_admin_user_failed", zap.Error(err))
+		fmt.Fprintf(os.Stderr, "❌ Failed to find admin user: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("✅ Found user: %s (ID: %s)\n", user.Email, user.ID)
+	fmt.Printf("✅ Found admin user: %s (ID: %s)\n", adminUser.Email, adminUser.ID)
 
 	// Find role
-	roleRepo := repo.NewRoleRepo(db)
+	roleRepo := repo.NewAdminRoleRepo(db)
 	role, err := roleRepo.GetByName(ctx, bindRoleName)
 	if err != nil {
 		logger.Error(context.Background(), "admin.role_not_found", zap.String("role", bindRoleName))
@@ -215,24 +215,24 @@ func runBindRole(cmd *cobra.Command, args []string) {
 
 	// Check if already assigned
 	var count int64
-	db.Model(&model.UserRole{}).Where("user_id = ? AND role_id = ?", user.ID, role.ID).Count(&count)
+	db.Model(&model.AdminUserRole{}).Where("user_id = ? AND role_id = ?", adminUser.ID, role.ID).Count(&count)
 	if count > 0 {
-		fmt.Printf("⚠️  User already has role: %s\n", bindRoleName)
+		fmt.Printf("⚠️  Admin user already has role: %s\n", bindRoleName)
 		return
 	}
 
-	// Create user_role record
-	userRole := &model.UserRole{
-		UserID:     user.ID,
+	// Create admin_user_role record
+	userRole := &model.AdminUserRole{
+		UserID:     adminUser.ID,
 		RoleID:     role.ID,
 		AssignedAt: time.Now(),
 	}
 	if err := db.Create(userRole).Error; err != nil {
-		logger.Error(context.Background(), "admin.create_user_role_failed", zap.Error(err))
-		fmt.Fprintf(os.Stderr, "❌ Failed to create user_role: %v\n", err)
+		logger.Error(context.Background(), "admin.create_admin_user_role_failed", zap.Error(err))
+		fmt.Fprintf(os.Stderr, "❌ Failed to create admin_user_role: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("✅ Created user_role record\n")
+	fmt.Printf("✅ Created admin_user_role record\n")
 
 	// Add Casbin grouping policy
 	enforcer, err := auth.NewCasbinEnforcer(db)
@@ -242,13 +242,13 @@ func runBindRole(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	if err := enforcer.AddGroupingPolicy(ctx, user.ID.String(), role.ID.String()); err != nil {
+	if err := enforcer.AddGroupingPolicy(ctx, adminUser.ID.String(), role.ID.String()); err != nil {
 		logger.Error(context.Background(), "admin.add_casbin_policy_failed", zap.Error(err))
 		fmt.Fprintf(os.Stderr, "❌ Failed to add Casbin policy: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("✅ Added Casbin grouping policy\n")
 
-	fmt.Printf("\n🎉 Success! User %s now has role: %s\n", user.Email, bindRoleName)
+	fmt.Printf("\n🎉 Success! Admin user %s now has role: %s\n", adminUser.Email, bindRoleName)
 	fmt.Printf("   Please restart the server to reload permissions.\n")
 }

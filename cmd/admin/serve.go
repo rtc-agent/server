@@ -30,7 +30,7 @@ import (
 var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Start the admin server",
-	Long:  `Start the RTC Agent admin server for user management and authentication`,
+	Long:  `Start the RTC Agent admin server for admin user management and authentication`,
 	Run:   runServe,
 }
 
@@ -127,15 +127,15 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 
 	// Init repositories
-	userRepo := repo.NewUserRepo(db)
+	adminUserRepo := repo.NewAdminUserRepo(db)
 	refreshTokenRepo := repo.NewAdminRefreshTokenRepo(db)
-	roleRepo := repo.NewRoleRepo(db)
-	userRoleRepo := repo.NewUserRoleRepo(db)
+	adminRoleRepo := repo.NewAdminRoleRepo(db)
+	adminUserRoleRepo := repo.NewAdminUserRoleRepo(db)
 	auditLogRepo := repo.NewAuditLogRepo(db)
 
 	// Bootstrap default roles and policies (idempotent, transactional) (P0 #4)
 	// If bootstrap fails, log error but continue - server can still function in degraded mode
-	if err := usecase.BootstrapAdmin(ctx, db, roleRepo, enforcer); err != nil {
+	if err := usecase.BootstrapAdmin(ctx, db, adminRoleRepo, enforcer); err != nil {
 		logger.Error(ctx, "admin.bootstrap_admin_failed_default_roles_may_be_missing",
 			zap.Error(err))
 		// Don't exit - allow server to start even if bootstrap failed
@@ -171,18 +171,18 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 
 	// Init usecases
-	adminAuthUsecase := usecase.NewAdminAuthUsecase(userRepo, refreshTokenRepo, jwtSigner)
+	adminAuthUsecase := usecase.NewAdminAuthUsecase(adminUserRepo, refreshTokenRepo, jwtSigner)
 	adminAuthUsecase.SetLoginProtection(loginProtection)
-	roleUsecase := usecase.NewRoleUsecase(roleRepo, userRoleRepo, auditLogRepo, enforcer)
-	permissionUsecase := usecase.NewPermissionUsecase(roleRepo, enforcer, auditLogRepo)
-	userRoleUsecase := usecase.NewUserRoleUsecase(userRepo, roleRepo, userRoleRepo, enforcer, auditLogRepo)
-	userUsecase := usecase.NewUserUsecase(userRepo)
+	adminRoleUsecase := usecase.NewAdminRoleUsecase(adminRoleRepo, adminUserRoleRepo, auditLogRepo, enforcer)
+	permissionUsecase := usecase.NewPermissionUsecase(adminRoleRepo, enforcer, auditLogRepo)
+	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer, auditLogRepo)
+	adminUserUsecase := usecase.NewAdminUserUsecase(adminUserRepo)
 
 	// Inject policy publisher for multi-instance sync (P0 #1 fix)
 	if policyWatcher != nil {
-		roleUsecase.SetPolicyPublisher(policyWatcher)
+		adminRoleUsecase.SetPolicyPublisher(policyWatcher)
 		permissionUsecase.SetPolicyPublisher(policyWatcher)
-		userRoleUsecase.SetPolicyPublisher(policyWatcher)
+		adminUserRoleUsecase.SetPolicyPublisher(policyWatcher)
 		logger.Info(ctx, "admin.policy_publisher_enabled_for_all_usecases")
 	} else {
 		logger.Info(ctx, "admin.policy_publisher_disabled_single_instance_mode")
@@ -190,28 +190,28 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	// Init handlers
 	adminAuthHandler := httphandler.NewAdminAuthHandler(adminAuthUsecase, jwtSigner, db)
-	roleHandler := httphandler.NewRoleHandler(roleUsecase)
+	adminRoleHandler := httphandler.NewAdminRoleHandler(adminRoleUsecase)
 	permissionHandler := httphandler.NewPermissionHandler(permissionUsecase)
-	userRoleHandler := httphandler.NewUserRoleHandler(userRoleUsecase, userRepo, roleRepo, userRoleRepo, enforcer)
+	adminUserRoleHandler := httphandler.NewAdminUserRoleHandler(adminUserRoleUsecase, adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer)
 	auditLogHandler := httphandler.NewAuditLogHandler(auditLogRepo)
-	userHandler := httphandler.NewUserHandler(userUsecase)
+	adminUserHandler := httphandler.NewAdminUserHandler(adminUserUsecase)
 
 	// Wire permission system deps to auth handler
 	permissionSystemEnabled := cfg.Features.PermissionSystem
-	adminAuthHandler.SetPermissionDeps(roleRepo, userRoleRepo, enforcer, permissionSystemEnabled)
+	adminAuthHandler.SetPermissionDeps(adminRoleRepo, adminUserRoleRepo, enforcer, permissionSystemEnabled)
 
 	// Setup router
 	router := setupRouter(routerDeps{
-		adminAuthHandler:  adminAuthHandler,
-		roleHandler:       roleHandler,
-		permissionHandler: permissionHandler,
-		userRoleHandler:   userRoleHandler,
-		auditLogHandler:   auditLogHandler,
-		userHandler:       userHandler,
-		enforcer:          enforcer,
-		permissionEnabled: permissionSystemEnabled,
-		allowedOrigins:    cfg.CORS.AllowedOrigins,
-		rateLimiter:       rateLimiter,
+		adminAuthHandler:     adminAuthHandler,
+		adminRoleHandler:     adminRoleHandler,
+		permissionHandler:    permissionHandler,
+		adminUserRoleHandler: adminUserRoleHandler,
+		auditLogHandler:      auditLogHandler,
+		adminUserHandler:     adminUserHandler,
+		enforcer:             enforcer,
+		permissionEnabled:    permissionSystemEnabled,
+		allowedOrigins:       cfg.CORS.AllowedOrigins,
+		rateLimiter:          rateLimiter,
 	})
 
 	// Create HTTP server
@@ -252,16 +252,16 @@ func runServe(cmd *cobra.Command, args []string) {
 
 // routerDeps groups all dependencies needed to configure the Gin router.
 type routerDeps struct {
-	adminAuthHandler  *httphandler.AdminAuthHandler
-	roleHandler       *httphandler.RoleHandler
-	permissionHandler *httphandler.PermissionHandler
-	userRoleHandler   *httphandler.UserRoleHandler
-	auditLogHandler   *httphandler.AuditLogHandler
-	userHandler       *httphandler.UserHandler
-	enforcer          *auth.CasbinEnforcer
-	permissionEnabled bool
-	allowedOrigins    []string
-	rateLimiter       httphandler.RateLimiterInterface
+	adminAuthHandler     *httphandler.AdminAuthHandler
+	adminRoleHandler     *httphandler.AdminRoleHandler
+	permissionHandler    *httphandler.PermissionHandler
+	adminUserRoleHandler *httphandler.AdminUserRoleHandler
+	auditLogHandler      *httphandler.AuditLogHandler
+	adminUserHandler     *httphandler.AdminUserHandler
+	enforcer             *auth.CasbinEnforcer
+	permissionEnabled    bool
+	allowedOrigins       []string
+	rateLimiter          httphandler.RateLimiterInterface
 }
 
 // setupRouter creates and configures the Gin router with all routes and middleware.
@@ -324,11 +324,11 @@ func setupRouter(deps routerDeps) *gin.Engine {
 	apiGroup.Use(httphandler.CasbinMiddleware(deps.enforcer, deps.permissionEnabled))
 
 	// Register management routes
-	deps.roleHandler.RegisterRoutes(apiGroup)
+	deps.adminRoleHandler.RegisterRoutes(apiGroup)
 	deps.permissionHandler.RegisterRoutes(apiGroup)
-	deps.userRoleHandler.RegisterRoutes(apiGroup)
+	deps.adminUserRoleHandler.RegisterRoutes(apiGroup)
 	deps.auditLogHandler.RegisterRoutes(apiGroup)
-	deps.userHandler.RegisterRoutes(apiGroup)
+	deps.adminUserHandler.RegisterRoutes(apiGroup)
 
 	// Register static file server for admin-ui (SPA)
 	ServeStaticFiles(router)

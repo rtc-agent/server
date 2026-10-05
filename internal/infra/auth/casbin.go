@@ -49,10 +49,10 @@ type CasbinEnforcer struct {
 
 // NewCasbinEnforcer creates a Casbin enforcer backed by the given GORM DB.
 //
-// The gorm-adapter automatically creates the `casbin_rule` table if it does not exist.
+// The gorm-adapter automatically creates the `admin_casbin_rule` table if it does not exist.
 // Policies are loaded from the database on construction.
 func NewCasbinEnforcer(db *gorm.DB) (*CasbinEnforcer, error) {
-	adapter, err := gormadapter.NewAdapterByDBUseTableName(db, "", "casbin_rule")
+	adapter, err := gormadapter.NewAdapterByDBUseTableName(db, "", "admin_casbin_rule")
 	if err != nil {
 		return nil, fmt.Errorf("create casbin gorm adapter: %w", err)
 	}

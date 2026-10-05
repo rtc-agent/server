@@ -35,7 +35,7 @@ const bcryptCost = 12
 
 // AdminAuthUsecase handles admin authentication operations.
 type AdminAuthUsecase struct {
-	userRepo         repo.UserRepo
+	adminUserRepo    repo.AdminUserRepo
 	refreshTokenRepo repo.AdminRefreshTokenRepo
 	signer           AdminTokenSigner
 	loginProtection  LoginProtectionInterface // optional brute-force protection (may be nil)
@@ -43,12 +43,12 @@ type AdminAuthUsecase struct {
 
 // NewAdminAuthUsecase creates a new AdminAuthUsecase.
 func NewAdminAuthUsecase(
-	userRepo repo.UserRepo,
+	adminUserRepo repo.AdminUserRepo,
 	refreshTokenRepo repo.AdminRefreshTokenRepo,
 	signer AdminTokenSigner,
 ) *AdminAuthUsecase {
 	return &AdminAuthUsecase{
-		userRepo:         userRepo,
+		adminUserRepo:    adminUserRepo,
 		refreshTokenRepo: refreshTokenRepo,
 		signer:           signer,
 	}
@@ -64,7 +64,7 @@ type LoginResult struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresIn    int64
-	User         *model.User
+	User         *model.AdminUser
 }
 
 // Login authenticates a user with email and password.
@@ -81,8 +81,8 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password, clientIP
 		}
 	}
 
-	// 1. Find user by email
-	user, err := uc.userRepo.GetByEmail(ctx, email)
+	// 1. Find admin user by email
+	user, err := uc.adminUserRepo.GetByEmail(ctx, email)
 	if err != nil {
 		if repo.IsNotFound(err) {
 			// SECURITY: Run bcrypt even when user not found to prevent timing-based
@@ -147,14 +147,14 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password, clientIP
 	}, nil
 }
 
-// GetCurrentUser retrieves the current user by ID.
-func (uc *AdminAuthUsecase) GetCurrentUser(ctx context.Context, userID uuid.UUID) (*model.User, error) {
-	user, err := uc.userRepo.GetByID(ctx, userID)
+// GetCurrentUser retrieves the current admin user by ID.
+func (uc *AdminAuthUsecase) GetCurrentUser(ctx context.Context, userID uuid.UUID) (*model.AdminUser, error) {
+	user, err := uc.adminUserRepo.GetByID(ctx, userID)
 	if err != nil {
 		if repo.IsNotFound(err) {
-			return nil, ErrUserNotFound
+			return nil, ErrAdminUserNotFound
 		}
-		return nil, fmt.Errorf("admin auth get current user: %w", err)
+		return nil, fmt.Errorf("admin auth get current admin user: %w", err)
 	}
 	return user, nil
 }
@@ -196,10 +196,10 @@ func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain 
 		return nil, fmt.Errorf("admin auth revoke old refresh token: %w", err)
 	}
 
-	// 5. Get user info
-	user, err := uc.userRepo.GetByID(ctx, rt.UserID)
+	// 5. Get admin user info
+	user, err := uc.adminUserRepo.GetByID(ctx, rt.UserID)
 	if err != nil {
-		return nil, fmt.Errorf("admin auth get user for refresh: %w", err)
+		return nil, fmt.Errorf("admin auth get admin user for refresh: %w", err)
 	}
 
 	// 6. Sign new access token
@@ -272,33 +272,33 @@ type OAuthUserInfo struct {
 	AvatarURL string
 }
 
-// FindOrCreateUser finds or creates a user from OAuth provider information.
+// FindOrCreateUser finds or creates an admin user from OAuth provider information.
 // This is used for OAuth-based admin authentication.
 //
 // Lookup order:
 //  1. By (provider, subject) — primary key for OAuth identity.
-//  2. By email — links OAuth login to an existing local user.
-//  3. Create a new user if neither matches.
-func (uc *AdminAuthUsecase) FindOrCreateUser(ctx context.Context, provider, sub, email, name, avatarURL string) (*model.User, error) {
+//  2. By email — links OAuth login to an existing local admin user.
+//  3. Create a new admin user if neither matches.
+func (uc *AdminAuthUsecase) FindOrCreateUser(ctx context.Context, provider, sub, email, name, avatarURL string) (*model.AdminUser, error) {
 	// 1. Try to find by OAuth provider + subject.
-	user, err := uc.userRepo.GetByProviderAndSubject(ctx, provider, sub)
+	user, err := uc.adminUserRepo.GetByProviderAndSubject(ctx, provider, sub)
 	if err == nil {
 		// Found — update profile fields if they changed.
 		uc.updateOAuthProfile(ctx, user, name, avatarURL)
 		return user, nil
 	}
 	if !repo.IsNotFound(err) {
-		return nil, fmt.Errorf("admin auth get user by provider/subject: %w", err)
+		return nil, fmt.Errorf("admin auth get admin user by provider/subject: %w", err)
 	}
 
-	// 2. Fall back to email lookup (link OAuth to an existing local user).
-	user, err = uc.userRepo.GetByEmail(ctx, email)
+	// 2. Fall back to email lookup (link OAuth to an existing local admin user).
+	user, err = uc.adminUserRepo.GetByEmail(ctx, email)
 	if err != nil && !repo.IsNotFound(err) {
-		return nil, fmt.Errorf("admin auth get user by email: %w", err)
+		return nil, fmt.Errorf("admin auth get admin user by email: %w", err)
 	}
 
 	if err == nil {
-		// Existing user found by email — attach OAuth identity.
+		// Existing admin user found by email — attach OAuth identity.
 		user.Provider = provider
 		user.ProviderSubject = sub
 		if name != "" {
@@ -307,19 +307,19 @@ func (uc *AdminAuthUsecase) FindOrCreateUser(ctx context.Context, provider, sub,
 		if avatarURL != "" {
 			user.AvatarURL = avatarURL
 		}
-		if err := uc.userRepo.Update(ctx, user); err != nil {
-			return nil, fmt.Errorf("admin auth attach oauth to existing user: %w", err)
+		if err := uc.adminUserRepo.Update(ctx, user); err != nil {
+			return nil, fmt.Errorf("admin auth attach oauth to existing admin user: %w", err)
 		}
-		logger.Info(ctx, "admin_auth.oauth_linked_to_existing_user",
-			zap.String("user_id", user.ID.String()),
+		logger.Info(ctx, "admin_auth.oauth_linked_to_existing_admin_user",
+			zap.String("admin_user_id", user.ID.String()),
 			zap.String("provider", provider),
 			zap.String("email", email))
 		return user, nil
 	}
 
-	// 3. Create a new user.
-	// OAuth-only users have an empty PasswordHash; they cannot log in locally.
-	user = &model.User{
+	// 3. Create a new admin user.
+	// OAuth-only admin users have an empty PasswordHash; they cannot log in locally.
+	user = &model.AdminUser{
 		Email:           email,
 		Name:            name,
 		AvatarURL:       avatarURL,
@@ -327,28 +327,28 @@ func (uc *AdminAuthUsecase) FindOrCreateUser(ctx context.Context, provider, sub,
 		ProviderSubject: sub,
 	}
 
-	if err := uc.userRepo.Create(ctx, user); err != nil {
+	if err := uc.adminUserRepo.Create(ctx, user); err != nil {
 		if errors.Is(err, repo.ErrDuplicateEmail) {
 			// Concurrent creation — re-find by email.
-			user, err = uc.userRepo.GetByEmail(ctx, email)
+			user, err = uc.adminUserRepo.GetByEmail(ctx, email)
 			if err != nil {
-				return nil, fmt.Errorf("admin auth re-find user after concurrent create: %w", err)
+				return nil, fmt.Errorf("admin auth re-find admin user after concurrent create: %w", err)
 			}
 			return user, nil
 		}
-		return nil, fmt.Errorf("admin auth create user: %w", err)
+		return nil, fmt.Errorf("admin auth create admin user: %w", err)
 	}
 
-	logger.Info(ctx, "admin_auth.oauth_user_created",
-		zap.String("user_id", user.ID.String()),
+	logger.Info(ctx, "admin_auth.oauth_admin_user_created",
+		zap.String("admin_user_id", user.ID.String()),
 		zap.String("provider", provider),
 		zap.String("email", email))
 
 	return user, nil
 }
 
-// updateOAuthProfile updates mutable profile fields for an existing OAuth user.
-func (uc *AdminAuthUsecase) updateOAuthProfile(ctx context.Context, user *model.User, name, avatarURL string) {
+// updateOAuthProfile updates mutable profile fields for an existing OAuth admin user.
+func (uc *AdminAuthUsecase) updateOAuthProfile(ctx context.Context, user *model.AdminUser, name, avatarURL string) {
 	updated := false
 	if name != "" && user.Name != name {
 		user.Name = name
@@ -359,10 +359,10 @@ func (uc *AdminAuthUsecase) updateOAuthProfile(ctx context.Context, user *model.
 		updated = true
 	}
 	if updated {
-		if err := uc.userRepo.Update(ctx, user); err != nil {
+		if err := uc.adminUserRepo.Update(ctx, user); err != nil {
 			logger.Warn(ctx, "admin_auth.oauth_profile_update_failed",
 				zap.Error(err),
-				zap.String("user_id", user.ID.String()))
+				zap.String("admin_user_id", user.ID.String()))
 		}
 	}
 }
@@ -379,7 +379,7 @@ func HashPassword(password string) (string, error) {
 // Sentinel errors for admin authentication.
 var (
 	ErrInvalidCredentials = errors.New("invalid email or password")
-	ErrUserNotFound       = errors.New("user not found")
+	ErrAdminUserNotFound  = errors.New("admin user not found")
 	ErrLoginLocked        = errors.New("login temporarily locked due to too many failed attempts")
 )
 

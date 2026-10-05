@@ -15,35 +15,35 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
-// UserRoleUsecase handles user-role association operations.
-type UserRoleUsecase struct {
-	userRepo        repo.UserRepo
-	roleRepo        repo.RoleRepo
-	userRoleRepo    repo.UserRoleRepo
-	enforcer        *auth.CasbinEnforcer
-	auditLogRepo    repo.AuditLogRepo
-	policyPublisher PolicyPublisher // optional multi-instance sync (may be nil)
+// AdminUserRoleUsecase handles admin user-role association operations.
+type AdminUserRoleUsecase struct {
+	adminUserRepo     repo.AdminUserRepo
+	adminRoleRepo     repo.AdminRoleRepo
+	adminUserRoleRepo repo.AdminUserRoleRepo
+	enforcer          *auth.CasbinEnforcer
+	auditLogRepo      repo.AuditLogRepo
+	policyPublisher   PolicyPublisher // optional multi-instance sync (may be nil)
 }
 
-// NewUserRoleUsecase creates a new UserRoleUsecase.
-func NewUserRoleUsecase(
-	userRepo repo.UserRepo,
-	roleRepo repo.RoleRepo,
-	userRoleRepo repo.UserRoleRepo,
+// NewAdminUserRoleUsecase creates a new AdminUserRoleUsecase.
+func NewAdminUserRoleUsecase(
+	adminUserRepo repo.AdminUserRepo,
+	adminRoleRepo repo.AdminRoleRepo,
+	adminUserRoleRepo repo.AdminUserRoleRepo,
 	enforcer *auth.CasbinEnforcer,
 	auditLogRepo repo.AuditLogRepo,
-) *UserRoleUsecase {
-	return &UserRoleUsecase{
-		userRepo:     userRepo,
-		roleRepo:     roleRepo,
-		userRoleRepo: userRoleRepo,
-		enforcer:     enforcer,
-		auditLogRepo: auditLogRepo,
+) *AdminUserRoleUsecase {
+	return &AdminUserRoleUsecase{
+		adminUserRepo:     adminUserRepo,
+		adminRoleRepo:     adminRoleRepo,
+		adminUserRoleRepo: adminUserRoleRepo,
+		enforcer:          enforcer,
+		auditLogRepo:      auditLogRepo,
 	}
 }
 
 // SetPolicyPublisher injects optional policy publisher for multi-instance sync.
-func (uc *UserRoleUsecase) SetPolicyPublisher(pp PolicyPublisher) {
+func (uc *AdminUserRoleUsecase) SetPolicyPublisher(pp PolicyPublisher) {
 	uc.policyPublisher = pp
 }
 
@@ -55,8 +55,8 @@ type AssignRolesInput struct {
 
 // validateRolesForAssignment validates that all role IDs exist and are enabled.
 // Returns the validated role objects and their UUIDs.
-func (uc *UserRoleUsecase) validateRolesForAssignment(ctx context.Context, roleIDStrs []string) ([]*model.Role, []uuid.UUID, error) {
-	roles := make([]*model.Role, 0, len(roleIDStrs))
+func (uc *AdminUserRoleUsecase) validateRolesForAssignment(ctx context.Context, roleIDStrs []string) ([]*model.AdminRole, []uuid.UUID, error) {
+	roles := make([]*model.AdminRole, 0, len(roleIDStrs))
 	roleIDs := make([]uuid.UUID, 0, len(roleIDStrs))
 
 	for _, roleIDStr := range roleIDStrs {
@@ -65,7 +65,7 @@ func (uc *UserRoleUsecase) validateRolesForAssignment(ctx context.Context, roleI
 			return nil, nil, fmt.Errorf("invalid role ID format: %s", roleIDStr)
 		}
 
-		role, err := uc.roleRepo.GetByID(ctx, roleID)
+		role, err := uc.adminRoleRepo.GetByID(ctx, roleID)
 		if err != nil {
 			if repo.IsNotFound(err) {
 				return nil, nil, fmt.Errorf("%w: %s", repo.ErrRoleNotFound, roleIDStr)
@@ -81,13 +81,13 @@ func (uc *UserRoleUsecase) validateRolesForAssignment(ctx context.Context, roleI
 	return roles, roleIDs, nil
 }
 
-// filterNewRoles filters out roles that are already assigned to the user.
-func (uc *UserRoleUsecase) filterNewRoles(ctx context.Context, userID uuid.UUID, roles []*model.Role, roleIDs []uuid.UUID) ([]*model.Role, []uuid.UUID, error) {
-	newRoles := make([]*model.Role, 0, len(roles))
+// filterNewRoles filters out roles that are already assigned to the admin user.
+func (uc *AdminUserRoleUsecase) filterNewRoles(ctx context.Context, userID uuid.UUID, roles []*model.AdminRole, roleIDs []uuid.UUID) ([]*model.AdminRole, []uuid.UUID, error) {
+	newRoles := make([]*model.AdminRole, 0, len(roles))
 	newRoleIDs := make([]uuid.UUID, 0, len(roleIDs))
 
 	for i, role := range roles {
-		exists, err := uc.userRoleRepo.Exists(ctx, userID, role.ID)
+		exists, err := uc.adminUserRoleRepo.Exists(ctx, userID, role.ID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("check role assignment: %w", err)
 		}
@@ -99,16 +99,16 @@ func (uc *UserRoleUsecase) filterNewRoles(ctx context.Context, userID uuid.UUID,
 	return newRoles, newRoleIDs, nil
 }
 
-// AssignRoles assigns roles to a user in a transaction (P0 #3 fix).
+// AssignRoles assigns roles to an admin user in a transaction (P0 #3 fix).
 // If any role assignment fails, the entire batch is rolled back.
 // Casbin policies are updated synchronously - if Casbin sync fails, the entire operation fails.
-func (uc *UserRoleUsecase) AssignRoles(ctx context.Context, input AssignRolesInput, operatorID uuid.UUID, operatorIP string) error {
-	// Verify user exists
-	if _, err := uc.userRepo.GetByID(ctx, input.UserID); err != nil {
+func (uc *AdminUserRoleUsecase) AssignRoles(ctx context.Context, input AssignRolesInput, operatorID uuid.UUID, operatorIP string) error {
+	// Verify admin user exists
+	if _, err := uc.adminUserRepo.GetByID(ctx, input.UserID); err != nil {
 		if repo.IsNotFound(err) {
-			return ErrUserNotFound
+			return ErrAdminUserNotFound
 		}
-		return fmt.Errorf("get user: %w", err)
+		return fmt.Errorf("get admin user: %w", err)
 	}
 
 	// Validate all roles exist and are enabled
@@ -125,7 +125,7 @@ func (uc *UserRoleUsecase) AssignRoles(ctx context.Context, input AssignRolesInp
 
 	// Create all assignments atomically in a transaction
 	if len(newRoleIDs) > 0 {
-		if err := uc.userRoleRepo.CreateBatch(ctx, input.UserID, newRoleIDs); err != nil {
+		if err := uc.adminUserRoleRepo.CreateBatch(ctx, input.UserID, newRoleIDs); err != nil {
 			return fmt.Errorf("batch create role assignments: %w", err)
 		}
 	}
@@ -145,7 +145,7 @@ func (uc *UserRoleUsecase) AssignRoles(ctx context.Context, input AssignRolesInp
 			rules = append(rules, []string{input.UserID.String(), roleID.String()})
 		}
 		if err := uc.policyPublisher.PublishChange(ctx, "g", "add_grouping_policies", rules); err != nil {
-			logger.Warn(ctx, "user_role.publish_policy_change_failed", zap.Error(err))
+			logger.Warn(ctx, "admin_user_role.publish_policy_change_failed", zap.Error(err))
 		}
 	}
 
@@ -156,10 +156,10 @@ func (uc *UserRoleUsecase) AssignRoles(ctx context.Context, input AssignRolesInp
 			roleNames = append(roleNames, role.Name)
 		}
 		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
-			operatorID, operatorIP, "assign_roles", "user", input.UserID,
+			operatorID, operatorIP, "assign_roles", "admin_user", input.UserID,
 			map[string]any{"role_ids": newRoleIDs, "role_names": roleNames},
 		)); err != nil {
-			logger.Error(ctx, "user_role.assign_audit_log_failed", zap.Error(err))
+			logger.Error(ctx, "admin_user_role.assign_audit_log_failed", zap.Error(err))
 		}
 	}
 
@@ -172,11 +172,11 @@ type RemoveRoleInput struct {
 	RoleID uuid.UUID
 }
 
-// RemoveRole removes a role from a user with safety checks (P0 #5 fix).
+// RemoveRole removes a role from an admin user with safety checks (P0 #5 fix).
 // Uses atomic DeleteWithAdminCheck to prevent race conditions.
-func (uc *UserRoleUsecase) RemoveRole(ctx context.Context, input RemoveRoleInput, operatorID uuid.UUID, operatorIP string) error {
+func (uc *AdminUserRoleUsecase) RemoveRole(ctx context.Context, input RemoveRoleInput, operatorID uuid.UUID, operatorIP string) error {
 	// Get role info
-	role, err := uc.roleRepo.GetByID(ctx, input.RoleID)
+	role, err := uc.adminRoleRepo.GetByID(ctx, input.RoleID)
 	if err != nil {
 		if repo.IsNotFound(err) {
 			return repo.ErrRoleNotFound
@@ -192,7 +192,7 @@ func (uc *UserRoleUsecase) RemoveRole(ctx context.Context, input RemoveRoleInput
 		}
 
 		// Check 2: atomic check and delete to prevent race condition (P0 #5 fix)
-		if err := uc.userRoleRepo.DeleteWithAdminCheck(ctx, input.UserID, input.RoleID); err != nil {
+		if err := uc.adminUserRoleRepo.DeleteWithAdminCheck(ctx, input.UserID, input.RoleID); err != nil {
 			if errors.Is(err, repo.ErrCannotRemoveLastAdmin) {
 				return err
 			}
@@ -200,7 +200,7 @@ func (uc *UserRoleUsecase) RemoveRole(ctx context.Context, input RemoveRoleInput
 		}
 	} else {
 		// Non-admin role: simple delete
-		if err := uc.userRoleRepo.Delete(ctx, input.UserID, input.RoleID); err != nil {
+		if err := uc.adminUserRoleRepo.Delete(ctx, input.UserID, input.RoleID); err != nil {
 			return fmt.Errorf("remove role assignment: %w", err)
 		}
 	}
@@ -216,31 +216,31 @@ func (uc *UserRoleUsecase) RemoveRole(ctx context.Context, input RemoveRoleInput
 	// Publish policy change for multi-instance sync (P0 #1 fix)
 	if uc.policyPublisher != nil {
 		if err := uc.policyPublisher.PublishChange(ctx, "g", "remove_grouping_policy", [][]string{{input.UserID.String(), input.RoleID.String()}}); err != nil {
-			logger.Warn(ctx, "user_role.publish_policy_change_failed", zap.Error(err))
+			logger.Warn(ctx, "admin_user_role.publish_policy_change_failed", zap.Error(err))
 		}
 	}
 
 	// Audit log
 	if uc.auditLogRepo != nil {
 		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
-			operatorID, operatorIP, "revoke_role", "user", input.UserID,
+			operatorID, operatorIP, "revoke_role", "admin_user", input.UserID,
 			map[string]any{"role_id": input.RoleID.String(), "role_name": role.Name},
 		)); err != nil {
-			logger.Error(ctx, "user_role.revoke_audit_log_failed", zap.Error(err))
+			logger.Error(ctx, "admin_user_role.revoke_audit_log_failed", zap.Error(err))
 		}
 	}
 
 	return nil
 }
 
-// CountEnabledAdmins counts the number of users who have the admin role assigned.
+// CountEnabledAdmins counts the number of admin users who have the admin role assigned.
 // This is used to prevent removing the last admin.
-// Optimized: uses a single COUNT query via CountByRoleID instead of N+1 user lookups.
-// Note: This may slightly over-count if soft-deleted users have stale user_role records,
+// Optimized: uses a single COUNT query via CountByRoleID instead of N+1 admin user lookups.
+// Note: This may slightly over-count if soft-deleted admin users have stale admin_user_roles records,
 // which is the safer failure mode (prevents removal when it would be safe, not vice versa).
-func (uc *UserRoleUsecase) CountEnabledAdmins(ctx context.Context) (int64, error) {
+func (uc *AdminUserRoleUsecase) CountEnabledAdmins(ctx context.Context) (int64, error) {
 	// Find the admin role
-	adminRole, err := uc.roleRepo.GetByName(ctx, SystemRoleAdmin)
+	adminRole, err := uc.adminRoleRepo.GetByName(ctx, SystemRoleAdmin)
 	if err != nil {
 		if errors.Is(err, repo.ErrRoleNotFound) {
 			return 0, nil // No admin role exists, so no admins
@@ -248,11 +248,11 @@ func (uc *UserRoleUsecase) CountEnabledAdmins(ctx context.Context) (int64, error
 		return 0, fmt.Errorf("get admin role: %w", err)
 	}
 
-	// Count users with admin role — single query, no N+1
-	return uc.userRoleRepo.CountByRoleID(ctx, adminRole.ID)
+	// Count admin users with admin role — single query, no N+1
+	return uc.adminUserRoleRepo.CountByRoleID(ctx, adminRole.ID)
 }
 
-// UserRoleResponse represents a user-role assignment.
+// UserRoleResponse represents an admin user-role assignment.
 type UserRoleResponse struct {
 	UserID     uuid.UUID
 	RoleID     uuid.UUID
@@ -260,9 +260,9 @@ type UserRoleResponse struct {
 	AssignedAt string
 }
 
-// ListUserRoles lists all roles assigned to a user.
-func (uc *UserRoleUsecase) ListUserRoles(ctx context.Context, userID uuid.UUID) ([]UserRoleResponse, error) {
-	urs, err := uc.userRoleRepo.ListByUserID(ctx, userID)
+// ListUserRoles lists all roles assigned to an admin user.
+func (uc *AdminUserRoleUsecase) ListUserRoles(ctx context.Context, userID uuid.UUID) ([]UserRoleResponse, error) {
+	urs, err := uc.adminUserRoleRepo.ListByUserID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list user roles: %w", err)
 	}
@@ -272,11 +272,11 @@ func (uc *UserRoleUsecase) ListUserRoles(ctx context.Context, userID uuid.UUID) 
 	for _, ur := range urs {
 		roleIDs = append(roleIDs, ur.RoleID)
 	}
-	roles, err := uc.roleRepo.GetByIDs(ctx, roleIDs)
+	roles, err := uc.adminRoleRepo.GetByIDs(ctx, roleIDs)
 	if err != nil {
 		return nil, fmt.Errorf("batch get roles: %w", err)
 	}
-	roleMap := make(map[uuid.UUID]*model.Role, len(roles))
+	roleMap := make(map[uuid.UUID]*model.AdminRole, len(roles))
 	for _, role := range roles {
 		roleMap[role.ID] = role
 	}
@@ -298,7 +298,7 @@ func (uc *UserRoleUsecase) ListUserRoles(ctx context.Context, userID uuid.UUID) 
 	return result, nil
 }
 
-// RoleUserResponse represents a user in a role.
+// RoleUserResponse represents an admin user in a role.
 type RoleUserResponse struct {
 	UserID     uuid.UUID
 	UserEmail  string
@@ -306,31 +306,31 @@ type RoleUserResponse struct {
 	AssignedAt string
 }
 
-// ListRoleUsers lists all users assigned to a role.
-func (uc *UserRoleUsecase) ListRoleUsers(ctx context.Context, roleID uuid.UUID) ([]RoleUserResponse, error) {
+// ListRoleUsers lists all admin users assigned to a role.
+func (uc *AdminUserRoleUsecase) ListRoleUsers(ctx context.Context, roleID uuid.UUID) ([]RoleUserResponse, error) {
 	// Verify role exists
-	if _, err := uc.roleRepo.GetByID(ctx, roleID); err != nil {
+	if _, err := uc.adminRoleRepo.GetByID(ctx, roleID); err != nil {
 		if repo.IsNotFound(err) {
 			return nil, repo.ErrRoleNotFound
 		}
 		return nil, fmt.Errorf("get role: %w", err)
 	}
 
-	urs, err := uc.userRoleRepo.ListByRoleID(ctx, roleID)
+	urs, err := uc.adminUserRoleRepo.ListByRoleID(ctx, roleID)
 	if err != nil {
-		return nil, fmt.Errorf("list role users: %w", err)
+		return nil, fmt.Errorf("list role admin users: %w", err)
 	}
 
-	// Batch-fetch all users in a single query to avoid N+1
+	// Batch-fetch all admin users in a single query to avoid N+1
 	userIDs := make([]uuid.UUID, 0, len(urs))
 	for _, ur := range urs {
 		userIDs = append(userIDs, ur.UserID)
 	}
-	users, err := uc.userRepo.GetByIDs(ctx, userIDs)
+	users, err := uc.adminUserRepo.GetByIDs(ctx, userIDs)
 	if err != nil {
-		return nil, fmt.Errorf("batch get users: %w", err)
+		return nil, fmt.Errorf("batch get admin users: %w", err)
 	}
-	userMap := make(map[uuid.UUID]*model.User, len(users))
+	userMap := make(map[uuid.UUID]*model.AdminUser, len(users))
 	for _, user := range users {
 		userMap[user.ID] = user
 	}
@@ -339,7 +339,7 @@ func (uc *UserRoleUsecase) ListRoleUsers(ctx context.Context, roleID uuid.UUID) 
 	for _, ur := range urs {
 		user, ok := userMap[ur.UserID]
 		if !ok {
-			continue // Skip if user not found (may have been deleted)
+			continue // Skip if admin user not found (may have been deleted)
 		}
 		result = append(result, RoleUserResponse{
 			UserID:     ur.UserID,

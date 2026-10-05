@@ -33,11 +33,11 @@ const (
 // The Casbin policy creation is intentionally done OUTSIDE the DB transaction because
 // the Casbin gorm-adapter manages its own DB session. To handle this safely, we check
 // for existing policies before adding them, making the operation idempotent.
-func BootstrapAdmin(ctx context.Context, db *gorm.DB, roleRepo repo.RoleRepo, enforcer *auth.CasbinEnforcer) error {
+func BootstrapAdmin(ctx context.Context, db *gorm.DB, adminRoleRepo repo.AdminRoleRepo, enforcer *auth.CasbinEnforcer) error {
 	// First, try to find existing roles
-	adminRole, adminErr := roleRepo.GetByName(ctx, "admin")
-	operatorRole, operatorErr := roleRepo.GetByName(ctx, "operator")
-	viewerRole, viewerErr := roleRepo.GetByName(ctx, "viewer")
+	adminRole, adminErr := adminRoleRepo.GetByName(ctx, "admin")
+	operatorRole, operatorErr := adminRoleRepo.GetByName(ctx, "operator")
+	viewerRole, viewerErr := adminRoleRepo.GetByName(ctx, "viewer")
 
 	allRolesExist := adminErr == nil && operatorErr == nil && viewerErr == nil
 
@@ -70,38 +70,38 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, roleRepo repo.RoleRepo, en
 
 		// Create roles that don't exist yet
 		if adminErr != nil {
-			adminRole = &model.Role{
+			adminRole = &model.AdminRole{
 				Name:        "admin",
 				DisplayName: "管理员",
 				Description: "系统管理员，拥有完整权限",
 				IsSystem:    true,
 				IsEnabled:   true,
 			}
-			if err := roleRepo.Create(txCtx, adminRole); err != nil {
+			if err := adminRoleRepo.Create(txCtx, adminRole); err != nil {
 				return fmt.Errorf("create admin role: %w", err)
 			}
 		}
 		if operatorErr != nil {
-			operatorRole = &model.Role{
+			operatorRole = &model.AdminRole{
 				Name:        "operator",
 				DisplayName: "运营",
 				Description: "运营人员，可管理用户和查看角色",
 				IsSystem:    false,
 				IsEnabled:   true,
 			}
-			if err := roleRepo.Create(txCtx, operatorRole); err != nil {
+			if err := adminRoleRepo.Create(txCtx, operatorRole); err != nil {
 				return fmt.Errorf("create operator role: %w", err)
 			}
 		}
 		if viewerErr != nil {
-			viewerRole = &model.Role{
+			viewerRole = &model.AdminRole{
 				Name:        "viewer",
 				DisplayName: "观察者",
 				Description: "只读访问权限",
 				IsSystem:    false,
 				IsEnabled:   true,
 			}
-			if err := roleRepo.Create(txCtx, viewerRole); err != nil {
+			if err := adminRoleRepo.Create(txCtx, viewerRole); err != nil {
 				return fmt.Errorf("create viewer role: %w", err)
 			}
 		}
@@ -142,31 +142,31 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, roleRepo repo.RoleRepo, en
 // This is idempotent — Casbin's AddPolicy is a no-op if the policy already exists.
 func addAllPolicies(ctx context.Context, enforcer *auth.CasbinEnforcer, adminID, operatorID, viewerID string) error {
 	adminPolicies := [][]string{
-		{adminID, "user", "read"},
-		{adminID, "user", "write"},
-		{adminID, "user", "delete"},
+		{adminID, "admin_user", "read"},
+		{adminID, "admin_user", "write"},
+		{adminID, "admin_user", "delete"},
 		{adminID, "role", "read"},
 		{adminID, "role", "write"},
 		{adminID, "role", "delete"},
 		{adminID, "permission", "read"},
 		{adminID, "permission", "write"},
 		{adminID, "permission", "delete"},
-		{adminID, "user_role", "read"},
-		{adminID, "user_role", "write"},
-		{adminID, "user_role", "delete"},
+		{adminID, "admin_user_role", "read"},
+		{adminID, "admin_user_role", "write"},
+		{adminID, "admin_user_role", "delete"},
 		{adminID, "audit_log", "read"},
 	}
 
 	operatorPolicies := [][]string{
-		{operatorID, "user", "read"},
-		{operatorID, "user", "write"},
+		{operatorID, "admin_user", "read"},
+		{operatorID, "admin_user", "write"},
 		{operatorID, "role", "read"},
-		{operatorID, "user_role", "read"},
-		{operatorID, "user_role", "write"},
+		{operatorID, "admin_user_role", "read"},
+		{operatorID, "admin_user_role", "write"},
 	}
 
 	viewerPolicies := [][]string{
-		{viewerID, "user", "read"},
+		{viewerID, "admin_user", "read"},
 	}
 
 	if err := enforcer.AddPolicies(ctx, adminPolicies); err != nil {
@@ -190,18 +190,18 @@ func addAllPolicies(ctx context.Context, enforcer *auth.CasbinEnforcer, adminID,
 // getExpectedAdminPolicies returns the expected policies for the admin role.
 func getExpectedAdminPolicies(adminID string) [][]string {
 	return [][]string{
-		{adminID, "user", "read"},
-		{adminID, "user", "write"},
-		{adminID, "user", "delete"},
+		{adminID, "admin_user", "read"},
+		{adminID, "admin_user", "write"},
+		{adminID, "admin_user", "delete"},
 		{adminID, "role", "read"},
 		{adminID, "role", "write"},
 		{adminID, "role", "delete"},
 		{adminID, "permission", "read"},
 		{adminID, "permission", "write"},
 		{adminID, "permission", "delete"},
-		{adminID, "user_role", "read"},
-		{adminID, "user_role", "write"},
-		{adminID, "user_role", "delete"},
+		{adminID, "admin_user_role", "read"},
+		{adminID, "admin_user_role", "write"},
+		{adminID, "admin_user_role", "delete"},
 		{adminID, "audit_log", "read"},
 	}
 }
@@ -235,21 +235,21 @@ func hasAllExpectedPolicies(existing [][]string, expected [][]string) bool {
 	return true
 }
 
-// autoAssignAdminRole automatically assigns the admin role to the first user if no one has it.
-// This ensures out-of-box experience: the first user created via CLI gets admin access immediately.
+// autoAssignAdminRole automatically assigns the admin role to the first admin user if no one has it.
+// This ensures out-of-box experience: the first admin user created via CLI gets admin access immediately.
 //
 // Logic:
-//  1. Check if any user already has the admin role (via Casbin grouping policies)
+//  1. Check if any admin user already has the admin role (via Casbin grouping policies)
 //  2. If yes, do nothing
-//  3. If no, find the first user in the database
-//  4. Assign admin role to that user (both in user_roles table and Casbin)
+//  3. If no, find the first admin user in the database
+//  4. Assign admin role to that admin user (both in admin_user_roles table and Casbin)
 func autoAssignAdminRole(
 	ctx context.Context,
 	db *gorm.DB,
 	enforcer *auth.CasbinEnforcer,
 	adminRoleID string,
 ) error {
-	// Check if any user already has admin role
+	// Check if any admin user already has admin role
 	// GetGroupingPolicy returns ([][]string, error)
 	allGroupingPolicies, err := enforcer.Enforcer().GetGroupingPolicy()
 	if err != nil {
@@ -257,39 +257,39 @@ func autoAssignAdminRole(
 	}
 	for _, policy := range allGroupingPolicies {
 		if len(policy) >= 2 && policy[1] == adminRoleID {
-			// At least one user has admin role — nothing to do
+			// At least one admin user has admin role — nothing to do
 			logger.Info(ctx, "bootstrap.admin_role_already_assigned",
-				zap.String("user_id", policy[0]))
+				zap.String("admin_user_id", policy[0]))
 			return nil
 		}
 	}
 
-	// No user has admin role — find the first user
-	var firstUser model.User
+	// No admin user has admin role — find the first admin user
+	var firstUser model.AdminUser
 	if err := db.WithContext(ctx).First(&firstUser).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			// No users exist yet — nothing to do
-			logger.Info(ctx, "bootstrap.no_users_exist_skipping_admin_assignment")
+			// No admin users exist yet — nothing to do
+			logger.Info(ctx, "bootstrap.no_admin_users_exist_skipping_admin_assignment")
 			return nil
 		}
-		return fmt.Errorf("find first user: %w", err)
+		return fmt.Errorf("find first admin user: %w", err)
 	}
 
-	// Assign admin role to the first user
+	// Assign admin role to the first admin user
 	userID := firstUser.ID.String()
 	logger.Info(ctx, "bootstrap.auto_assigning_admin_role",
 		zap.String("user_id", userID),
 		zap.String("user_email", firstUser.Email),
 		zap.String("admin_role_id", adminRoleID))
 
-	// 1. Create user_roles record
-	userRole := &model.UserRole{
+	// 1. Create admin_user_roles record
+	userRole := &model.AdminUserRole{
 		UserID:     firstUser.ID,
 		RoleID:     uuid.MustParse(adminRoleID),
 		AssignedAt: time.Now(),
 	}
 	if err := db.WithContext(ctx).Create(userRole).Error; err != nil {
-		return fmt.Errorf("create user_role record: %w", err)
+		return fmt.Errorf("create admin_user_role record: %w", err)
 	}
 
 	// 2. Add Casbin grouping policy

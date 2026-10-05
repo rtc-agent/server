@@ -9,26 +9,26 @@ import (
 	"github.com/rtc-agent/server/internal/usecase"
 )
 
-// UserHandler handles user-related HTTP requests.
-type UserHandler struct {
-	userUsecase *usecase.UserUsecase
+// AdminUserHandler handles admin user-related HTTP requests.
+type AdminUserHandler struct {
+	adminUserUsecase *usecase.AdminUserUsecase
 }
 
-// NewUserHandler creates a new UserHandler.
-func NewUserHandler(userUsecase *usecase.UserUsecase) *UserHandler {
-	return &UserHandler{
-		userUsecase: userUsecase,
+// NewAdminUserHandler creates a new AdminUserHandler.
+func NewAdminUserHandler(adminUserUsecase *usecase.AdminUserUsecase) *AdminUserHandler {
+	return &AdminUserHandler{
+		adminUserUsecase: adminUserUsecase,
 	}
 }
 
-// RegisterRoutes registers user routes under /api/users.
-func (h *UserHandler) RegisterRoutes(r *gin.RouterGroup) {
-	r.GET("/users", h.ListUsers)
+// RegisterRoutes registers admin user routes under /api/admin-users.
+func (h *AdminUserHandler) RegisterRoutes(r *gin.RouterGroup) {
+	r.GET("/admin-users", h.ListUsers)
 }
 
-// ListUsers returns a paginated list of users.
+// ListUsers returns a paginated list of admin users.
 // Query parameters: page (default 1), page_size (default 20, max 100)
-func (h *UserHandler) ListUsers(c *gin.Context) {
+func (h *AdminUserHandler) ListUsers(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	page := 1
@@ -45,9 +45,9 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 		}
 	}
 
-	users, total, err := h.userUsecase.ListUsersPaginated(ctx, page, pageSize)
+	users, total, err := h.adminUserUsecase.ListUsersPaginated(ctx, page, pageSize)
 	if err != nil {
-		Error(c, "server_error", "获取用户列表失败")
+		Error(c, "server_error", "获取管理员列表失败")
 		return
 	}
 

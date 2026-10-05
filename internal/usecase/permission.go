@@ -15,7 +15,7 @@ import (
 
 // PermissionUsecase handles permission policy management.
 type PermissionUsecase struct {
-	roleRepo        repo.RoleRepo
+	adminRoleRepo   repo.AdminRoleRepo
 	enforcer        *auth.CasbinEnforcer
 	auditLogRepo    repo.AuditLogRepo
 	policyPublisher PolicyPublisher // optional multi-instance sync (may be nil)
@@ -23,14 +23,14 @@ type PermissionUsecase struct {
 
 // NewPermissionUsecase creates a new PermissionUsecase.
 func NewPermissionUsecase(
-	roleRepo repo.RoleRepo,
+	adminRoleRepo repo.AdminRoleRepo,
 	enforcer *auth.CasbinEnforcer,
 	auditLogRepo repo.AuditLogRepo,
 ) *PermissionUsecase {
 	return &PermissionUsecase{
-		roleRepo:     roleRepo,
-		enforcer:     enforcer,
-		auditLogRepo: auditLogRepo,
+		adminRoleRepo: adminRoleRepo,
+		enforcer:      enforcer,
+		auditLogRepo:  auditLogRepo,
 	}
 }
 
@@ -54,7 +54,7 @@ func (uc *PermissionUsecase) CreatePermission(ctx context.Context, input CreateP
 	if err != nil {
 		return fmt.Errorf("invalid role ID: %w", err)
 	}
-	role, err := uc.roleRepo.GetByID(ctx, roleID)
+	role, err := uc.adminRoleRepo.GetByID(ctx, roleID)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (uc *PermissionUsecase) DeletePermission(ctx context.Context, input DeleteP
 
 	// Get role info for audit before deletion
 	var roleName string
-	if role, err := uc.roleRepo.GetByID(ctx, roleID); err == nil {
+	if role, err := uc.adminRoleRepo.GetByID(ctx, roleID); err == nil {
 		roleName = role.Name
 	}
 

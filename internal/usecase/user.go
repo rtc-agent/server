@@ -9,20 +9,20 @@ import (
 	"github.com/rtc-agent/server/internal/repo"
 )
 
-// UserUsecase handles user-related operations.
-type UserUsecase struct {
-	userRepo repo.UserRepo
+// AdminUserUsecase handles admin user-related operations.
+type AdminUserUsecase struct {
+	adminUserRepo repo.AdminUserRepo
 }
 
-// NewUserUsecase creates a new UserUsecase.
-func NewUserUsecase(userRepo repo.UserRepo) *UserUsecase {
-	return &UserUsecase{
-		userRepo: userRepo,
+// NewAdminUserUsecase creates a new AdminUserUsecase.
+func NewAdminUserUsecase(adminUserRepo repo.AdminUserRepo) *AdminUserUsecase {
+	return &AdminUserUsecase{
+		adminUserRepo: adminUserRepo,
 	}
 }
 
-// ListUsersPaginated returns a paginated list of users.
-func (uc *UserUsecase) ListUsersPaginated(ctx context.Context, page, pageSize int) ([]*model.User, int64, error) {
+// ListUsersPaginated returns a paginated list of admin users.
+func (uc *AdminUserUsecase) ListUsersPaginated(ctx context.Context, page, pageSize int) ([]*model.AdminUser, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -33,9 +33,9 @@ func (uc *UserUsecase) ListUsersPaginated(ctx context.Context, page, pageSize in
 		pageSize = 100
 	}
 
-	users, total, err := uc.userRepo.List(ctx, page, pageSize)
+	users, total, err := uc.adminUserRepo.List(ctx, page, pageSize)
 	if err != nil {
-		return nil, 0, fmt.Errorf("list users: %w", err)
+		return nil, 0, fmt.Errorf("list admin users: %w", err)
 	}
 
 	return users, total, nil

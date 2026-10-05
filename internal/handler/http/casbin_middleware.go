@@ -39,12 +39,12 @@ var routeResourceMap = []routeResourceMapping{
 	{"DELETE", "/api/permissions", "permission", "delete"},
 	{"POST", "/api/permissions/check", "permission", "read"},
 
-	// User-role management
-	{"GET", "/api/users", "user", "read"},
-	{"GET", "/api/users/:id/roles", "user_role", "read"},
-	{"POST", "/api/users/:id/roles", "user_role", "write"},
-	{"DELETE", "/api/users/:id/roles/:roleId", "user_role", "delete"},
-	{"GET", "/api/roles/:id/users", "user_role", "read"},
+	// Admin user-role management
+	{"GET", "/api/admin-users", "admin_user", "read"},
+	{"GET", "/api/admin-users/:id/roles", "admin_user_role", "read"},
+	{"POST", "/api/admin-users/:id/roles", "admin_user_role", "write"},
+	{"DELETE", "/api/admin-users/:id/roles/:roleId", "admin_user_role", "delete"},
+	{"GET", "/api/roles/:id/admin-users", "admin_user_role", "read"},
 
 	// Audit logs
 	{"GET", "/api/audit-logs", "audit_log", "read"},

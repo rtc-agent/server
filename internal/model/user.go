@@ -8,12 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// User is the database model for an admin user.
+// AdminUser is the database model for an admin user.
 //
 // Supports two authentication methods:
 //   - Local password-based auth: PasswordHash is set.
 //   - OAuth2/OIDC: Provider and ProviderSubject are set; PasswordHash may be empty.
-type User struct {
+type AdminUser struct {
 	ID           uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
 	Email        string    `gorm:"size:255;not null;uniqueIndex" json:"email"`
 	Name         string    `gorm:"size:100" json:"name,omitempty"`
@@ -27,13 +27,13 @@ type User struct {
 	DeletedAt       *time.Time `gorm:"index" json:"-"`
 }
 
-// TableName specifies the database table name for User.
-func (User) TableName() string {
-	return "users"
+// TableName specifies the database table name for AdminUser.
+func (AdminUser) TableName() string {
+	return "admin_users"
 }
 
 // BeforeCreate generates a UUID v7 identifier if one is not already set.
-func (u *User) BeforeCreate(tx *gorm.DB) error {
+func (u *AdminUser) BeforeCreate(tx *gorm.DB) error {
 	if u.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {

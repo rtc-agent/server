@@ -24,7 +24,7 @@ type AdminAuthHandler struct {
 	jwtSigner               *auth.AdminJWTSigner
 	db                      *gorm.DB
 	roleRepo                roleLookup
-	userRoleRepo            userRoleLister
+	adminUserRoleRepo       adminUserRoleLister
 	enforcer                *auth.CasbinEnforcer
 	permissionSystemEnabled bool
 }
@@ -46,12 +46,12 @@ func NewAdminAuthHandler(
 // This must be called before RegisterRoutes if the permission system is enabled.
 func (h *AdminAuthHandler) SetPermissionDeps(
 	roleRepo roleLookup,
-	userRoleRepo userRoleLister,
+	adminUserRoleRepo adminUserRoleLister,
 	enforcer *auth.CasbinEnforcer,
 	permissionSystemEnabled bool,
 ) {
 	h.roleRepo = roleRepo
-	h.userRoleRepo = userRoleRepo
+	h.adminUserRoleRepo = adminUserRoleRepo
 	h.enforcer = enforcer
 	h.permissionSystemEnabled = permissionSystemEnabled
 }
@@ -137,38 +137,38 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		Error(c, "unauthorized", "用户未认证")
+		Error(c, "unauthorized", "管理员未认证")
 		return
 	}
 
 	// Convert userID from string to uuid.UUID
 	userIDStr, ok := userID.(string)
 	if !ok {
-		Error(c, "unauthorized", "无效的用户 ID")
+		Error(c, "unauthorized", "无效的管理员 ID")
 		return
 	}
 
 	userUUID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		Error(c, "unauthorized", "用户 ID 格式错误")
+		Error(c, "unauthorized", "管理员 ID 格式错误")
 		return
 	}
 
 	ctx := c.Request.Context()
 	user, err := h.adminAuthUsecase.GetCurrentUser(ctx, userUUID)
 	if err != nil {
-		if errors.Is(err, usecase.ErrUserNotFound) {
-			Error(c, "user_not_found", "用户不存在")
+		if errors.Is(err, usecase.ErrAdminUserNotFound) {
+			Error(c, "admin_user_not_found", "管理员不存在")
 			return
 		}
-		logger.Error(ctx, "admin_auth.get_current_user_failed", zap.Error(err))
+		logger.Error(ctx, "admin_auth.get_current_admin_user_failed", zap.Error(err))
 		Error(c, "server_error", "服务器内部错误")
 		return
 	}
 
 	// If permission system is enabled and deps are injected, include roles and permissions
 	if h.permissionSystemEnabled && h.roleRepo != nil && h.enforcer != nil {
-		resp, err := GetCurrentUserWithRoles(ctx, user, h.userRoleRepo, h.roleRepo, h.enforcer)
+		resp, err := GetCurrentUserWithRoles(ctx, user, h.adminUserRoleRepo, h.roleRepo, h.enforcer)
 		if err != nil {
 			logger.Error(ctx, "admin_auth.get_current_user_roles_failed", zap.Error(err))
 			Error(c, "server_error", "服务器内部错误")
@@ -178,8 +178,8 @@ func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	// Permission system disabled: return user with default admin role
-	// This ensures frontend knows the user has full access
+	// Permission system disabled: return admin user with default admin role
+	// This ensures frontend knows the admin user has full access
 	Success(c, UserResponse{
 		ID:        user.ID.String(),
 		Email:     user.Email,

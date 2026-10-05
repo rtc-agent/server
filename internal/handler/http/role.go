@@ -12,18 +12,18 @@ import (
 	"github.com/rtc-agent/server/internal/usecase"
 )
 
-// RoleHandler handles role management endpoints.
-type RoleHandler struct {
-	roleUsecase *usecase.RoleUsecase
+// AdminRoleHandler handles admin role management endpoints.
+type AdminRoleHandler struct {
+	adminRoleUsecase *usecase.AdminRoleUsecase
 }
 
-// NewRoleHandler creates a new RoleHandler.
-func NewRoleHandler(roleUsecase *usecase.RoleUsecase) *RoleHandler {
-	return &RoleHandler{roleUsecase: roleUsecase}
+// NewAdminRoleHandler creates a new AdminRoleHandler.
+func NewAdminRoleHandler(adminRoleUsecase *usecase.AdminRoleUsecase) *AdminRoleHandler {
+	return &AdminRoleHandler{adminRoleUsecase: adminRoleUsecase}
 }
 
 // RegisterRoutes registers role management routes under /api/roles.
-func (h *RoleHandler) RegisterRoutes(r *gin.RouterGroup) {
+func (h *AdminRoleHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/roles", h.List)
 	r.GET("/roles/:id", h.Get)
 	r.POST("/roles", h.Create)
@@ -53,7 +53,7 @@ type RoleResponse struct {
 
 // List lists roles with pagination support.
 // Query parameters: page (default 1), page_size (default 20, max 100)
-func (h *RoleHandler) List(c *gin.Context) {
+func (h *AdminRoleHandler) List(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	// Parse pagination parameters
@@ -70,7 +70,7 @@ func (h *RoleHandler) List(c *gin.Context) {
 		}
 	}
 
-	roles, total, err := h.roleUsecase.ListRolesPaginated(ctx, page, pageSize)
+	roles, total, err := h.adminRoleUsecase.ListRolesPaginated(ctx, page, pageSize)
 	if err != nil {
 		Error(c, "server_error", "查询角色列表失败")
 		return
@@ -98,7 +98,7 @@ func (h *RoleHandler) List(c *gin.Context) {
 }
 
 // Get returns a single role by ID.
-func (h *RoleHandler) Get(c *gin.Context) {
+func (h *AdminRoleHandler) Get(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
@@ -107,7 +107,7 @@ func (h *RoleHandler) Get(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	role, err := h.roleUsecase.GetRole(ctx, id)
+	role, err := h.adminRoleUsecase.GetRole(ctx, id)
 	if err != nil {
 		if usecase.IsNotFound(err) {
 			Error(c, "role_not_found", "角色不存在")
@@ -129,7 +129,7 @@ func (h *RoleHandler) Get(c *gin.Context) {
 }
 
 // Create creates a new role.
-func (h *RoleHandler) Create(c *gin.Context) {
+func (h *AdminRoleHandler) Create(c *gin.Context) {
 	var req CreateRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
@@ -155,7 +155,7 @@ func (h *RoleHandler) Create(c *gin.Context) {
 	operatorID := getOperatorID(c)
 	operatorIP := c.ClientIP()
 
-	role, err := h.roleUsecase.CreateRole(ctx, usecase.CreateRoleInput{
+	role, err := h.adminRoleUsecase.CreateRole(ctx, usecase.CreateRoleInput{
 		Name:        req.Name,
 		DisplayName: req.DisplayName,
 		Description: req.Description,
@@ -188,7 +188,7 @@ type UpdateRoleRequest struct {
 }
 
 // Update updates an existing role.
-func (h *RoleHandler) Update(c *gin.Context) {
+func (h *AdminRoleHandler) Update(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
@@ -206,7 +206,7 @@ func (h *RoleHandler) Update(c *gin.Context) {
 	operatorID := getOperatorID(c)
 	operatorIP := c.ClientIP()
 
-	role, err := h.roleUsecase.UpdateRole(ctx, id, usecase.UpdateRoleInput{
+	role, err := h.adminRoleUsecase.UpdateRole(ctx, id, usecase.UpdateRoleInput{
 		DisplayName: req.DisplayName,
 		Description: req.Description,
 		IsEnabled:   req.IsEnabled,
@@ -236,7 +236,7 @@ func (h *RoleHandler) Update(c *gin.Context) {
 }
 
 // Delete deletes a role.
-func (h *RoleHandler) Delete(c *gin.Context) {
+func (h *AdminRoleHandler) Delete(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
@@ -248,7 +248,7 @@ func (h *RoleHandler) Delete(c *gin.Context) {
 	operatorID := getOperatorID(c)
 	operatorIP := c.ClientIP()
 
-	if err := h.roleUsecase.DeleteRole(ctx, id, operatorID, operatorIP); err != nil {
+	if err := h.adminRoleUsecase.DeleteRole(ctx, id, operatorID, operatorIP); err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrCannotDeleteSystemRole):
 			Error(c, "cannot_delete_system_role", "系统内置角色不可删除")
@@ -266,7 +266,7 @@ func (h *RoleHandler) Delete(c *gin.Context) {
 }
 
 // GetPolicies returns all permission policies for a role.
-func (h *RoleHandler) GetPolicies(c *gin.Context) {
+func (h *AdminRoleHandler) GetPolicies(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
@@ -275,7 +275,7 @@ func (h *RoleHandler) GetPolicies(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	policies, err := h.roleUsecase.GetRolePolicies(ctx, id)
+	policies, err := h.adminRoleUsecase.GetRolePolicies(ctx, id)
 	if err != nil {
 		if usecase.IsNotFound(err) {
 			Error(c, "role_not_found", "角色不存在")

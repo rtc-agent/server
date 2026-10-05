@@ -13,8 +13,8 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 )
 
-// UserRoleRepo provides user-role association persistence operations.
-type UserRoleRepo interface {
+// AdminUserRoleRepo provides admin user-role association persistence operations.
+type AdminUserRoleRepo interface {
 	// Create assigns a role to a user.
 	Create(ctx context.Context, userID, roleID uuid.UUID) error
 	// CreateBatch assigns multiple roles to a user atomically in a transaction.
@@ -27,9 +27,9 @@ type UserRoleRepo interface {
 	// Returns ErrCannotRemoveLastAdmin if this would remove the last admin.
 	DeleteWithAdminCheck(ctx context.Context, userID, adminRoleID uuid.UUID) error
 	// ListByUserID returns all role IDs assigned to a user.
-	ListByUserID(ctx context.Context, userID uuid.UUID) ([]model.UserRole, error)
+	ListByUserID(ctx context.Context, userID uuid.UUID) ([]model.AdminUserRole, error)
 	// ListByRoleID returns all user IDs assigned to a role.
-	ListByRoleID(ctx context.Context, roleID uuid.UUID) ([]model.UserRole, error)
+	ListByRoleID(ctx context.Context, roleID uuid.UUID) ([]model.AdminUserRole, error)
 	// CountByRoleID counts how many users are assigned a given role.
 	CountByRoleID(ctx context.Context, roleID uuid.UUID) (int64, error)
 	// Exists checks whether a specific user-role assignment exists.
@@ -38,17 +38,17 @@ type UserRoleRepo interface {
 	DeleteByRoleID(ctx context.Context, roleID uuid.UUID) error
 }
 
-type userRoleRepo struct {
+type adminUserRoleRepo struct {
 	db *gorm.DB
 }
 
-// NewUserRoleRepo creates a new UserRoleRepo.
-func NewUserRoleRepo(db *gorm.DB) UserRoleRepo {
-	return &userRoleRepo{db: db}
+// NewAdminUserRoleRepo creates a new AdminUserRoleRepo.
+func NewAdminUserRoleRepo(db *gorm.DB) AdminUserRoleRepo {
+	return &adminUserRoleRepo{db: db}
 }
 
-func (r *userRoleRepo) Create(ctx context.Context, userID, roleID uuid.UUID) error {
-	ur := &model.UserRole{UserID: userID, RoleID: roleID}
+func (r *adminUserRoleRepo) Create(ctx context.Context, userID, roleID uuid.UUID) error {
+	ur := &model.AdminUserRole{UserID: userID, RoleID: roleID}
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(ur).Error; err != nil {
 		return fmt.Errorf("create user role (user=%s, role=%s): %w", userID, roleID, err)
 	}
@@ -57,14 +57,14 @@ func (r *userRoleRepo) Create(ctx context.Context, userID, roleID uuid.UUID) err
 
 // CreateBatch assigns multiple roles to a user atomically in a transaction.
 // If any assignment fails, all changes are rolled back.
-func (r *userRoleRepo) CreateBatch(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error {
+func (r *adminUserRoleRepo) CreateBatch(ctx context.Context, userID uuid.UUID, roleIDs []uuid.UUID) error {
 	if len(roleIDs) == 0 {
 		return nil
 	}
 
 	return DBFromContext(ctx, r.db).Transaction(func(tx *gorm.DB) error {
 		for _, roleID := range roleIDs {
-			ur := &model.UserRole{UserID: userID, RoleID: roleID}
+			ur := &model.AdminUserRole{UserID: userID, RoleID: roleID}
 			if err := tx.WithContext(ctx).Create(ur).Error; err != nil {
 				return fmt.Errorf("create user role (user=%s, role=%s): %w", userID, roleID, err)
 			}
@@ -76,11 +76,11 @@ func (r *userRoleRepo) CreateBatch(ctx context.Context, userID uuid.UUID, roleID
 // DeleteWithAdminCheck atomically checks if removing an admin role is safe and deletes if so.
 // Uses a transaction with row-level locking to prevent race conditions.
 // Returns ErrCannotRemoveLastAdmin if this would remove the last admin role assignment.
-func (r *userRoleRepo) DeleteWithAdminCheck(ctx context.Context, userID, adminRoleID uuid.UUID) error {
+func (r *adminUserRoleRepo) DeleteWithAdminCheck(ctx context.Context, userID, adminRoleID uuid.UUID) error {
 	return DBFromContext(ctx, r.db).Transaction(func(tx *gorm.DB) error {
 		// First, lock all admin role assignments with SELECT FOR UPDATE
 		// Note: PostgreSQL's FOR UPDATE locks actual rows, not aggregate results
-		var adminRoles []model.UserRole
+		var adminRoles []model.AdminUserRole
 		if err := tx.WithContext(ctx).
 			Where("role_id = ?", adminRoleID).
 			Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -95,7 +95,7 @@ func (r *userRoleRepo) DeleteWithAdminCheck(ctx context.Context, userID, adminRo
 			// Verify the target user actually has this role
 			var exists int64
 			if err := tx.WithContext(ctx).
-				Model(&model.UserRole{}).
+				Model(&model.AdminUserRole{}).
 				Where("user_id = ? AND role_id = ?", userID, adminRoleID).
 				Count(&exists).Error; err != nil {
 				return fmt.Errorf("check user admin role: %w", err)
@@ -108,7 +108,7 @@ func (r *userRoleRepo) DeleteWithAdminCheck(ctx context.Context, userID, adminRo
 		// Safe to delete
 		result := tx.WithContext(ctx).
 			Where("user_id = ? AND role_id = ?", userID, adminRoleID).
-			Delete(&model.UserRole{})
+			Delete(&model.AdminUserRole{})
 		if result.Error != nil {
 			return fmt.Errorf("delete user role: %w", result.Error)
 		}
@@ -116,18 +116,18 @@ func (r *userRoleRepo) DeleteWithAdminCheck(ctx context.Context, userID, adminRo
 	})
 }
 
-func (r *userRoleRepo) Delete(ctx context.Context, userID, roleID uuid.UUID) error {
+func (r *adminUserRoleRepo) Delete(ctx context.Context, userID, roleID uuid.UUID) error {
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("user_id = ? AND role_id = ?", userID, roleID).
-		Delete(&model.UserRole{})
+		Delete(&model.AdminUserRole{})
 	if result.Error != nil {
 		return fmt.Errorf("delete user role (user=%s, role=%s): %w", userID, roleID, result.Error)
 	}
 	return nil
 }
 
-func (r *userRoleRepo) ListByUserID(ctx context.Context, userID uuid.UUID) ([]model.UserRole, error) {
-	var urs []model.UserRole
+func (r *adminUserRoleRepo) ListByUserID(ctx context.Context, userID uuid.UUID) ([]model.AdminUserRole, error) {
+	var urs []model.AdminUserRole
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("user_id = ?", userID).
 		Find(&urs).Error; err != nil {
@@ -136,8 +136,8 @@ func (r *userRoleRepo) ListByUserID(ctx context.Context, userID uuid.UUID) ([]mo
 	return urs, nil
 }
 
-func (r *userRoleRepo) ListByRoleID(ctx context.Context, roleID uuid.UUID) ([]model.UserRole, error) {
-	var urs []model.UserRole
+func (r *adminUserRoleRepo) ListByRoleID(ctx context.Context, roleID uuid.UUID) ([]model.AdminUserRole, error) {
+	var urs []model.AdminUserRole
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("role_id = ?", roleID).
 		Find(&urs).Error; err != nil {
@@ -146,10 +146,10 @@ func (r *userRoleRepo) ListByRoleID(ctx context.Context, roleID uuid.UUID) ([]mo
 	return urs, nil
 }
 
-func (r *userRoleRepo) CountByRoleID(ctx context.Context, roleID uuid.UUID) (int64, error) {
+func (r *adminUserRoleRepo) CountByRoleID(ctx context.Context, roleID uuid.UUID) (int64, error) {
 	var count int64
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&model.UserRole{}).
+		Model(&model.AdminUserRole{}).
 		Where("role_id = ?", roleID).
 		Count(&count).Error; err != nil {
 		return 0, fmt.Errorf("count users for role %s: %w", roleID, err)
@@ -157,10 +157,10 @@ func (r *userRoleRepo) CountByRoleID(ctx context.Context, roleID uuid.UUID) (int
 	return count, nil
 }
 
-func (r *userRoleRepo) Exists(ctx context.Context, userID, roleID uuid.UUID) (bool, error) {
+func (r *adminUserRoleRepo) Exists(ctx context.Context, userID, roleID uuid.UUID) (bool, error) {
 	var count int64
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&model.UserRole{}).
+		Model(&model.AdminUserRole{}).
 		Where("user_id = ? AND role_id = ?", userID, roleID).
 		Count(&count).Error; err != nil {
 		return false, fmt.Errorf("check user role exists: %w", err)
@@ -168,10 +168,10 @@ func (r *userRoleRepo) Exists(ctx context.Context, userID, roleID uuid.UUID) (bo
 	return count > 0, nil
 }
 
-func (r *userRoleRepo) DeleteByRoleID(ctx context.Context, roleID uuid.UUID) error {
+func (r *adminUserRoleRepo) DeleteByRoleID(ctx context.Context, roleID uuid.UUID) error {
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("role_id = ?", roleID).
-		Delete(&model.UserRole{}).Error; err != nil {
+		Delete(&model.AdminUserRole{}).Error; err != nil {
 		return fmt.Errorf("delete user roles for role %s: %w", roleID, err)
 	}
 	return nil

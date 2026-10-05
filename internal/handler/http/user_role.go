@@ -18,58 +18,58 @@ import (
 // Handler-local interfaces for data access (depguard: handlers cannot import repo).
 // The actual implementations from repo package satisfy these via Go's implicit interfaces.
 type (
-	userRoleLister interface {
-		ListByUserID(ctx context.Context, userID uuid.UUID) ([]model.UserRole, error)
+	adminUserRoleLister interface {
+		ListByUserID(ctx context.Context, userID uuid.UUID) ([]model.AdminUserRole, error)
 	}
 	roleLookup interface {
-		GetByID(ctx context.Context, id uuid.UUID) (*model.Role, error)
+		GetByID(ctx context.Context, id uuid.UUID) (*model.AdminRole, error)
 	}
-	userLookup interface {
-		GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
+	adminUserLookup interface {
+		GetByID(ctx context.Context, id uuid.UUID) (*model.AdminUser, error)
 	}
 )
 
-// UserRoleHandler handles user-role association endpoints.
-type UserRoleHandler struct {
-	userRoleUsecase *usecase.UserRoleUsecase
+// AdminUserRoleHandler handles admin user-role association endpoints.
+type AdminUserRoleHandler struct {
+	adminUserRoleUsecase *usecase.AdminUserRoleUsecase
 	// Retained for GetCurrentUserWithRoles (called from AdminAuthHandler)
-	userRepo     userLookup
-	roleRepo     roleLookup
-	userRoleRepo userRoleLister
-	enforcer     *auth.CasbinEnforcer
+	adminUserRepo     adminUserLookup
+	roleRepo          roleLookup
+	adminUserRoleRepo adminUserRoleLister
+	enforcer          *auth.CasbinEnforcer
 }
 
-// NewUserRoleHandler creates a new UserRoleHandler.
-func NewUserRoleHandler(
-	userRoleUsecase *usecase.UserRoleUsecase,
-	userRepo userLookup,
+// NewAdminUserRoleHandler creates a new AdminUserRoleHandler.
+func NewAdminUserRoleHandler(
+	adminUserRoleUsecase *usecase.AdminUserRoleUsecase,
+	adminUserRepo adminUserLookup,
 	roleRepo roleLookup,
-	userRoleRepo userRoleLister,
+	adminUserRoleRepo adminUserRoleLister,
 	enforcer *auth.CasbinEnforcer,
-) *UserRoleHandler {
-	return &UserRoleHandler{
-		userRoleUsecase: userRoleUsecase,
-		userRepo:        userRepo,
-		roleRepo:        roleRepo,
-		userRoleRepo:    userRoleRepo,
-		enforcer:        enforcer,
+) *AdminUserRoleHandler {
+	return &AdminUserRoleHandler{
+		adminUserRoleUsecase: adminUserRoleUsecase,
+		adminUserRepo:        adminUserRepo,
+		roleRepo:             roleRepo,
+		adminUserRoleRepo:    adminUserRoleRepo,
+		enforcer:             enforcer,
 	}
 }
 
-// RegisterRoutes registers user-role routes.
-func (h *UserRoleHandler) RegisterRoutes(r *gin.RouterGroup) {
-	r.GET("/users/:id/roles", h.ListUserRoles)
-	r.POST("/users/:id/roles", h.AssignRoles)
-	r.DELETE("/users/:id/roles/:roleId", h.RemoveRole)
-	r.GET("/roles/:id/users", h.ListRoleUsers)
+// RegisterRoutes registers admin user-role routes.
+func (h *AdminUserRoleHandler) RegisterRoutes(r *gin.RouterGroup) {
+	r.GET("/admin-users/:id/roles", h.ListUserRoles)
+	r.POST("/admin-users/:id/roles", h.AssignRoles)
+	r.DELETE("/admin-users/:id/roles/:roleId", h.RemoveRole)
+	r.GET("/roles/:id/admin-users", h.ListRoleUsers)
 }
 
-// AssignRolesRequest is the request body for POST /api/users/:id/roles.
+// AssignRolesRequest is the request body for POST /api/admin-users/:id/roles.
 type AssignRolesRequest struct {
 	RoleIDs []string `json:"role_ids" binding:"required,min=1,dive,uuid"`
 }
 
-// UserRoleResponse is the response for a user-role assignment.
+// UserRoleResponse is the response for an admin user-role assignment.
 type UserRoleResponse struct {
 	UserID     string `json:"user_id"`
 	RoleID     string `json:"role_id"`
@@ -77,19 +77,19 @@ type UserRoleResponse struct {
 	AssignedAt string `json:"assigned_at"`
 }
 
-// ListUserRoles lists all roles assigned to a user.
-func (h *UserRoleHandler) ListUserRoles(c *gin.Context) {
+// ListUserRoles lists all roles assigned to an admin user.
+func (h *AdminUserRoleHandler) ListUserRoles(c *gin.Context) {
 	userIDStr := c.Param("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的用户 ID")
+		Error(c, "validation_error", "无效的管理员 ID")
 		return
 	}
 
 	ctx := c.Request.Context()
-	urs, err := h.userRoleUsecase.ListUserRoles(ctx, userID)
+	urs, err := h.adminUserRoleUsecase.ListUserRoles(ctx, userID)
 	if err != nil {
-		Error(c, "server_error", "查询用户角色失败")
+		Error(c, "server_error", "查询管理员角色失败")
 		return
 	}
 
@@ -106,12 +106,12 @@ func (h *UserRoleHandler) ListUserRoles(c *gin.Context) {
 	Success(c, gin.H{"items": result, "total": len(result)})
 }
 
-// AssignRoles assigns roles to a user (batch).
-func (h *UserRoleHandler) AssignRoles(c *gin.Context) {
+// AssignRoles assigns roles to an admin user (batch).
+func (h *AdminUserRoleHandler) AssignRoles(c *gin.Context) {
 	userIDStr := c.Param("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的用户 ID")
+		Error(c, "validation_error", "无效的管理员 ID")
 		return
 	}
 
@@ -125,19 +125,19 @@ func (h *UserRoleHandler) AssignRoles(c *gin.Context) {
 	operatorID := getOperatorID(c)
 	operatorIP := c.ClientIP()
 
-	if err := h.userRoleUsecase.AssignRoles(ctx, usecase.AssignRolesInput{
+	if err := h.adminUserRoleUsecase.AssignRoles(ctx, usecase.AssignRolesInput{
 		UserID:  userID,
 		RoleIDs: req.RoleIDs,
 	}, operatorID, operatorIP); err != nil {
 		switch {
-		case errors.Is(err, usecase.ErrUserNotFound):
-			Error(c, "user_not_found", "用户不存在")
+		case errors.Is(err, usecase.ErrAdminUserNotFound):
+			Error(c, "admin_user_not_found", "管理员不存在")
 		case errors.Is(err, usecase.ErrRoleNotFound):
 			Error(c, "role_not_found", "角色不存在")
 		case errors.Is(err, usecase.ErrRoleDisabled):
 			Error(c, "role_disabled", "角色已禁用")
 		default:
-			logger.Error(ctx, "user_role.assign_failed", zap.Error(err))
+			logger.Error(ctx, "admin_user_role.assign_failed", zap.Error(err))
 			Error(c, "server_error", "分配角色失败")
 		}
 		return
@@ -146,12 +146,12 @@ func (h *UserRoleHandler) AssignRoles(c *gin.Context) {
 	Success(c, gin.H{"status": "ok"})
 }
 
-// RemoveRole removes a role from a user.
-func (h *UserRoleHandler) RemoveRole(c *gin.Context) {
+// RemoveRole removes a role from an admin user.
+func (h *AdminUserRoleHandler) RemoveRole(c *gin.Context) {
 	userIDStr := c.Param("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的用户 ID")
+		Error(c, "validation_error", "无效的管理员 ID")
 		return
 	}
 
@@ -166,7 +166,7 @@ func (h *UserRoleHandler) RemoveRole(c *gin.Context) {
 	operatorID := getOperatorID(c)
 	operatorIP := c.ClientIP()
 
-	if err := h.userRoleUsecase.RemoveRole(ctx, usecase.RemoveRoleInput{
+	if err := h.adminUserRoleUsecase.RemoveRole(ctx, usecase.RemoveRoleInput{
 		UserID: userID,
 		RoleID: roleID,
 	}, operatorID, operatorIP); err != nil {
@@ -178,7 +178,7 @@ func (h *UserRoleHandler) RemoveRole(c *gin.Context) {
 		case errors.Is(err, usecase.ErrCannotRemoveSelfAdmin):
 			Error(c, "cannot_remove_self_admin", "不能移除自己的管理员角色")
 		default:
-			logger.Error(ctx, "user_role.remove_failed", zap.Error(err))
+			logger.Error(ctx, "admin_user_role.remove_failed", zap.Error(err))
 			Error(c, "server_error", "移除角色失败")
 		}
 		return
@@ -187,7 +187,7 @@ func (h *UserRoleHandler) RemoveRole(c *gin.Context) {
 	Success(c, gin.H{"status": "ok"})
 }
 
-// RoleUserResponse is the response for a user in a role.
+// RoleUserResponse is the response for an admin user in a role.
 type RoleUserResponse struct {
 	UserID     string `json:"user_id"`
 	UserEmail  string `json:"user_email"`
@@ -195,8 +195,8 @@ type RoleUserResponse struct {
 	AssignedAt string `json:"assigned_at"`
 }
 
-// ListRoleUsers lists all users assigned to a role.
-func (h *UserRoleHandler) ListRoleUsers(c *gin.Context) {
+// ListRoleUsers lists all admin users assigned to a role.
+func (h *AdminUserRoleHandler) ListRoleUsers(c *gin.Context) {
 	roleIDStr := c.Param("id")
 	roleID, err := uuid.Parse(roleIDStr)
 	if err != nil {
@@ -205,13 +205,13 @@ func (h *UserRoleHandler) ListRoleUsers(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	users, err := h.userRoleUsecase.ListRoleUsers(ctx, roleID)
+	users, err := h.adminUserRoleUsecase.ListRoleUsers(ctx, roleID)
 	if err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrRoleNotFound):
 			Error(c, "role_not_found", "角色不存在")
 		default:
-			Error(c, "server_error", "查询角色用户失败")
+			Error(c, "server_error", "查询角色管理员失败")
 		}
 		return
 	}
@@ -233,8 +233,8 @@ func (h *UserRoleHandler) ListRoleUsers(c *gin.Context) {
 // This function is called from AdminAuthHandler.GetCurrentUser.
 func GetCurrentUserWithRoles(
 	ctx context.Context,
-	user *model.User,
-	userRoleRepo userRoleLister,
+	user *model.AdminUser,
+	adminUserRoleRepo adminUserRoleLister,
 	roleRepo roleLookup,
 	enforcer *auth.CasbinEnforcer,
 ) (*UserWithRolesResponse, error) {
@@ -245,8 +245,8 @@ func GetCurrentUserWithRoles(
 		AvatarURL: user.AvatarURL,
 	}
 
-	// Get user roles
-	urs, err := userRoleRepo.ListByUserID(ctx, user.ID)
+	// Get admin user roles
+	urs, err := adminUserRoleRepo.ListByUserID(ctx, user.ID)
 	if err != nil {
 		return nil, err
 	}

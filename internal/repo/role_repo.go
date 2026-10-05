@@ -12,38 +12,38 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 )
 
-// RoleRepo provides role persistence operations.
-type RoleRepo interface {
-	// Create stores a new role.
-	Create(ctx context.Context, role *model.Role) error
-	// GetByID looks up a role by ID.
-	GetByID(ctx context.Context, id uuid.UUID) (*model.Role, error)
-	// GetByName looks up a role by name.
-	GetByName(ctx context.Context, name string) (*model.Role, error)
-	// List returns all roles.
-	List(ctx context.Context) ([]*model.Role, error)
-	// ListPaginated returns roles with pagination support.
-	ListPaginated(ctx context.Context, page, pageSize int) ([]*model.Role, int64, error)
-	// Update persists changes to a role.
-	Update(ctx context.Context, role *model.Role) error
-	// Delete removes a role by ID.
+// AdminRoleRepo provides admin role persistence operations.
+type AdminRoleRepo interface {
+	// Create stores a new admin role.
+	Create(ctx context.Context, role *model.AdminRole) error
+	// GetByID looks up an admin role by ID.
+	GetByID(ctx context.Context, id uuid.UUID) (*model.AdminRole, error)
+	// GetByName looks up an admin role by name.
+	GetByName(ctx context.Context, name string) (*model.AdminRole, error)
+	// List returns all admin roles.
+	List(ctx context.Context) ([]*model.AdminRole, error)
+	// ListPaginated returns admin roles with pagination support.
+	ListPaginated(ctx context.Context, page, pageSize int) ([]*model.AdminRole, int64, error)
+	// Update persists changes to an admin role.
+	Update(ctx context.Context, role *model.AdminRole) error
+	// Delete removes an admin role by ID.
 	Delete(ctx context.Context, id uuid.UUID) error
-	// Count returns total number of roles.
+	// Count returns total number of admin roles.
 	Count(ctx context.Context) (int64, error)
-	// GetByIDs returns roles matching the given IDs. Missing IDs are silently omitted.
-	GetByIDs(ctx context.Context, ids []uuid.UUID) ([]*model.Role, error)
+	// GetByIDs returns admin roles matching the given IDs. Missing IDs are silently omitted.
+	GetByIDs(ctx context.Context, ids []uuid.UUID) ([]*model.AdminRole, error)
 }
 
-type roleRepo struct {
+type adminRoleRepo struct {
 	db *gorm.DB
 }
 
-// NewRoleRepo creates a new RoleRepo.
-func NewRoleRepo(db *gorm.DB) RoleRepo {
-	return &roleRepo{db: db}
+// NewAdminRoleRepo creates a new AdminRoleRepo.
+func NewAdminRoleRepo(db *gorm.DB) AdminRoleRepo {
+	return &adminRoleRepo{db: db}
 }
 
-func (r *roleRepo) Create(ctx context.Context, role *model.Role) error {
+func (r *adminRoleRepo) Create(ctx context.Context, role *model.AdminRole) error {
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(role).Error; err != nil {
 		if IsDuplicateKeyError(err) {
 			return fmt.Errorf("create role: %w", ErrRoleNameExists)
@@ -53,8 +53,8 @@ func (r *roleRepo) Create(ctx context.Context, role *model.Role) error {
 	return nil
 }
 
-func (r *roleRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Role, error) {
-	var role model.Role
+func (r *adminRoleRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.AdminRole, error) {
+	var role model.AdminRole
 	err := DBFromContext(ctx, r.db).WithContext(ctx).First(&role, "id = ?", id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -65,8 +65,8 @@ func (r *roleRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Role, erro
 	return &role, nil
 }
 
-func (r *roleRepo) GetByName(ctx context.Context, name string) (*model.Role, error) {
-	var role model.Role
+func (r *adminRoleRepo) GetByName(ctx context.Context, name string) (*model.AdminRole, error) {
+	var role model.AdminRole
 	err := DBFromContext(ctx, r.db).WithContext(ctx).Where("name = ?", name).First(&role).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -77,15 +77,15 @@ func (r *roleRepo) GetByName(ctx context.Context, name string) (*model.Role, err
 	return &role, nil
 }
 
-func (r *roleRepo) List(ctx context.Context) ([]*model.Role, error) {
-	var roles []*model.Role
+func (r *adminRoleRepo) List(ctx context.Context) ([]*model.AdminRole, error) {
+	var roles []*model.AdminRole
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Order("created_at ASC").Find(&roles).Error; err != nil {
 		return nil, fmt.Errorf("list roles: %w", err)
 	}
 	return roles, nil
 }
 
-func (r *roleRepo) ListPaginated(ctx context.Context, page, pageSize int) ([]*model.Role, int64, error) {
+func (r *adminRoleRepo) ListPaginated(ctx context.Context, page, pageSize int) ([]*model.AdminRole, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -97,11 +97,11 @@ func (r *roleRepo) ListPaginated(ctx context.Context, page, pageSize int) ([]*mo
 	}
 
 	var total int64
-	if err := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Role{}).Count(&total).Error; err != nil {
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.AdminRole{}).Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count roles: %w", err)
 	}
 
-	var roles []*model.Role
+	var roles []*model.AdminRole
 	offset := (page - 1) * pageSize
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Order("created_at ASC").
@@ -114,13 +114,13 @@ func (r *roleRepo) ListPaginated(ctx context.Context, page, pageSize int) ([]*mo
 	return roles, total, nil
 }
 
-func (r *roleRepo) Update(ctx context.Context, role *model.Role) error {
+func (r *adminRoleRepo) Update(ctx context.Context, role *model.AdminRole) error {
 	// Optimistic locking: only update if version matches current DB version.
 	// This follows the same pattern as GORM's optimisticlock plugin but uses int64
 	// instead of sql.NullInt64 for simpler API. The WHERE clause ensures we only
 	// update if no other writer has modified the row since we read it.
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&model.Role{}).
+		Model(&model.AdminRole{}).
 		Where("id = ? AND version = ?", role.ID, role.Version).
 		Updates(map[string]any{
 			"name":         role.Name,
@@ -144,11 +144,11 @@ func (r *roleRepo) Update(ctx context.Context, role *model.Role) error {
 }
 
 // Delete performs a soft delete by setting is_enabled=false.
-// This follows the spec: roles are never hard-deleted to preserve audit trail
-// and foreign key references in user_roles / casbin_rule.
-func (r *roleRepo) Delete(ctx context.Context, id uuid.UUID) error {
+// This follows the spec: admin roles are never hard-deleted to preserve audit trail
+// and foreign key references in admin_user_roles / admin_casbin_rule.
+func (r *adminRoleRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&model.Role{}).
+		Model(&model.AdminRole{}).
 		Where("id = ?", id).
 		Update("is_enabled", false)
 	if result.Error != nil {
@@ -160,19 +160,19 @@ func (r *roleRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (r *roleRepo) Count(ctx context.Context) (int64, error) {
+func (r *adminRoleRepo) Count(ctx context.Context) (int64, error) {
 	var count int64
-	if err := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Role{}).Count(&count).Error; err != nil {
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.AdminRole{}).Count(&count).Error; err != nil {
 		return 0, fmt.Errorf("count roles: %w", err)
 	}
 	return count, nil
 }
 
-func (r *roleRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]*model.Role, error) {
+func (r *adminRoleRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]*model.AdminRole, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	var roles []*model.Role
+	var roles []*model.AdminRole
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Where("id IN ?", ids).Find(&roles).Error; err != nil {
 		return nil, fmt.Errorf("get roles by ids: %w", err)
 	}
