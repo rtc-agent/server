@@ -77,6 +77,13 @@ var routeResourceMap = []routeResourceMapping{
 	{"DELETE", "/api/rtc-users/:userId/configs/:key", "server_config", "delete"},
 	{"GET", "/api/rtc-users/:userId/configs/:key/history", "server_config", "read"},
 	{"POST", "/api/rtc-users/:userId/configs/:key/rollback", "server_config", "write"},
+
+	// Dashboard metrics proxy (Prometheus reverse proxy)
+	{"GET", "/api/metrics/*path", "dashboard", "read"},
+	{"POST", "/api/metrics/*path", "dashboard", "read"},
+
+	// Grafana dashboard iframe proxy
+	{"GET", "/api/grafana/*path", "dashboard", "read"},
 }
 
 // CasbinMiddleware creates a Gin middleware that checks Casbin permissions.

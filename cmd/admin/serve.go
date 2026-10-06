@@ -229,6 +229,8 @@ func runServe(cmd *cobra.Command, args []string) {
 	rtcSessionHandler := httphandler.NewRtcSessionHandler(rtcSessionUsecase)
 	serverConfigHandler := httphandler.NewServerConfigHandler(serverConfigUsecase)
 	userConfigHandler := httphandler.NewUserConfigHandler(serverConfigUsecase)
+	metricsProxyHandler := httphandler.NewMetricsProxyHandler(cfg.PrometheusURL)
+	grafanaProxyHandler := httphandler.NewGrafanaProxyHandler(cfg.GrafanaURL)
 
 	// Wire permission system deps to auth handler
 	permissionSystemEnabled := cfg.Features.PermissionSystem
@@ -246,6 +248,8 @@ func runServe(cmd *cobra.Command, args []string) {
 		rtcUserHandler:       rtcUserHandler,
 		serverConfigHandler:  serverConfigHandler,
 		userConfigHandler:    userConfigHandler,
+		metricsProxyHandler:  metricsProxyHandler,
+		grafanaProxyHandler:  grafanaProxyHandler,
 		enforcer:             enforcer,
 		permissionEnabled:    permissionSystemEnabled,
 		allowedOrigins:       cfg.CORS.AllowedOrigins,
@@ -300,6 +304,8 @@ type routerDeps struct {
 	rtcUserHandler       *httphandler.RtcUserHandler
 	serverConfigHandler  *httphandler.ServerConfigHandler
 	userConfigHandler    *httphandler.UserConfigHandler
+	metricsProxyHandler  *httphandler.MetricsProxyHandler
+	grafanaProxyHandler  *httphandler.GrafanaProxyHandler
 	enforcer             *auth.CasbinEnforcer
 	permissionEnabled    bool
 	allowedOrigins       []string
@@ -388,6 +394,8 @@ func setupRouter(deps routerDeps) *gin.Engine {
 	deps.rtcUserHandler.RegisterRoutes(apiGroup)
 	deps.serverConfigHandler.RegisterRoutes(apiGroup)
 	deps.userConfigHandler.RegisterRoutes(apiGroup)
+	deps.metricsProxyHandler.RegisterRoutes(apiGroup)
+	deps.grafanaProxyHandler.RegisterRoutes(apiGroup)
 
 	// Register static file server for admin-ui (SPA)
 	ServeStaticFiles(router)

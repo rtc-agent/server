@@ -17,6 +17,12 @@ type AdminConfig struct {
 	Security AdminSecurityConfig `mapstructure:"security"`
 	// Features configuration for feature flags
 	Features AdminFeaturesConfig `mapstructure:"features"`
+	// PrometheusURL is the base URL of the Prometheus instance for metrics proxying.
+	// If empty, the metrics proxy endpoint returns 501 Not Implemented.
+	PrometheusURL string `mapstructure:"prometheus_url"`
+	// GrafanaURL is the base URL of the Grafana instance for dashboard iframe proxying.
+	// If empty, the grafana proxy endpoint returns 501 Not Implemented.
+	GrafanaURL string `mapstructure:"grafana_url"`
 }
 
 // AdminSecurityConfig security settings for admin-server.

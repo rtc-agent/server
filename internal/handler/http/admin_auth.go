@@ -119,6 +119,10 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 	}
 
 	// 登录成功返回统一格式的响应
+	// 同时设置 access_token cookie，供 iframe 嵌入场景使用（如 Grafana）
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("access_token", result.AccessToken, int(result.ExpiresIn), "/", "", false, true)
+
 	Success(c, LoginResponse{
 		AccessToken:  result.AccessToken,
 		RefreshToken: result.RefreshToken,
@@ -220,6 +224,10 @@ func (h *AdminAuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
+	// Update access_token cookie with new token
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("access_token", result.AccessToken, int(result.ExpiresIn), "/", "", false, true)
+
 	Success(c, RefreshResponse{
 		AccessToken:  result.AccessToken,
 		RefreshToken: result.RefreshToken,
@@ -243,6 +251,9 @@ func (h *AdminAuthHandler) Logout(c *gin.Context) {
 		Error(c, "server_error", "服务器内部错误")
 		return
 	}
+
+	// Clear access_token cookie
+	c.SetCookie("access_token", "", -1, "/", "", false, true)
 
 	Success(c, gin.H{"status": "ok"})
 }
@@ -298,24 +309,33 @@ func (h *AdminAuthHandler) Health(c *gin.Context) {
 }
 
 // JWTAuthMiddleware is a Gin middleware for JWT authentication.
+// Reads token from Authorization header first; falls back to "access_token" cookie.
 func (h *AdminAuthHandler) JWTAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		var tokenString string
+
+		// 1. Try Authorization header
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			Error(c, "unauthorized", "缺少 Authorization 头")
+		if authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+				tokenString = parts[1]
+			}
+		}
+
+		// 2. Fallback to cookie
+		if tokenString == "" {
+			if cookie, err := c.Cookie("access_token"); err == nil && cookie != "" {
+				tokenString = cookie
+			}
+		}
+
+		if tokenString == "" {
+			Error(c, "unauthorized", "缺少认证信息")
 			c.Abort()
 			return
 		}
 
-		// Extract token from "Bearer <token>"
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			Error(c, "unauthorized", "Authorization 头格式错误")
-			c.Abort()
-			return
-		}
-
-		tokenString := parts[1]
 		claims, err := h.jwtSigner.ParseAccessToken(tokenString)
 		if err != nil {
 			// SECURITY: log at Info level to detect brute-force patterns without

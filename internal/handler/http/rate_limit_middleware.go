@@ -2,6 +2,7 @@
 package httphandler
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -122,8 +123,16 @@ func (rl *RateLimiter) Stop() {
 }
 
 // AdminRateLimitMiddleware creates a Gin middleware that enforces rate limiting for admin API.
+// Grafana proxy routes (/api/grafana/*) are exempted — they are reverse-proxied to a local
+// Grafana instance and generate high request volume from dashboard auto-refresh.
 func AdminRateLimitMiddleware(limiter RateLimiterInterface) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Skip rate limiting for Grafana proxy (dashboard auto-refresh generates many requests)
+		if strings.HasPrefix(c.Request.URL.Path, "/api/grafana/") {
+			c.Next()
+			return
+		}
+
 		ip := c.ClientIP()
 		if !limiter.Allow(ip) {
 			Error(c, "rate_limit_exceeded",

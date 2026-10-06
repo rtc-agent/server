@@ -136,6 +136,20 @@ services:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
+      # 禁用自带鉴权，允许 Admin Server 通过 iframe 嵌入访问
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_BASIC_ENABLED=false
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      # 反向代理子路径配置（Admin Server 在 /api/grafana 反代 Grafana）
+      - GF_SERVER_ROOT_URL=http://localhost:8000/api/grafana
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      # 允许 iframe 嵌入及 CSRF 信任源（dev proxy 和 admin server）
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_SECURITY_CSRF_TRUSTED_ORIGINS=http://localhost:8000,http://localhost:28081
+      - GF_SECURITY_CSRF_ENABLED=false
+      # 允许的来源（Grafana 11.x origin 检查）
+      - GF_SERVER_ALLOWED_ORIGINS=http://localhost:8000 http://localhost:28081
     ports:
       - "23001:3000"
     volumes:

@@ -28,9 +28,12 @@ jwt:
   refresh_token_ttl: 604800   # 7 days
 
 cors:
-  allowed_origins: ["http://localhost:23001", "http://localhost:5173"]  # Grafana, Vite dev server
+  allowed_origins: ["http://localhost:23001", "http://localhost:5173", "http://localhost:8000"]  # Grafana, Vite dev server, Admin UI dev server
 
 security:
   rate_limit_per_minute: 100   # Max requests per minute per IP
   login_max_attempts: 5        # Max failed login attempts before lockout
   login_lock_duration: 900     # Lockout duration in seconds (15 minutes)
+
+prometheus_url: "http://prometheus:9090"
+grafana_url: "http://grafana:3000"

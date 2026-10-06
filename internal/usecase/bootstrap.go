@@ -18,9 +18,9 @@ import (
 
 // Expected policy counts for default roles (used for bootstrap validation).
 const (
-	expectedAdminPolicies    = 20 // admin role: admin_user(3) + role(3) + permission(3) + admin_user_role(3) + audit_log(1) + rtc_user(2) + rtc_session(1) + rtc_message(1) + server_config(3)
-	expectedOperatorPolicies = 11 // operator role: admin_user(2) + role(1) + admin_user_role(2) + rtc_user(2) + rtc_session(1) + rtc_message(1) + server_config(2)
-	expectedViewerPolicies   = 5  // viewer role: admin_user(1) + rtc_user(1) + rtc_session(1) + rtc_message(1) + server_config(1)
+	expectedAdminPolicies    = 21 // admin role: admin_user(3) + role(3) + permission(3) + admin_user_role(3) + audit_log(1) + rtc_user(2) + rtc_session(1) + rtc_message(1) + server_config(3) + dashboard(1)
+	expectedOperatorPolicies = 12 // operator role: admin_user(2) + role(1) + admin_user_role(2) + rtc_user(2) + rtc_session(1) + rtc_message(1) + server_config(2) + dashboard(1)
+	expectedViewerPolicies   = 6  // viewer role: admin_user(1) + rtc_user(1) + rtc_session(1) + rtc_message(1) + server_config(1) + dashboard(1)
 )
 
 // BootstrapAdmin initializes default roles and permissions if they don't already exist.
@@ -223,6 +223,7 @@ func getAllExpectedAdminPolicies(adminID string) [][]string {
 		{adminID, "server_config", "read"},
 		{adminID, "server_config", "write"},
 		{adminID, "server_config", "delete"},
+		{adminID, "dashboard", "read"},
 	}
 }
 
@@ -240,6 +241,7 @@ func getAllExpectedOperatorPolicies(operatorID string) [][]string {
 		{operatorID, "rtc_message", "read"},
 		{operatorID, "server_config", "read"},
 		{operatorID, "server_config", "write"},
+		{operatorID, "dashboard", "read"},
 	}
 }
 
@@ -251,6 +253,7 @@ func getAllExpectedViewerPolicies(viewerID string) [][]string {
 		{viewerID, "rtc_session", "read"},
 		{viewerID, "rtc_message", "read"},
 		{viewerID, "server_config", "read"},
+		{viewerID, "dashboard", "read"},
 	}
 }
 
