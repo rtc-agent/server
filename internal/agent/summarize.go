@@ -417,7 +417,10 @@ func (h *helpers) summarizeMessagesStreaming(
 	prompt := buildSummarizePrompt(msgs, mode, customInstruction)
 	userPrompt := schema.UserMessage(prompt)
 
-	stream, err := h.deps.ChatModel.Stream(ctx, []*schema.Message{userPrompt}, h.noThinkingOptions()...)
+	// Use dynamic config for summarization LLM calls when available.
+	chatModel := h.resolveChatModelForBackground(ctx)
+
+	stream, err := chatModel.Stream(ctx, []*schema.Message{userPrompt}, h.noThinkingOptions()...)
 	if err != nil {
 		return "", nil, fmt.Errorf("chat model stream: %w", err)
 	}

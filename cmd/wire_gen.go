@@ -61,6 +61,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	repository := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
+	configRepo := repo.NewConfigRepo(db)
 	updatePublisher := provideUpdatePublisher(db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo)
 	node, err := provideCentrifugeNode(cfg)
 	if err != nil {
@@ -74,7 +75,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, scriptExecutionRepo, repository, loopRepo, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, scriptExecutionRepo, repository, loopRepo, configRepo, updatePublisher, node, dualBroker, jwtSigner)
 	return serviceContext, nil
 }
 
@@ -92,6 +93,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	repository := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
+	configRepo := repo.NewConfigRepo(db)
 	updatePublisher := provideUpdatePublisher(db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo)
 	node, err := provideCentrifugeNode(cfg)
 	if err != nil {
@@ -105,7 +107,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, scriptExecutionRepo, repository, loopRepo, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, scriptExecutionRepo, repository, loopRepo, configRepo, updatePublisher, node, dualBroker, jwtSigner)
 	prometheusMetrics := provideMetrics()
 	cmdChatModelResult, err := provideChatModel(cfg, prometheusMetrics)
 	if err != nil {
@@ -117,7 +119,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	}
 	webSearchManager := provideWebSearchManager(cfg)
 	webFetchManager := provideWebFetchManager(cfg, universalClient)
-	dependencies := provideUsecaseDependencies(serviceContext, cmdChatModelResult, cfg, taskScheduler, webSearchManager, webFetchManager)
+	dependencies := provideUsecaseDependencies(serviceContext, cmdChatModelResult, cfg, taskScheduler, webSearchManager, webFetchManager, prometheusMetrics)
 	queue := provideQueue(rdb)
 	inspector := provideAsynqInspector(cfg)
 	fileRepo := repo.NewFileRepo(db)
@@ -161,7 +163,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 // wire.go:
 
 // RepositorySet provides all repository implementations.
-var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewGoalRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo, repo.NewScriptExecutionRepo, repo.NewMemoryRepo, repo.NewLoopRepo, repo.NewFileRepo, repo.NewMultipartUploadRepo, repo.NewTemporaryCredentialRepo)
+var RepositorySet = wire.NewSet(repo.NewSessionRepo, repo.NewMessageRepo, repo.NewTurnRepo, repo.NewRtcRepo, repo.NewGoalRepo, repo.NewOAuth2UserRepo, repo.NewDeviceRepo, repo.NewRefreshTokenRepo, repo.NewScriptExecutionRepo, repo.NewMemoryRepo, repo.NewLoopRepo, repo.NewFileRepo, repo.NewMultipartUploadRepo, repo.NewTemporaryCredentialRepo, repo.NewConfigRepo)
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
 var ServiceSet = wire.NewSet(
@@ -322,6 +324,7 @@ func provideUsecaseDependencies(
 	taskScheduler usecase.TaskScheduler,
 	webSearchManager *websearch.WebSearchManager,
 	webFetchManager *webfetch.WebFetchManager,
+	metrics *turnagent.PrometheusMetrics,
 ) *usecase.Dependencies {
 	deps := &usecase.Dependencies{
 		DB:               svcCtx.DB,
@@ -333,6 +336,7 @@ func provideUsecaseDependencies(
 		GoalRepo:         svcCtx.GoalRepo,
 		LoopRepo:         svcCtx.LoopRepo,
 		MemoryRepo:       svcCtx.MemoryRepo,
+		ConfigRepo:       svcCtx.ConfigRepo,
 		UpdatePublisher:  svcCtx.UpdatePublisher,
 		ChatModel:        chatModelResult2.model,
 		LLMConfig:        cfg.LLM,
@@ -342,6 +346,10 @@ func provideUsecaseDependencies(
 		TaskScheduler:    taskScheduler,
 		WebSearchManager: webSearchManager,
 		WebFetchManager:  webFetchManager,
+	}
+
+	if chatModelResult2.model != nil {
+		deps.ChatModelFactory = server.NewChatModelFactory(cfg.LLM, metrics, logger.IsDebugMode())
 	}
 
 	if webFetchManager != nil && chatModelResult2 != nil && chatModelResult2.model != nil {

@@ -46,6 +46,10 @@ func runServe(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Populate dynamic config registry with yaml defaults so that
+	// config.GetRegistryEntry().YamlDefault reflects the actual yaml values.
+	config.PopulateYamlDefaults(cfg)
+
 	// Init logger
 	logger.Init(cfg.Log.Level, cfg.Log.ServerLogFile)
 	defer logger.Sync()

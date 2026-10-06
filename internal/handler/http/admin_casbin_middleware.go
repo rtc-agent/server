@@ -55,6 +55,22 @@ var routeResourceMap = []routeResourceMapping{
 	{"GET", "/api/rtc-users/:id", "rtc_user", "read"},
 	{"POST", "/api/rtc-users/:id/ban", "rtc_user", "ban"},
 	{"POST", "/api/rtc-users/:id/unban", "rtc_user", "ban"},
+
+	// System-level dynamic configuration management
+	{"GET", "/api/configs", "server_config", "read"},
+	{"GET", "/api/configs/:key", "server_config", "read"},
+	{"PUT", "/api/configs/:key", "server_config", "write"},
+	{"DELETE", "/api/configs/:key", "server_config", "delete"},
+	{"GET", "/api/configs/:key/history", "server_config", "read"},
+	{"POST", "/api/configs/:key/rollback", "server_config", "write"},
+
+	// User-level config overrides (reuse server_config resource)
+	{"GET", "/api/rtc-users/:userId/configs", "server_config", "read"},
+	{"GET", "/api/rtc-users/:userId/configs/:key", "server_config", "read"},
+	{"PUT", "/api/rtc-users/:userId/configs/:key", "server_config", "write"},
+	{"DELETE", "/api/rtc-users/:userId/configs/:key", "server_config", "delete"},
+	{"GET", "/api/rtc-users/:userId/configs/:key/history", "server_config", "read"},
+	{"POST", "/api/rtc-users/:userId/configs/:key/rollback", "server_config", "write"},
 }
 
 // CasbinMiddleware creates a Gin middleware that checks Casbin permissions.

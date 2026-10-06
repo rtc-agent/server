@@ -52,11 +52,13 @@ func extractMessageContent(ctx context.Context, cd protocol.ContentData) string 
 
 // summarizeTitleAsync runs title summarization in a background goroutine.
 func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Session) {
-	if h.deps.Deps.ChatModel == nil {
+	if h.deps.Deps.ChatModel == nil && h.deps.Deps.ChatModelFactory == nil {
 		return
 	}
+	// Use dynamic config for title summarization when available.
+	chatModel := agent.ResolveChatModel(ctx, h.deps.Deps)
 	summarizer := agent.NewSessionTitleSummarizer(
-		h.deps.Deps.ChatModel,
+		chatModel,
 		h.deps.Deps.SessionRepo,
 		h.deps.Deps.MessageRepo,
 		h.deps.Deps.LLMConfig,

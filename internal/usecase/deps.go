@@ -51,8 +51,17 @@ type Dependencies struct {
 	UpdatePublisher Publisher
 
 	// ChatModel is the eino ChatModel for LLM interactions.
-	// Required for agent execution in turn-loop sessions.
+	// Deprecated: prefer ChatModelFactory for dynamic config support.
+	// Kept for backwards compatibility when factory is not available.
 	ChatModel einomodel.ToolCallingChatModel
+
+	// ChatModelFactory creates per-turn ChatModel instances with dynamic overrides.
+	// When non-nil, createAgent and background LLM calls use this instead of ChatModel.
+	ChatModelFactory ChatModelFactoryInterface
+
+	// ConfigRepo provides access to the dynamic configuration system.
+	// Required when ChatModelFactory is non-nil.
+	ConfigRepo repo.ConfigRepo
 
 	// LLMConfig provides access to LLM-level configuration (retry, etc.)
 	LLMConfig config.LLMConfig
@@ -88,6 +97,24 @@ type Dependencies struct {
 	// WebFetchManager provides web page fetching capabilities.
 	// Optional: if nil, web fetch tool will not be available.
 	WebFetchManager *webfetch.WebFetchManager
+}
+
+// ChatModelFactoryInterface creates ChatModel instances with dynamic overrides.
+// Implemented by *server.ChatModelFactory.
+type ChatModelFactoryInterface interface {
+	Create(overrides ChatModelOverrides) (einomodel.ToolCallingChatModel, error)
+}
+
+// ChatModelOverrides holds the dynamic LLM overrides for a single turn.
+type ChatModelOverrides struct {
+	Model                string
+	Provider             string
+	BaseURL              string
+	MaxTokens            int
+	Temperature          *float32
+	ThinkingBudgetTokens int64
+	ReasoningEffort      string
+	RetryMaxAttempts     int
 }
 
 // TaskScheduler is the interface for delayed task scheduling.

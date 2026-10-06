@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/compose"
@@ -335,11 +336,26 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 	}
 
 	// Validate required dependencies
-	if h.deps.ChatModel == nil {
-		return nil, fmt.Errorf("createAgent: ChatModel is nil (LLM not configured)")
+	if h.deps.ChatModel == nil && h.deps.ChatModelFactory == nil {
+		return nil, fmt.Errorf("createAgent: ChatModel and ChatModelFactory are both nil (LLM not configured)")
 	}
 	if systemPrompt == "" {
 		return nil, fmt.Errorf("createAgent: system prompt is empty after resolution")
+	}
+
+	// Resolve the effective ChatModel for this turn.
+	// When ChatModelFactory is available, resolve dynamic config overrides
+	// from the DB (system/user level) so that admin changes take effect
+	// without restarting the server.
+	chatModel, resolveErr := h.resolveChatModel(ctx)
+	if resolveErr != nil {
+		h.logger.Warn(ctx, "createAgent.dynamic_config_fallback", map[string]any{
+			"session_id": sessionID,
+			"error":      resolveErr.Error(),
+		})
+	}
+	if chatModel == nil {
+		chatModel = h.deps.ChatModel
 	}
 
 	// Inject sessionID into context for summarization middleware callbacks.
@@ -411,7 +427,7 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		Name:             fmt.Sprintf("session-%s", sessionID),
 		Description:      "RTC Agent session handler",
 		Instruction:      instruction,
-		Model:            h.deps.ChatModel,
+		Model:            chatModel,
 		Handlers:         handlers,
 		ModelRetryConfig: retryConfig,
 		ToolsConfig: adk.ToolsConfig{
@@ -482,4 +498,53 @@ func (h *helpers) publishEvent(ctx context.Context, sessionID string, turnID str
 		})
 		return nil
 	}
+}
+
+// resolveChatModel builds a per-turn ChatModel from dynamic config when ChatModelFactory
+// is available. Falls back to the static ChatModel (h.deps.ChatModel) when:
+//   - ChatModelFactory is nil (factory not wired)
+//   - ConfigRepo is nil (dynamic config not available)
+//   - Any config resolution error occurs (logged as warning, not fatal)
+//
+// User-level overrides are applied when user_id is present in the context
+// (set via turnagent.WithUserID in the RPC handler).
+func (h *helpers) resolveChatModel(ctx context.Context) (einomodel.ToolCallingChatModel, error) {
+	if h.deps.ChatModelFactory == nil || h.deps.ConfigRepo == nil {
+		return nil, nil // no dynamic config; caller uses static ChatModel
+	}
+
+	// Resolve user_id from context (set by turn-agent turn context).
+	var userIDPtr *uuid.UUID
+	if uidStr := turnagent.UserIDFromContext(ctx); uidStr != "" {
+		if uid, err := uuid.Parse(uidStr); err == nil {
+			userIDPtr = &uid
+		}
+	}
+
+	overrides, err := resolveOverrides(ctx, h.deps.ConfigRepo, userIDPtr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve config overrides: %w", err)
+	}
+
+	chatModel, err := h.deps.ChatModelFactory.Create(overrides)
+	if err != nil {
+		return nil, fmt.Errorf("create dynamic chat model: %w", err)
+	}
+	return chatModel, nil
+}
+
+// resolveChatModelForBackground resolves a ChatModel for background LLM calls
+// (summarization, memory extraction) where no user context is available.
+// Exposed as a package-level helper so background goroutines can use it.
+func (h *helpers) resolveChatModelForBackground(ctx context.Context) einomodel.ToolCallingChatModel {
+	resolved, err := h.resolveChatModel(ctx)
+	if err != nil {
+		h.logger.Warn(ctx, "resolveChatModelForBackground.fallback", map[string]any{
+			"error": err.Error(),
+		})
+	}
+	if resolved != nil {
+		return resolved
+	}
+	return h.deps.ChatModel
 }

@@ -67,6 +67,8 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		&model.AdminRole{},
 		&model.AdminUserRole{},
 		&model.AuditLog{},
+		&model.ServerConfig{},
+		&model.ServerConfigHistory{},
 	); err != nil {
 		return fmt.Errorf("admin auto migrate: %w", err)
 	}

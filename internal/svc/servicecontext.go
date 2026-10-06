@@ -40,6 +40,7 @@ type ServiceContext struct {
 	ScriptExecutionRepo repo.ScriptExecutionRepo
 	MemoryRepo          memory.Repository // Phase 2: unified Memory storage
 	LoopRepo            repo.LoopRepo
+	ConfigRepo          repo.ConfigRepo // Dynamic configuration repository
 
 	// Infrastructure
 	UpdatePublisher *updates.UpdatePublisher
@@ -62,6 +63,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	memoryRepo := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
+	configRepo := repo.NewConfigRepo(db)
 
 	updatePublisher := updates.NewUpdatePublisher(db, rdb, sessionRepo, messageRepo, turnRepo, rtcRepo)
 
@@ -99,6 +101,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		sessionRepo, messageRepo, turnRepo, rtcRepo,
 		goalRepo, oauth2UserRepo, deviceRepo, refreshTokenRepo,
 		scriptExecutionRepo, memoryRepo, loopRepo,
+		configRepo,
 		updatePublisher, node, dualBroker, jwtSigner)
 }
 
@@ -121,6 +124,7 @@ func NewServiceContextWithDeps(
 	scriptExecutionRepo repo.ScriptExecutionRepo,
 	memoryRepo memory.Repository,
 	loopRepo repo.LoopRepo,
+	configRepo repo.ConfigRepo,
 	updatePublisher *updates.UpdatePublisher,
 	node *centrifuge.Node,
 	broker *centrifugeplus.DualBroker,
@@ -146,6 +150,7 @@ func NewServiceContextWithDeps(
 		ScriptExecutionRepo: scriptExecutionRepo,
 		MemoryRepo:          memoryRepo,
 		LoopRepo:            loopRepo,
+		ConfigRepo:          configRepo,
 		UpdatePublisher:     updatePublisher,
 		CentrifugeNode:      node,
 		Broker:              broker,

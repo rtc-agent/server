@@ -18,9 +18,9 @@ import (
 
 // Expected policy counts for default roles (used for bootstrap validation).
 const (
-	expectedAdminPolicies    = 15 // admin role: role(4) + permission(3) + user_role(3) + audit_log(1) + user(2) + rtc_user(2)
-	expectedOperatorPolicies = 7  // operator role: role(1) + user(2) + user_role(2) + rtc_user(2)
-	expectedViewerPolicies   = 2  // viewer role: role(1) + rtc_user(1)
+	expectedAdminPolicies    = 18 // admin role: role(4) + permission(3) + user_role(3) + audit_log(1) + user(2) + rtc_user(2) + server_config(3)
+	expectedOperatorPolicies = 9  // operator role: role(1) + user(2) + user_role(2) + rtc_user(2) + server_config(2)
+	expectedViewerPolicies   = 3  // viewer role: role(1) + rtc_user(1) + server_config(1)
 )
 
 // BootstrapAdmin initializes default roles and permissions if they don't already exist.
@@ -157,6 +157,9 @@ func addAllPolicies(ctx context.Context, enforcer *auth.CasbinEnforcer, adminID,
 		{adminID, "audit_log", "read"},
 		{adminID, "rtc_user", "read"},
 		{adminID, "rtc_user", "ban"},
+		{adminID, "server_config", "read"},
+		{adminID, "server_config", "write"},
+		{adminID, "server_config", "delete"},
 	}
 
 	operatorPolicies := [][]string{
@@ -167,11 +170,14 @@ func addAllPolicies(ctx context.Context, enforcer *auth.CasbinEnforcer, adminID,
 		{operatorID, "admin_user_role", "write"},
 		{operatorID, "rtc_user", "read"},
 		{operatorID, "rtc_user", "ban"},
+		{operatorID, "server_config", "read"},
+		{operatorID, "server_config", "write"},
 	}
 
 	viewerPolicies := [][]string{
 		{viewerID, "admin_user", "read"},
 		{viewerID, "rtc_user", "read"},
+		{viewerID, "server_config", "read"},
 	}
 
 	if err := enforcer.AddPolicies(ctx, adminPolicies); err != nil {
@@ -210,6 +216,9 @@ func getExpectedAdminPolicies(adminID string) [][]string {
 		{adminID, "audit_log", "read"},
 		{adminID, "rtc_user", "read"},
 		{adminID, "rtc_user", "ban"},
+		{adminID, "server_config", "read"},
+		{adminID, "server_config", "write"},
+		{adminID, "server_config", "delete"},
 	}
 }
 

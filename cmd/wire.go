@@ -65,6 +65,7 @@ var RepositorySet = wire.NewSet(
 	repo.NewFileRepo,
 	repo.NewMultipartUploadRepo,
 	repo.NewTemporaryCredentialRepo,
+	repo.NewConfigRepo,
 )
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
@@ -234,6 +235,7 @@ func provideUsecaseDependencies(
 	taskScheduler usecase.TaskScheduler,
 	webSearchManager *websearch.WebSearchManager,
 	webFetchManager *webfetch.WebFetchManager,
+	metrics *turnagent.PrometheusMetrics,
 ) *usecase.Dependencies {
 	deps := &usecase.Dependencies{
 		DB:               svcCtx.DB,
@@ -245,6 +247,7 @@ func provideUsecaseDependencies(
 		GoalRepo:         svcCtx.GoalRepo,
 		LoopRepo:         svcCtx.LoopRepo,
 		MemoryRepo:       svcCtx.MemoryRepo,
+		ConfigRepo:       svcCtx.ConfigRepo,
 		UpdatePublisher:  svcCtx.UpdatePublisher,
 		ChatModel:        chatModelResult.model,
 		LLMConfig:        cfg.LLM,
@@ -254,6 +257,14 @@ func provideUsecaseDependencies(
 		TaskScheduler:    taskScheduler,
 		WebSearchManager: webSearchManager,
 		WebFetchManager:  webFetchManager,
+	}
+
+	// Wire ChatModelFactory for dynamic per-turn config resolution.
+	// When ChatModelFactory is non-nil, createAgent and background LLM calls
+	// resolve model settings from the dynamic config registry (DB > yaml)
+	// instead of using the static startup-time ChatModel.
+	if chatModelResult.model != nil {
+		deps.ChatModelFactory = server.NewChatModelFactory(cfg.LLM, metrics, logger.IsDebugMode())
 	}
 
 	// Inject LLM extractor into WebFetchManager now that deps is available.
