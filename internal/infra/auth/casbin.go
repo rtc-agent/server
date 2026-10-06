@@ -102,13 +102,25 @@ func (e *CasbinEnforcer) AddPolicy(_ context.Context, roleID, resource, action s
 	return added, nil
 }
 
-// AddPolicies adds multiple permission policies in one batch.
+// AddPolicies adds multiple permission policies.
+//
+// Policies are added individually (not as a batch) to ensure that existing policies
+// are silently skipped while new ones are persisted. The gorm-adapter's batch AddPolicies
+// uses a single INSERT for all rules, which fails entirely if ANY rule already exists
+// (UNIQUE constraint violation), and the error can be silently swallowed by Casbin's
+// internal dispatcher check. Individual AddPolicy calls are idempotent: Casbin checks
+// the in-memory model first, and the adapter only persists if the policy is new.
 func (e *CasbinEnforcer) AddPolicies(_ context.Context, policies [][]string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if _, err := e.enforcer.AddPolicies(policies); err != nil {
-		return fmt.Errorf("add permission policies: %w", err)
+	for _, policy := range policies {
+		if len(policy) != 3 {
+			continue
+		}
+		if _, err := e.enforcer.AddPolicy(policy[0], policy[1], policy[2]); err != nil {
+			return fmt.Errorf("add permission policy %v: %w", policy, err)
+		}
 	}
 	return nil
 }

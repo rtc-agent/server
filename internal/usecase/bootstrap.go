@@ -45,7 +45,7 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, adminRoleRepo repo.AdminRo
 		// Check if all expected policies already exist for the admin role
 		// We check content, not just count, to ensure correctness
 		existingPolicies := enforcer.GetPoliciesForRole(adminRole.ID.String())
-		if hasAllExpectedPolicies(existingPolicies, getExpectedAdminPolicies(adminRole.ID.String())) {
+		if hasAllExpectedPolicies(existingPolicies, getAllExpectedAdminPolicies(adminRole.ID.String())) {
 			// Admin has all expected policies — bootstrap already complete
 			logger.Info(ctx, "bootstrap.already_complete_skipping",
 				zap.Int("admin_policies", len(existingPolicies)),
@@ -139,67 +139,69 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, adminRoleRepo repo.AdminRo
 }
 
 // addAllPolicies adds all default Casbin policies for the three default roles.
-// This is idempotent — Casbin's AddPolicy is a no-op if the policy already exists.
+//
+// It filters out policies that already exist before adding, so each role only gets
+// the policies it's missing. This avoids relying on Casbin's idempotency check and
+// provides clear logging about which policies are actually new.
 func addAllPolicies(ctx context.Context, enforcer *auth.CasbinEnforcer, adminID, operatorID, viewerID string) error {
-	adminPolicies := [][]string{
-		{adminID, "admin_user", "read"},
-		{adminID, "admin_user", "write"},
-		{adminID, "admin_user", "delete"},
-		{adminID, "role", "read"},
-		{adminID, "role", "write"},
-		{adminID, "role", "delete"},
-		{adminID, "permission", "read"},
-		{adminID, "permission", "write"},
-		{adminID, "permission", "delete"},
-		{adminID, "admin_user_role", "read"},
-		{adminID, "admin_user_role", "write"},
-		{adminID, "admin_user_role", "delete"},
-		{adminID, "audit_log", "read"},
-		{adminID, "rtc_user", "read"},
-		{adminID, "rtc_user", "ban"},
-		{adminID, "server_config", "read"},
-		{adminID, "server_config", "write"},
-		{adminID, "server_config", "delete"},
+	allRolePolicies := []struct {
+		roleName string
+		roleID   string
+		policies [][]string
+	}{
+		{"admin", adminID, getAllExpectedAdminPolicies(adminID)},
+		{"operator", operatorID, getAllExpectedOperatorPolicies(operatorID)},
+		{"viewer", viewerID, getAllExpectedViewerPolicies(viewerID)},
 	}
 
-	operatorPolicies := [][]string{
-		{operatorID, "admin_user", "read"},
-		{operatorID, "admin_user", "write"},
-		{operatorID, "role", "read"},
-		{operatorID, "admin_user_role", "read"},
-		{operatorID, "admin_user_role", "write"},
-		{operatorID, "rtc_user", "read"},
-		{operatorID, "rtc_user", "ban"},
-		{operatorID, "server_config", "read"},
-		{operatorID, "server_config", "write"},
-	}
+	for _, rp := range allRolePolicies {
+		existing := enforcer.GetPoliciesForRole(rp.roleID)
+		missing := filterMissingPolicies(existing, rp.policies)
 
-	viewerPolicies := [][]string{
-		{viewerID, "admin_user", "read"},
-		{viewerID, "rtc_user", "read"},
-		{viewerID, "server_config", "read"},
-	}
+		if len(missing) == 0 {
+			logger.Info(ctx, "bootstrap.role_policies_complete",
+				zap.String("role", rp.roleName),
+				zap.Int("existing", len(existing)))
+			continue
+		}
 
-	if err := enforcer.AddPolicies(ctx, adminPolicies); err != nil {
-		return fmt.Errorf("add admin policies: %w", err)
-	}
-	if err := enforcer.AddPolicies(ctx, operatorPolicies); err != nil {
-		return fmt.Errorf("add operator policies: %w", err)
-	}
-	if err := enforcer.AddPolicies(ctx, viewerPolicies); err != nil {
-		return fmt.Errorf("add viewer policies: %w", err)
-	}
+		if err := enforcer.AddPolicies(ctx, missing); err != nil {
+			return fmt.Errorf("add %s policies: %w", rp.roleName, err)
+		}
 
-	logger.Info(ctx, "bootstrap.policies_added",
-		zap.Int("admin_policies", len(adminPolicies)),
-		zap.Int("operator_policies", len(operatorPolicies)),
-		zap.Int("viewer_policies", len(viewerPolicies)))
+		logger.Info(ctx, "bootstrap.role_policies_added",
+			zap.String("role", rp.roleName),
+			zap.Int("added", len(missing)),
+			zap.Int("total", len(existing)+len(missing)))
+	}
 
 	return nil
 }
 
-// getExpectedAdminPolicies returns the expected policies for the admin role.
-func getExpectedAdminPolicies(adminID string) [][]string {
+// filterMissingPolicies returns the subset of expected policies that don't exist yet.
+// existing contains [resource, action] pairs; expected contains [roleID, resource, action] triples.
+func filterMissingPolicies(existing [][]string, expected [][]string) [][]string {
+	existingSet := make(map[string]struct{}, len(existing))
+	for _, p := range existing {
+		if len(p) >= 2 {
+			existingSet[p[0]+":"+p[1]] = struct{}{}
+		}
+	}
+
+	var missing [][]string
+	for _, p := range expected {
+		if len(p) >= 3 {
+			key := p[1] + ":" + p[2]
+			if _, ok := existingSet[key]; !ok {
+				missing = append(missing, p)
+			}
+		}
+	}
+	return missing
+}
+
+// getAllExpectedAdminPolicies returns the complete expected policy set for the admin role.
+func getAllExpectedAdminPolicies(adminID string) [][]string {
 	return [][]string{
 		{adminID, "admin_user", "read"},
 		{adminID, "admin_user", "write"},
@@ -219,6 +221,30 @@ func getExpectedAdminPolicies(adminID string) [][]string {
 		{adminID, "server_config", "read"},
 		{adminID, "server_config", "write"},
 		{adminID, "server_config", "delete"},
+	}
+}
+
+// getAllExpectedOperatorPolicies returns the complete expected policy set for the operator role.
+func getAllExpectedOperatorPolicies(operatorID string) [][]string {
+	return [][]string{
+		{operatorID, "admin_user", "read"},
+		{operatorID, "admin_user", "write"},
+		{operatorID, "role", "read"},
+		{operatorID, "admin_user_role", "read"},
+		{operatorID, "admin_user_role", "write"},
+		{operatorID, "rtc_user", "read"},
+		{operatorID, "rtc_user", "ban"},
+		{operatorID, "server_config", "read"},
+		{operatorID, "server_config", "write"},
+	}
+}
+
+// getAllExpectedViewerPolicies returns the complete expected policy set for the viewer role.
+func getAllExpectedViewerPolicies(viewerID string) [][]string {
+	return [][]string{
+		{viewerID, "admin_user", "read"},
+		{viewerID, "rtc_user", "read"},
+		{viewerID, "server_config", "read"},
 	}
 }
 
