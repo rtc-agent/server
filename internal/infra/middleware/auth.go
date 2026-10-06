@@ -5,6 +5,8 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/contextx"
@@ -21,11 +23,57 @@ type UserBanChecker interface {
 	IsUserBanned(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
+// banCacheEntry holds a cached ban check result with expiration.
+type banCacheEntry struct {
+	banned    bool
+	expiresAt time.Time
+}
+
+// banCache provides a simple TTL-based cache for ban status checks.
+type banCache struct {
+	mu      sync.RWMutex
+	entries map[uuid.UUID]banCacheEntry
+	ttl     time.Duration
+}
+
+// newBanCache creates a new ban cache with the specified TTL.
+func newBanCache(ttl time.Duration) *banCache {
+	return &banCache{
+		entries: make(map[uuid.UUID]banCacheEntry),
+		ttl:     ttl,
+	}
+}
+
+// get retrieves a cached ban status if it exists and hasn't expired.
+func (c *banCache) get(userID uuid.UUID) (bool, bool) {
+	c.mu.RLock()
+	entry, ok := c.entries[userID]
+	c.mu.RUnlock()
+
+	if !ok || time.Now().After(entry.expiresAt) {
+		return false, false
+	}
+	return entry.banned, true
+}
+
+// set stores a ban status in the cache.
+func (c *banCache) set(userID uuid.UUID, banned bool) {
+	c.mu.Lock()
+	c.entries[userID] = banCacheEntry{
+		banned:    banned,
+		expiresAt: time.Now().Add(c.ttl),
+	}
+	c.mu.Unlock()
+}
+
 // JWTAuth creates a JWT authentication middleware.
 // signer is the JWT signer; allowDevBypass should only be true in development,
 // allowing X-User-ID / X-Device-ID headers to bypass JWT validation (must be false in production).
 // banChecker optionally checks if user is banned (can be nil to skip check).
 func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool, banChecker UserBanChecker) func(http.Handler) http.Handler {
+	// Create a cache with 30 second TTL for ban checks
+	cache := newBanCache(30 * time.Second)
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var userID uuid.UUID
@@ -70,15 +118,23 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool, banChecker UserBanChec
 				return
 			}
 
-			// 3. Check if user is banned
+			// 3. Check if user is banned (with cache)
 			if banChecker != nil {
-				banned, err := banChecker.IsUserBanned(r.Context(), userID)
-				if err != nil {
-					logger.Warn(r.Context(), "failed to check user ban status",
-						zap.Error(err),
-						zap.String("user_id", userID.String()))
-					// Continue - don't block legitimate users on DB errors
-				} else if banned {
+				banned, cached := cache.get(userID)
+				if !cached {
+					var err error
+					banned, err = banChecker.IsUserBanned(r.Context(), userID)
+					if err != nil {
+						logger.Warn(r.Context(), "failed to check user ban status",
+							zap.Error(err),
+							zap.String("user_id", userID.String()))
+						// Continue - don't block legitimate users on DB errors
+					} else {
+						cache.set(userID, banned)
+					}
+				}
+
+				if banned {
 					logger.Info(r.Context(), "banned user rejected",
 						zap.String("user_id", userID.String()),
 						zap.String("remote_addr", r.RemoteAddr))

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cenkalti/backoff/v5"
 	"github.com/centrifugal/centrifuge"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -18,11 +19,12 @@ import (
 
 // BanWatcher listens for user ban events and disconnects users from Centrifuge.
 type BanWatcher struct {
-	node   *centrifuge.Node
-	rdb    redis.UniversalClient
-	sub    *redis.PubSub
-	mu     sync.Mutex
-	closed bool
+	node    *centrifuge.Node
+	rdb     redis.UniversalClient
+	sub     *redis.PubSub
+	mu      sync.Mutex
+	closed  bool
+	baseCtx context.Context
 }
 
 // NewBanWatcher creates a BanWatcher that listens for ban events.
@@ -32,8 +34,9 @@ func NewBanWatcher(node *centrifuge.Node, rdb redis.UniversalClient) (*BanWatche
 	}
 
 	bw := &BanWatcher{
-		node: node,
-		rdb:  rdb,
+		node:    node,
+		rdb:     rdb,
+		baseCtx: context.Background(),
 	}
 
 	// Subscribe to ban channel
@@ -49,8 +52,12 @@ func NewBanWatcher(node *centrifuge.Node, rdb redis.UniversalClient) (*BanWatche
 
 // subscribe creates a new Redis Pub/Sub subscription.
 func (bw *BanWatcher) subscribe() error {
-	bw.sub = bw.rdb.Subscribe(context.Background(), model.BanChannel)
-	_, err := bw.sub.Receive(context.Background())
+	// Close old subscription to prevent resource leak
+	if bw.sub != nil {
+		_ = bw.sub.Close()
+	}
+	bw.sub = bw.rdb.Subscribe(bw.baseCtx, model.BanChannel)
+	_, err := bw.sub.Receive(bw.baseCtx)
 	if err != nil {
 		return fmt.Errorf("subscribe to ban channel: %w", err)
 	}
@@ -58,10 +65,8 @@ func (bw *BanWatcher) subscribe() error {
 }
 
 // listenWithReconnect runs the listener with automatic reconnection on failure.
+// Uses cenkalti/backoff for exponential backoff with jitter.
 func (bw *BanWatcher) listenWithReconnect() {
-	backoff := time.Second
-	maxBackoff := 30 * time.Second
-
 	for {
 		bw.mu.Lock()
 		if bw.closed {
@@ -70,7 +75,7 @@ func (bw *BanWatcher) listenWithReconnect() {
 		}
 		bw.mu.Unlock()
 
-		// Run the listener
+		// Run the listener - blocks until channel closes
 		bw.listen()
 
 		// Check if we should exit
@@ -81,39 +86,43 @@ func (bw *BanWatcher) listenWithReconnect() {
 		}
 		bw.mu.Unlock()
 
-		// Connection lost, attempt to reconnect
-		logger.Warn(context.Background(), "ban_watcher.connection_lost_reconnecting",
-			zap.Duration("backoff", backoff))
+		// Connection lost, attempt to reconnect with exponential backoff
+		bo := backoff.NewExponentialBackOff()
+		bo.InitialInterval = time.Second
+		bo.MaxInterval = 30 * time.Second
 
-		select {
-		case <-time.After(backoff):
-			// Exponential backoff
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
+		logger.Warn(bw.baseCtx, "ban_watcher.connection_lost_reconnecting",
+			zap.Duration("initial_backoff", bo.InitialInterval))
 
-			// Try to resubscribe
+		_, err := backoff.Retry(bw.baseCtx, func() (struct{}, error) {
 			bw.mu.Lock()
 			if bw.closed {
 				bw.mu.Unlock()
-				return
+				return struct{}{}, backoff.Permanent(fmt.Errorf("watcher closed"))
 			}
+
 			if err := bw.subscribe(); err != nil {
-				logger.Error(context.Background(), "ban_watcher.resubscribe_failed",
-					zap.Error(err))
 				bw.mu.Unlock()
-				continue
+				logger.Error(bw.baseCtx, "ban_watcher.resubscribe_failed",
+					zap.Error(err))
+				return struct{}{}, err
 			}
 			bw.mu.Unlock()
 
-			logger.Info(context.Background(), "ban_watcher.resubscribed_successfully")
-			backoff = time.Second // Reset backoff on success
+			logger.Info(bw.baseCtx, "ban_watcher.resubscribed_successfully")
+			return struct{}{}, nil
+		},
+			backoff.WithBackOff(bo),
+			backoff.WithMaxTries(0), // Unlimited retries
+		)
 
-		case <-bw.sub.Channel():
-			// Channel closed, will retry immediately
-			backoff = time.Second
+		if err != nil {
+			// Permanent error or closed watcher
+			return
 		}
+
+		// Successfully resubscribed, restart listening
+		bw.listen()
 	}
 }
 
@@ -123,7 +132,7 @@ func (bw *BanWatcher) listen() {
 	for msg := range ch {
 		var event model.BanEvent
 		if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {
-			logger.Warn(context.Background(), "ban_watcher.invalid_message",
+			logger.Warn(bw.baseCtx, "ban_watcher.invalid_message",
 				zap.Error(err), zap.String("payload", msg.Payload))
 			continue
 		}
@@ -136,10 +145,10 @@ func (bw *BanWatcher) listen() {
 			}
 
 			if err := bw.node.Disconnect(userID, centrifuge.WithCustomDisconnect(disconnect)); err != nil {
-				logger.Error(context.Background(), "ban_watcher.disconnect_failed",
+				logger.Error(bw.baseCtx, "ban_watcher.disconnect_failed",
 					zap.String("user_id", userID), zap.Error(err))
 			} else {
-				logger.Info(context.Background(), "ban_watcher.user_disconnected",
+				logger.Info(bw.baseCtx, "ban_watcher.user_disconnected",
 					zap.String("user_id", userID), zap.String("reason", event.Reason))
 			}
 		}

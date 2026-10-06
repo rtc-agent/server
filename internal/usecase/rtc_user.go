@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -21,6 +22,7 @@ type BanPublisher interface {
 
 // RtcUserUsecase handles RTC user management operations.
 type RtcUserUsecase struct {
+	db               *gorm.DB
 	oauth2UserRepo   repo.OAuth2UserRepo
 	refreshTokenRepo repo.RefreshTokenRepo
 	banPublisher     BanPublisher
@@ -29,11 +31,13 @@ type RtcUserUsecase struct {
 
 // NewRtcUserUsecase creates a new RtcUserUsecase.
 func NewRtcUserUsecase(
+	db *gorm.DB,
 	oauth2UserRepo repo.OAuth2UserRepo,
 	refreshTokenRepo repo.RefreshTokenRepo,
 	auditLogRepo repo.AuditLogRepo,
 ) *RtcUserUsecase {
 	return &RtcUserUsecase{
+		db:               db,
 		oauth2UserRepo:   oauth2UserRepo,
 		refreshTokenRepo: refreshTokenRepo,
 		auditLogRepo:     auditLogRepo,
@@ -41,6 +45,7 @@ func NewRtcUserUsecase(
 }
 
 // SetBanPublisher injects the ban publisher for distributed sync.
+// SetBanPublisher must be called before any BanUser/UnbanUser calls.
 func (uc *RtcUserUsecase) SetBanPublisher(publisher BanPublisher) {
 	uc.banPublisher = publisher
 }
@@ -100,7 +105,7 @@ type BanUserInput struct {
 
 // BanUser bans a user, revokes all refresh tokens, and publishes a ban event.
 func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput, adminUserID uuid.UUID, adminIP string) (*model.OAuth2User, error) {
-	// 1. Update user status
+	// 1. Find user first
 	user, err := uc.oauth2UserRepo.FindByID(ctx, input.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("find user: %w", err)
@@ -110,24 +115,34 @@ func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput, admin
 	user.BannedAt = &now
 	user.BannedReason = input.Reason
 
-	if err := uc.oauth2UserRepo.Update(ctx, user); err != nil {
-		return nil, fmt.Errorf("update user: %w", err)
+	// 2. Update user + revoke tokens in a transaction
+	var revokedCount int64
+	if err := uc.db.Transaction(func(tx *gorm.DB) error {
+		txCtx := repo.WithTx(ctx, tx)
+
+		if err := uc.oauth2UserRepo.Update(txCtx, user); err != nil {
+			return fmt.Errorf("update user: %w", err)
+		}
+
+		var revokeErr error
+		revokedCount, revokeErr = uc.refreshTokenRepo.RevokeAllByUserID(txCtx, input.UserID)
+		if revokeErr != nil {
+			logger.Error(txCtx, "ban_user.revoke_tokens_failed",
+				zap.String("user_id", input.UserID.String()),
+				zap.Error(revokeErr))
+			// Continue even if token revocation fails - the ban is already in effect
+		} else {
+			logger.Info(txCtx, "ban_user.tokens_revoked",
+				zap.String("user_id", input.UserID.String()),
+				zap.Int64("revoked_count", revokedCount))
+		}
+
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("ban user transaction: %w", err)
 	}
 
-	// 2. Revoke all refresh tokens
-	revokedCount, err := uc.refreshTokenRepo.RevokeAllByUserID(ctx, input.UserID)
-	if err != nil {
-		logger.Error(ctx, "ban_user.revoke_tokens_failed",
-			zap.String("user_id", input.UserID.String()),
-			zap.Error(err))
-		// Continue even if token revocation fails - the ban is already in effect
-	} else {
-		logger.Info(ctx, "ban_user.tokens_revoked",
-			zap.String("user_id", input.UserID.String()),
-			zap.Int64("revoked_count", revokedCount))
-	}
-
-	// 3. Publish ban event for distributed sync
+	// 3. Publish ban event for distributed sync (outside transaction)
 	if uc.banPublisher != nil {
 		if err := uc.banPublisher.PublishBan(ctx, input.UserID, "ban", input.Reason); err != nil {
 			logger.Error(ctx, "ban_user.publish_failed",

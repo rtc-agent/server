@@ -165,7 +165,12 @@ func (h *RtcUserHandler) BanUser(c *gin.Context) {
 		Error(c, "unauthorized", "admin user ID not found in context")
 		return
 	}
-	adminUserID, err := uuid.Parse(adminUserIDStr.(string))
+	adminUserIDStr2, ok := adminUserIDStr.(string)
+	if !ok {
+		Error(c, "unauthorized", "invalid admin user ID type")
+		return
+	}
+	adminUserID, err := uuid.Parse(adminUserIDStr2)
 	if err != nil {
 		Error(c, "invalid_param", "invalid admin user ID")
 		return
@@ -207,7 +212,12 @@ func (h *RtcUserHandler) UnbanUser(c *gin.Context) {
 		Error(c, "unauthorized", "admin user ID not found in context")
 		return
 	}
-	adminUserID, err := uuid.Parse(adminUserIDStr.(string))
+	adminUserIDStr2, ok := adminUserIDStr.(string)
+	if !ok {
+		Error(c, "unauthorized", "invalid admin user ID type")
+		return
+	}
+	adminUserID, err := uuid.Parse(adminUserIDStr2)
 	if err != nil {
 		Error(c, "invalid_param", "invalid admin user ID")
 		return

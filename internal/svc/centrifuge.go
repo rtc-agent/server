@@ -166,20 +166,19 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 		}
 
 		// Check if user is banned
-		user, err := oauth2UserRepo.FindByID(ctx, claims.UserID)
+		banned, err := oauth2UserRepo.IsUserBanned(ctx, claims.UserID)
 		if err != nil {
 			metrics.recordConnecting("error", time.Since(start))
-			logger.Error(ctx, "[Centrifuge] Failed to find user, rejecting connection",
+			logger.Error(ctx, "[Centrifuge] Failed to check user ban status, rejecting connection",
 				zap.Error(err),
 				zap.String("user_id", claims.UserID.String()),
 			)
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
 		}
-		if user.BannedAt != nil {
+		if banned {
 			metrics.recordConnecting("banned", time.Since(start))
 			logger.Info(ctx, "[Centrifuge] User is banned, rejecting connection",
 				zap.String("user_id", claims.UserID.String()),
-				zap.String("reason", user.BannedReason),
 			)
 			return centrifuge.ConnectReply{}, centrifuge.Disconnect{
 				Code:   4501,

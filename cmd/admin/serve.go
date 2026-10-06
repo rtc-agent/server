@@ -179,7 +179,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	permissionUsecase := usecase.NewPermissionUsecase(adminRoleRepo, enforcer, auditLogRepo)
 	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer, auditLogRepo)
 	adminUserUsecase := usecase.NewAdminUserUsecase(adminUserRepo)
-	rtcUserUsecase := usecase.NewRtcUserUsecase(oauth2UserRepo, mainRefreshTokenRepo, auditLogRepo)
+	rtcUserUsecase := usecase.NewRtcUserUsecase(db, oauth2UserRepo, mainRefreshTokenRepo, auditLogRepo)
 
 	// Set up ban publisher for distributed sync (requires Redis)
 	if rdb != nil {
