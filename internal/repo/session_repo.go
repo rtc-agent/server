@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,6 +50,12 @@ type SessionRepo interface {
 	AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UUID, delta TokenUsageDelta) error
 	// AtomicUpdateEWMA atomically updates the session's token estimate EWMA value.
 	AtomicUpdateEWMA(ctx context.Context, sessionID uuid.UUID, ewma float64) error
+	// ListForAdmin returns a paginated list of sessions with admin filters.
+	ListForAdmin(ctx context.Context, filter SessionAdminFilter) ([]*model.Session, int64, error)
+	// AggregateTokenStats aggregates token usage by day for a user.
+	AggregateTokenStats(ctx context.Context, userID string, days int) ([]*DailyTokenStat, error)
+	// ListTopByTokens returns the top sessions by total token usage for a user.
+	ListTopByTokens(ctx context.Context, userID string, limit int) ([]*model.Session, error)
 }
 
 // TokenUsageDelta represents incremental token usage changes.
@@ -70,6 +77,26 @@ type TokenUsageDelta struct {
 	// LLM call, and by persistCompressedMessages / compact to write the
 	// accurate post-compaction token count.
 	SetCurrentContextTokens int64
+}
+
+// SessionAdminFilter holds filter criteria for admin session listing.
+type SessionAdminFilter struct {
+	UserID    string
+	Status    string
+	StartTime *time.Time
+	EndTime   *time.Time
+	Search    string
+	Page      int
+	PageSize  int
+}
+
+// DailyTokenStat holds daily aggregated token statistics.
+type DailyTokenStat struct {
+	Date              string `json:"date" gorm:"column:date"`
+	TotalTokens       int64  `json:"total_tokens" gorm:"column:total_tokens"`
+	TotalInputTokens  int64  `json:"total_input_tokens" gorm:"column:total_input_tokens"`
+	TotalOutputTokens int64  `json:"total_output_tokens" gorm:"column:total_output_tokens"`
+	CachedReadTokens  int64  `json:"cached_read_tokens" gorm:"column:cached_read_tokens"`
 }
 
 type sessionRepo struct {
@@ -217,7 +244,7 @@ func (r *sessionRepo) FindActiveByParent(ctx context.Context, parentSessionID uu
 }
 
 func (r *sessionRepo) AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UUID, delta TokenUsageDelta) error {
-	updates := map[string]interface{}{
+	updates := map[string]any{
 		"total_input_tokens":        gorm.Expr("total_input_tokens + ?", delta.InputDelta),
 		"total_output_tokens":       gorm.Expr("total_output_tokens + ?", delta.OutputDelta),
 		"total_tokens":              gorm.Expr("total_tokens + ?", delta.TotalDelta),
@@ -255,4 +282,79 @@ func (r *sessionRepo) AtomicUpdateEWMA(ctx context.Context, sessionID uuid.UUID,
 		return fmt.Errorf("atomic update ewma for session %s: %w", sessionID, result.Error)
 	}
 	return nil
+}
+
+func (r *sessionRepo) ListForAdmin(ctx context.Context, filter SessionAdminFilter) ([]*model.Session, int64, error) {
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.PageSize < 1 || filter.PageSize > 100 {
+		filter.PageSize = 20
+	}
+
+	query := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Session{}).
+		Where("owner_kind = ? AND owner_ref_id = ?", "user", filter.UserID)
+
+	if filter.Status != "" {
+		query = query.Where("status = ?", filter.Status)
+	}
+	if filter.StartTime != nil {
+		query = query.Where("created_at >= ?", *filter.StartTime)
+	}
+	if filter.EndTime != nil {
+		query = query.Where("created_at <= ?", *filter.EndTime)
+	}
+	if filter.Search != "" {
+		escaped := strings.NewReplacer(
+			`\`, `\\`,
+			`%`, `\%`,
+			`_`, `\_`,
+		).Replace(filter.Search)
+		query = query.Where("title ILIKE ? ESCAPE '\\'", "%"+escaped+"%")
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count admin sessions: %w", err)
+	}
+
+	var sessions []*model.Session
+	offset := (filter.Page - 1) * filter.PageSize
+	if err := query.Order("created_at DESC").Offset(offset).Limit(filter.PageSize).Find(&sessions).Error; err != nil {
+		return nil, 0, fmt.Errorf("list admin sessions: %w", err)
+	}
+
+	return sessions, total, nil
+}
+
+func (r *sessionRepo) AggregateTokenStats(ctx context.Context, userID string, days int) ([]*DailyTokenStat, error) {
+	if days < 1 {
+		days = 30
+	}
+	startDate := time.Now().AddDate(0, 0, -days)
+
+	var stats []*DailyTokenStat
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.Session{}).
+		Select("DATE(created_at) as date, SUM(total_tokens) as total_tokens, SUM(total_input_tokens) as total_input_tokens, SUM(total_output_tokens) as total_output_tokens, SUM(total_cached_read_tokens) as cached_read_tokens").
+		Where("owner_kind = ? AND owner_ref_id = ? AND created_at >= ?", "user", userID, startDate).
+		Group("DATE(created_at)").
+		Order("DATE(created_at) ASC").
+		Find(&stats).Error; err != nil {
+		return nil, fmt.Errorf("aggregate token stats for user %s: %w", userID, err)
+	}
+
+	return stats, nil
+}
+
+func (r *sessionRepo) ListTopByTokens(ctx context.Context, userID string, limit int) ([]*model.Session, error) {
+	var sessions []*model.Session
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("owner_ref_id = ? AND owner_kind = ?", userID, "user").
+		Order("total_tokens DESC").
+		Limit(limit).
+		Find(&sessions).Error; err != nil {
+		return nil, fmt.Errorf("list top sessions by tokens for user %s: %w", userID, err)
+	}
+	return sessions, nil
 }

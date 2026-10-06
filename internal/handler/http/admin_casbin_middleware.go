@@ -53,8 +53,14 @@ var routeResourceMap = []routeResourceMapping{
 	// RTC user management
 	{"GET", "/api/rtc-users", "rtc_user", "read"},
 	{"GET", "/api/rtc-users/:id", "rtc_user", "read"},
+	{"GET", "/api/rtc-users/:id/devices", "rtc_user", "read"},
 	{"POST", "/api/rtc-users/:id/ban", "rtc_user", "ban"},
 	{"POST", "/api/rtc-users/:id/unban", "rtc_user", "ban"},
+
+	// Session management
+	{"GET", "/api/rtc-users/sessions", "rtc_session", "read"},
+	{"GET", "/api/rtc-users/sessions/stats", "rtc_session", "read"},
+	{"GET", "/api/rtc-users/sessions/:id/messages", "rtc_message", "read"},
 
 	// System-level dynamic configuration management
 	{"GET", "/api/configs", "server_config", "read"},

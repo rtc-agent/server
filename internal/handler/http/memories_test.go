@@ -164,6 +164,17 @@ func (r *mockSessionRepo) AtomicUpdateEWMA(_ context.Context, _ uuid.UUID, _ flo
 	return nil
 }
 
+func (r *mockSessionRepo) ListForAdmin(_ context.Context, _ repo.SessionAdminFilter) ([]*model.Session, int64, error) {
+	return nil, 0, nil
+}
+
+func (r *mockSessionRepo) AggregateTokenStats(_ context.Context, _ string, _ int) ([]*repo.DailyTokenStat, error) {
+	return nil, nil
+}
+func (r *mockSessionRepo) ListTopByTokens(_ context.Context, _ string, _ int) ([]*model.Session, error) {
+	return nil, nil
+}
+
 // ─── test helpers ───
 
 // newTestSigner creates a JWT signer for testing.

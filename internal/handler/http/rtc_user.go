@@ -26,6 +26,7 @@ func NewRtcUserHandler(rtcUserUsecase *usecase.RtcUserUsecase) *RtcUserHandler {
 func (h *RtcUserHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/rtc-users", h.ListUsers)
 	r.GET("/rtc-users/:id", h.GetUser)
+	r.GET("/rtc-users/:id/devices", h.ListUserDevices)
 	r.POST("/rtc-users/:id/ban", h.BanUser)
 	r.POST("/rtc-users/:id/unban", h.UnbanUser)
 }
@@ -236,5 +237,40 @@ func (h *RtcUserHandler) UnbanUser(c *gin.Context) {
 	Success(c, gin.H{
 		"id":     user.ID,
 		"status": "active",
+	})
+}
+
+// ListUserDevices returns the list of devices for a user.
+func (h *RtcUserHandler) ListUserDevices(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	userID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		Error(c, "invalid_param", "invalid user ID")
+		return
+	}
+
+	devices, err := h.rtcUserUsecase.ListUserDevices(ctx, userID)
+	if err != nil {
+		Error(c, "server_error", "failed to list devices")
+		return
+	}
+
+	items := make([]gin.H, 0, len(devices))
+	for _, d := range devices {
+		items = append(items, gin.H{
+			"id":             d.Device.ID,
+			"user_id":        d.Device.UserID,
+			"device_id":      d.Device.DeviceID,
+			"name":           d.Device.Name,
+			"user_agent":     d.Device.UserAgent,
+			"last_active_at": d.Device.LastActiveAt,
+			"created_at":     d.Device.CreatedAt,
+			"is_online":      d.IsOnline,
+		})
+	}
+
+	Success(c, gin.H{
+		"items": items,
 	})
 }

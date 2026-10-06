@@ -115,6 +115,8 @@ func (uc *TokenExchangeUsecase) ExchangeToken(
 	subjectToken string,
 	subjectTokenType string,
 	deviceID string,
+	deviceName *string,
+	userAgent *string,
 ) (*TokenExchangeResult, error) {
 	// Validate subject_token_type.
 	switch subjectTokenType {
@@ -226,6 +228,8 @@ func (uc *TokenExchangeUsecase) ExchangeToken(
 		device := &model.Device{
 			UserID:       createdUser.ID,
 			DeviceID:     deviceID,
+			Name:         model.DerefStr(deviceName),
+			UserAgent:    model.DerefStr(userAgent),
 			LastActiveAt: time.Now(),
 		}
 		if err := uc.deviceRepo.Upsert(ctx, device); err != nil {

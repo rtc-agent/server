@@ -99,6 +99,14 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create unique index for user configs: %w", err)
 	}
 
+	// Composite index for admin session listing and token aggregation stats.
+	if err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_sessions_owner_created
+		ON sessions(owner_ref_id, created_at)
+	`).Error; err != nil {
+		return fmt.Errorf("create index for sessions: %w", err)
+	}
+
 	// Bootstrap default roles and Casbin policies (idempotent).
 	// This ensures default roles exist even when only `migrate` is run without `serve`.
 	// If Casbin enforcer initialization fails (e.g., table not yet created), we skip

@@ -147,6 +147,9 @@ func runServe(cmd *cobra.Command, args []string) {
 	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
 	mainRefreshTokenRepo := repo.NewRefreshTokenRepo(db)
 	configRepo := repo.NewConfigRepo(db)
+	deviceRepo := repo.NewDeviceRepo(db)
+	sessionRepo := repo.NewSessionRepo(db)
+	messageRepo := repo.NewMessageRepo(db)
 
 	// Bootstrap default roles and policies (idempotent, transactional) (P0 #4)
 	// If bootstrap fails, log error but continue - server can still function in degraded mode
@@ -192,7 +195,8 @@ func runServe(cmd *cobra.Command, args []string) {
 	permissionUsecase := usecase.NewPermissionUsecase(adminRoleRepo, enforcer, auditLogRepo)
 	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer, auditLogRepo)
 	adminUserUsecase := usecase.NewAdminUserUsecase(adminUserRepo)
-	rtcUserUsecase := usecase.NewRtcUserUsecase(db, oauth2UserRepo, mainRefreshTokenRepo, auditLogRepo)
+	rtcUserUsecase := usecase.NewRtcUserUsecase(db, oauth2UserRepo, mainRefreshTokenRepo, auditLogRepo, deviceRepo)
+	rtcSessionUsecase := usecase.NewRtcSessionUsecase(sessionRepo, messageRepo)
 	serverConfigUsecase := usecase.NewServerConfigUsecase(configRepo, auditLogRepo, oauth2UserRepo, db)
 
 	// Set up ban publisher for distributed sync (requires Redis)
@@ -222,6 +226,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	auditLogHandler := httphandler.NewAuditLogHandler(auditLogRepo)
 	adminUserHandler := httphandler.NewAdminUserHandler(adminUserUsecase)
 	rtcUserHandler := httphandler.NewRtcUserHandler(rtcUserUsecase)
+	rtcSessionHandler := httphandler.NewRtcSessionHandler(rtcSessionUsecase)
 	serverConfigHandler := httphandler.NewServerConfigHandler(serverConfigUsecase)
 	userConfigHandler := httphandler.NewUserConfigHandler(serverConfigUsecase)
 
@@ -237,6 +242,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		adminUserRoleHandler: adminUserRoleHandler,
 		auditLogHandler:      auditLogHandler,
 		adminUserHandler:     adminUserHandler,
+		rtcSessionHandler:    rtcSessionHandler,
 		rtcUserHandler:       rtcUserHandler,
 		serverConfigHandler:  serverConfigHandler,
 		userConfigHandler:    userConfigHandler,
@@ -290,6 +296,7 @@ type routerDeps struct {
 	adminUserRoleHandler *httphandler.AdminUserRoleHandler
 	auditLogHandler      *httphandler.AuditLogHandler
 	adminUserHandler     *httphandler.AdminUserHandler
+	rtcSessionHandler    *httphandler.RtcSessionHandler
 	rtcUserHandler       *httphandler.RtcUserHandler
 	serverConfigHandler  *httphandler.ServerConfigHandler
 	userConfigHandler    *httphandler.UserConfigHandler
@@ -377,6 +384,7 @@ func setupRouter(deps routerDeps) *gin.Engine {
 	deps.adminUserRoleHandler.RegisterRoutes(apiGroup)
 	deps.auditLogHandler.RegisterRoutes(apiGroup)
 	deps.adminUserHandler.RegisterRoutes(apiGroup)
+	deps.rtcSessionHandler.RegisterRoutes(apiGroup)
 	deps.rtcUserHandler.RegisterRoutes(apiGroup)
 	deps.serverConfigHandler.RegisterRoutes(apiGroup)
 	deps.userConfigHandler.RegisterRoutes(apiGroup)

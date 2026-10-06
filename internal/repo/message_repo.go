@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
@@ -43,6 +44,17 @@ type MessageRepo interface {
 	// UpdateTokenUsage updates the token usage fields for a message.
 	// Used to record LLM token usage on assistant messages after stream finalization.
 	UpdateTokenUsage(ctx context.Context, id uuid.UUID, usage *model.TokenUsageUpdate) error
+	// ListForAdmin returns a paginated list of messages for a session with admin filters.
+	ListForAdmin(ctx context.Context, sessionID uuid.UUID, filter MessageAdminFilter) ([]*model.Message, int64, error)
+}
+
+// MessageAdminFilter holds filter criteria for admin message listing.
+type MessageAdminFilter struct {
+	Role          string
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+	Page          int
+	PageSize      int
 }
 
 type messageRepo struct {
@@ -223,4 +235,39 @@ func (r *messageRepo) UpdateTokenUsage(ctx context.Context, id uuid.UUID, usage 
 		return fmt.Errorf("update message %s token usage: %w", id, ErrMessageNotFound)
 	}
 	return nil
+}
+
+func (r *messageRepo) ListForAdmin(ctx context.Context, sessionID uuid.UUID, filter MessageAdminFilter) ([]*model.Message, int64, error) {
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.PageSize < 1 || filter.PageSize > 100 {
+		filter.PageSize = 20
+	}
+
+	query := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Message{}).
+		Where("session_id = ?", sessionID)
+
+	if filter.Role != "" {
+		query = query.Where("role = ?", filter.Role)
+	}
+	if filter.CreatedAfter != nil {
+		query = query.Where("created_at >= ?", *filter.CreatedAfter)
+	}
+	if filter.CreatedBefore != nil {
+		query = query.Where("created_at <= ?", *filter.CreatedBefore)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count admin messages: %w", err)
+	}
+
+	var messages []*model.Message
+	offset := (filter.Page - 1) * filter.PageSize
+	if err := query.Order("global_offset DESC").Offset(offset).Limit(filter.PageSize).Find(&messages).Error; err != nil {
+		return nil, 0, fmt.Errorf("list admin messages: %w", err)
+	}
+
+	return messages, total, nil
 }

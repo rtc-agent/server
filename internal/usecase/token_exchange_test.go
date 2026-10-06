@@ -108,6 +108,10 @@ func (m *mockDeviceRepo) FindByUserAndDeviceID(ctx context.Context, userID uuid.
 	return nil, repo.ErrDeviceNotFound
 }
 
+func (m *mockDeviceRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]*model.Device, error) {
+	return nil, nil
+}
+
 type mockTokenSigner struct {
 	accessTTL time.Duration
 }
@@ -147,7 +151,7 @@ func TestTokenExchangeUsecase_ExchangeToken_UnsupportedTokenType(t *testing.T) {
 		config.TokenExchangeConfig{},
 	)
 
-	_, err := uc.ExchangeToken(context.Background(), "token", "unsupported_type", "device-1")
+	_, err := uc.ExchangeToken(context.Background(), "token", "unsupported_type", "device-1", nil, nil)
 	require.Error(t, err)
 	var teErr *usecase.TokenExchangeError
 	require.ErrorAs(t, err, &teErr)
@@ -172,7 +176,7 @@ func TestTokenExchangeUsecase_ExchangeToken_InvalidJWT(t *testing.T) {
 		},
 	)
 
-	_, err := uc.ExchangeToken(context.Background(), "not-a-jwt", usecase.TokenTypeJWT, "device-1")
+	_, err := uc.ExchangeToken(context.Background(), "not-a-jwt", usecase.TokenTypeJWT, "device-1", nil, nil)
 	require.Error(t, err)
 	var teErr *usecase.TokenExchangeError
 	require.ErrorAs(t, err, &teErr)
@@ -206,7 +210,7 @@ func TestTokenExchangeUsecase_ExchangeToken_UntrustedIssuer(t *testing.T) {
 		},
 	)
 
-	_, err := uc.ExchangeToken(context.Background(), tokenStr, usecase.TokenTypeJWT, "device-1")
+	_, err := uc.ExchangeToken(context.Background(), tokenStr, usecase.TokenTypeJWT, "device-1", nil, nil)
 	require.Error(t, err)
 	var teErr *usecase.TokenExchangeError
 	require.ErrorAs(t, err, &teErr)
@@ -246,6 +250,6 @@ func TestTokenExchangeUsecase_ExtractUserInfo(t *testing.T) {
 	privKey := generateRSAPrivateKey(t)
 	tokenStr := generateTestJWT(t, claims, privKey, "key-1")
 
-	_, err := uc.ExchangeToken(context.Background(), tokenStr, usecase.TokenTypeJWT, "device-1")
+	_, err := uc.ExchangeToken(context.Background(), tokenStr, usecase.TokenTypeJWT, "device-1", nil, nil)
 	require.Error(t, err)
 }

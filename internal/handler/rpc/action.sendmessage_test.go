@@ -90,6 +90,10 @@ func (m *mockMessageRepo) UpdateTokenUsage(_ context.Context, _ uuid.UUID, _ *mo
 	return nil
 }
 
+func (m *mockMessageRepo) ListForAdmin(_ context.Context, _ uuid.UUID, _ repo.MessageAdminFilter) ([]*model.Message, int64, error) {
+	return nil, 0, nil
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------

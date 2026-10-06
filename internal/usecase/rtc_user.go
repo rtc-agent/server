@@ -28,6 +28,7 @@ type RtcUserUsecase struct {
 	refreshTokenRepo repo.RefreshTokenRepo
 	banPublisher     BanPublisher
 	auditLogRepo     repo.AuditLogRepo
+	deviceRepo       repo.DeviceRepo
 }
 
 // NewRtcUserUsecase creates a new RtcUserUsecase.
@@ -36,12 +37,14 @@ func NewRtcUserUsecase(
 	oauth2UserRepo repo.OAuth2UserRepo,
 	refreshTokenRepo repo.RefreshTokenRepo,
 	auditLogRepo repo.AuditLogRepo,
+	deviceRepo repo.DeviceRepo,
 ) *RtcUserUsecase {
 	return &RtcUserUsecase{
 		db:               db,
 		oauth2UserRepo:   oauth2UserRepo,
 		refreshTokenRepo: refreshTokenRepo,
 		auditLogRepo:     auditLogRepo,
+		deviceRepo:       deviceRepo,
 	}
 }
 
@@ -214,4 +217,32 @@ func (uc *RtcUserUsecase) UnbanUser(ctx context.Context, userID uuid.UUID, admin
 		zap.String("admin_user_id", adminUserID.String()))
 
 	return user, nil
+}
+
+// DeviceOnlineThreshold is the duration within which a device is considered online.
+// A device whose last activity is within this window is reported as online.
+const DeviceOnlineThreshold = 5 * time.Minute
+
+// DeviceInfo holds device information with computed online status.
+type DeviceInfo struct {
+	Device   *model.Device
+	IsOnline bool
+}
+
+// ListUserDevices returns the list of devices for a user with online status.
+func (uc *RtcUserUsecase) ListUserDevices(ctx context.Context, userID uuid.UUID) ([]*DeviceInfo, error) {
+	devices, err := uc.deviceRepo.ListByUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list user devices: %w", err)
+	}
+
+	result := make([]*DeviceInfo, 0, len(devices))
+	for _, d := range devices {
+		result = append(result, &DeviceInfo{
+			Device:   d,
+			IsOnline: time.Since(d.LastActiveAt) < DeviceOnlineThreshold,
+		})
+	}
+
+	return result, nil
 }

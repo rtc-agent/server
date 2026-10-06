@@ -15,6 +15,7 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/httputil"
 	"github.com/rtc-agent/server/internal/infra/middleware"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 )
@@ -42,10 +43,12 @@ func (h *TokenExchangeHandler) SetIPRateLimiter(limiter *middleware.IPRateLimite
 
 // tokenExchangeRequest is the RFC 8693 Token Exchange request body.
 type tokenExchangeRequest struct {
-	GrantType        string `json:"grant_type"`
-	SubjectToken     string `json:"subject_token"`
-	SubjectTokenType string `json:"subject_token_type"`
-	DeviceID         string `json:"device_id,omitempty"`
+	GrantType        string  `json:"grant_type"`
+	SubjectToken     string  `json:"subject_token"`
+	SubjectTokenType string  `json:"subject_token_type"`
+	DeviceID         string  `json:"device_id,omitempty"`
+	DeviceName       *string `json:"device_name,omitempty"`
+	UserAgent        *string `json:"user_agent,omitempty"`
 	// Additional optional parameters (not yet used).
 	// ActorToken     string `json:"actor_token,omitempty"`
 	// ActorTokenType string `json:"actor_token_type,omitempty"`
@@ -93,7 +96,7 @@ func (h *TokenExchangeHandler) HandleTokenExchange(w http.ResponseWriter, r *htt
 
 	ctx := r.Context()
 
-	result, err := h.tokenExchangeUC.ExchangeToken(ctx, req.SubjectToken, req.SubjectTokenType, req.DeviceID)
+	result, err := h.tokenExchangeUC.ExchangeToken(ctx, req.SubjectToken, req.SubjectTokenType, req.DeviceID, req.DeviceName, req.UserAgent)
 	if err != nil {
 		var teErr *usecase.TokenExchangeError
 		if errors.As(err, &teErr) {
@@ -140,6 +143,12 @@ func (h *TokenExchangeHandler) parseRequest(w http.ResponseWriter, r *http.Reque
 	req.SubjectToken = r.FormValue("subject_token")
 	req.SubjectTokenType = r.FormValue("subject_token_type")
 	req.DeviceID = r.FormValue("device_id")
+	if deviceName := r.FormValue("device_name"); deviceName != "" {
+		req.DeviceName = model.StrPtr(deviceName)
+	}
+	if userAgent := r.FormValue("user_agent"); userAgent != "" {
+		req.UserAgent = model.StrPtr(userAgent)
+	}
 
 	return &req, nil
 }
