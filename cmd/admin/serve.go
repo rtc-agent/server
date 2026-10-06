@@ -231,6 +231,8 @@ func runServe(cmd *cobra.Command, args []string) {
 	userConfigHandler := httphandler.NewUserConfigHandler(serverConfigUsecase)
 	metricsProxyHandler := httphandler.NewMetricsProxyHandler(cfg.PrometheusURL)
 	grafanaProxyHandler := httphandler.NewGrafanaProxyHandler(cfg.GrafanaURL)
+	jaegerProxyHandler := httphandler.NewJaegerProxyHandler(cfg.JaegerURL)
+	pyroscopeProxyHandler := httphandler.NewPyroscopeProxyHandler(cfg.PyroscopeURL)
 
 	// Wire permission system deps to auth handler
 	permissionSystemEnabled := cfg.Features.PermissionSystem
@@ -249,11 +251,13 @@ func runServe(cmd *cobra.Command, args []string) {
 		serverConfigHandler:  serverConfigHandler,
 		userConfigHandler:    userConfigHandler,
 		metricsProxyHandler:  metricsProxyHandler,
-		grafanaProxyHandler:  grafanaProxyHandler,
-		enforcer:             enforcer,
-		permissionEnabled:    permissionSystemEnabled,
-		allowedOrigins:       cfg.CORS.AllowedOrigins,
-		rateLimiter:          rateLimiter,
+		grafanaProxyHandler:   grafanaProxyHandler,
+		jaegerProxyHandler:    jaegerProxyHandler,
+		pyroscopeProxyHandler: pyroscopeProxyHandler,
+		enforcer:              enforcer,
+		permissionEnabled:     permissionSystemEnabled,
+		allowedOrigins:        cfg.CORS.AllowedOrigins,
+		rateLimiter:           rateLimiter,
 	})
 
 	// Create HTTP server
@@ -305,11 +309,13 @@ type routerDeps struct {
 	serverConfigHandler  *httphandler.ServerConfigHandler
 	userConfigHandler    *httphandler.UserConfigHandler
 	metricsProxyHandler  *httphandler.MetricsProxyHandler
-	grafanaProxyHandler  *httphandler.GrafanaProxyHandler
-	enforcer             *auth.CasbinEnforcer
-	permissionEnabled    bool
-	allowedOrigins       []string
-	rateLimiter          httphandler.RateLimiterInterface
+	grafanaProxyHandler   *httphandler.GrafanaProxyHandler
+	jaegerProxyHandler    *httphandler.JaegerProxyHandler
+	pyroscopeProxyHandler *httphandler.PyroscopeProxyHandler
+	enforcer              *auth.CasbinEnforcer
+	permissionEnabled     bool
+	allowedOrigins        []string
+	rateLimiter           httphandler.RateLimiterInterface
 }
 
 // setupRouter creates and configures the Gin router with all routes and middleware.
@@ -396,6 +402,8 @@ func setupRouter(deps routerDeps) *gin.Engine {
 	deps.userConfigHandler.RegisterRoutes(apiGroup)
 	deps.metricsProxyHandler.RegisterRoutes(apiGroup)
 	deps.grafanaProxyHandler.RegisterRoutes(apiGroup)
+	deps.jaegerProxyHandler.RegisterRoutes(apiGroup)
+	deps.pyroscopeProxyHandler.RegisterRoutes(apiGroup)
 
 	// Register static file server for admin-ui (SPA)
 	ServeStaticFiles(router)

@@ -84,6 +84,12 @@ var routeResourceMap = []routeResourceMapping{
 
 	// Grafana dashboard iframe proxy
 	{"GET", "/api/grafana/*path", "dashboard", "read"},
+
+	// Jaeger tracing proxy
+	{"GET", "/api/jaeger/*path", "dashboard", "read"},
+
+	// Pyroscope profiling proxy
+	{"GET", "/api/pyroscope/*path", "dashboard", "read"},
 }
 
 // CasbinMiddleware creates a Gin middleware that checks Casbin permissions.

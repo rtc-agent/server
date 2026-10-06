@@ -37,3 +37,5 @@ security:
 
 prometheus_url: "http://prometheus:9090"
 grafana_url: "http://grafana:3000"
+jaeger_url: "http://jaeger:16686"
+pyroscope_url: "http://pyroscope:4040"

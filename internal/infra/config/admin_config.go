@@ -23,6 +23,12 @@ type AdminConfig struct {
 	// GrafanaURL is the base URL of the Grafana instance for dashboard iframe proxying.
 	// If empty, the grafana proxy endpoint returns 501 Not Implemented.
 	GrafanaURL string `mapstructure:"grafana_url"`
+	// JaegerURL is the base URL of the Jaeger instance for tracing proxying.
+	// If empty, the jaeger proxy endpoint returns 501 Not Implemented.
+	JaegerURL string `mapstructure:"jaeger_url"`
+	// PyroscopeURL is the base URL of the Pyroscope instance for profiling proxying.
+	// If empty, the pyroscope proxy endpoint returns 501 Not Implemented.
+	PyroscopeURL string `mapstructure:"pyroscope_url"`
 }
 
 // AdminSecurityConfig security settings for admin-server.

@@ -30,3 +30,5 @@ security:
 
 prometheus_url: "http://prometheus:9090"
 grafana_url: "http://localhost:3000"
+jaeger_url: "http://localhost:16686"
+pyroscope_url: "http://localhost:4040"

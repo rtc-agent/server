@@ -20,8 +20,10 @@ import (
 // Skips /api/grafana/* routes to allow iframe embedding of Grafana dashboards.
 func SecurityHeadersMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Skip framing-restricting headers for Grafana proxy (iframe embedding)
-		if !strings.HasPrefix(c.Request.URL.Path, "/api/grafana/") {
+		// Skip framing-restricting headers for proxy routes (iframe embedding)
+		if !strings.HasPrefix(c.Request.URL.Path, "/api/grafana/") &&
+			!strings.HasPrefix(c.Request.URL.Path, "/api/jaeger/") &&
+			!strings.HasPrefix(c.Request.URL.Path, "/api/pyroscope/") {
 			c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
 			c.Writer.Header().Set("X-Frame-Options", "DENY")
 			c.Writer.Header().Set("X-XSS-Protection", "1; mode=block")

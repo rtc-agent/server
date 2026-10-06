@@ -127,8 +127,10 @@ func (rl *RateLimiter) Stop() {
 // Grafana instance and generate high request volume from dashboard auto-refresh.
 func AdminRateLimitMiddleware(limiter RateLimiterInterface) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Skip rate limiting for Grafana proxy (dashboard auto-refresh generates many requests)
-		if strings.HasPrefix(c.Request.URL.Path, "/api/grafana/") {
+		// Skip rate limiting for proxy routes (dashboard auto-refresh generates many requests)
+		if strings.HasPrefix(c.Request.URL.Path, "/api/grafana/") ||
+			strings.HasPrefix(c.Request.URL.Path, "/api/jaeger/") ||
+			strings.HasPrefix(c.Request.URL.Path, "/api/pyroscope/") {
 			c.Next()
 			return
 		}
