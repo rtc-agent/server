@@ -35,7 +35,8 @@ type ConfigRepo interface {
 	Upsert(ctx context.Context, cfg *model.ServerConfig, expectedVersion int) error
 
 	// Delete performs an atomic CAS delete.
-	// Returns the deleted config (for history/audit) and ErrConflict if version does not match.
+	// Returns the deleted config (for history/audit).
+	// Returns ErrNotFound if the record does not exist, ErrConflict if the version does not match.
 	Delete(ctx context.Context, key string, userID *uuid.UUID, expectedVersion int) (*model.ServerConfig, error)
 
 	// ListHistory returns config change history ordered by changed_at DESC.
@@ -140,27 +141,29 @@ func (r *configRepo) Upsert(ctx context.Context, cfg *model.ServerConfig, expect
 }
 
 // Delete performs an atomic CAS delete.
-// Returns the deleted config (for history/audit) and ErrConflict if version does not match.
+// Returns the deleted config (for history/audit).
+// Returns ErrNotFound if the record does not exist, ErrConflict if the version does not match.
 // WHERE clause uses raw column names (see ConfigRepo interface doc for column mapping).
 func (r *configRepo) Delete(ctx context.Context, key string, userID *uuid.UUID, expectedVersion int) (*model.ServerConfig, error) {
 	db := DBFromContext(ctx, r.db)
 
-	// First, fetch the current record for history/audit.
-	query := db.WithContext(ctx).Where("key = ? AND version = ?", key, expectedVersion)
+	// Step 1: Check if the record exists (without version check) to distinguish
+	// "not found" from "version mismatch".
+	existQuery := db.WithContext(ctx).Where("key = ?", key)
 	if userID == nil {
-		query = query.Where("user_id IS NULL")
+		existQuery = existQuery.Where("user_id IS NULL")
 	} else {
-		query = query.Where("user_id = ?", *userID)
+		existQuery = existQuery.Where("user_id = ?", *userID)
 	}
-	var cfg model.ServerConfig
-	if err := query.First(&cfg).Error; err != nil {
+	var existing model.ServerConfig
+	if err := existQuery.First(&existing).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("delete config %q: %w", key, ErrConflict)
+			return nil, fmt.Errorf("delete config %q: %w", key, ErrNotFound)
 		}
 		return nil, fmt.Errorf("delete config %q: %w", key, err)
 	}
 
-	// Atomic CAS delete.
+	// Step 2: Atomic CAS delete with version check.
 	delQuery := db.WithContext(ctx).Where("key = ? AND version = ?", key, expectedVersion)
 	if userID == nil {
 		delQuery = delQuery.Where("user_id IS NULL")
@@ -172,9 +175,10 @@ func (r *configRepo) Delete(ctx context.Context, key string, userID *uuid.UUID, 
 		return nil, fmt.Errorf("delete config %q: %w", key, result.Error)
 	}
 	if result.RowsAffected == 0 {
+		// Record exists but version does not match.
 		return nil, fmt.Errorf("delete config %q: %w", key, ErrConflict)
 	}
-	return &cfg, nil
+	return &existing, nil
 }
 
 func (r *configRepo) ListHistory(ctx context.Context, filter model.ConfigHistoryFilter, page, pageSize int) ([]*model.ServerConfigHistory, int64, error) {
@@ -261,21 +265,28 @@ func (r *configRepo) TrimHistory(ctx context.Context, key string, userID *uuid.U
 // DeleteByUserID deletes all config overrides for a given user_id.
 // Returns the deleted configs (for audit/cascade).
 // Reserved for future user deletion workflows (e.g., GDPR erasure, account cleanup).
+// Uses a transaction to ensure the fetch and delete are atomic, preventing a concurrent
+// write between the two steps from producing inconsistent audit data.
 func (r *configRepo) DeleteByUserID(ctx context.Context, userID uuid.UUID) ([]*model.ServerConfig, error) {
 	db := DBFromContext(ctx, r.db)
 
-	// Fetch all user configs before deletion (for audit).
 	var configs []*model.ServerConfig
-	if err := db.WithContext(ctx).Where("user_id = ?", userID).Find(&configs).Error; err != nil {
-		return nil, fmt.Errorf("delete by user_id fetch: %w", err)
-	}
-	if len(configs) == 0 {
-		return nil, nil
-	}
+	if err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Fetch all user configs before deletion (for audit) inside the transaction.
+		if err := tx.Where("user_id = ?", userID).Find(&configs).Error; err != nil {
+			return fmt.Errorf("delete by user_id fetch: %w", err)
+		}
+		if len(configs) == 0 {
+			return nil
+		}
 
-	// Delete all.
-	if err := db.WithContext(ctx).Where("user_id = ?", userID).Delete(&model.ServerConfig{}).Error; err != nil {
-		return nil, fmt.Errorf("delete by user_id: %w", err)
+		// Delete all within the same transaction.
+		if err := tx.Where("user_id = ?", userID).Delete(&model.ServerConfig{}).Error; err != nil {
+			return fmt.Errorf("delete by user_id: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return configs, nil
 }

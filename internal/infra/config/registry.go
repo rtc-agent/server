@@ -6,6 +6,7 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"sort"
 	"time"
@@ -128,6 +129,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Base backoff duration for retries (Go duration string)",
 		YamlDefault: "1s",
+		Validator:   ValidateDuration,
 	},
 	"llm.pricing.input_per_million": {
 		Key:         "llm.pricing.input_per_million",
@@ -227,6 +229,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Worker idle timeout (Go duration string)",
 		YamlDefault: "5m",
+		Validator:   ValidateDuration,
 	},
 	"worker.heartbeat_sec": {
 		Key:         "worker.heartbeat_sec",
@@ -255,6 +258,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Eino checkpoint TTL (Go duration string)",
 		YamlDefault: "24h",
+		Validator:   ValidateDuration,
 	},
 	"worker.stream_chunk_ttl": {
 		Key:         "worker.stream_chunk_ttl",
@@ -262,6 +266,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Streaming message chunk TTL (Go duration string)",
 		YamlDefault: "5m",
+		Validator:   ValidateDuration,
 	},
 	"worker.interrupt_answer_ttl": {
 		Key:         "worker.interrupt_answer_ttl",
@@ -269,6 +274,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Interrupt answer TTL (Go duration string)",
 		YamlDefault: "10m",
+		Validator:   ValidateDuration,
 	},
 	"worker.orphan_trigger_ttl": {
 		Key:         "worker.orphan_trigger_ttl",
@@ -276,6 +282,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Orphan trigger dedup TTL (Go duration string)",
 		YamlDefault: "24h",
+		Validator:   ValidateDuration,
 	},
 
 	// ── Feature Flags ────────────────────────────────────────────────
@@ -343,6 +350,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Cleanup task interval (Go duration string)",
 		YamlDefault: "1h",
+		Validator:   ValidateDuration,
 	},
 	"storage.cleanup.multipart_expiry": {
 		Key:         "storage.cleanup.multipart_expiry",
@@ -350,6 +358,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Incomplete multipart upload expiry (Go duration string)",
 		YamlDefault: "24h",
+		Validator:   ValidateDuration,
 	},
 	"storage.cleanup.orphan.cooldown_period": {
 		Key:         "storage.cleanup.orphan.cooldown_period",
@@ -357,6 +366,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Orphan object cooldown period (Go duration string)",
 		YamlDefault: "1h",
+		Validator:   ValidateDuration,
 	},
 
 	// ── Web Search ───────────────────────────────────────────────────
@@ -451,6 +461,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Task execution timeout (Go duration string)",
 		YamlDefault: "30s",
+		Validator:   ValidateDuration,
 	},
 	"asynq.stale_threshold": {
 		Key:         "asynq.stale_threshold",
@@ -458,6 +469,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Loop staleness threshold (Go duration string)",
 		YamlDefault: "5m",
+		Validator:   ValidateDuration,
 	},
 	"asynq.health_check_interval": {
 		Key:         "asynq.health_check_interval",
@@ -465,6 +477,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeDuration,
 		Description: "Health check interval (Go duration string)",
 		YamlDefault: "30s",
+		Validator:   ValidateDuration,
 	},
 }
 
@@ -510,19 +523,10 @@ func sortConfigKeys(keys []string) {
 
 func compareConfigKeys(a, b string) int {
 	catA, catB := categoryOf(a), categoryOf(b)
-	if catA != catB {
-		if catA < catB {
-			return -1
-		}
-		return 1
+	if c := cmp.Compare(catA, catB); c != 0 {
+		return c
 	}
-	if a < b {
-		return -1
-	}
-	if a > b {
-		return 1
-	}
-	return 0
+	return cmp.Compare(a, b)
 }
 
 func categoryOf(key string) string {

@@ -101,9 +101,14 @@ type RollbackConfigInput struct {
 	ChangeNote    string `json:"change_note"`
 }
 
-// ListSystemConfigs returns all registered config keys merged with DB values.
-func (uc *ServerConfigUsecase) ListSystemConfigs(ctx context.Context, category string) ([]SystemConfigItem, int, error) {
+// ListSystemConfigs returns registered config keys merged with DB values, with pagination.
+// The registry keys are the source of truth for which configs exist; DB records provide
+// overrides. Pagination is applied in-memory after merging, since the full key set is
+// small (~50 keys) and must be iterated to produce the unified view.
+func (uc *ServerConfigUsecase) ListSystemConfigs(ctx context.Context, category string, page, pageSize int) ([]SystemConfigItem, int, error) {
 	// Get all DB records for system configs.
+	// DB-level category filter reduces data fetched; the loop filter below is still
+	// necessary because we iterate all registry keys (including those without DB records).
 	filter := model.ConfigFilter{Category: category}
 	dbConfigs, err := uc.configRepo.List(ctx, filter)
 	if err != nil {
@@ -115,6 +120,9 @@ func (uc *ServerConfigUsecase) ListSystemConfigs(ctx context.Context, category s
 	}
 
 	// Iterate registry keys filtered by category.
+	// The loop filter is necessary (not redundant with the DB filter above) because
+	// we iterate ALL registry keys, including those without DB records. The DB filter
+	// only reduces the data fetched; the loop filter controls which keys appear in output.
 	var items []SystemConfigItem
 	for _, key := range config.AllRegistryKeys() {
 		entry := config.GetRegistryEntry(key)
@@ -148,7 +156,11 @@ func (uc *ServerConfigUsecase) ListSystemConfigs(ctx context.Context, category s
 		}
 		items = append(items, item)
 	}
-	return items, len(items), nil
+
+	// Paginate the merged result.
+	total := len(items)
+	items = paginateItems(items, page, pageSize)
+	return items, total, nil
 }
 
 // GetSystemConfig returns a single system config by key.
@@ -287,6 +299,9 @@ func (uc *ServerConfigUsecase) DeleteSystemConfig(ctx context.Context, key strin
 		// eliminating the redundant pre-transaction Get (P2-1 fix).
 		deletedCfg, delErr := uc.configRepo.Delete(txCtx, key, nil, version)
 		if delErr != nil {
+			if errors.Is(delErr, repo.ErrNotFound) {
+				return ErrConfigNotFound
+			}
 			if errors.Is(delErr, repo.ErrConflict) {
 				return ErrOptimisticLock
 			}
@@ -357,6 +372,9 @@ func (uc *ServerConfigUsecase) GetUserConfigsView(ctx context.Context, userID uu
 	}
 
 	// Merge registry + system + user.
+	// The loop filter is necessary (not redundant with the DB filters above) because
+	// we iterate ALL registry keys, including those without DB records. The DB filters
+	// only reduce the data fetched; the loop filter controls which keys appear in output.
 	var items []UserConfigItem
 	for _, key := range config.AllRegistryKeys() {
 		entry := config.GetRegistryEntry(key)
@@ -422,11 +440,17 @@ func (uc *ServerConfigUsecase) GetUserConfig(ctx context.Context, userID uuid.UU
 
 	// System DB value.
 	sysCfg, sysErr := uc.configRepo.Get(ctx, key, nil)
+	if sysErr != nil && !errors.Is(sysErr, repo.ErrNotFound) {
+		return nil, fmt.Errorf("get system config for user view: %w", sysErr)
+	}
 	if sysErr == nil {
 		item.SystemValue = unmarshalJSONB(sysCfg.Value)
 	}
 	// User DB value.
 	userCfg, userErr := uc.configRepo.Get(ctx, key, &userID)
+	if userErr != nil && !errors.Is(userErr, repo.ErrNotFound) {
+		return nil, fmt.Errorf("get user config for user view: %w", userErr)
+	}
 	if userErr == nil {
 		item.UserValue = unmarshalJSONB(userCfg.Value)
 		item.Version = userCfg.Version
@@ -553,6 +577,9 @@ func (uc *ServerConfigUsecase) DeleteUserConfigOverride(ctx context.Context, use
 		// eliminating the redundant pre-transaction Get (P2-1 fix).
 		deletedCfg, delErr := uc.configRepo.Delete(txCtx, key, &userID, version)
 		if delErr != nil {
+			if errors.Is(delErr, repo.ErrNotFound) {
+				return ErrConfigNotFound
+			}
 			if errors.Is(delErr, repo.ErrConflict) {
 				return ErrOptimisticLock
 			}
@@ -622,62 +649,63 @@ func (uc *ServerConfigUsecase) GetHistory(ctx context.Context, key string, userI
 }
 
 // RollbackConfig rolls back a config to a historical version.
+// All reads (current config + target history) are performed inside the transaction
+// to prevent TOCTOU races where a concurrent write invalidates the captured old value.
 func (uc *ServerConfigUsecase) RollbackConfig(ctx context.Context, key string, userID *uuid.UUID, input RollbackConfigInput, operatorID uuid.UUID, operatorIP string) (rolledBackValue any, newVersion int, err error) {
 	entry := config.GetRegistryEntry(key)
 	if entry == nil {
 		return nil, 0, ErrConfigKeyNotFound
 	}
 
-	// Get current config.
-	currentCfg, getErr := uc.configRepo.Get(ctx, key, userID)
-	if getErr != nil {
-		if errors.Is(getErr, repo.ErrNotFound) {
-			return nil, 0, ErrConfigNotFound
-		}
-		return nil, 0, fmt.Errorf("get config for rollback: %w", getErr)
-	}
-
-	// Check no-op.
-	if input.TargetVersion == currentCfg.Version {
-		return nil, 0, ErrNoOp
-	}
-
-	// Look up target version in history.
-	targetHistory, histErr := uc.configRepo.GetHistoryByVersion(ctx, key, userID, input.TargetVersion)
-	if histErr != nil {
-		if errors.Is(histErr, repo.ErrNotFound) {
-			return nil, 0, ErrVersionNotFound
-		}
-		return nil, 0, fmt.Errorf("get history for rollback: %w", histErr)
-	}
-
-	// Use the target version's new_value as the rollback value.
-	targetValue := targetHistory.NewValue
-
-	// Optimistic lock check.
-	if input.Version != currentCfg.Version {
-		return nil, 0, ErrOptimisticLock
-	}
-
 	now := time.Now()
-	newVersion = input.Version + 1
-
-	cfg := &model.ServerConfig{
-		Key:         key,
-		UserID:      userID,
-		Value:       targetValue,
-		ValueType:   entry.ValueType,
-		Category:    entry.Category,
-		Description: entry.Description,
-		Version:     newVersion,
-		UpdatedBy:   &operatorID,
-		UpdatedAt:   now,
-	}
-
-	oldValueJSON := currentCfg.Value
+	var rolledBackJSON datatypes.JSON
 
 	err = uc.db.Transaction(func(tx *gorm.DB) error {
 		txCtx := repo.WithTx(ctx, tx)
+
+		// Get current config inside transaction to avoid TOCTOU.
+		currentCfg, getErr := uc.configRepo.Get(txCtx, key, userID)
+		if getErr != nil {
+			if errors.Is(getErr, repo.ErrNotFound) {
+				return ErrConfigNotFound
+			}
+			return fmt.Errorf("get config for rollback: %w", getErr)
+		}
+
+		// Check no-op.
+		if input.TargetVersion == currentCfg.Version {
+			return ErrNoOp
+		}
+
+		// Optimistic lock check.
+		if input.Version != currentCfg.Version {
+			return ErrOptimisticLock
+		}
+
+		// Look up target version in history inside transaction.
+		targetHistory, histErr := uc.configRepo.GetHistoryByVersion(txCtx, key, userID, input.TargetVersion)
+		if histErr != nil {
+			if errors.Is(histErr, repo.ErrNotFound) {
+				return ErrVersionNotFound
+			}
+			return fmt.Errorf("get history for rollback: %w", histErr)
+		}
+
+		targetValue := targetHistory.NewValue
+		rolledBackJSON = targetValue
+		newVersion = input.Version + 1
+
+		cfg := &model.ServerConfig{
+			Key:         key,
+			UserID:      userID,
+			Value:       targetValue,
+			ValueType:   entry.ValueType,
+			Category:    entry.Category,
+			Description: entry.Description,
+			Version:     newVersion,
+			UpdatedBy:   &operatorID,
+			UpdatedAt:   now,
+		}
 
 		if upsertErr := uc.configRepo.Upsert(txCtx, cfg, input.Version); upsertErr != nil {
 			if errors.Is(upsertErr, repo.ErrConflict) {
@@ -689,7 +717,7 @@ func (uc *ServerConfigUsecase) RollbackConfig(ctx context.Context, key string, u
 		history := &model.ServerConfigHistory{
 			Key:        key,
 			UserID:     userID,
-			OldValue:   oldValueJSON,
+			OldValue:   currentCfg.Value,
 			NewValue:   targetValue,
 			Version:    newVersion,
 			ChangedBy:  operatorID,
@@ -707,7 +735,7 @@ func (uc *ServerConfigUsecase) RollbackConfig(ctx context.Context, key string, u
 		auditDetails := map[string]any{
 			"key":                      key,
 			"user_id":                  userIDString(userID),
-			"old_value":                unmarshalJSONB(oldValueJSON),
+			"old_value":                unmarshalJSONB(currentCfg.Value),
 			"new_value":                unmarshalJSONB(targetValue),
 			"rolled_back_from_version": currentCfg.Version,
 			"target_version":           input.TargetVersion,
@@ -725,7 +753,7 @@ func (uc *ServerConfigUsecase) RollbackConfig(ctx context.Context, key string, u
 		return nil, 0, err
 	}
 
-	return unmarshalJSONB(targetValue), newVersion, nil
+	return unmarshalJSONB(rolledBackJSON), newVersion, nil
 }
 
 // GetEffectiveValue returns the effective config value for a key and user.
@@ -886,4 +914,24 @@ func userIDString(uid *uuid.UUID) any {
 		return nil
 	}
 	return uid.String()
+}
+
+// paginateItems applies page/pageSize pagination to a slice.
+// Returns an empty slice if the page is out of range.
+func paginateItems[T any](items []T, page, pageSize int) []T {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+	if offset >= len(items) {
+		return []T{}
+	}
+	end := offset + pageSize
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end]
 }
