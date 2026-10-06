@@ -23,6 +23,8 @@ func NewRedisBanPublisher(rdb redis.UniversalClient) *RedisBanPublisher {
 }
 
 // PublishBan publishes a ban/unban event to Redis.
+// Returns error immediately on failure - no retry logic.
+// Redis is critical infrastructure; failures should be handled at the caller level.
 func (p *RedisBanPublisher) PublishBan(ctx context.Context, userID uuid.UUID, action, reason string) error {
 	if p.rdb == nil {
 		return fmt.Errorf("redis client is required for ban publisher")

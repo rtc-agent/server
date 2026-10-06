@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
@@ -135,8 +136,14 @@ func (r *oauth2UserRepo) ListWithFilters(ctx context.Context, filter OAuth2UserF
 
 	// Apply search filter
 	if filter.Search != "" {
-		searchPattern := "%" + filter.Search + "%"
-		query = query.Where("email ILIKE ? OR name ILIKE ?", searchPattern, searchPattern)
+		// Escape ILIKE special characters: %, _, and backslash
+		escaped := strings.NewReplacer(
+			`\`, `\\`,
+			`%`, `\%`,
+			`_`, `\_`,
+		).Replace(filter.Search)
+		searchPattern := "%" + escaped + "%"
+		query = query.Where("(email ILIKE ? ESCAPE '\\' OR name ILIKE ? ESCAPE '\\')", searchPattern, searchPattern)
 	}
 
 	// Count total

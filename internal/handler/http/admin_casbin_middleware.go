@@ -49,6 +49,12 @@ var routeResourceMap = []routeResourceMapping{
 	// Audit logs
 	{"GET", "/api/audit-logs", "audit_log", "read"},
 	{"GET", "/api/audit-logs/:id", "audit_log", "read"},
+
+	// RTC user management
+	{"GET", "/api/rtc-users", "rtc_user", "read"},
+	{"GET", "/api/rtc-users/:id", "rtc_user", "read"},
+	{"POST", "/api/rtc-users/:id/ban", "rtc_user", "ban"},
+	{"POST", "/api/rtc-users/:id/unban", "rtc_user", "ban"},
 }
 
 // CasbinMiddleware creates a Gin middleware that checks Casbin permissions.

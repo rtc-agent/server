@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -127,15 +128,12 @@ func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput, admin
 		var revokeErr error
 		revokedCount, revokeErr = uc.refreshTokenRepo.RevokeAllByUserID(txCtx, input.UserID)
 		if revokeErr != nil {
-			logger.Error(txCtx, "ban_user.revoke_tokens_failed",
-				zap.String("user_id", input.UserID.String()),
-				zap.Error(revokeErr))
-			// Continue even if token revocation fails - the ban is already in effect
-		} else {
-			logger.Info(txCtx, "ban_user.tokens_revoked",
-				zap.String("user_id", input.UserID.String()),
-				zap.Int64("revoked_count", revokedCount))
+			// Rollback transaction - token revocation is critical for security
+			return fmt.Errorf("revoke tokens: %w", revokeErr)
 		}
+		logger.Info(txCtx, "ban_user.tokens_revoked",
+			zap.String("user_id", input.UserID.String()),
+			zap.Int64("revoked_count", revokedCount))
 
 		return nil
 	}); err != nil {
@@ -185,7 +183,10 @@ func (uc *RtcUserUsecase) UnbanUser(ctx context.Context, userID uuid.UUID, admin
 		return nil, fmt.Errorf("update user: %w", err)
 	}
 
-	// 2. Publish unban event for distributed sync
+	// 2. Invalidate ban cache to ensure immediate effect
+	middleware.InvalidateBanCache(userID)
+
+	// 3. Publish unban event for distributed sync
 	if uc.banPublisher != nil {
 		if err := uc.banPublisher.PublishBan(ctx, userID, "unban", ""); err != nil {
 			logger.Error(ctx, "unban_user.publish_failed",
@@ -195,7 +196,7 @@ func (uc *RtcUserUsecase) UnbanUser(ctx context.Context, userID uuid.UUID, admin
 		}
 	}
 
-	// 3. Write audit log
+	// 4. Write audit log
 	if uc.auditLogRepo != nil {
 		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
 			adminUserID, adminIP, "unban_user", "rtc_user", userID, nil,

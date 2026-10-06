@@ -73,6 +73,7 @@ func (h *RtcUserHandler) ListUsers(c *gin.Context) {
 		item := gin.H{
 			"id":         user.ID,
 			"provider":   user.Provider,
+			"sub":        user.Sub,
 			"email":      user.Email,
 			"name":       user.Name,
 			"avatar_url": user.AvatarURL,
@@ -140,7 +141,7 @@ func (h *RtcUserHandler) GetUser(c *gin.Context) {
 
 // BanUserInput represents the input for banning a user.
 type BanUserInput struct {
-	Reason string `json:"reason" binding:"required"`
+	Reason string `json:"reason" binding:"required,max=500"`
 }
 
 // BanUser bans a user.
@@ -165,12 +166,12 @@ func (h *RtcUserHandler) BanUser(c *gin.Context) {
 		Error(c, "unauthorized", "admin user ID not found in context")
 		return
 	}
-	adminUserIDStr2, ok := adminUserIDStr.(string)
+	adminUserIDRaw, ok := adminUserIDStr.(string)
 	if !ok {
 		Error(c, "unauthorized", "invalid admin user ID type")
 		return
 	}
-	adminUserID, err := uuid.Parse(adminUserIDStr2)
+	adminUserID, err := uuid.Parse(adminUserIDRaw)
 	if err != nil {
 		Error(c, "invalid_param", "invalid admin user ID")
 		return
@@ -212,12 +213,12 @@ func (h *RtcUserHandler) UnbanUser(c *gin.Context) {
 		Error(c, "unauthorized", "admin user ID not found in context")
 		return
 	}
-	adminUserIDStr2, ok := adminUserIDStr.(string)
+	adminUserIDRaw, ok := adminUserIDStr.(string)
 	if !ok {
 		Error(c, "unauthorized", "invalid admin user ID type")
 		return
 	}
-	adminUserID, err := uuid.Parse(adminUserIDStr2)
+	adminUserID, err := uuid.Parse(adminUserIDRaw)
 	if err != nil {
 		Error(c, "invalid_param", "invalid admin user ID")
 		return

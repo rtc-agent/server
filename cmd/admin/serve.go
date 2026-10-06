@@ -287,6 +287,19 @@ func setupRouter(deps routerDeps) *gin.Engine {
 
 	router := gin.New()
 
+	// Configure trusted proxies for correct ClientIP() extraction.
+	// In Docker deployment, Nginx is the reverse proxy, so we trust its IP.
+	// For development, trust all private network ranges.
+	if err := router.SetTrustedProxies([]string{
+		"127.0.0.0/8",    // localhost
+		"10.0.0.0/8",     // Docker bridge network
+		"172.16.0.0/12",  // Docker custom networks
+		"192.168.0.0/16", // Docker bridge network
+	}); err != nil {
+		// Log but don't fail - ClientIP() will fall back to RemoteAddr
+		logger.Warn(context.Background(), "Failed to set trusted proxies", zap.Error(err))
+	}
+
 	// Recovery middleware
 	router.Use(gin.Recovery())
 

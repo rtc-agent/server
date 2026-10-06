@@ -19,6 +19,7 @@ import (
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/infra/contextx"
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/repo"
 	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -165,24 +166,32 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 		}
 
-		// Check if user is banned
-		banned, err := oauth2UserRepo.IsUserBanned(ctx, claims.UserID)
-		if err != nil {
-			metrics.recordConnecting("error", time.Since(start))
-			logger.Error(ctx, "[Centrifuge] Failed to check user ban status, rejecting connection",
-				zap.Error(err),
-				zap.String("user_id", claims.UserID.String()),
-			)
-			return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
-		}
-		if banned {
-			metrics.recordConnecting("banned", time.Since(start))
-			logger.Info(ctx, "[Centrifuge] User is banned, rejecting connection",
-				zap.String("user_id", claims.UserID.String()),
-			)
-			return centrifuge.ConnectReply{}, centrifuge.Disconnect{
-				Code:   4501,
-				Reason: "account banned",
+		// Check if user is banned (skip if repo not available, e.g. in tests)
+		if oauth2UserRepo != nil {
+			// Check cache first to reduce DB load on frequent reconnections
+			banned, cached := middleware.GetBanCache(claims.UserID)
+			if !cached {
+				var err error
+				banned, err = oauth2UserRepo.IsUserBanned(ctx, claims.UserID)
+				if err != nil {
+					metrics.recordConnecting("error", time.Since(start))
+					logger.Error(ctx, "[Centrifuge] Failed to check user ban status, rejecting connection",
+						zap.Error(err),
+						zap.String("user_id", claims.UserID.String()),
+					)
+					return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
+				}
+				middleware.SetBanCache(claims.UserID, banned)
+			}
+			if banned {
+				metrics.recordConnecting("banned", time.Since(start))
+				logger.Info(ctx, "[Centrifuge] User is banned, rejecting connection",
+					zap.String("user_id", claims.UserID.String()),
+				)
+				return centrifuge.ConnectReply{}, centrifuge.Disconnect{
+					Code:   4501,
+					Reason: "account banned",
+				}
 			}
 		}
 

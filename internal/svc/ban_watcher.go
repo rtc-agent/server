@@ -51,16 +51,18 @@ func NewBanWatcher(node *centrifuge.Node, rdb redis.UniversalClient) (*BanWatche
 }
 
 // subscribe creates a new Redis Pub/Sub subscription.
+// Must be called with bw.mu held.
 func (bw *BanWatcher) subscribe() error {
 	// Close old subscription to prevent resource leak
 	if bw.sub != nil {
 		_ = bw.sub.Close()
 	}
-	bw.sub = bw.rdb.Subscribe(bw.baseCtx, model.BanChannel)
-	_, err := bw.sub.Receive(bw.baseCtx)
+	sub := bw.rdb.Subscribe(bw.baseCtx, model.BanChannel)
+	_, err := sub.Receive(bw.baseCtx)
 	if err != nil {
 		return fmt.Errorf("subscribe to ban channel: %w", err)
 	}
+	bw.sub = sub
 	return nil
 }
 
@@ -128,7 +130,14 @@ func (bw *BanWatcher) listenWithReconnect() {
 
 // listen processes incoming ban event notifications.
 func (bw *BanWatcher) listen() {
+	bw.mu.Lock()
+	if bw.sub == nil {
+		bw.mu.Unlock()
+		return
+	}
 	ch := bw.sub.Channel()
+	bw.mu.Unlock()
+
 	for msg := range ch {
 		var event model.BanEvent
 		if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {

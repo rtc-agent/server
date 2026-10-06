@@ -37,10 +37,37 @@ type banCache struct {
 }
 
 // newBanCache creates a new ban cache with the specified TTL.
+// Starts a background goroutine to periodically clean up expired entries.
 func newBanCache(ttl time.Duration) *banCache {
-	return &banCache{
+	c := &banCache{
 		entries: make(map[uuid.UUID]banCacheEntry),
 		ttl:     ttl,
+	}
+	// Start cleanup goroutine
+	go c.cleanupLoop()
+	return c
+}
+
+// cleanupLoop periodically removes expired entries to prevent memory leaks.
+func (c *banCache) cleanupLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		c.cleanup()
+	}
+}
+
+// cleanup removes all expired entries from the cache.
+func (c *banCache) cleanup() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := time.Now()
+	for userID, entry := range c.entries {
+		if now.After(entry.expiresAt) {
+			delete(c.entries, userID)
+		}
 	}
 }
 
@@ -66,14 +93,38 @@ func (c *banCache) set(userID uuid.UUID, banned bool) {
 	c.mu.Unlock()
 }
 
+// invalidate removes a user's ban status from the cache.
+func (c *banCache) invalidate(userID uuid.UUID) {
+	c.mu.Lock()
+	delete(c.entries, userID)
+	c.mu.Unlock()
+}
+
+// globalBanCache is a shared cache instance for ban status checks across all JWT middleware instances.
+var globalBanCache = newBanCache(30 * time.Second)
+
+// InvalidateBanCache removes a user's ban status from the global cache.
+// Called when a user is unbanned to ensure immediate effect.
+func InvalidateBanCache(userID uuid.UUID) {
+	globalBanCache.invalidate(userID)
+}
+
+// GetBanCache retrieves a user's ban status from the global cache.
+// Returns (banned, cached) where cached indicates if the value was found in cache.
+func GetBanCache(userID uuid.UUID) (bool, bool) {
+	return globalBanCache.get(userID)
+}
+
+// SetBanCache stores a user's ban status in the global cache.
+func SetBanCache(userID uuid.UUID, banned bool) {
+	globalBanCache.set(userID, banned)
+}
+
 // JWTAuth creates a JWT authentication middleware.
 // signer is the JWT signer; allowDevBypass should only be true in development,
 // allowing X-User-ID / X-Device-ID headers to bypass JWT validation (must be false in production).
 // banChecker optionally checks if user is banned (can be nil to skip check).
 func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool, banChecker UserBanChecker) func(http.Handler) http.Handler {
-	// Create a cache with 30 second TTL for ban checks
-	cache := newBanCache(30 * time.Second)
-
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var userID uuid.UUID
@@ -120,7 +171,7 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool, banChecker UserBanChec
 
 			// 3. Check if user is banned (with cache)
 			if banChecker != nil {
-				banned, cached := cache.get(userID)
+				banned, cached := globalBanCache.get(userID)
 				if !cached {
 					var err error
 					banned, err = banChecker.IsUserBanned(r.Context(), userID)
@@ -130,7 +181,7 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool, banChecker UserBanChec
 							zap.String("user_id", userID.String()))
 						// Continue - don't block legitimate users on DB errors
 					} else {
-						cache.set(userID, banned)
+						globalBanCache.set(userID, banned)
 					}
 				}
 
