@@ -169,13 +169,12 @@ func (s *Server) Start() error {
 	// Start BanWatcher for distributed user ban synchronization.
 	// Listens to Redis Pub/Sub for ban events and disconnects banned users.
 	if s.svcCtx.Redis != nil && s.banWatcher == nil {
-		banWatcher, err := svc.NewBanWatcher(s.svcCtx.CentrifugeNode, s.svcCtx.Redis, s.instanceID)
+		banWatcher, err := svc.NewBanWatcher(s.svcCtx.CentrifugeNode, s.svcCtx.Redis)
 		if err != nil {
 			logger.Error(context.Background(), "[Server] Failed to create ban watcher", zap.Error(err))
 		} else {
 			s.banWatcher = banWatcher
-			logger.Info(context.Background(), "[Server] Ban watcher started",
-				zap.String("instance_id", s.instanceID))
+			logger.Info(context.Background(), "[Server] Ban watcher started")
 		}
 	}
 
@@ -288,6 +287,13 @@ func (s *Server) Stop() {
 	// Stop IP rate limiter cleanup goroutine
 	if s.ipRateLimiterCancel != nil {
 		s.ipRateLimiterCancel()
+	}
+
+	// Stop BanWatcher
+	if s.banWatcher != nil {
+		if err := s.banWatcher.Close(); err != nil {
+			logger.Error(ctx, "[Server] ban watcher close error", zap.Error(err))
+		}
 	}
 
 	// Stop goroutine metrics collector

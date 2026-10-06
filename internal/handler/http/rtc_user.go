@@ -58,7 +58,7 @@ func (h *RtcUserHandler) ListUsers(c *gin.Context) {
 
 	result, err := h.rtcUserUsecase.ListUsers(ctx, filter)
 	if err != nil {
-		Error(c, "server_error", "获取用户列表失败")
+		Error(c, "server_error", "failed to list users")
 		return
 	}
 
@@ -103,13 +103,13 @@ func (h *RtcUserHandler) GetUser(c *gin.Context) {
 
 	userID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		Error(c, "invalid_param", "无效的用户 ID")
+		Error(c, "invalid_param", "invalid user ID")
 		return
 	}
 
 	user, err := h.rtcUserUsecase.GetUser(ctx, userID)
 	if err != nil {
-		Error(c, "not_found", "用户不存在")
+		Error(c, "not_found", "user not found")
 		return
 	}
 
@@ -149,22 +149,37 @@ func (h *RtcUserHandler) BanUser(c *gin.Context) {
 
 	userID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		Error(c, "invalid_param", "无效的用户 ID")
+		Error(c, "invalid_param", "invalid user ID")
 		return
 	}
 
 	var input BanUserInput
 	if err := c.ShouldBindJSON(&input); err != nil {
-		Error(c, "invalid_param", "请提供封禁原因")
+		Error(c, "invalid_param", "reason is required")
 		return
 	}
+
+	// Get admin user ID from context (set by JWT middleware)
+	adminUserIDStr, exists := c.Get("user_id")
+	if !exists {
+		Error(c, "unauthorized", "admin user ID not found in context")
+		return
+	}
+	adminUserID, err := uuid.Parse(adminUserIDStr.(string))
+	if err != nil {
+		Error(c, "invalid_param", "invalid admin user ID")
+		return
+	}
+
+	// Get admin IP
+	adminIP := c.ClientIP()
 
 	user, err := h.rtcUserUsecase.BanUser(ctx, usecase.BanUserInput{
 		UserID: userID,
 		Reason: input.Reason,
-	})
+	}, adminUserID, adminIP)
 	if err != nil {
-		Error(c, "server_error", "封禁用户失败")
+		Error(c, "server_error", "failed to ban user")
 		return
 	}
 
@@ -182,13 +197,28 @@ func (h *RtcUserHandler) UnbanUser(c *gin.Context) {
 
 	userID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		Error(c, "invalid_param", "无效的用户 ID")
+		Error(c, "invalid_param", "invalid user ID")
 		return
 	}
 
-	user, err := h.rtcUserUsecase.UnbanUser(ctx, userID)
+	// Get admin user ID from context (set by JWT middleware)
+	adminUserIDStr, exists := c.Get("user_id")
+	if !exists {
+		Error(c, "unauthorized", "admin user ID not found in context")
+		return
+	}
+	adminUserID, err := uuid.Parse(adminUserIDStr.(string))
 	if err != nil {
-		Error(c, "server_error", "解封用户失败")
+		Error(c, "invalid_param", "invalid admin user ID")
+		return
+	}
+
+	// Get admin IP
+	adminIP := c.ClientIP()
+
+	user, err := h.rtcUserUsecase.UnbanUser(ctx, userID, adminUserID, adminIP)
+	if err != nil {
+		Error(c, "server_error", "failed to unban user")
 		return
 	}
 

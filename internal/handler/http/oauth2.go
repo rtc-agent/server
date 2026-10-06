@@ -363,6 +363,8 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has been revoked")
 		case usecase.ErrRefreshTokenExpired:
 			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has expired")
+		case usecase.ErrAccountBanned:
+			httputil.WriteError(w, http.StatusForbidden, "access_denied", "account has been banned")
 		default:
 			logger.Error(ctx, "failed to validate refresh_token", zap.Error(err))
 			httputil.WriteError(w, http.StatusInternalServerError, "server_error", "internal error")

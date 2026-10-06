@@ -6,94 +6,122 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
-const (
-	// banChannel is the Redis Pub/Sub channel for user ban events.
-	banChannel = "rtc:user_banned"
-)
-
-// BanEvent represents a user ban/unban event published via Redis Pub/Sub.
-type BanEvent struct {
-	UserID string `json:"user_id"`
-	Action string `json:"action"` // "ban" or "unban"
-	Reason string `json:"reason,omitempty"`
-}
-
 // BanWatcher listens for user ban events and disconnects users from Centrifuge.
 type BanWatcher struct {
-	node       *centrifuge.Node
-	rdb        redis.UniversalClient
-	sub        *redis.PubSub
-	instanceID string
-	mu         sync.Mutex
-	closed     bool
+	node   *centrifuge.Node
+	rdb    redis.UniversalClient
+	sub    *redis.PubSub
+	mu     sync.Mutex
+	closed bool
 }
 
 // NewBanWatcher creates a BanWatcher that listens for ban events.
-func NewBanWatcher(node *centrifuge.Node, rdb redis.UniversalClient, instanceID string) (*BanWatcher, error) {
+func NewBanWatcher(node *centrifuge.Node, rdb redis.UniversalClient) (*BanWatcher, error) {
 	if rdb == nil {
 		return nil, fmt.Errorf("redis client is required for ban watcher")
 	}
 
 	bw := &BanWatcher{
-		node:       node,
-		rdb:        rdb,
-		instanceID: instanceID,
+		node: node,
+		rdb:  rdb,
 	}
 
 	// Subscribe to ban channel
-	bw.sub = rdb.Subscribe(context.Background(), banChannel)
-	_, err := bw.sub.Receive(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("subscribe to ban channel: %w", err)
+	if err := bw.subscribe(); err != nil {
+		return nil, err
 	}
 
-	// Start background listener
-	go bw.listen()
+	// Start background listener with reconnection
+	go bw.listenWithReconnect()
 
 	return bw, nil
 }
 
-// PublishBan publishes a user ban/unban event to Redis.
-func (bw *BanWatcher) PublishBan(ctx context.Context, userID uuid.UUID, action, reason string) error {
-	bw.mu.Lock()
-	defer bw.mu.Unlock()
-
-	if bw.closed {
-		return nil
-	}
-
-	event := BanEvent{
-		UserID: userID.String(),
-		Action: action,
-		Reason: reason,
-	}
-
-	data, err := json.Marshal(event)
+// subscribe creates a new Redis Pub/Sub subscription.
+func (bw *BanWatcher) subscribe() error {
+	bw.sub = bw.rdb.Subscribe(context.Background(), model.BanChannel)
+	_, err := bw.sub.Receive(context.Background())
 	if err != nil {
-		return fmt.Errorf("marshal ban event: %w", err)
+		return fmt.Errorf("subscribe to ban channel: %w", err)
 	}
-
-	if err := bw.rdb.Publish(ctx, banChannel, data).Err(); err != nil {
-		return fmt.Errorf("publish ban event: %w", err)
-	}
-
 	return nil
+}
+
+// listenWithReconnect runs the listener with automatic reconnection on failure.
+func (bw *BanWatcher) listenWithReconnect() {
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
+
+	for {
+		bw.mu.Lock()
+		if bw.closed {
+			bw.mu.Unlock()
+			return
+		}
+		bw.mu.Unlock()
+
+		// Run the listener
+		bw.listen()
+
+		// Check if we should exit
+		bw.mu.Lock()
+		if bw.closed {
+			bw.mu.Unlock()
+			return
+		}
+		bw.mu.Unlock()
+
+		// Connection lost, attempt to reconnect
+		logger.Warn(context.Background(), "ban_watcher.connection_lost_reconnecting",
+			zap.Duration("backoff", backoff))
+
+		select {
+		case <-time.After(backoff):
+			// Exponential backoff
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+
+			// Try to resubscribe
+			bw.mu.Lock()
+			if bw.closed {
+				bw.mu.Unlock()
+				return
+			}
+			if err := bw.subscribe(); err != nil {
+				logger.Error(context.Background(), "ban_watcher.resubscribe_failed",
+					zap.Error(err))
+				bw.mu.Unlock()
+				continue
+			}
+			bw.mu.Unlock()
+
+			logger.Info(context.Background(), "ban_watcher.resubscribed_successfully")
+			backoff = time.Second // Reset backoff on success
+
+		case <-bw.sub.Channel():
+			// Channel closed, will retry immediately
+			backoff = time.Second
+		}
+	}
 }
 
 // listen processes incoming ban event notifications.
 func (bw *BanWatcher) listen() {
 	ch := bw.sub.Channel()
 	for msg := range ch {
-		var event BanEvent
+		var event model.BanEvent
 		if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {
 			logger.Warn(context.Background(), "ban_watcher.invalid_message",
 				zap.Error(err), zap.String("payload", msg.Payload))

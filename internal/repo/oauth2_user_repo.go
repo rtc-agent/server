@@ -27,6 +27,8 @@ type OAuth2UserRepo interface {
 	Update(ctx context.Context, user *model.OAuth2User) error
 	// ListWithFilters returns a paginated list of users with optional filters.
 	ListWithFilters(ctx context.Context, filter OAuth2UserFilter) ([]*model.OAuth2User, int64, error)
+	// IsUserBanned checks if a user account is banned.
+	IsUserBanned(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
 // OAuth2UserFilter holds filter criteria for listing users.
@@ -151,4 +153,17 @@ func (r *oauth2UserRepo) ListWithFilters(ctx context.Context, filter OAuth2UserF
 	}
 
 	return users, total, nil
+}
+
+// IsUserBanned checks if a user account is banned.
+func (r *oauth2UserRepo) IsUserBanned(ctx context.Context, userID uuid.UUID) (bool, error) {
+	var user model.OAuth2User
+	err := DBFromContext(ctx, r.db).WithContext(ctx).Select("banned_at").First(&user, "id = ?", userID).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil // User not found, not banned
+		}
+		return false, fmt.Errorf("check user ban status %s: %w", userID, err)
+	}
+	return user.BannedAt != nil, nil
 }

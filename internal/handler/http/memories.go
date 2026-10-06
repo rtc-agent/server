@@ -21,13 +21,14 @@ import (
 
 // MemoriesHandler handles memory export HTTP requests.
 type MemoriesHandler struct {
-	memoryUC *usecase.MemoryUsecase
-	signer   *auth.JWTSigner
+	memoryUC   *usecase.MemoryUsecase
+	signer     *auth.JWTSigner
+	banChecker middleware.UserBanChecker
 }
 
 // NewMemoriesHandler creates a MemoriesHandler.
-func NewMemoriesHandler(memoryUC *usecase.MemoryUsecase, signer *auth.JWTSigner) *MemoriesHandler {
-	return &MemoriesHandler{memoryUC: memoryUC, signer: signer}
+func NewMemoriesHandler(memoryUC *usecase.MemoryUsecase, signer *auth.JWTSigner, banChecker middleware.UserBanChecker) *MemoriesHandler {
+	return &MemoriesHandler{memoryUC: memoryUC, signer: signer, banChecker: banChecker}
 }
 
 // RegisterRoutes registers memory-related routes on the given ServeMux.
@@ -36,7 +37,7 @@ func NewMemoriesHandler(memoryUC *usecase.MemoryUsecase, signer *auth.JWTSigner)
 // (development only), requests may use X-User-ID / X-Device-ID headers instead
 // of a Bearer token.
 func (h *MemoriesHandler) RegisterRoutes(mux *http.ServeMux, allowDevBypass bool) {
-	authMiddleware := middleware.JWTAuth(h.signer, allowDevBypass)
+	authMiddleware := middleware.JWTAuth(h.signer, allowDevBypass, h.banChecker)
 	mux.Handle("POST /api/memories/export", authMiddleware(http.HandlerFunc(h.ExportMemories)))
 }
 

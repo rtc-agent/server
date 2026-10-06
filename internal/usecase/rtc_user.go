@@ -24,16 +24,19 @@ type RtcUserUsecase struct {
 	oauth2UserRepo   repo.OAuth2UserRepo
 	refreshTokenRepo repo.RefreshTokenRepo
 	banPublisher     BanPublisher
+	auditLogRepo     repo.AuditLogRepo
 }
 
 // NewRtcUserUsecase creates a new RtcUserUsecase.
 func NewRtcUserUsecase(
 	oauth2UserRepo repo.OAuth2UserRepo,
 	refreshTokenRepo repo.RefreshTokenRepo,
+	auditLogRepo repo.AuditLogRepo,
 ) *RtcUserUsecase {
 	return &RtcUserUsecase{
 		oauth2UserRepo:   oauth2UserRepo,
 		refreshTokenRepo: refreshTokenRepo,
+		auditLogRepo:     auditLogRepo,
 	}
 }
 
@@ -96,7 +99,7 @@ type BanUserInput struct {
 }
 
 // BanUser bans a user, revokes all refresh tokens, and publishes a ban event.
-func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput) (*model.OAuth2User, error) {
+func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput, adminUserID uuid.UUID, adminIP string) (*model.OAuth2User, error) {
 	// 1. Update user status
 	user, err := uc.oauth2UserRepo.FindByID(ctx, input.UserID)
 	if err != nil {
@@ -134,15 +137,26 @@ func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput) (*mod
 		}
 	}
 
+	// 4. Write audit log
+	if uc.auditLogRepo != nil {
+		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+			adminUserID, adminIP, "ban_user", "rtc_user", input.UserID,
+			map[string]any{"reason": input.Reason, "revoked_tokens": revokedCount},
+		)); err != nil {
+			logger.Error(ctx, "ban_user.audit_log_failed", zap.Error(err))
+		}
+	}
+
 	logger.Info(ctx, "ban_user.success",
 		zap.String("user_id", input.UserID.String()),
-		zap.String("reason", input.Reason))
+		zap.String("reason", input.Reason),
+		zap.String("admin_user_id", adminUserID.String()))
 
 	return user, nil
 }
 
 // UnbanUser unbans a user and publishes an unban event.
-func (uc *RtcUserUsecase) UnbanUser(ctx context.Context, userID uuid.UUID) (*model.OAuth2User, error) {
+func (uc *RtcUserUsecase) UnbanUser(ctx context.Context, userID uuid.UUID, adminUserID uuid.UUID, adminIP string) (*model.OAuth2User, error) {
 	// 1. Update user status
 	user, err := uc.oauth2UserRepo.FindByID(ctx, userID)
 	if err != nil {
@@ -166,8 +180,18 @@ func (uc *RtcUserUsecase) UnbanUser(ctx context.Context, userID uuid.UUID) (*mod
 		}
 	}
 
+	// 3. Write audit log
+	if uc.auditLogRepo != nil {
+		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+			adminUserID, adminIP, "unban_user", "rtc_user", userID, nil,
+		)); err != nil {
+			logger.Error(ctx, "unban_user.audit_log_failed", zap.Error(err))
+		}
+	}
+
 	logger.Info(ctx, "unban_user.success",
-		zap.String("user_id", userID.String()))
+		zap.String("user_id", userID.String()),
+		zap.String("admin_user_id", adminUserID.String()))
 
 	return user, nil
 }

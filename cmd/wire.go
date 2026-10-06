@@ -698,7 +698,7 @@ func provideInterruptHandler(
 	jwtSigner *auth.JWTSigner,
 ) *httphandler.InterruptHandler {
 	interruptUC := usecase.NewInterruptUsecase(redisClient, cfg.Worker, svcCtx.SessionRepo)
-	return httphandler.NewInterruptHandler(interruptUC, jwtSigner)
+	return httphandler.NewInterruptHandler(interruptUC, jwtSigner, svcCtx.OAuth2UserRepo)
 }
 
 func provideMemoriesHandler(
@@ -706,7 +706,7 @@ func provideMemoriesHandler(
 	jwtSigner *auth.JWTSigner,
 ) *httphandler.MemoriesHandler {
 	memoryUC := usecase.NewMemoryUsecase(svcCtx.MemoryRepo, svcCtx.SessionRepo)
-	return httphandler.NewMemoriesHandler(memoryUC, jwtSigner)
+	return httphandler.NewMemoriesHandler(memoryUC, jwtSigner, svcCtx.OAuth2UserRepo)
 }
 
 func provideOSS3Backend(cfg *config.Config) (rtcoss3.Backend, error) {
@@ -755,20 +755,20 @@ func provideOSS3Handler(oss3UC *usecase.OSS3Usecase, cfg *config.Config) *httpha
 	return httphandler.NewOSS3Handler(oss3UC, cfg.Storage.MinIO.Bucket, cfg.Storage.Quota.MaxFileSizeBytes)
 }
 
-func provideSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config) *httphandler.STSHandler {
+func provideSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config, svcCtx *svc.ServiceContext) *httphandler.STSHandler {
 	if oss3UC == nil {
 		return nil
 	}
 	isDev := cfg.Server.Env == "development"
-	return httphandler.NewSTSHandler(oss3UC, signer, isDev)
+	return httphandler.NewSTSHandler(oss3UC, signer, isDev, svcCtx.OAuth2UserRepo)
 }
 
-func provideSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config) *httphandler.STSPresignHandler {
+func provideSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config, svcCtx *svc.ServiceContext) *httphandler.STSPresignHandler {
 	if oss3UC == nil {
 		return nil
 	}
 	isDev := cfg.Server.Env == "development"
-	return httphandler.NewSTSPresignHandler(oss3UC, signer, isDev)
+	return httphandler.NewSTSPresignHandler(oss3UC, signer, isDev, svcCtx.OAuth2UserRepo)
 }
 
 func provideServer(

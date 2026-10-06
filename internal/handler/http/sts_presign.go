@@ -21,17 +21,19 @@ import (
 // Endpoints:
 //   - POST /api/presigned-url — generate a presigned PUT or GET URL
 type STSPresignHandler struct {
-	oss3UC *usecase.OSS3Usecase
-	signer *auth.JWTSigner
-	isDev  bool
+	oss3UC     *usecase.OSS3Usecase
+	signer     *auth.JWTSigner
+	isDev      bool
+	banChecker middleware.UserBanChecker
 }
 
 // NewSTSPresignHandler creates a new presigned URL handler.
-func NewSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool) *STSPresignHandler {
+func NewSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool, banChecker middleware.UserBanChecker) *STSPresignHandler {
 	return &STSPresignHandler{
-		oss3UC: oss3UC,
-		signer: signer,
-		isDev:  isDev,
+		oss3UC:     oss3UC,
+		signer:     signer,
+		isDev:      isDev,
+		banChecker: banChecker,
 	}
 }
 
@@ -42,7 +44,7 @@ func (h *STSPresignHandler) RegisterRoutes(mux *http.ServeMux) {
 		return
 	}
 
-	authMiddleware := middleware.JWTAuth(h.signer, h.isDev)
+	authMiddleware := middleware.JWTAuth(h.signer, h.isDev, h.banChecker)
 
 	// POST /api/presigned-url — generate a presigned URL
 	mux.Handle("POST /api/presigned-url", authMiddleware(http.HandlerFunc(h.GeneratePresignedURL)))

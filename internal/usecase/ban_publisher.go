@@ -8,27 +8,17 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-)
 
-const (
-	// banChannel is the Redis Pub/Sub channel for user ban events.
-	banChannel = "rtc:user_banned"
+	"github.com/rtc-agent/server/internal/model"
 )
-
-// BanEvent represents a user ban/unban event published via Redis Pub/Sub.
-type BanEvent struct {
-	UserID string `json:"user_id"`
-	Action string `json:"action"` // "ban" or "unban"
-	Reason string `json:"reason,omitempty"`
-}
 
 // RedisBanPublisher publishes ban events via Redis Pub/Sub.
 type RedisBanPublisher struct {
-	rdb *redis.Client
+	rdb redis.UniversalClient
 }
 
 // NewRedisBanPublisher creates a new RedisBanPublisher.
-func NewRedisBanPublisher(rdb *redis.Client) *RedisBanPublisher {
+func NewRedisBanPublisher(rdb redis.UniversalClient) *RedisBanPublisher {
 	return &RedisBanPublisher{rdb: rdb}
 }
 
@@ -38,7 +28,7 @@ func (p *RedisBanPublisher) PublishBan(ctx context.Context, userID uuid.UUID, ac
 		return fmt.Errorf("redis client is required for ban publisher")
 	}
 
-	event := BanEvent{
+	event := model.BanEvent{
 		UserID: userID.String(),
 		Action: action,
 		Reason: reason,
@@ -49,7 +39,7 @@ func (p *RedisBanPublisher) PublishBan(ctx context.Context, userID uuid.UUID, ac
 		return fmt.Errorf("marshal ban event: %w", err)
 	}
 
-	if err := p.rdb.Publish(ctx, banChannel, data).Err(); err != nil {
+	if err := p.rdb.Publish(ctx, model.BanChannel, data).Err(); err != nil {
 		return fmt.Errorf("publish ban event: %w", err)
 	}
 

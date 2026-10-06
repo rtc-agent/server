@@ -17,17 +17,19 @@ import (
 // These endpoints are authenticated via JWT and allow users to:
 //   - Issue temporary S3 credentials (POST /api/credentials/temporary)
 type STSHandler struct {
-	oss3UC *usecase.OSS3Usecase
-	signer *auth.JWTSigner
-	isDev  bool
+	oss3UC     *usecase.OSS3Usecase
+	signer     *auth.JWTSigner
+	isDev      bool
+	banChecker middleware.UserBanChecker
 }
 
 // NewSTSHandler creates a new STS handler.
-func NewSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool) *STSHandler {
+func NewSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool, banChecker middleware.UserBanChecker) *STSHandler {
 	return &STSHandler{
-		oss3UC: oss3UC,
-		signer: signer,
-		isDev:  isDev,
+		oss3UC:     oss3UC,
+		signer:     signer,
+		isDev:      isDev,
+		banChecker: banChecker,
 	}
 }
 
@@ -38,7 +40,7 @@ func (h *STSHandler) RegisterRoutes(mux *http.ServeMux) {
 		return
 	}
 
-	authMiddleware := middleware.JWTAuth(h.signer, h.isDev)
+	authMiddleware := middleware.JWTAuth(h.signer, h.isDev, h.banChecker)
 
 	// POST /api/credentials/temporary — issue temporary S3 credentials
 	mux.Handle("POST /api/credentials/temporary", authMiddleware(http.HandlerFunc(h.IssueTemporaryCredentials)))

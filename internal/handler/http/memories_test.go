@@ -184,7 +184,7 @@ func newTestHandler(t *testing.T) (*MemoriesHandler, *mockMemoryRepo, *mockSessi
 
 	memoryUC := usecase.NewMemoryUsecase(memRepo, sessRepo)
 
-	h := NewMemoriesHandler(memoryUC, signer)
+	h := NewMemoriesHandler(memoryUC, signer, nil) // nil oauth2UserRepo - ban check disabled in tests
 	return h, memRepo, sessRepo
 }
 

@@ -89,6 +89,15 @@ func (m *mockOAuth2UserRepo) ListWithFilters(ctx context.Context, filter repo.OA
 	return users, int64(len(users)), nil
 }
 
+func (m *mockOAuth2UserRepo) IsUserBanned(ctx context.Context, userID uuid.UUID) (bool, error) {
+	for _, u := range m.users {
+		if u.ID == userID {
+			return u.BannedAt != nil, nil
+		}
+	}
+	return false, nil // User not found, not banned
+}
+
 type mockDeviceRepo struct{}
 
 func (m *mockDeviceRepo) Upsert(ctx context.Context, device *model.Device) error {
