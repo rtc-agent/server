@@ -8,12 +8,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
+
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/pkg/logger"
-
-	"github.com/google/uuid"
-	"go.uber.org/zap"
 )
 
 // UserBanChecker checks if a user account is banned.
@@ -23,101 +24,128 @@ type UserBanChecker interface {
 	IsUserBanned(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
-// banCacheEntry holds a cached ban check result with expiration.
-type banCacheEntry struct {
-	banned    bool
-	expiresAt time.Time
+// banKeyPrefix is the Redis key prefix for ban status cache.
+// Format: rtc:ban:status:{userID}
+// The "rtc:" prefix ensures consistency with other project Redis keys and prevents
+// conflicts in shared Redis environments.
+const banKeyPrefix = "rtc:ban:status:"
+
+// BanCache provides a Redis-backed shared cache for ban status checks.
+// All server instances share the same cache, ensuring consistency in distributed deployments.
+type BanCache struct {
+	rdb redis.UniversalClient
+	ttl time.Duration
 }
 
-// banCache provides a simple TTL-based cache for ban status checks.
-type banCache struct {
-	mu      sync.RWMutex
-	entries map[uuid.UUID]banCacheEntry
-	ttl     time.Duration
-}
-
-// newBanCache creates a new ban cache with the specified TTL.
-// Starts a background goroutine to periodically clean up expired entries.
-func newBanCache(ttl time.Duration) *banCache {
-	c := &banCache{
-		entries: make(map[uuid.UUID]banCacheEntry),
-		ttl:     ttl,
-	}
-	// Start cleanup goroutine
-	go c.cleanupLoop()
-	return c
-}
-
-// cleanupLoop periodically removes expired entries to prevent memory leaks.
-func (c *banCache) cleanupLoop() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		c.cleanup()
+// NewBanCache creates a new Redis-backed ban cache with the specified TTL.
+func NewBanCache(rdb redis.UniversalClient, ttl time.Duration) *BanCache {
+	return &BanCache{
+		rdb: rdb,
+		ttl: ttl,
 	}
 }
 
-// cleanup removes all expired entries from the cache.
-func (c *banCache) cleanup() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	now := time.Now()
-	for userID, entry := range c.entries {
-		if now.After(entry.expiresAt) {
-			delete(c.entries, userID)
-		}
-	}
+// banCacheKey returns the Redis key for a user's ban status.
+func banCacheKey(userID uuid.UUID) string {
+	return banKeyPrefix + userID.String()
 }
 
-// get retrieves a cached ban status if it exists and hasn't expired.
-func (c *banCache) get(userID uuid.UUID) (bool, bool) {
-	c.mu.RLock()
-	entry, ok := c.entries[userID]
-	c.mu.RUnlock()
-
-	if !ok || time.Now().After(entry.expiresAt) {
+// Get retrieves a cached ban status if it exists and hasn't expired.
+// Returns (banned, cached) where cached indicates if the value was found in cache.
+func (c *BanCache) Get(ctx context.Context, userID uuid.UUID) (bool, bool) {
+	if c.rdb == nil {
 		return false, false
 	}
-	return entry.banned, true
-}
 
-// set stores a ban status in the cache.
-func (c *banCache) set(userID uuid.UUID, banned bool) {
-	c.mu.Lock()
-	c.entries[userID] = banCacheEntry{
-		banned:    banned,
-		expiresAt: time.Now().Add(c.ttl),
+	key := banCacheKey(userID)
+	val, err := c.rdb.Get(ctx, key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return false, false
+		}
+		logger.Warn(ctx, "ban_cache.get_failed",
+			zap.String("user_id", userID.String()),
+			zap.Error(err))
+		return false, false
 	}
-	c.mu.Unlock()
+
+	// Value is "1" for banned, "0" for not banned
+	banned := val == "1"
+	return banned, true
 }
 
-// invalidate removes a user's ban status from the cache.
-func (c *banCache) invalidate(userID uuid.UUID) {
-	c.mu.Lock()
-	delete(c.entries, userID)
-	c.mu.Unlock()
+// Set stores a ban status in the cache with TTL.
+func (c *BanCache) Set(ctx context.Context, userID uuid.UUID, banned bool) {
+	if c.rdb == nil {
+		return
+	}
+
+	key := banCacheKey(userID)
+	val := "0"
+	if banned {
+		val = "1"
+	}
+
+	if err := c.rdb.Set(ctx, key, val, c.ttl).Err(); err != nil {
+		logger.Warn(ctx, "ban_cache.set_failed",
+			zap.String("user_id", userID.String()),
+			zap.Bool("banned", banned),
+			zap.Error(err))
+	}
+}
+
+// Invalidate removes a user's ban status from the cache.
+func (c *BanCache) Invalidate(ctx context.Context, userID uuid.UUID) {
+	if c.rdb == nil {
+		return
+	}
+
+	key := banCacheKey(userID)
+	if err := c.rdb.Del(ctx, key).Err(); err != nil {
+		logger.Warn(ctx, "ban_cache.invalidate_failed",
+			zap.String("user_id", userID.String()),
+			zap.Error(err))
+	}
 }
 
 // globalBanCache is a shared cache instance for ban status checks across all JWT middleware instances.
-var globalBanCache = newBanCache(30 * time.Second)
+// Initialized via InitBanCache during server startup. Uses sync.Once to ensure thread-safe initialization.
+var (
+	globalBanCache     *BanCache
+	globalBanCacheOnce sync.Once
+)
+
+// InitBanCache initializes the global ban cache with a Redis client.
+// Must be called during server startup before any requests are processed.
+// Thread-safe: uses sync.Once to ensure initialization happens exactly once.
+func InitBanCache(rdb redis.UniversalClient, ttl time.Duration) {
+	globalBanCacheOnce.Do(func() {
+		globalBanCache = NewBanCache(rdb, ttl)
+	})
+}
 
 // InvalidateBanCache removes a user's ban status from the global cache.
 // Called when a user is unbanned to ensure immediate effect.
-func InvalidateBanCache(userID uuid.UUID) {
-	globalBanCache.invalidate(userID)
+func InvalidateBanCache(ctx context.Context, userID uuid.UUID) {
+	if globalBanCache != nil {
+		globalBanCache.Invalidate(ctx, userID)
+	}
 }
 
 // GetBanCache retrieves a user's ban status from the global cache.
 // Returns (banned, cached) where cached indicates if the value was found in cache.
-func GetBanCache(userID uuid.UUID) (bool, bool) {
-	return globalBanCache.get(userID)
+func GetBanCache(ctx context.Context, userID uuid.UUID) (bool, bool) {
+	if globalBanCache == nil {
+		return false, false
+	}
+	return globalBanCache.Get(ctx, userID)
 }
 
 // SetBanCache stores a user's ban status in the global cache.
-func SetBanCache(userID uuid.UUID, banned bool) {
-	globalBanCache.set(userID, banned)
+func SetBanCache(ctx context.Context, userID uuid.UUID, banned bool) {
+	if globalBanCache != nil {
+		globalBanCache.Set(ctx, userID, banned)
+	}
 }
 
 // JWTAuth creates a JWT authentication middleware.
@@ -169,9 +197,14 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool, banChecker UserBanChec
 				return
 			}
 
-			// 3. Check if user is banned (with cache)
+			// 3. Check if user is banned (with Redis cache)
+			// SECURITY NOTE: This implements a fail-open strategy for resilience:
+			// - If Redis is unavailable, Get returns (false, false) → falls through to DB check
+			// - If DB is also unavailable, the request is allowed to proceed (fail-open)
+			// This ensures system availability over strict security in extreme failure scenarios.
+			// The 30-second cache TTL limits the window where a banned user might slip through.
 			if banChecker != nil {
-				banned, cached := globalBanCache.get(userID)
+				banned, cached := GetBanCache(r.Context(), userID)
 				if !cached {
 					var err error
 					banned, err = banChecker.IsUserBanned(r.Context(), userID)
@@ -179,9 +212,10 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool, banChecker UserBanChec
 						logger.Warn(r.Context(), "failed to check user ban status",
 							zap.Error(err),
 							zap.String("user_id", userID.String()))
-						// Continue - don't block legitimate users on DB errors
+						// Fail-open: allow request to proceed when both cache and DB are unavailable
+						// This is a deliberate trade-off: availability > strict security
 					} else {
-						globalBanCache.set(userID, banned)
+						SetBanCache(r.Context(), userID, banned)
 					}
 				}
 

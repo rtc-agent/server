@@ -140,6 +140,10 @@ func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput, admin
 		return nil, fmt.Errorf("ban user transaction: %w", err)
 	}
 
+	// 2.5 Update ban cache immediately after transaction succeeds
+	// This ensures all instances see the banned status without waiting for cache miss + DB query
+	middleware.SetBanCache(ctx, input.UserID, true)
+
 	// 3. Publish ban event for distributed sync (outside transaction)
 	if uc.banPublisher != nil {
 		if err := uc.banPublisher.PublishBan(ctx, input.UserID, "ban", input.Reason); err != nil {
@@ -184,7 +188,7 @@ func (uc *RtcUserUsecase) UnbanUser(ctx context.Context, userID uuid.UUID, admin
 	}
 
 	// 2. Invalidate ban cache to ensure immediate effect
-	middleware.InvalidateBanCache(userID)
+	middleware.InvalidateBanCache(ctx, userID)
 
 	// 3. Publish unban event for distributed sync
 	if uc.banPublisher != nil {

@@ -21,6 +21,7 @@ import (
 	httphandler "github.com/rtc-agent/server/internal/handler/http"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -86,6 +87,11 @@ func runServe(cmd *cobra.Command, args []string) {
 		}
 	} else {
 		logger.Info(ctx, "admin.redis_not_configured_jwks_caching_disabled")
+	}
+
+	// Init ban cache (Redis-backed if available, otherwise disabled)
+	if rdb != nil {
+		middleware.InitBanCache(rdb, 30*time.Second)
 	}
 
 	// Init JWT signer

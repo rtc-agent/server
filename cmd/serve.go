@@ -10,6 +10,7 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/config"
 	dbmetrics "github.com/rtc-agent/server/internal/infra/db"
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/infra/tracing"
 	"github.com/rtc-agent/server/pkg/logger"
 
@@ -138,6 +139,9 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Fatal(context.Background(), "Failed to connect Redis", zap.Error(err))
 	}
 	defer func() { _ = rdb.Close() }()
+
+	// Init ban cache (Redis-backed, shared across all instances)
+	middleware.InitBanCache(rdb, 30*time.Second)
 
 	// Init server (Wire-generated)
 	srv, err := InitializeServer(cfg, db, rdb)

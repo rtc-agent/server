@@ -10,9 +10,11 @@ import (
 
 	"github.com/cenkalti/backoff/v5"
 	"github.com/centrifugal/centrifuge"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 )
@@ -147,21 +149,47 @@ func (bw *BanWatcher) listen() {
 		}
 
 		if event.Action == "ban" {
-			userID := event.UserID
+			userIDStr := event.UserID
 			disconnect := centrifuge.Disconnect{
 				Code:   4501,
 				Reason: "account banned",
 			}
 
-			if err := bw.node.Disconnect(userID, centrifuge.WithCustomDisconnect(disconnect)); err != nil {
+			// Parse userID string to UUID for cache update
+			userID, err := uuid.Parse(userIDStr)
+			if err != nil {
+				logger.Error(bw.baseCtx, "ban_watcher.invalid_user_id",
+					zap.String("user_id", userIDStr), zap.Error(err))
+				continue
+			}
+
+			// Update ban cache to ensure HTTP API also rejects this user immediately
+			// This is a defensive measure in case BanUser's SetBanCache failed
+			middleware.SetBanCache(bw.baseCtx, userID, true)
+
+			if err := bw.node.Disconnect(userIDStr, centrifuge.WithCustomDisconnect(disconnect)); err != nil {
 				logger.Error(bw.baseCtx, "ban_watcher.disconnect_failed",
-					zap.String("user_id", userID), zap.Error(err))
+					zap.String("user_id", userIDStr), zap.Error(err))
 			} else {
 				logger.Info(bw.baseCtx, "ban_watcher.user_disconnected",
-					zap.String("user_id", userID), zap.String("reason", event.Reason))
+					zap.String("user_id", userIDStr), zap.String("reason", event.Reason))
 			}
+		} else if event.Action == "unban" {
+			// Handle unban events: invalidate ban cache on all instances
+			// This ensures the unban takes effect immediately across the distributed system
+			userIDStr := event.UserID
+			userID, err := uuid.Parse(userIDStr)
+			if err != nil {
+				logger.Error(bw.baseCtx, "ban_watcher.invalid_user_id",
+					zap.String("user_id", userIDStr), zap.Error(err))
+				continue
+			}
+
+			// Invalidate ban cache to allow immediate reconnection
+			middleware.InvalidateBanCache(bw.baseCtx, userID)
+			logger.Info(bw.baseCtx, "ban_watcher.ban_cache_invalidated",
+				zap.String("user_id", userIDStr))
 		}
-		// For "unban" events, we don't need to do anything - the user can reconnect normally
 	}
 }
 

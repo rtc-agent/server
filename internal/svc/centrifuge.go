@@ -169,7 +169,7 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 		// Check if user is banned (skip if repo not available, e.g. in tests)
 		if oauth2UserRepo != nil {
 			// Check cache first to reduce DB load on frequent reconnections
-			banned, cached := middleware.GetBanCache(claims.UserID)
+			banned, cached := middleware.GetBanCache(ctx, claims.UserID)
 			if !cached {
 				var err error
 				banned, err = oauth2UserRepo.IsUserBanned(ctx, claims.UserID)
@@ -181,7 +181,7 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 					)
 					return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
 				}
-				middleware.SetBanCache(claims.UserID, banned)
+				middleware.SetBanCache(ctx, claims.UserID, banned)
 			}
 			if banned {
 				metrics.recordConnecting("banned", time.Since(start))
