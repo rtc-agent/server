@@ -18,9 +18,9 @@ import (
 
 // Expected policy counts for default roles (used for bootstrap validation).
 const (
-	expectedAdminPolicies    = 18 // admin role: role(4) + permission(3) + user_role(3) + audit_log(1) + user(2) + rtc_user(2) + server_config(3)
-	expectedOperatorPolicies = 9  // operator role: role(1) + user(2) + user_role(2) + rtc_user(2) + server_config(2)
-	expectedViewerPolicies   = 3  // viewer role: role(1) + rtc_user(1) + server_config(1)
+	expectedAdminPolicies    = 18 // admin role: admin_user(3) + role(3) + permission(3) + admin_user_role(3) + audit_log(1) + rtc_user(2) + server_config(3)
+	expectedOperatorPolicies = 9  // operator role: admin_user(2) + role(1) + admin_user_role(2) + rtc_user(2) + server_config(2)
+	expectedViewerPolicies   = 3  // viewer role: admin_user(1) + rtc_user(1) + server_config(1)
 )
 
 // BootstrapAdmin initializes default roles and permissions if they don't already exist.
