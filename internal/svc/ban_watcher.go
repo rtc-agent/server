@@ -121,8 +121,8 @@ func (bw *BanWatcher) listenWithReconnect() {
 			return
 		}
 
-		// Successfully resubscribed, restart listening
-		bw.listen()
+		// Successfully resubscribed — loop back to bw.listen() at the top,
+		// which will read from the newly created subscription.
 	}
 }
 
