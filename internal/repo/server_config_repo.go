@@ -31,6 +31,7 @@ type ConfigRepo interface {
 
 	// Upsert performs an atomic CAS update or insert.
 	// expectedVersion=0 means INSERT (first write); expectedVersion>0 means UPDATE with WHERE version=expectedVersion.
+	// expectedVersion<0 means unconditional UPDATE (force overwrite, skip version check); falls back to INSERT if record doesn't exist.
 	// Returns ErrConflict if the version does not match (optimistic lock conflict).
 	Upsert(ctx context.Context, cfg *model.ServerConfig, expectedVersion int) error
 
@@ -102,6 +103,40 @@ func (r *configRepo) List(ctx context.Context, filter model.ConfigFilter) ([]*mo
 
 func (r *configRepo) Upsert(ctx context.Context, cfg *model.ServerConfig, expectedVersion int) error {
 	db := DBFromContext(ctx, r.db)
+
+	if expectedVersion < 0 {
+		// Force overwrite: unconditional UPDATE, no CAS.
+		// Usecase has already resolved the correct new version.
+		query := db.WithContext(ctx).Model(&model.ServerConfig{}).
+			Where("key = ?", cfg.Key)
+		if cfg.UserID == nil {
+			query = query.Where("user_id IS NULL")
+		} else {
+			query = query.Where("user_id = ?", *cfg.UserID)
+		}
+		result := query.Updates(map[string]interface{}{
+			"value":       cfg.Value,
+			"value_type":  cfg.ValueType,
+			"category":    cfg.Category,
+			"description": cfg.Description,
+			"version":     cfg.Version,
+			"updated_by":  cfg.UpdatedBy,
+			"updated_at":  cfg.UpdatedAt,
+		})
+		if result.Error != nil {
+			return fmt.Errorf("upsert config %q: %w", cfg.Key, result.Error)
+		}
+		if result.RowsAffected == 0 {
+			// Record doesn't exist; fall back to INSERT.
+			if err := db.WithContext(ctx).Create(cfg).Error; err != nil {
+				if IsDuplicateKeyError(err) {
+					return fmt.Errorf("upsert config %q: %w", cfg.Key, ErrConflict)
+				}
+				return fmt.Errorf("upsert config %q: %w", cfg.Key, err)
+			}
+		}
+		return nil
+	}
 
 	if expectedVersion == 0 {
 		// First write: INSERT. Primary key conflict → optimistic lock conflict.

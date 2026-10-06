@@ -22,8 +22,15 @@ func NewStreamStore(rdb redis.UniversalClient, chunkTTL time.Duration) *StreamSt
 	return &StreamStore{rdb: rdb, chunkTTL: chunkTTL}
 }
 
-func (h *helpers) getStreamStore() *StreamStore {
-	return &StreamStore{rdb: h.rdb, chunkTTL: h.streamChunkTTL}
+func (h *helpers) getStreamStore(ctx context.Context) *StreamStore {
+	// Read stream_chunk_ttl dynamically from ConfigProvider when available.
+	chunkTTL := h.streamChunkTTL
+	if h.deps != nil && h.deps.ConfigProvider != nil {
+		if v, err := h.deps.ConfigProvider.GetEffectiveDuration(ctx, "worker.stream_chunk_ttl", userIDFromContext(ctx)); err == nil && v > 0 {
+			chunkTTL = v
+		}
+	}
+	return &StreamStore{rdb: h.rdb, chunkTTL: chunkTTL}
 }
 
 // StreamStore is a lightweight Redis-based buffer for streaming message

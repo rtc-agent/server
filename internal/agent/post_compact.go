@@ -240,7 +240,14 @@ func appendPostCompactAttachments(
 	out = append(out, attachments...)
 	out = append(out, compressed[insertIdx:]...)
 
-	if h.enableLLMLogging {
+	// Read log_llm_payload dynamically from ConfigProvider when available.
+	shouldLog := h.enableLLMLogging
+	if h.deps != nil && h.deps.ConfigProvider != nil {
+		if v, err := h.deps.ConfigProvider.GetEffectiveBool(ctx, "feature.log_llm_payload", userIDFromContext(ctx)); err == nil {
+			shouldLog = v
+		}
+	}
+	if shouldLog {
 		sessionID := getSessionIDFromContext(ctx)
 		h.logger.Info(ctx, "postCompact.attachments", map[string]any{
 			"session_id":       sessionID.String(),

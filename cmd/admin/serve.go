@@ -49,6 +49,12 @@ func runServe(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Populate dynamic config registry with yaml defaults so that the admin UI
+	// (via ServerConfigUsecase) displays actual yaml values as YamlDefault instead
+	// of the hardcoded registry fallbacks. The admin server shares the deployment
+	// with the main server and can read its config file from the default path.
+	populateDynamicConfigDefaults()
+
 	// Init logger
 	logger.Init("info", "")
 	defer logger.Sync()
@@ -379,4 +385,23 @@ func setupRouter(deps routerDeps) *gin.Engine {
 	ServeStaticFiles(router)
 
 	return router
+}
+
+// populateDynamicConfigDefaults loads the main server config from the default
+// path and populates the dynamic config registry with actual yaml values.
+// This ensures the admin UI (via ServerConfigUsecase) displays the real yaml
+// defaults rather than the hardcoded registry fallbacks.
+//
+// The admin server shares the deployment with the main server, so the main
+// config file is available at the standard location (etc/config.yaml).
+// If loading fails (e.g., file not found), the function logs a warning and
+// the admin server continues with the hardcoded registry defaults -- this is
+// non-fatal because the registry always has sensible fallback values.
+func populateDynamicConfigDefaults() {
+	mainCfg, err := config.Load("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to load main config for yaml defaults: %v\n", err)
+		return
+	}
+	config.PopulateYamlDefaults(mainCfg)
 }

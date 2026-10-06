@@ -196,8 +196,9 @@ func (uc *ServerConfigUsecase) GetSystemConfig(ctx context.Context, key string) 
 	return item, nil
 }
 
-// UpdateSystemConfig updates a system-level config entry.
+// UpdateSystemConfig updates a system-level dynamic config entry.
 // operatorID and operatorIP are used for audit logging.
+// input.Version < 0 means force overwrite (skip optimistic lock check).
 func (uc *ServerConfigUsecase) UpdateSystemConfig(ctx context.Context, key string, input UpdateConfigInput, operatorID uuid.UUID, operatorIP string) (*SystemConfigItem, error) {
 	entry := config.GetRegistryEntry(key)
 	if entry == nil {
@@ -211,19 +212,6 @@ func (uc *ServerConfigUsecase) UpdateSystemConfig(ctx context.Context, key strin
 	}
 
 	now := time.Now()
-	newVersion := input.Version + 1
-
-	cfg := &model.ServerConfig{
-		Key:         key,
-		UserID:      nil,
-		Value:       datatypes.JSON(jsonVal),
-		ValueType:   entry.ValueType,
-		Category:    entry.Category,
-		Description: entry.Description,
-		Version:     newVersion,
-		UpdatedBy:   &operatorID,
-		UpdatedAt:   now,
-	}
 
 	// Execute in transaction: get old value + upsert config + history + audit log.
 	// getOldValue runs inside the transaction to avoid TOCTOU: the old value is read
@@ -232,9 +220,44 @@ func (uc *ServerConfigUsecase) UpdateSystemConfig(ctx context.Context, key strin
 		txCtx := repo.WithTx(ctx, tx)
 
 		// Capture old value within the same transaction for history.
-		oldValueJSON := uc.getOldValue(txCtx, key, nil)
+		// Pass entry to provide yaml default when DB has no record (first write).
+		oldValueJSON := uc.getOldValue(txCtx, key, nil, entry)
 
-		if err := uc.configRepo.Upsert(txCtx, cfg, input.Version); err != nil {
+		var newVersion, expectedVersion int
+		if input.Version < 0 {
+			// Force overwrite: skip version check.
+			currentVersion := 0
+			if oldValueJSON != nil {
+				currentCfg, getErr := uc.configRepo.Get(txCtx, key, nil)
+				if getErr == nil {
+					currentVersion = currentCfg.Version
+				} else {
+					// 获取当前版本号失败，从 0 开始递增，记录警告以便排查。
+					logger.Warn(ctx, "config.force_overwrite.get_version_failed",
+						zap.String("key", key),
+						zap.Error(getErr))
+				}
+			}
+			newVersion = currentVersion + 1
+			expectedVersion = -1 // signal repo to skip CAS
+		} else {
+			newVersion = input.Version + 1
+			expectedVersion = input.Version
+		}
+
+		cfg := &model.ServerConfig{
+			Key:         key,
+			UserID:      nil,
+			Value:       datatypes.JSON(jsonVal),
+			ValueType:   entry.ValueType,
+			Category:    entry.Category,
+			Description: entry.Description,
+			Version:     newVersion,
+			UpdatedBy:   &operatorID,
+			UpdatedAt:   now,
+		}
+
+		if err := uc.configRepo.Upsert(txCtx, cfg, expectedVersion); err != nil {
 			if errors.Is(err, repo.ErrConflict) {
 				return ErrOptimisticLock
 			}
@@ -471,6 +494,7 @@ func (uc *ServerConfigUsecase) GetUserConfig(ctx context.Context, userID uuid.UU
 }
 
 // SetUserConfigOverride sets a user-level config override.
+// input.Version < 0 means force overwrite (skip optimistic lock check).
 func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID uuid.UUID, key string, input UpdateConfigInput, operatorID uuid.UUID, operatorIP string) (*UserConfigItem, error) {
 	entry := config.GetRegistryEntry(key)
 	if entry == nil {
@@ -492,19 +516,6 @@ func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID
 	}
 
 	now := time.Now()
-	newVersion := input.Version + 1
-
-	cfg := &model.ServerConfig{
-		Key:         key,
-		UserID:      &userID,
-		Value:       datatypes.JSON(jsonVal),
-		ValueType:   entry.ValueType,
-		Category:    entry.Category,
-		Description: entry.Description,
-		Version:     newVersion,
-		UpdatedBy:   &operatorID,
-		UpdatedAt:   now,
-	}
 
 	// Execute in transaction: get old value + upsert config + history + audit log.
 	// getOldValue runs inside the transaction to avoid TOCTOU: the old value is read
@@ -513,9 +524,39 @@ func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID
 		txCtx := repo.WithTx(ctx, tx)
 
 		// Capture old value within the same transaction for history.
-		oldValueJSON := uc.getOldValue(txCtx, key, &userID)
+		// Pass entry to provide yaml default when DB has no record (first write).
+		oldValueJSON := uc.getOldValue(txCtx, key, &userID, entry)
 
-		if err := uc.configRepo.Upsert(txCtx, cfg, input.Version); err != nil {
+		var newVersion, expectedVersion int
+		if input.Version < 0 {
+			// Force overwrite: skip version check.
+			currentVersion := 0
+			if oldValueJSON != nil {
+				currentCfg, getErr := uc.configRepo.Get(txCtx, key, &userID)
+				if getErr == nil {
+					currentVersion = currentCfg.Version
+				}
+			}
+			newVersion = currentVersion + 1
+			expectedVersion = -1 // signal repo to skip CAS
+		} else {
+			newVersion = input.Version + 1
+			expectedVersion = input.Version
+		}
+
+		cfg := &model.ServerConfig{
+			Key:         key,
+			UserID:      &userID,
+			Value:       datatypes.JSON(jsonVal),
+			ValueType:   entry.ValueType,
+			Category:    entry.Category,
+			Description: entry.Description,
+			Version:     newVersion,
+			UpdatedBy:   &operatorID,
+			UpdatedAt:   now,
+		}
+
+		if err := uc.configRepo.Upsert(txCtx, cfg, expectedVersion); err != nil {
 			if errors.Is(err, repo.ErrConflict) {
 				return ErrOptimisticLock
 			}
@@ -682,6 +723,58 @@ func (uc *ServerConfigUsecase) RollbackConfig(ctx context.Context, key string, u
 			return ErrOptimisticLock
 		}
 
+		// Special case: target_version=0 means delete the config (revert to yaml default).
+		if input.TargetVersion == 0 {
+			// Delete the config record.
+			deletedCfg, delErr := uc.configRepo.Delete(txCtx, key, userID, input.Version)
+			if delErr != nil {
+				if errors.Is(delErr, repo.ErrNotFound) {
+					return ErrConfigNotFound
+				}
+				if errors.Is(delErr, repo.ErrConflict) {
+					return ErrOptimisticLock
+				}
+				return fmt.Errorf("delete config for rollback to v0: %w", delErr)
+			}
+
+			rolledBackJSON = nil // nil indicates deletion
+			newVersion = deletedCfg.Version + 1
+
+			// Create history record for the deletion.
+			history := &model.ServerConfigHistory{
+				Key:        key,
+				UserID:     userID,
+				OldValue:   deletedCfg.Value,
+				NewValue:   datatypes.JSON("null"),
+				Version:    newVersion,
+				ChangedBy:  operatorID,
+				ChangedAt:  now,
+				ChangeNote: input.ChangeNote,
+			}
+			if err := tx.WithContext(ctx).Create(history).Error; err != nil {
+				return fmt.Errorf("create rollback to v0 history: %w", err)
+			}
+
+			if trimErr := uc.configRepo.TrimHistory(txCtx, key, userID, 100); trimErr != nil {
+				logger.Warn(ctx, "config.trim_history_failed", zap.Error(trimErr))
+			}
+
+			auditDetails := map[string]any{
+				"key":             key,
+				"user_id":         userIDString(userID),
+				"deleted_value":   unmarshalJSONB(deletedCfg.Value),
+				"deleted_version": deletedCfg.Version,
+				"target_version":  0,
+				"change_note":     input.ChangeNote,
+			}
+			auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.rollback", "server_config", uuid.Nil, auditDetails)
+			if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
+				return fmt.Errorf("create rollback to v0 audit log: %w", err)
+			}
+
+			return nil
+		}
+
 		// Look up target version in history inside transaction.
 		targetHistory, histErr := uc.configRepo.GetHistoryByVersion(txCtx, key, userID, input.TargetVersion)
 		if histErr != nil {
@@ -792,11 +885,19 @@ func (uc *ServerConfigUsecase) GetEffectiveValue(ctx context.Context, key string
 // ── Helpers ──────────────────────────────────────────────────────────
 
 // getOldValue fetches the current JSON value for history tracking.
-// Returns nil if the config does not exist (first write).
+// Returns yaml default value (as JSON) if DB has no record, ensuring v1 history
+// shows the transition from yaml baseline to DB value.
 // Should be called within a transaction to ensure atomicity with the write operation (P2-2 fix).
-func (uc *ServerConfigUsecase) getOldValue(ctx context.Context, key string, userID *uuid.UUID) datatypes.JSON {
+func (uc *ServerConfigUsecase) getOldValue(ctx context.Context, key string, userID *uuid.UUID, entry *config.ConfigEntry) datatypes.JSON {
 	cfg, err := uc.configRepo.Get(ctx, key, userID)
 	if err != nil {
+		// DB has no record; return yaml default as JSON for history completeness.
+		if entry != nil && entry.YamlDefault != nil {
+			jsonVal, marshalErr := json.Marshal(entry.YamlDefault)
+			if marshalErr == nil {
+				return datatypes.JSON(jsonVal)
+			}
+		}
 		return nil
 	}
 	return cfg.Value
@@ -934,4 +1035,84 @@ func paginateItems[T any](items []T, page, pageSize int) []T {
 		end = len(items)
 	}
 	return items[offset:end]
+}
+
+// BootstrapDynamicConfigs initializes all dynamic configs from the registry into the DB.
+// This ensures "out-of-box" experience: new deployments have all configs ready for editing.
+//
+// For each config key that doesn't exist in DB:
+//  1. INSERT config record (version=1, value=yaml_default)
+//  2. INSERT history record v1 (version=1, old_value=null, new_value=yaml_default)
+//
+// This function is idempotent: existing configs are not modified.
+// operatorID is used for audit trail (use uuid.Nil for system bootstrap).
+func (uc *ServerConfigUsecase) BootstrapDynamicConfigs(ctx context.Context, operatorID uuid.UUID) error {
+	now := time.Now()
+
+	for _, key := range config.AllRegistryKeys() {
+		entry := config.GetRegistryEntry(key)
+		if entry == nil {
+			continue
+		}
+
+		// Check if system config already exists.
+		_, err := uc.configRepo.Get(ctx, key, nil)
+		if err == nil {
+			// Already exists, skip.
+			continue
+		}
+		if !errors.Is(err, repo.ErrNotFound) {
+			return fmt.Errorf("check config %q existence: %w", key, err)
+		}
+
+		// Config doesn't exist, bootstrap it.
+		// Marshal yaml default to JSON.
+		jsonVal, err := marshalAndValidateValue(entry.YamlDefault, entry)
+		if err != nil {
+			// If yaml default is invalid, log and skip (should not happen in practice).
+			logger.Warn(ctx, "bootstrap.invalid_yaml_default",
+				zap.String("key", key),
+				zap.Any("yaml_default", entry.YamlDefault),
+				zap.Error(err))
+			continue
+		}
+
+		// Create config record (version=1).
+		cfg := &model.ServerConfig{
+			Key:         key,
+			UserID:      nil,
+			Value:       datatypes.JSON(jsonVal),
+			ValueType:   entry.ValueType,
+			Category:    entry.Category,
+			Description: entry.Description,
+			Version:     1,
+			UpdatedBy:   &operatorID,
+			UpdatedAt:   now,
+		}
+		if err := uc.configRepo.Upsert(ctx, cfg, 0); err != nil {
+			return fmt.Errorf("bootstrap config %q: %w", key, err)
+		}
+
+		// Create v1 history record (old_value=null, new_value=yaml_default).
+		// This represents the "initial bootstrap" from no DB value to yaml default.
+		history := &model.ServerConfigHistory{
+			Key:        key,
+			UserID:     nil,
+			OldValue:   nil, // null represents "no DB value"
+			NewValue:   datatypes.JSON(jsonVal),
+			Version:    1, // Match config record version
+			ChangedBy:  operatorID,
+			ChangedAt:  now,
+			ChangeNote: "Initial bootstrap from yaml default",
+		}
+		if err := uc.db.WithContext(ctx).Create(history).Error; err != nil {
+			return fmt.Errorf("create bootstrap history for %q: %w", key, err)
+		}
+
+		logger.Info(ctx, "bootstrap.config_initialized",
+			zap.String("key", key),
+			zap.Any("value", entry.YamlDefault))
+	}
+
+	return nil
 }

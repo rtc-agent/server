@@ -159,6 +159,13 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		Description: "Cache write token price (USD per million tokens)",
 		YamlDefault: 3.75,
 	},
+	"llm.pricing.reasoning_per_million": {
+		Key:         "llm.pricing.reasoning_per_million",
+		Category:    CategoryLLM,
+		ValueType:   ValueTypeFloat,
+		Description: "Reasoning token price (USD per million tokens)",
+		YamlDefault: 0.0,
+	},
 
 	// ── Worker / Agent Behavior ──────────────────────────────────────
 	"worker.system_prompt": {
@@ -564,6 +571,7 @@ func PopulateYamlDefaults(cfg *Config) {
 		setDefault("llm.pricing.output_per_million", cfg.LLM.Pricing.OutputPerMillion)
 		setDefault("llm.pricing.cached_read_per_million", cfg.LLM.Pricing.CachedReadPerMillion)
 		setDefault("llm.pricing.cached_write_per_million", cfg.LLM.Pricing.CachedWritePerMillion)
+		setDefault("llm.pricing.reasoning_per_million", cfg.LLM.Pricing.ReasoningPerMillion)
 	}
 
 	// Worker

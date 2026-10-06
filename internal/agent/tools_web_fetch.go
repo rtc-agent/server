@@ -35,10 +35,18 @@ type webFetchArgs struct {
 	Prompt string `json:"prompt"`
 }
 
-// createWebFetchTool returns a webFetchTool if WebFetchManager is configured.
-func (h *helpers) createWebFetchTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
-	if h.deps.WebFetchManager == nil {
+// createWebFetchTool returns a webFetchTool if WebFetchManager is configured
+// and the feature.web_fetch flag is enabled (managed by ConfigProvider).
+func (h *helpers) createWebFetchTool(ctx context.Context, session *model.Session, turnID uuid.UUID) tool.InvokableTool {
+	if h.deps == nil || h.deps.WebFetchManager == nil {
 		return nil
+	}
+	// Check feature flag dynamically from ConfigProvider.
+	if h.deps.ConfigProvider != nil {
+		userID := userIDFromContext(ctx)
+		if enabled, err := h.deps.ConfigProvider.GetEffectiveBool(ctx, "feature.web_fetch", userID); err == nil && !enabled {
+			return nil
+		}
 	}
 	return &webFetchTool{session: session, helpers: h, turnID: turnID}
 }

@@ -1,5 +1,7 @@
 package agent
 
+import "context"
+
 // ModelPricing defines model pricing in USD per million tokens.
 // Different token types have different prices for fine-grained cost calculation.
 type ModelPricing struct {
@@ -79,4 +81,30 @@ func calculateCostMicros(u *FullTokenUsage, pricing ModelPricing) int64 {
 
 	totalCostUSD := inputCost + cachedReadCost + cachedWriteCost + outputCost + reasoningCost
 	return int64(totalCostUSD * 1_000_000) // convert to micro-USD
+}
+
+// resolveModelPricing reads pricing from ConfigProvider dynamically.
+// Falls back to the static h.modelPricing when ConfigProvider is unavailable or fails.
+func (h *helpers) resolveModelPricing(ctx context.Context) ModelPricing {
+	if h.deps == nil || h.deps.ConfigProvider == nil {
+		return h.modelPricing
+	}
+	userID := userIDFromContext(ctx)
+	p := h.modelPricing
+	if v, err := h.deps.ConfigProvider.GetEffectiveFloat(ctx, "llm.pricing.input_per_million", userID); err == nil {
+		p.InputPerMillion = v
+	}
+	if v, err := h.deps.ConfigProvider.GetEffectiveFloat(ctx, "llm.pricing.output_per_million", userID); err == nil {
+		p.OutputPerMillion = v
+	}
+	if v, err := h.deps.ConfigProvider.GetEffectiveFloat(ctx, "llm.pricing.cached_read_per_million", userID); err == nil {
+		p.CachedReadPerMillion = v
+	}
+	if v, err := h.deps.ConfigProvider.GetEffectiveFloat(ctx, "llm.pricing.cached_write_per_million", userID); err == nil {
+		p.CachedWritePerMillion = v
+	}
+	if v, err := h.deps.ConfigProvider.GetEffectiveFloat(ctx, "llm.pricing.reasoning_per_million", userID); err == nil {
+		p.ReasoningPerMillion = v
+	}
+	return p
 }

@@ -159,7 +159,9 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 		return
 	}
 
-	costMicros := calculateCostMicros(fullUsage, h.modelPricing)
+	// Calculate cost using dynamic pricing from ConfigProvider when available.
+	pricing := h.resolveModelPricing(ctx)
+	costMicros := calculateCostMicros(fullUsage, pricing)
 
 	// Use cached session from context to avoid redundant DB queries.
 	// In a ReAct loop, reportLLMCall may be invoked 5-10 times per turn;
@@ -310,19 +312,28 @@ func (h *helpers) publishSessionUpdateWithWarnings(ctx context.Context, session 
 	}
 
 	if h.cacheHitRateWarnThreshold >= 0 {
-		totalCached := session.TotalCachedReadTokens
-		totalInput := session.TotalInputTokens
-		totalRelevant := totalCached + totalInput
-		if totalRelevant > 0 {
-			hitRate := float64(totalCached) / float64(totalRelevant)
-			if hitRate < h.cacheHitRateWarnThreshold {
-				h.logger.Warn(ctx, "cache hit rate below threshold", map[string]any{
-					"session_id":         sessionID.String(),
-					"cache_hit_rate":     hitRate,
-					"threshold":          h.cacheHitRateWarnThreshold,
-					"cached_read_tokens": totalCached,
-					"input_tokens":       totalInput,
-				})
+		// Read threshold dynamically from ConfigProvider when available.
+		threshold := h.cacheHitRateWarnThreshold
+		if h.deps != nil && h.deps.ConfigProvider != nil {
+			if v, err := h.deps.ConfigProvider.GetEffectiveFloat(ctx, "worker.cache_hit_rate_warn_threshold", userIDFromContext(ctx)); err == nil {
+				threshold = v
+			}
+		}
+		if threshold >= 0 {
+			totalCached := session.TotalCachedReadTokens
+			totalInput := session.TotalInputTokens
+			totalRelevant := totalCached + totalInput
+			if totalRelevant > 0 {
+				hitRate := float64(totalCached) / float64(totalRelevant)
+				if hitRate < threshold {
+					h.logger.Warn(ctx, "cache hit rate below threshold", map[string]any{
+						"session_id":         sessionID.String(),
+						"cache_hit_rate":     hitRate,
+						"threshold":          threshold,
+						"cached_read_tokens": totalCached,
+						"input_tokens":       totalInput,
+					})
+				}
 			}
 		}
 	}

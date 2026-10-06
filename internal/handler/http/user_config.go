@@ -81,9 +81,15 @@ func (h *UserConfigHandler) Update(c *gin.Context) {
 	operatorID := getOperatorID(c)
 	operatorIP := c.ClientIP()
 
+	// version omitted → force overwrite (skip optimistic lock)
+	version := -1
+	if req.Version != nil {
+		version = *req.Version
+	}
+
 	item, err := h.uc.SetUserConfigOverride(c.Request.Context(), userID, key, usecase.UpdateConfigInput{
 		Value:      req.Value,
-		Version:    req.Version,
+		Version:    version,
 		ChangeNote: req.ChangeNote,
 	}, operatorID, operatorIP)
 	if err != nil {

@@ -53,8 +53,8 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 		h.deps.MemoryRepo,
 		turnagent.CumulativeTokenCounter,
 		h.logger,
-		h.noThinkingOptions(),  // disable thinking to save tokens
-		h.tokenCallbackHandler, // track token consumption to Session.TotalTokens
+		h.noThinkingOptions(ctx), // disable thinking to save tokens
+		h.tokenCallbackHandler,   // track token consumption to Session.TotalTokens
 	)
 
 	// Load extraction state from session metadata.

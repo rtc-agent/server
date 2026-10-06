@@ -180,7 +180,7 @@ func (h *helpers) appendStreamChunk(
 	msgIDStr := msgID.String()
 
 	// Append chunk to Redis buffer.
-	streamStore := h.getStreamStore()
+	streamStore := h.getStreamStore(ctx)
 	if streamStore != nil {
 		if _, appendErr := streamStore.AppendChunk(msgIDStr, chunkContent); appendErr != nil {
 			h.logger.Warn(ctx, "appendStreamChunk.redis_append_failed", map[string]any{

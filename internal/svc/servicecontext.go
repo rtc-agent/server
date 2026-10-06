@@ -159,6 +159,10 @@ func NewServiceContextWithDeps(
 }
 
 // configureUpdatePublisher sets compression trigger thresholds (with 80% fallback protection).
+// TODO(dynamic-config): Read worker.context_tokens_limit and worker.auto_compact_buffer_tokens
+// from ConfigProvider dynamically. Currently uses static YAML config because UpdatePublisher
+// is a singleton initialized at startup. Requires a mechanism to push threshold updates to
+// the publisher at runtime (e.g., a SetCompressionThreshold callback triggered by config changes).
 func configureUpdatePublisher(u *updates.UpdatePublisher, cfg *config.Config) {
 	contextLimit := cfg.Worker.ContextTokensLimit
 	if contextLimit <= 0 {
@@ -182,6 +186,10 @@ func configureUpdatePublisher(u *updates.UpdatePublisher, cfg *config.Config) {
 }
 
 // initTokenCounter initialises the global TokenCounter.
+// TODO(dynamic-config): Read worker.token_counter_mode from ConfigProvider dynamically.
+// Currently uses static YAML config because TokenCounter is a global singleton set once
+// at startup. Changing it at runtime would require re-creating the tokenizer and updating
+// all concurrent readers, which is complex for minimal benefit.
 func initTokenCounter(cfg *config.Config) {
 	tc := turnagent.NewTokenCounter(cfg.Worker.TokenCounterMode)
 	turnagent.SetGlobalTokenCounter(tc)

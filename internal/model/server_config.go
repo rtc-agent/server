@@ -10,11 +10,17 @@ import (
 )
 
 // ServerConfig represents a dynamic configuration entry in the database.
-// Composite primary key: (key, user_id). NULL user_id = system default;
-// non-NULL user_id = per-user override.
+// Design: (key, user_id) combination must be unique, where:
+//   - NULL user_id = system default config (one per key)
+//   - non-NULL user_id = per-user override (one per key+user)
+//
+// Implementation: Uses a surrogate UUID primary key (id) because PostgreSQL
+// does not allow NULL values in primary key columns. Uniqueness is enforced
+// via two partial unique indexes (see migrate.go).
 type ServerConfig struct {
-	Key         string         `gorm:"primaryKey;column:key" json:"key"`
-	UserID      *uuid.UUID     `gorm:"primaryKey;type:uuid;column:user_id" json:"user_id,omitempty"`
+	ID          uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	Key         string         `gorm:"type:text;not null;column:key" json:"key"`
+	UserID      *uuid.UUID     `gorm:"type:uuid;column:user_id" json:"user_id,omitempty"`
 	Value       datatypes.JSON `gorm:"type:jsonb;not null" json:"value"`
 	ValueType   string         `gorm:"size:20;not null" json:"value_type"`
 	Category    string         `gorm:"size:50;not null;index:idx_server_configs_category" json:"category"`
@@ -30,8 +36,15 @@ func (ServerConfig) TableName() string {
 	return "server_configs"
 }
 
-// BeforeCreate sets default timestamps.
+// BeforeCreate sets default timestamps and generates UUID if not set.
 func (sc *ServerConfig) BeforeCreate(tx *gorm.DB) error {
+	if sc.ID == uuid.Nil {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return err
+		}
+		sc.ID = id
+	}
 	now := time.Now()
 	if sc.CreatedAt.IsZero() {
 		sc.CreatedAt = now

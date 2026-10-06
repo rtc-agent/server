@@ -248,6 +248,7 @@ func provideUsecaseDependencies(
 		LoopRepo:         svcCtx.LoopRepo,
 		MemoryRepo:       svcCtx.MemoryRepo,
 		ConfigRepo:       svcCtx.ConfigRepo,
+		ConfigProvider:   config.NewDBConfigProvider(svcCtx.ConfigRepo),
 		UpdatePublisher:  svcCtx.UpdatePublisher,
 		ChatModel:        chatModelResult.model,
 		LLMConfig:        cfg.LLM,

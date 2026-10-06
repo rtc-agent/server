@@ -38,25 +38,29 @@ type SessionTitleSummarizer struct {
 	chatModel            einomodel.ToolCallingChatModel
 	sessionRepo          repo.SessionRepo
 	messageRepo          repo.MessageRepo
-	llmConfig            config.LLMConfig
-	maxMessages          int // maximum messages for summary generation
-	maxTitleLen          int // maximum title length (in characters)
+	configProvider       config.ConfigProvider
+	llmProviderFallback  string // static fallback when configProvider is nil or fails
+	maxMessages          int    // maximum messages for summary generation
+	maxTitleLen          int    // maximum title length (in characters)
 	tokenCallbackHandler callbacks.Handler
 }
 
 // NewSessionTitleSummarizer creates a SessionTitleSummarizer.
+// configProvider may be nil; in that case llmProviderFallback is used.
 func NewSessionTitleSummarizer(
 	chatModel einomodel.ToolCallingChatModel,
 	sessionRepo repo.SessionRepo,
 	messageRepo repo.MessageRepo,
-	llmConfig config.LLMConfig,
+	configProvider config.ConfigProvider,
+	llmProviderFallback string,
 	tokenCallbackHandler callbacks.Handler,
 ) *SessionTitleSummarizer {
 	return &SessionTitleSummarizer{
 		chatModel:            chatModel,
 		sessionRepo:          sessionRepo,
 		messageRepo:          messageRepo,
-		llmConfig:            llmConfig,
+		configProvider:       configProvider,
+		llmProviderFallback:  llmProviderFallback,
 		maxMessages:          10,
 		maxTitleLen:          50,
 		tokenCallbackHandler: tokenCallbackHandler,
@@ -65,9 +69,17 @@ func NewSessionTitleSummarizer(
 
 // noThinkingOptions returns options that disable thinking/reasoning.
 // Title summaries don't need reasoning; disabling saves tokens.
-func (s *SessionTitleSummarizer) noThinkingOptions() []einomodel.Option {
+// Reads llm.provider dynamically from ConfigProvider when available.
+func (s *SessionTitleSummarizer) noThinkingOptions(ctx context.Context) []einomodel.Option {
+	provider := s.llmProviderFallback
+	if s.configProvider != nil {
+		// Background call: no user context, pass nil userID.
+		if p, err := s.configProvider.GetEffectiveString(ctx, "llm.provider", nil); err == nil && p != "" {
+			provider = p
+		}
+	}
 	var opts []einomodel.Option
-	switch s.llmConfig.Provider {
+	switch provider {
 	case "claude":
 		opts = append(opts, einoclaude.WithThinkingConfig(
 			&anthropic.ThinkingConfigParamUnion{
@@ -175,7 +187,7 @@ func (s *SessionTitleSummarizer) generateTitle(ctx context.Context, conversation
 	// Thinking is disabled to save tokens.
 	stream, err := s.chatModel.Stream(ctx, []*schema.Message{
 		schema.UserMessage(prompt),
-	}, s.noThinkingOptions()...)
+	}, s.noThinkingOptions(ctx)...)
 	if err != nil {
 		return "", fmt.Errorf("chat model stream: %w", err)
 	}

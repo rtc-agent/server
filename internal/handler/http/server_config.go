@@ -61,9 +61,10 @@ func (h *ServerConfigHandler) Get(c *gin.Context) {
 }
 
 // updateConfigRequest is the request body for updating a config.
+// Version is optional: omitted → force overwrite (skip optimistic lock check).
 type updateConfigRequest struct {
 	Value      any    `json:"value" binding:"required"`
-	Version    int    `json:"version" binding:"required,gte=0"`
+	Version    *int   `json:"version" binding:"omitempty,gte=0"`
 	ChangeNote string `json:"change_note"`
 }
 
@@ -80,9 +81,15 @@ func (h *ServerConfigHandler) Update(c *gin.Context) {
 	operatorID := getOperatorID(c)
 	operatorIP := c.ClientIP()
 
+	// version omitted → force overwrite (skip optimistic lock)
+	version := -1
+	if req.Version != nil {
+		version = *req.Version
+	}
+
 	item, err := h.uc.UpdateSystemConfig(c.Request.Context(), key, usecase.UpdateConfigInput{
 		Value:      req.Value,
-		Version:    req.Version,
+		Version:    version,
 		ChangeNote: req.ChangeNote,
 	}, operatorID, operatorIP)
 	if err != nil {

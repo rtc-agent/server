@@ -70,7 +70,13 @@ func (h *helpers) insertErrorMessage(
 	sanitized := sanitizeRawError(rawError)
 	if sanitized != "" {
 		content.RawError = &sanitized
+		// Read show_raw_errors dynamically from ConfigProvider when available.
 		showRaw := h.showRawErrors
+		if h.deps != nil && h.deps.ConfigProvider != nil {
+			if v, err := h.deps.ConfigProvider.GetEffectiveBool(ctx, "feature.debug_show_raw_errors", userIDFromContext(ctx)); err == nil {
+				showRaw = v
+			}
+		}
 		content.ShowRawError = &showRaw
 	}
 

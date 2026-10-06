@@ -75,6 +75,10 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			})
 			return nil
 		}
+		// Inject user ID into context for ConfigProvider calls
+		if p.UserID != "" {
+			ctx = WithUserID(ctx, p.UserID)
+		}
 		return a.cfg.CompactContext(ctx, p.SessionID, p.CustomInstruction)
 	}
 

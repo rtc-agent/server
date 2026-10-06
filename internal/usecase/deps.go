@@ -63,14 +63,22 @@ type Dependencies struct {
 	// Required when ChatModelFactory is non-nil.
 	ConfigRepo repo.ConfigRepo
 
+	// ConfigProvider provides type-safe access to dynamic configuration values.
+	// Wraps ConfigRepo with three-tier resolution (user override > system default > yaml baseline).
+	// V1 implementation reads from DB on every call; V2 can add caching.
+	ConfigProvider config.ConfigProvider
+
 	// LLMConfig provides access to LLM-level configuration (retry, etc.)
+	// Deprecated: use ConfigProvider for dynamic configuration.
 	LLMConfig config.LLMConfig
 
 	// SystemPrompt is the agent's instruction/system message.
 	// Defines the agent's behavior and capabilities.
+	// Deprecated: use ConfigProvider.GetEffectiveString(ctx, "worker.system_prompt", userID) instead.
 	SystemPrompt string
 
 	// WorkerConfig provides access to worker-level configuration (TTLs, etc.)
+	// Deprecated: use ConfigProvider for dynamic configuration.
 	WorkerConfig config.WorkerConfig
 
 	// CommandRegistry is the slash-command framework. It owns prompt

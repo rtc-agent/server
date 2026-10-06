@@ -52,10 +52,18 @@ type webSearchResultEntry struct {
 	Source      string `json:"source,omitempty"`
 }
 
-// createWebSearchTool returns a webSearchTool if WebSearchManager is configured.
-func (h *helpers) createWebSearchTool(session *model.Session, turnID uuid.UUID) tool.InvokableTool {
-	if h.deps.WebSearchManager == nil {
+// createWebSearchTool returns a webSearchTool if WebSearchManager is configured
+// and the feature.web_search flag is enabled (managed by ConfigProvider).
+func (h *helpers) createWebSearchTool(ctx context.Context, session *model.Session, turnID uuid.UUID) tool.InvokableTool {
+	if h.deps == nil || h.deps.WebSearchManager == nil {
 		return nil
+	}
+	// Check feature flag dynamically from ConfigProvider.
+	if h.deps.ConfigProvider != nil {
+		userID := userIDFromContext(ctx)
+		if enabled, err := h.deps.ConfigProvider.GetEffectiveBool(ctx, "feature.web_search", userID); err == nil && !enabled {
+			return nil
+		}
 	}
 	return &webSearchTool{session: session, helpers: h, turnID: turnID}
 }

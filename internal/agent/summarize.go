@@ -24,9 +24,11 @@ import (
 // noThinkingOptions returns model options that disable thinking/reasoning
 // for the configured LLM provider. Used for compression tasks where
 // extended thinking is unnecessary and wasteful.
-func (h *helpers) noThinkingOptions() []model.Option {
+// Reads llm.provider dynamically from ConfigProvider to support runtime changes.
+func (h *helpers) noThinkingOptions(ctx context.Context) []model.Option {
+	provider := h.resolveLLMProvider(ctx)
 	var opts []model.Option
-	switch h.deps.LLMConfig.Provider {
+	switch provider {
 	case "claude":
 		opts = append(opts, einoclaude.WithThinkingConfig(
 			&anthropic.ThinkingConfigParamUnion{
@@ -39,6 +41,39 @@ func (h *helpers) noThinkingOptions() []model.Option {
 		}))
 	}
 	return opts
+}
+
+// resolveLLMProvider reads the effective llm.provider from ConfigProvider.
+// Falls back to the static LLMConfig.Provider when ConfigProvider is unavailable
+// or returns an error.
+func (h *helpers) resolveLLMProvider(ctx context.Context) string {
+	if h.deps != nil && h.deps.ConfigProvider != nil {
+		userID := userIDFromContext(ctx)
+		provider, err := h.deps.ConfigProvider.GetEffectiveString(ctx, "llm.provider", userID)
+		if err == nil && provider != "" {
+			return provider
+		}
+		if err != nil {
+			h.logger.Warn(ctx, "config.resolve_llm_provider_fallback", map[string]any{
+				"error": err.Error(),
+			})
+		}
+	}
+	if h.deps != nil {
+		return h.deps.LLMConfig.Provider
+	}
+	return "claude"
+}
+
+// userIDFromContext extracts the user ID pointer from context for ConfigProvider calls.
+// Returns nil when no user ID is present (background tasks, system calls).
+func userIDFromContext(ctx context.Context) *uuid.UUID {
+	if uidStr := turnagent.UserIDFromContext(ctx); uidStr != "" {
+		if uid, err := uuid.Parse(uidStr); err == nil {
+			return &uid
+		}
+	}
+	return nil
 }
 
 // buildSummarizationMiddleware constructs the summarization middleware for
@@ -420,7 +455,7 @@ func (h *helpers) summarizeMessagesStreaming(
 	// Use dynamic config for summarization LLM calls when available.
 	chatModel := h.resolveChatModelForBackground(ctx)
 
-	stream, err := chatModel.Stream(ctx, []*schema.Message{userPrompt}, h.noThinkingOptions()...)
+	stream, err := chatModel.Stream(ctx, []*schema.Message{userPrompt}, h.noThinkingOptions(ctx)...)
 	if err != nil {
 		return "", nil, fmt.Errorf("chat model stream: %w", err)
 	}

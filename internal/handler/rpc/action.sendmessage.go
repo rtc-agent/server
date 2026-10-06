@@ -61,7 +61,8 @@ func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Sessio
 		chatModel,
 		h.deps.Deps.SessionRepo,
 		h.deps.Deps.MessageRepo,
-		h.deps.Deps.LLMConfig,
+		h.deps.Deps.ConfigProvider,
+		h.deps.Deps.LLMConfig.Provider,
 		h.deps.Deps.TokenCallbackHandler,
 	)
 	detachedCtx := context.WithoutCancel(ctx)

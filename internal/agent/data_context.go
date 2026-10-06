@@ -285,7 +285,15 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	// Set strategic cache breakpoints to protect stable content from invalidation
 	// caused by microcompact or tool result budget modifications.
 	// MUST be called AFTER normalizeMessagesForLLM (which reorders system messages).
-	if h.enableStrategicCacheBreakpoints {
+	// Read dynamically from ConfigProvider to support runtime toggling.
+	enableStrategic := h.enableStrategicCacheBreakpoints
+	if h.deps != nil && h.deps.ConfigProvider != nil {
+		userID := userIDFromContext(ctx)
+		if v, err := h.deps.ConfigProvider.GetEffectiveBool(ctx, "worker.enable_strategic_cache_breakpoints", userID); err == nil {
+			enableStrategic = v
+		}
+	}
+	if enableStrategic {
 		messages = h.setCacheBreakpoints(messages)
 	}
 
