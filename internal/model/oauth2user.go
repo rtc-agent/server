@@ -9,15 +9,17 @@ import (
 
 // OAuth2User is the database model for an OAuth2-authenticated user.
 type OAuth2User struct {
-	ID        uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	Provider  string     `gorm:"size:50;not null;uniqueIndex:idx_provider_sub,priority:1" json:"provider"`
-	Sub       string     `gorm:"size:255;not null;uniqueIndex:idx_provider_sub,priority:2" json:"sub"`
-	Email     string     `gorm:"size:255" json:"email,omitempty"`
-	Name      string     `gorm:"size:100" json:"name,omitempty"`
-	AvatarURL string     `gorm:"size:500" json:"avatar_url,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	DeletedAt *time.Time `gorm:"index" json:"-"`
+	ID           uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	Provider     string     `gorm:"size:50;not null;uniqueIndex:idx_provider_sub,priority:1" json:"provider"`
+	Sub          string     `gorm:"size:255;not null;uniqueIndex:idx_provider_sub,priority:2" json:"sub"`
+	Email        string     `gorm:"size:255" json:"email,omitempty"`
+	Name         string     `gorm:"size:100" json:"name,omitempty"`
+	AvatarURL    string     `gorm:"size:500" json:"avatar_url,omitempty"`
+	BannedAt     *time.Time `json:"banned_at,omitempty"`
+	BannedReason string     `gorm:"size:500" json:"banned_reason,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	DeletedAt    *time.Time `gorm:"index" json:"-"`
 }
 
 // BeforeCreate generates a UUID v7 identifier if one is not already set.

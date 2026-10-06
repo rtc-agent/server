@@ -19,6 +19,7 @@ import (
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/infra/contextx"
+	"github.com/rtc-agent/server/internal/repo"
 	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/logger"
 )
@@ -47,7 +48,7 @@ type RPCHandler interface {
 // AssembleDualBroker assembles the DualBroker core logic: create Redis shard,
 // build DualBroker, and configure event handlers. Shared between the Wire
 // path (provideDualBroker) and the non-Wire path (servicecontext.go).
-func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore centrifugeplus.HistoryStore, jwtSigner *auth.JWTSigner) (*centrifugeplus.DualBroker, error) {
+func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore centrifugeplus.HistoryStore, jwtSigner *auth.JWTSigner, oauth2UserRepo repo.OAuth2UserRepo) (*centrifugeplus.DualBroker, error) {
 	redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
 		Address: cfg.Redis.Addr,
 	})
@@ -74,7 +75,7 @@ func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore 
 		return nil, fmt.Errorf("create broker: %w", err)
 	}
 
-	if err := setupCentrifuge(node, broker, jwtSigner, cfg.Server.RPCTimeout); err != nil {
+	if err := setupCentrifuge(node, broker, jwtSigner, cfg.Server.RPCTimeout, oauth2UserRepo); err != nil {
 		return nil, fmt.Errorf("setup centrifuge: %w", err)
 	}
 
@@ -107,14 +108,14 @@ func parseClientInfo(info []byte) *clientInfo {
 // verification, channel subscription validation).
 func setupCentrifuge(
 	node *centrifuge.Node, broker *centrifugeplus.DualBroker,
-	signer *auth.JWTSigner, rpcTimeout time.Duration,
+	signer *auth.JWTSigner, rpcTimeout time.Duration, oauth2UserRepo repo.OAuth2UserRepo,
 ) error {
 	node.SetBroker(broker)
 
 	// Create metrics collector (promauto registers automatically).
 	metrics := newCentrifugeMetrics()
 
-	node.OnConnecting(createOnConnectingHandler(signer, metrics))
+	node.OnConnecting(createOnConnectingHandler(signer, metrics, oauth2UserRepo))
 	node.OnConnect(createOnConnectHandler(broker, rpcTimeout, metrics))
 
 	if err := node.Run(); err != nil {
@@ -145,7 +146,7 @@ func (l *centrifugeLogger) Error(msg string, args ...any) {
 
 // createOnConnectingHandler returns the OnConnecting callback: JWT verification
 // -> extract identity -> write to Credentials.
-func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetrics) func(stdcontext.Context, centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetrics, oauth2UserRepo repo.OAuth2UserRepo) func(stdcontext.Context, centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 	return func(ctx stdcontext.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		start := time.Now()
 
@@ -162,6 +163,28 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 				zap.String("token_preview", previewToken(e.Token)),
 			)
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
+		}
+
+		// Check if user is banned
+		user, err := oauth2UserRepo.FindByID(ctx, claims.UserID)
+		if err != nil {
+			metrics.recordConnecting("error", time.Since(start))
+			logger.Error(ctx, "[Centrifuge] Failed to find user, rejecting connection",
+				zap.Error(err),
+				zap.String("user_id", claims.UserID.String()),
+			)
+			return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
+		}
+		if user.BannedAt != nil {
+			metrics.recordConnecting("banned", time.Since(start))
+			logger.Info(ctx, "[Centrifuge] User is banned, rejecting connection",
+				zap.String("user_id", claims.UserID.String()),
+				zap.String("reason", user.BannedReason),
+			)
+			return centrifuge.ConnectReply{}, centrifuge.Disconnect{
+				Code:   4501,
+				Reason: "account banned",
+			}
 		}
 
 		metrics.recordConnecting("success", time.Since(start))

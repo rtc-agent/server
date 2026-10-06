@@ -42,6 +42,7 @@ const (
 	ErrInvalidGrant           = "invalid_grant"
 	ErrServerError            = "server_error"
 	ErrTemporarilyUnavailable = "temporarily_unavailable"
+	ErrAccessDenied           = "access_denied"
 )
 
 // TokenExchangeError is an OAuth2-compliant error returned by the Token Exchange usecase.
@@ -199,6 +200,20 @@ func (uc *TokenExchangeUsecase) ExchangeToken(
 	createdUser, isNew, err := uc.oauth2UserRepo.FindOrCreate(ctx, oauth2User)
 	if err != nil {
 		return nil, fmt.Errorf("token exchange find/create user: %w", err)
+	}
+
+	// Check if user is banned.
+	if createdUser.BannedAt != nil {
+		logger.Warn(ctx, "token_exchange.banned_user_rejected",
+			zap.String("issuer", issClaim),
+			zap.String("provider", issuerCfg.Name),
+			zap.String("user_id", createdUser.ID.String()),
+			zap.Time("banned_at", *createdUser.BannedAt))
+		return nil, &TokenExchangeError{
+			Code:        ErrAccessDenied,
+			Description: "account has been banned",
+			HTTPStatus:  403,
+		}
 	}
 
 	// Update user info if existing (sync latest profile).

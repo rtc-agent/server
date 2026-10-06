@@ -61,6 +61,9 @@ type Server struct {
 
 	// IP rate limiter cleanup
 	ipRateLimiterCancel context.CancelFunc // cancels the IP rate limiter cleanup goroutine
+
+	// Ban watcher for distributed user ban sync
+	banWatcher *svc.BanWatcher
 }
 
 // BuildProviderClients constructs the Provider list from config.
@@ -160,6 +163,19 @@ func (s *Server) Start() error {
 			})
 			logger.Info(ctx, "[Server] OSS3 cleanup scheduler started",
 				zap.Duration("interval", interval))
+		}
+	}
+
+	// Start BanWatcher for distributed user ban synchronization.
+	// Listens to Redis Pub/Sub for ban events and disconnects banned users.
+	if s.svcCtx.Redis != nil && s.banWatcher == nil {
+		banWatcher, err := svc.NewBanWatcher(s.svcCtx.CentrifugeNode, s.svcCtx.Redis, s.instanceID)
+		if err != nil {
+			logger.Error(context.Background(), "[Server] Failed to create ban watcher", zap.Error(err))
+		} else {
+			s.banWatcher = banWatcher
+			logger.Info(context.Background(), "[Server] Ban watcher started",
+				zap.String("instance_id", s.instanceID))
 		}
 	}
 

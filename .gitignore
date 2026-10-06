@@ -5,6 +5,7 @@ bin/
 *.so
 *.dylib
 rtc-agent
+/server
 
 # Test binary
 *.test

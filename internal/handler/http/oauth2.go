@@ -297,6 +297,16 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 		return
 	}
 
+	// 3.5. Check if user is banned.
+	if userResult.BannedAt != nil {
+		logger.Warn(ctx, "banned user attempted to login",
+			zap.String("provider", provider),
+			zap.String("user_id", userResult.UserID.String()),
+			zap.Time("banned_at", *userResult.BannedAt))
+		httputil.WriteError(w, http.StatusForbidden, "access_denied", "account has been banned")
+		return
+	}
+
 	// 4. Find or update Device via Usecase.
 	if req.DeviceId != "" {
 		if err := h.authUsecase.UpsertDevice(ctx, &usecase.UpsertDeviceInput{

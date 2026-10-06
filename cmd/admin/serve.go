@@ -132,6 +132,8 @@ func runServe(cmd *cobra.Command, args []string) {
 	adminRoleRepo := repo.NewAdminRoleRepo(db)
 	adminUserRoleRepo := repo.NewAdminUserRoleRepo(db)
 	auditLogRepo := repo.NewAuditLogRepo(db)
+	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
+	mainRefreshTokenRepo := repo.NewRefreshTokenRepo(db)
 
 	// Bootstrap default roles and policies (idempotent, transactional) (P0 #4)
 	// If bootstrap fails, log error but continue - server can still function in degraded mode
@@ -177,6 +179,16 @@ func runServe(cmd *cobra.Command, args []string) {
 	permissionUsecase := usecase.NewPermissionUsecase(adminRoleRepo, enforcer, auditLogRepo)
 	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer, auditLogRepo)
 	adminUserUsecase := usecase.NewAdminUserUsecase(adminUserRepo)
+	rtcUserUsecase := usecase.NewRtcUserUsecase(oauth2UserRepo, mainRefreshTokenRepo)
+
+	// Set up ban publisher for distributed sync (requires Redis)
+	if rdb != nil {
+		banPublisher := usecase.NewRedisBanPublisher(rdb)
+		rtcUserUsecase.SetBanPublisher(banPublisher)
+		logger.Info(ctx, "admin.ban_publisher_enabled")
+	} else {
+		logger.Warn(ctx, "admin.ban_publisher_disabled_redis_not_available")
+	}
 
 	// Inject policy publisher for multi-instance sync (P0 #1 fix)
 	if policyWatcher != nil {
@@ -195,6 +207,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	adminUserRoleHandler := httphandler.NewAdminUserRoleHandler(adminUserRoleUsecase, adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer)
 	auditLogHandler := httphandler.NewAuditLogHandler(auditLogRepo)
 	adminUserHandler := httphandler.NewAdminUserHandler(adminUserUsecase)
+	rtcUserHandler := httphandler.NewRtcUserHandler(rtcUserUsecase)
 
 	// Wire permission system deps to auth handler
 	permissionSystemEnabled := cfg.Features.PermissionSystem
@@ -208,6 +221,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		adminUserRoleHandler: adminUserRoleHandler,
 		auditLogHandler:      auditLogHandler,
 		adminUserHandler:     adminUserHandler,
+		rtcUserHandler:       rtcUserHandler,
 		enforcer:             enforcer,
 		permissionEnabled:    permissionSystemEnabled,
 		allowedOrigins:       cfg.CORS.AllowedOrigins,
@@ -258,6 +272,7 @@ type routerDeps struct {
 	adminUserRoleHandler *httphandler.AdminUserRoleHandler
 	auditLogHandler      *httphandler.AuditLogHandler
 	adminUserHandler     *httphandler.AdminUserHandler
+	rtcUserHandler       *httphandler.RtcUserHandler
 	enforcer             *auth.CasbinEnforcer
 	permissionEnabled    bool
 	allowedOrigins       []string
@@ -329,6 +344,7 @@ func setupRouter(deps routerDeps) *gin.Engine {
 	deps.adminUserRoleHandler.RegisterRoutes(apiGroup)
 	deps.auditLogHandler.RegisterRoutes(apiGroup)
 	deps.adminUserHandler.RegisterRoutes(apiGroup)
+	deps.rtcUserHandler.RegisterRoutes(apiGroup)
 
 	// Register static file server for admin-ui (SPA)
 	ServeStaticFiles(router)

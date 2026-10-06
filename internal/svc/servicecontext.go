@@ -87,7 +87,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	if err != nil {
 		logger.Fatal(context.Background(), "create centrifuge node", zap.Error(err))
 	}
-	dualBroker, err := AssembleDualBroker(node, cfg, updatePublisher, jwtSigner)
+	dualBroker, err := AssembleDualBroker(node, cfg, updatePublisher, jwtSigner, oauth2UserRepo)
 	if err != nil {
 		if shutdownErr := node.Shutdown(context.Background()); shutdownErr != nil {
 			logger.Error(context.Background(), "centrifuge node shutdown after broker assembly failure", zap.Error(shutdownErr))

@@ -80,6 +80,15 @@ func (m *mockOAuth2UserRepo) Update(ctx context.Context, user *model.OAuth2User)
 	return nil
 }
 
+func (m *mockOAuth2UserRepo) ListWithFilters(ctx context.Context, filter repo.OAuth2UserFilter) ([]*model.OAuth2User, int64, error) {
+	// Simple implementation for tests
+	users := make([]*model.OAuth2User, 0, len(m.users))
+	for _, u := range m.users {
+		users = append(users, u)
+	}
+	return users, int64(len(users)), nil
+}
+
 type mockDeviceRepo struct{}
 
 func (m *mockDeviceRepo) Upsert(ctx context.Context, device *model.Device) error {

@@ -25,6 +25,16 @@ type OAuth2UserRepo interface {
 	FindOrCreate(ctx context.Context, user *model.OAuth2User) (*model.OAuth2User, bool, error)
 	// Update persists changes to an OAuth2 user record.
 	Update(ctx context.Context, user *model.OAuth2User) error
+	// ListWithFilters returns a paginated list of users with optional filters.
+	ListWithFilters(ctx context.Context, filter OAuth2UserFilter) ([]*model.OAuth2User, int64, error)
+}
+
+// OAuth2UserFilter holds filter criteria for listing users.
+type OAuth2UserFilter struct {
+	Status   string // "active" or "banned", empty means all
+	Search   string // search in email and name
+	Page     int
+	PageSize int
 }
 
 type oauth2UserRepo struct {
@@ -100,4 +110,45 @@ func (r *oauth2UserRepo) FindOrCreate(ctx context.Context, user *model.OAuth2Use
 		return nil, false, fmt.Errorf("findOrCreate create oauth2 user: %w", err)
 	}
 	return user, true, nil
+}
+
+// ListWithFilters returns a paginated list of users with optional filters.
+func (r *oauth2UserRepo) ListWithFilters(ctx context.Context, filter OAuth2UserFilter) ([]*model.OAuth2User, int64, error) {
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.PageSize < 1 || filter.PageSize > 100 {
+		filter.PageSize = 20
+	}
+
+	query := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.OAuth2User{})
+
+	// Apply status filter
+	switch filter.Status {
+	case "banned":
+		query = query.Where("banned_at IS NOT NULL")
+	case "active":
+		query = query.Where("banned_at IS NULL")
+	}
+
+	// Apply search filter
+	if filter.Search != "" {
+		searchPattern := "%" + filter.Search + "%"
+		query = query.Where("email ILIKE ? OR name ILIKE ?", searchPattern, searchPattern)
+	}
+
+	// Count total
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count oauth2 users: %w", err)
+	}
+
+	// Fetch paginated results
+	var users []*model.OAuth2User
+	offset := (filter.Page - 1) * filter.PageSize
+	if err := query.Order("created_at DESC").Offset(offset).Limit(filter.PageSize).Find(&users).Error; err != nil {
+		return nil, 0, fmt.Errorf("list oauth2 users: %w", err)
+	}
+
+	return users, total, nil
 }

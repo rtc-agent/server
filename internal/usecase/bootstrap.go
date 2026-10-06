@@ -18,9 +18,9 @@ import (
 
 // Expected policy counts for default roles (used for bootstrap validation).
 const (
-	expectedAdminPolicies    = 13 // admin role: role(4) + permission(3) + user_role(3) + audit_log(1) + user(2)
-	expectedOperatorPolicies = 5  // operator role: role(1) + user(2) + user_role(2)
-	expectedViewerPolicies   = 1  // viewer role: role(1)
+	expectedAdminPolicies    = 15 // admin role: role(4) + permission(3) + user_role(3) + audit_log(1) + user(2) + rtc_user(2)
+	expectedOperatorPolicies = 7  // operator role: role(1) + user(2) + user_role(2) + rtc_user(2)
+	expectedViewerPolicies   = 2  // viewer role: role(1) + rtc_user(1)
 )
 
 // BootstrapAdmin initializes default roles and permissions if they don't already exist.
@@ -155,6 +155,8 @@ func addAllPolicies(ctx context.Context, enforcer *auth.CasbinEnforcer, adminID,
 		{adminID, "admin_user_role", "write"},
 		{adminID, "admin_user_role", "delete"},
 		{adminID, "audit_log", "read"},
+		{adminID, "rtc_user", "read"},
+		{adminID, "rtc_user", "ban"},
 	}
 
 	operatorPolicies := [][]string{
@@ -163,10 +165,13 @@ func addAllPolicies(ctx context.Context, enforcer *auth.CasbinEnforcer, adminID,
 		{operatorID, "role", "read"},
 		{operatorID, "admin_user_role", "read"},
 		{operatorID, "admin_user_role", "write"},
+		{operatorID, "rtc_user", "read"},
+		{operatorID, "rtc_user", "ban"},
 	}
 
 	viewerPolicies := [][]string{
 		{viewerID, "admin_user", "read"},
+		{viewerID, "rtc_user", "read"},
 	}
 
 	if err := enforcer.AddPolicies(ctx, adminPolicies); err != nil {
@@ -203,6 +208,8 @@ func getExpectedAdminPolicies(adminID string) [][]string {
 		{adminID, "admin_user_role", "write"},
 		{adminID, "admin_user_role", "delete"},
 		{adminID, "audit_log", "read"},
+		{adminID, "rtc_user", "read"},
+		{adminID, "rtc_user", "ban"},
 	}
 }
 

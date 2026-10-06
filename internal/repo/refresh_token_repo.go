@@ -19,6 +19,8 @@ type RefreshTokenRepo interface {
 	FindByHash(ctx context.Context, hash string) (*model.RefreshToken, error)
 	// Revoke marks a refresh token as revoked.
 	Revoke(ctx context.Context, id uuid.UUID) error
+	// RevokeAllByUserID revokes all refresh tokens for a user.
+	RevokeAllByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
 }
 
 type refreshTokenRepo struct {
@@ -55,4 +57,16 @@ func (r *refreshTokenRepo) Revoke(ctx context.Context, id uuid.UUID) error {
 		return fmt.Errorf("revoke refresh token %s: %w", id, result.Error)
 	}
 	return nil
+}
+
+// RevokeAllByUserID revokes all refresh tokens for a user.
+func (r *refreshTokenRepo) RevokeAllByUserID(ctx context.Context, userID uuid.UUID) (int64, error) {
+	result := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.RefreshToken{}).
+		Where("user_id = ? AND revoked = false", userID).
+		Update("revoked", true)
+	if result.Error != nil {
+		return 0, fmt.Errorf("revoke all refresh tokens for user %s: %w", userID, result.Error)
+	}
+	return result.RowsAffected, nil
 }

@@ -53,8 +53,9 @@ func NewAuthUsecase(
 
 // FindOrCreateUserInfo holds the result of FindOrCreateUser.
 type FindOrCreateUserInfo struct {
-	UserID uuid.UUID
-	IsNew  bool
+	UserID   uuid.UUID
+	IsNew    bool
+	BannedAt *time.Time // Non-nil if the user account is banned
 }
 
 // FindOrCreateUser finds or creates an OAuth2 user using a "lookup + unique
@@ -86,11 +87,11 @@ func (uc *AuthUsecase) FindOrCreateUser(ctx context.Context, provider string, us
 				if err != nil {
 					return nil, fmt.Errorf("re-find user after concurrent create: %w", err)
 				}
-				return &FindOrCreateUserInfo{UserID: user.ID, IsNew: false}, nil
+				return &FindOrCreateUserInfo{UserID: user.ID, IsNew: false, BannedAt: user.BannedAt}, nil
 			}
 			return nil, fmt.Errorf("create user: %w", err)
 		}
-		return &FindOrCreateUserInfo{UserID: user.ID, IsNew: true}, nil
+		return &FindOrCreateUserInfo{UserID: user.ID, IsNew: true, BannedAt: user.BannedAt}, nil
 	}
 	// Already exists, update user info.
 	user.Name = userInfo.Username
@@ -99,7 +100,7 @@ func (uc *AuthUsecase) FindOrCreateUser(ctx context.Context, provider string, us
 	if err := uc.oauth2UserRepo.Update(ctx, user); err != nil {
 		logger.Warn(ctx, "failed to update user info", zap.Error(err))
 	}
-	return &FindOrCreateUserInfo{UserID: user.ID, IsNew: false}, nil
+	return &FindOrCreateUserInfo{UserID: user.ID, IsNew: false, BannedAt: user.BannedAt}, nil
 }
 
 // UpsertDeviceInput holds the input for UpsertDevice.
@@ -191,6 +192,15 @@ func (uc *AuthUsecase) ValidateRefreshToken(ctx context.Context, plainToken stri
 		return nil, ErrRefreshTokenExpired
 	}
 
+	// Check if user is banned
+	user, err := uc.oauth2UserRepo.FindByID(ctx, rt.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("find user: %w", err)
+	}
+	if user.BannedAt != nil {
+		return nil, ErrAccountBanned
+	}
+
 	// Revoke the old refresh token (token rotation).
 	if err := uc.refreshTokenRepo.Revoke(ctx, rt.ID); err != nil {
 		return nil, fmt.Errorf("revoke old refresh token: %w", err)
@@ -208,6 +218,7 @@ var (
 	ErrInvalidRefreshToken = errors.New("refresh_token is invalid")
 	ErrRefreshTokenRevoked = errors.New("refresh_token has been revoked")
 	ErrRefreshTokenExpired = errors.New("refresh_token has expired")
+	ErrAccountBanned       = errors.New("account has been banned")
 )
 
 // generateRefreshToken generates an opaque refresh_token.

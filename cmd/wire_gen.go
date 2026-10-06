@@ -70,7 +70,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	if err != nil {
 		return nil, err
 	}
-	dualBroker, err := provideDualBroker(cfg, node, updatePublisher, jwtSigner)
+	dualBroker, err := provideDualBroker(cfg, node, updatePublisher, jwtSigner, oAuth2UserRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	dualBroker, err := provideDualBroker(cfg, node, updatePublisher, jwtSigner)
+	dualBroker, err := provideDualBroker(cfg, node, updatePublisher, jwtSigner, oAuth2UserRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -291,8 +291,9 @@ func provideDualBroker(
 	node *centrifuge.Node,
 	updatePublisher *updates.UpdatePublisher,
 	jwtSigner *auth.JWTSigner,
+	oauth2UserRepo repo.OAuth2UserRepo,
 ) (*centrifugeplus.DualBroker, error) {
-	return svc.AssembleDualBroker(node, cfg, updatePublisher, jwtSigner)
+	return svc.AssembleDualBroker(node, cfg, updatePublisher, jwtSigner, oauth2UserRepo)
 }
 
 // chatModelResult wraps the optional ChatModel to handle Wire's error semantics.
