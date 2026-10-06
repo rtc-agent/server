@@ -230,9 +230,9 @@ func (h *ServerConfigHandler) respondOptimisticLock(c *gin.Context, message stri
 
 // ── User config helper used by UserConfigHandler ─────────────────────
 
-// parseUserIDParam parses :userId path parameter.
+// parseUserIDParam parses :id path parameter.
 func parseUserIDParam(c *gin.Context) (uuid.UUID, bool) {
-	idStr := c.Param("userId")
+	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		Error(c, "VALIDATION_ERROR", "无效的用户 ID")

@@ -22,12 +22,12 @@ func NewUserConfigHandler(uc *usecase.ServerConfigUsecase) *UserConfigHandler {
 
 // RegisterRoutes registers user config routes.
 func (h *UserConfigHandler) RegisterRoutes(r *gin.RouterGroup) {
-	r.GET("/rtc-users/:userId/configs", h.List)
-	r.GET("/rtc-users/:userId/configs/:key", h.Get)
-	r.PUT("/rtc-users/:userId/configs/:key", h.Update)
-	r.DELETE("/rtc-users/:userId/configs/:key", h.Delete)
-	r.GET("/rtc-users/:userId/configs/:key/history", h.GetHistory)
-	r.POST("/rtc-users/:userId/configs/:key/rollback", h.Rollback)
+	r.GET("/rtc-users/:id/configs", h.List)
+	r.GET("/rtc-users/:id/configs/:key", h.Get)
+	r.PUT("/rtc-users/:id/configs/:key", h.Update)
+	r.DELETE("/rtc-users/:id/configs/:key", h.Delete)
+	r.GET("/rtc-users/:id/configs/:key/history", h.GetHistory)
+	r.POST("/rtc-users/:id/configs/:key/rollback", h.Rollback)
 }
 
 // List returns the complete config view for a user (yaml + system + user merged).
