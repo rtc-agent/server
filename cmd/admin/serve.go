@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -28,6 +30,25 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
+// httpTimeouts defines standard timeout values for the admin HTTP server.
+// These prevent resource exhaustion from slow or idle connections.
+const (
+	// httpReadTimeout is the maximum duration for reading the entire request,
+	// including the body. 30s balances large payload uploads against Slowloris
+	// attacks.
+	httpReadTimeout = 30 * time.Second
+
+	// httpWriteTimeout is the maximum duration before timing out writes of the
+	// response. 30s is generous for most admin API responses while still
+	// preventing indefinite hangs.
+	httpWriteTimeout = 30 * time.Second
+
+	// httpIdleTimeout is the maximum duration to keep idle connections alive.
+	// 120s allows connection reuse for bursty admin traffic without leaking
+	// file descriptors.
+	httpIdleTimeout = 120 * time.Second
+)
+
 // serveCmd represents the serve command
 var serveCmd = &cobra.Command{
 	Use:   "serve",
@@ -35,6 +56,10 @@ var serveCmd = &cobra.Command{
 	Long:  `Start the RTC Agent admin server for admin user management and authentication`,
 	Run:   runServe,
 }
+
+// bootstrapDegraded tracks whether the server started in degraded mode
+// (bootstrap failed). It is read by the readiness probe endpoint.
+var bootstrapDegraded atomic.Bool
 
 func runServe(cmd *cobra.Command, args []string) {
 	// Load admin config
@@ -62,6 +87,20 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	ctx := context.Background()
 	logger.Info(ctx, "admin.starting")
+
+	// Log deployment mode: detect multi-instance configuration via environment
+	// variable INSTANCE_COUNT. This helps operators verify that Redis-backed
+	// features (rate limiting, login protection, policy sync) are properly
+	// configured for the deployment topology.
+	instanceCount := parseInstanceCount()
+	deploymentMode := "single-instance"
+	if instanceCount > 1 {
+		deploymentMode = "multi-instance"
+	}
+	logger.Info(ctx, "admin.deployment_mode",
+		zap.String("mode", deploymentMode),
+		zap.Int("instance_count", instanceCount),
+		zap.String("env", cfg.Server.Env))
 
 	// Init database
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
@@ -94,6 +133,15 @@ func runServe(cmd *cobra.Command, args []string) {
 		}
 	} else {
 		logger.Info(ctx, "admin.redis_not_configured_jwks_caching_disabled")
+	}
+
+	// Warn if multi-instance deployment is configured but Redis is unavailable.
+	// Without Redis, rate limiting, login protection, OTP store, and policy sync
+	// fall back to per-instance memory stores, which are inconsistent across
+	// replicas.
+	if rdb == nil && instanceCount > 1 {
+		logger.Warn(ctx, "admin.multi_instance_without_redis_rate_limiting_and_policy_sync_disabled",
+			zap.Int("instance_count", instanceCount))
 	}
 
 	// Init ban cache (Redis-backed if available, otherwise disabled)
@@ -152,13 +200,17 @@ func runServe(cmd *cobra.Command, args []string) {
 	sessionRepo := repo.NewSessionRepo(db)
 	messageRepo := repo.NewMessageRepo(db)
 
-	// Bootstrap default roles and policies (idempotent, transactional) (P0 #4)
-	// If bootstrap fails, log error but continue - server can still function in degraded mode
+	// Bootstrap default roles and policies (idempotent, transactional).
+	// If bootstrap fails, the server enters "degraded mode": it starts normally
+	// but default roles/permissions may be missing, causing authorization errors
+	// for admin operations. The readiness probe will report degraded status so
+	// load balancers can avoid routing traffic to this instance.
 	if err := usecase.BootstrapAdmin(ctx, db, adminRoleRepo, enforcer); err != nil {
-		logger.Error(ctx, "admin.bootstrap_admin_failed_default_roles_may_be_missing",
+		bootstrapDegraded.Store(true)
+		logger.Error(ctx, "admin.bootstrap_failed_degraded_mode_default_roles_may_be_missing",
 			zap.Error(err))
-		// Don't exit - allow server to start even if bootstrap failed
-		// Admin can manually fix issues or restart after resolving DB problems
+	} else {
+		logger.Info(ctx, "admin.bootstrap_completed")
 	}
 
 	// Init rate limiter — prefer Redis-backed for multi-instance deployments
@@ -292,33 +344,51 @@ func runServe(cmd *cobra.Command, args []string) {
 	// Wire password login configuration to auth handler
 	adminAuthHandler.SetPasswordEnabled(cfg.Features.PasswordEnabled)
 
+	// Wire cookie security configuration to auth handler.
+	// Enable Secure flag in production HTTPS deployments to prevent cookie leakage over HTTP.
+	adminAuthHandler.SetCookieSecure(cfg.Security.CookieSecure)
+
 	// Setup router
 	router := setupRouter(routerDeps{
-		adminAuthHandler:     adminAuthHandler,
-		adminRoleHandler:     adminRoleHandler,
-		permissionHandler:    permissionHandler,
-		adminUserRoleHandler: adminUserRoleHandler,
-		auditLogHandler:      auditLogHandler,
-		adminUserHandler:     adminUserHandler,
-		rtcSessionHandler:    rtcSessionHandler,
-		rtcUserHandler:       rtcUserHandler,
-		serverConfigHandler:  serverConfigHandler,
-		userConfigHandler:    userConfigHandler,
-		metricsProxyHandler:  metricsProxyHandler,
-		grafanaProxyHandler:   grafanaProxyHandler,
-		jaegerProxyHandler:    jaegerProxyHandler,
-		pyroscopeProxyHandler: pyroscopeProxyHandler,
-		enforcer:              enforcer,
-		permissionEnabled:     permissionSystemEnabled,
-		allowedOrigins:        cfg.CORS.AllowedOrigins,
-		rateLimiter:           rateLimiter,
+		handlers: handlerDeps{
+			adminAuth:      adminAuthHandler,
+			adminRole:      adminRoleHandler,
+			permission:     permissionHandler,
+			adminUserRole:  adminUserRoleHandler,
+			auditLog:       auditLogHandler,
+			adminUser:      adminUserHandler,
+			rtcSession:     rtcSessionHandler,
+			rtcUser:        rtcUserHandler,
+			serverConfig:   serverConfigHandler,
+			userConfig:     userConfigHandler,
+			metricsProxy:   metricsProxyHandler,
+			grafanaProxy:   grafanaProxyHandler,
+			jaegerProxy:    jaegerProxyHandler,
+			pyroscopeProxy: pyroscopeProxyHandler,
+		},
+		auth: authDeps{
+			enforcer:          enforcer,
+			permissionEnabled: permissionSystemEnabled,
+		},
+		cors: corsDeps{
+			allowedOrigins: cfg.CORS.AllowedOrigins,
+			env:            cfg.Server.Env,
+		},
+		middleware: middlewareDeps{
+			rateLimiter: rateLimiter,
+		},
 	})
 
-	// Create HTTP server
+	// Create HTTP server with explicit timeouts to prevent resource exhaustion.
+	// Without these, the server uses zero values (no timeout), making it
+	// vulnerable to Slowloris attacks and connection leaks.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: router,
+		Addr:         addr,
+		Handler:      router,
+		ReadTimeout:  httpReadTimeout,
+		WriteTimeout: httpWriteTimeout,
+		IdleTimeout:  httpIdleTimeout,
 	}
 
 	// Start server
@@ -326,7 +396,11 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Info(ctx, "admin.server_listening",
 			zap.String("addr", addr),
 			zap.String("env", cfg.Server.Env),
-			zap.Bool("permission_system", permissionSystemEnabled))
+			zap.Bool("permission_system", permissionSystemEnabled),
+			zap.Bool("degraded_mode", bootstrapDegraded.Load()),
+			zap.Duration("read_timeout", httpReadTimeout),
+			zap.Duration("write_timeout", httpWriteTimeout),
+			zap.Duration("idle_timeout", httpIdleTimeout))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error(ctx, "admin.server_failed", zap.Error(err))
 			_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
@@ -350,26 +424,56 @@ func runServe(cmd *cobra.Command, args []string) {
 	logger.Info(ctx, "admin.server_exited")
 }
 
-// routerDeps groups all dependencies needed to configure the Gin router.
+// handlerDeps groups all HTTP handler dependencies by functional module.
+type handlerDeps struct {
+	// Admin management handlers
+	adminAuth     *httphandler.AdminAuthHandler
+	adminRole     *httphandler.AdminRoleHandler
+	permission    *httphandler.PermissionHandler
+	adminUserRole *httphandler.AdminUserRoleHandler
+	auditLog      *httphandler.AuditLogHandler
+	adminUser     *httphandler.AdminUserHandler
+
+	// RTC management handlers
+	rtcSession *httphandler.RtcSessionHandler
+	rtcUser    *httphandler.RtcUserHandler
+
+	// Configuration & monitoring handlers
+	serverConfig   *httphandler.ServerConfigHandler
+	userConfig     *httphandler.UserConfigHandler
+	metricsProxy   *httphandler.MetricsProxyHandler
+	grafanaProxy   *httphandler.GrafanaProxyHandler
+	jaegerProxy    *httphandler.JaegerProxyHandler
+	pyroscopeProxy *httphandler.PyroscopeProxyHandler
+}
+
+// authDeps groups authorization-related dependencies.
+type authDeps struct {
+	enforcer          *auth.CasbinEnforcer
+	permissionEnabled bool
+}
+
+// corsDeps groups CORS configuration dependencies.
+type corsDeps struct {
+	allowedOrigins []string
+	// env is the runtime environment (development/production).
+	// In production, an empty allowedOrigins list blocks all cross-origin
+	// requests instead of allowing all origins (secure-by-default).
+	env string
+}
+
+// middlewareDeps groups middleware-related dependencies.
+type middlewareDeps struct {
+	rateLimiter httphandler.RateLimiterInterface
+}
+
+// routerDeps groups all dependencies needed to configure the Gin router,
+// organized by functional module to improve readability.
 type routerDeps struct {
-	adminAuthHandler     *httphandler.AdminAuthHandler
-	adminRoleHandler     *httphandler.AdminRoleHandler
-	permissionHandler    *httphandler.PermissionHandler
-	adminUserRoleHandler *httphandler.AdminUserRoleHandler
-	auditLogHandler      *httphandler.AuditLogHandler
-	adminUserHandler     *httphandler.AdminUserHandler
-	rtcSessionHandler    *httphandler.RtcSessionHandler
-	rtcUserHandler       *httphandler.RtcUserHandler
-	serverConfigHandler  *httphandler.ServerConfigHandler
-	userConfigHandler    *httphandler.UserConfigHandler
-	metricsProxyHandler  *httphandler.MetricsProxyHandler
-	grafanaProxyHandler   *httphandler.GrafanaProxyHandler
-	jaegerProxyHandler    *httphandler.JaegerProxyHandler
-	pyroscopeProxyHandler *httphandler.PyroscopeProxyHandler
-	enforcer              *auth.CasbinEnforcer
-	permissionEnabled     bool
-	allowedOrigins        []string
-	rateLimiter           httphandler.RateLimiterInterface
+	handlers   handlerDeps
+	auth       authDeps
+	cors       corsDeps
+	middleware middlewareDeps
 }
 
 // setupRouter creates and configures the Gin router with all routes and middleware.
@@ -403,16 +507,36 @@ func setupRouter(deps routerDeps) *gin.Engine {
 	router.Use(httphandler.SecurityHeadersMiddleware())
 
 	// Rate limiting middleware (P0 #2) — applied globally
-	router.Use(httphandler.AdminRateLimitMiddleware(deps.rateLimiter))
+	router.Use(httphandler.AdminRateLimitMiddleware(deps.middleware.rateLimiter))
 
 	// CORS middleware
+	//
+	// Security behavior by environment:
+	// - production/staging: empty allowedOrigins blocks ALL cross-origin requests
+	//   (secure-by-default; operators must explicitly configure CORS origins).
+	// - development: empty allowedOrigins allows all origins for developer ergonomics.
+	//
+	// This prevents accidental open CORS in production when the config is missing.
+	isProduction := deps.cors.env == "production" || deps.cors.env == "staging"
+	if isProduction && len(deps.cors.allowedOrigins) == 0 {
+		logger.Warn(context.Background(),
+			"admin.cors_empty_origins_in_production_blocking_all_cross_origin_requests",
+			zap.String("env", deps.cors.env))
+	}
+
 	router.Use(func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 		allowed := false
-		if len(deps.allowedOrigins) == 0 {
-			allowed = true
+
+		if len(deps.cors.allowedOrigins) == 0 {
+			// In production/staging, empty origins means "block all".
+			// In development, empty origins means "allow all" (backward compatible).
+			if !isProduction {
+				allowed = true
+			}
+			// If production and empty, allowed stays false — no CORS headers sent.
 		} else {
-			for _, o := range deps.allowedOrigins {
+			for _, o := range deps.cors.allowedOrigins {
 				if o == origin {
 					allowed = true
 					break
@@ -436,33 +560,65 @@ func setupRouter(deps routerDeps) *gin.Engine {
 		c.Next()
 	})
 
+	// Register readiness probe endpoint.
+	// Reports degraded status when bootstrap failed, allowing load balancers
+	// to route traffic away from unhealthy instances.
+	router.GET("/ready", func(c *gin.Context) {
+		if bootstrapDegraded.Load() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status": "degraded",
+				"error":  "bootstrap failed — default roles may be missing",
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"status": "ready",
+		})
+	})
+
 	// Register admin auth routes (public + protected)
-	deps.adminAuthHandler.RegisterRoutes(router)
+	deps.handlers.adminAuth.RegisterRoutes(router)
 
 	// Protected API routes with JWT + Casbin middleware
 	apiGroup := router.Group("/api")
-	apiGroup.Use(deps.adminAuthHandler.JWTAuthMiddleware())
-	apiGroup.Use(httphandler.CasbinMiddleware(deps.enforcer, deps.permissionEnabled))
+	apiGroup.Use(deps.handlers.adminAuth.JWTAuthMiddleware())
+	apiGroup.Use(httphandler.CasbinMiddleware(deps.auth.enforcer, deps.auth.permissionEnabled))
 
 	// Register management routes
-	deps.adminRoleHandler.RegisterRoutes(apiGroup)
-	deps.permissionHandler.RegisterRoutes(apiGroup)
-	deps.adminUserRoleHandler.RegisterRoutes(apiGroup)
-	deps.auditLogHandler.RegisterRoutes(apiGroup)
-	deps.adminUserHandler.RegisterRoutes(apiGroup)
-	deps.rtcSessionHandler.RegisterRoutes(apiGroup)
-	deps.rtcUserHandler.RegisterRoutes(apiGroup)
-	deps.serverConfigHandler.RegisterRoutes(apiGroup)
-	deps.userConfigHandler.RegisterRoutes(apiGroup)
-	deps.metricsProxyHandler.RegisterRoutes(apiGroup)
-	deps.grafanaProxyHandler.RegisterRoutes(apiGroup)
-	deps.jaegerProxyHandler.RegisterRoutes(apiGroup)
-	deps.pyroscopeProxyHandler.RegisterRoutes(apiGroup)
+	deps.handlers.adminRole.RegisterRoutes(apiGroup)
+	deps.handlers.permission.RegisterRoutes(apiGroup)
+	deps.handlers.adminUserRole.RegisterRoutes(apiGroup)
+	deps.handlers.auditLog.RegisterRoutes(apiGroup)
+	deps.handlers.adminUser.RegisterRoutes(apiGroup)
+	deps.handlers.rtcSession.RegisterRoutes(apiGroup)
+	deps.handlers.rtcUser.RegisterRoutes(apiGroup)
+	deps.handlers.serverConfig.RegisterRoutes(apiGroup)
+	deps.handlers.userConfig.RegisterRoutes(apiGroup)
+	deps.handlers.metricsProxy.RegisterRoutes(apiGroup)
+	deps.handlers.grafanaProxy.RegisterRoutes(apiGroup)
+	deps.handlers.jaegerProxy.RegisterRoutes(apiGroup)
+	deps.handlers.pyroscopeProxy.RegisterRoutes(apiGroup)
 
 	// Register static file server for admin-ui (SPA)
 	ServeStaticFiles(router)
 
 	return router
+}
+
+// parseInstanceCount reads the INSTANCE_COUNT environment variable to determine
+// the expected number of server replicas. Returns 1 if unset or invalid.
+// This is used to warn operators when multi-instance features are needed but
+// supporting infrastructure (Redis) is unavailable.
+func parseInstanceCount() int {
+	raw := os.Getenv("INSTANCE_COUNT")
+	if raw == "" {
+		return 1
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 1
+	}
+	return n
 }
 
 // populateDynamicConfigDefaults loads the main server config from the default
