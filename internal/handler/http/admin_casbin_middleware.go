@@ -2,6 +2,10 @@
 package httphandler
 
 import (
+	"fmt"
+	"log"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/rtc-agent/server/internal/infra/auth"
@@ -16,6 +20,40 @@ type routeResourceMapping struct {
 	pattern  string // Gin route pattern (from FullPath), e.g. "/api/roles/:id"
 	resource string // Casbin resource
 	action   string // Casbin action
+}
+
+// routeMapKey builds the composite key for routeMap lookups: "{METHOD} {pattern}".
+func routeMapKey(method, pattern string) string {
+	return method + " " + pattern
+}
+
+// routeMap provides O(1) lookup from "{method} {pattern}" to its Casbin (resource, action).
+// Built once in init() from routeResourceMap — zero per-request allocation.
+var routeMap map[string]struct {
+	resource string
+	action   string
+}
+
+func init() {
+	routeMap = make(map[string]struct {
+		resource string
+		action   string
+	}, len(routeResourceMap))
+
+	for _, m := range routeResourceMap {
+		key := routeMapKey(m.method, m.pattern)
+		if existing, dup := routeMap[key]; dup {
+			// Fail fast at startup: duplicate route mappings indicate a configuration
+			// error that would silently cause incorrect permission checks.
+			log.Fatalf("FATAL: duplicate route mapping in routeResourceMap: key=%q, "+
+				"existing=(%s, %s), duplicate=(%s, %s)",
+				key, existing.resource, existing.action, m.resource, m.action)
+		}
+		routeMap[key] = struct {
+			resource string
+			action   string
+		}{m.resource, m.action}
+	}
 }
 
 // routeResourceMap defines the mapping from API routes to Casbin resources/actions.
@@ -73,12 +111,12 @@ var routeResourceMap = []routeResourceMapping{
 	{"POST", "/api/configs/:key/rollback", "server_config", "write"},
 
 	// User-level config overrides (reuse server_config resource)
-	{"GET", "/api/rtc-users/:userId/configs", "server_config", "read"},
-	{"GET", "/api/rtc-users/:userId/configs/:key", "server_config", "read"},
-	{"PUT", "/api/rtc-users/:userId/configs/:key", "server_config", "write"},
-	{"DELETE", "/api/rtc-users/:userId/configs/:key", "server_config", "delete"},
-	{"GET", "/api/rtc-users/:userId/configs/:key/history", "server_config", "read"},
-	{"POST", "/api/rtc-users/:userId/configs/:key/rollback", "server_config", "write"},
+	{"GET", "/api/rtc-users/:id/configs", "server_config", "read"},
+	{"GET", "/api/rtc-users/:id/configs/:key", "server_config", "read"},
+	{"PUT", "/api/rtc-users/:id/configs/:key", "server_config", "write"},
+	{"DELETE", "/api/rtc-users/:id/configs/:key", "server_config", "delete"},
+	{"GET", "/api/rtc-users/:id/configs/:key/history", "server_config", "read"},
+	{"POST", "/api/rtc-users/:id/configs/:key/rollback", "server_config", "write"},
 
 	// Dashboard metrics proxy (Prometheus reverse proxy)
 	{"GET", "/api/metrics/*path", "dashboard", "read"},
@@ -100,11 +138,10 @@ var routeResourceMap = []routeResourceMapping{
 // are allowed through (legacy behavior). When enabled, requests must have a valid
 // Casbin policy for the corresponding (resource, action) pair.
 //
-// SECURITY POLICY: allow-by-default for unmapped routes.
-// Routes not registered in routeResourceMap are accessible to all authenticated users.
-// WARNING: New API endpoints MUST be added to routeResourceMap to enforce permissions.
-// This design prioritizes developer experience (new endpoints work immediately) over
-// strict security. For high-security deployments, consider changing to deny-by-default.
+// SECURITY POLICY: deny-by-default for unmapped routes.
+// Routes not registered in routeResourceMap are REJECTED with 403 Forbidden.
+// New API endpoints MUST be added to routeResourceMap, otherwise they will be
+// inaccessible to all users (including admins) until the mapping is added.
 func CasbinMiddleware(enforcer *auth.CasbinEnforcer, permissionSystemEnabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// If permission system is disabled, allow all requests (legacy mode)
@@ -118,14 +155,14 @@ func CasbinMiddleware(enforcer *auth.CasbinEnforcer, permissionSystemEnabled boo
 		// the request was not properly authenticated — deny access.
 		userIDStr, exists := c.Get("user_id")
 		if !exists {
-			Error(c, "unauthorized", "未认证")
+			Error(c, "unauthorized", "Authentication required")
 			c.Abort()
 			return
 		}
 
 		userID, ok := userIDStr.(string)
 		if !ok || userID == "" {
-			Error(c, "unauthorized", "未认证")
+			Error(c, "unauthorized", "Authentication required")
 			c.Abort()
 			return
 		}
@@ -141,12 +178,17 @@ func CasbinMiddleware(enforcer *auth.CasbinEnforcer, permissionSystemEnabled boo
 
 		resource, action, found := lookupRouteMapping(method, pattern)
 		if !found {
-			// SECURITY: allow-by-default for unmapped routes (per design doc section 3.4).
-			// WARNING: This means any registered route not in routeResourceMap is accessible
-			// to all authenticated users. New API endpoints MUST be added to routeResourceMap
-			// to enforce proper permission checks. This is a deliberate design trade-off
-			// favoring developer convenience over strict security.
-			c.Next()
+			// SECURITY: deny-by-default for unmapped routes (HTTP 403).
+			// Any route that is not explicitly mapped in routeResourceMap is forbidden.
+			// Developers: if you add a new API endpoint, you MUST add a corresponding
+			// entry to routeResourceMap, otherwise the endpoint will be inaccessible.
+			// Note: Uses HTTP 403 (not project's usual HTTP 200) because this is a
+			// security policy violation — unmapped endpoints should never be reached.
+			c.AbortWithStatusJSON(http.StatusForbidden, ResponseStructure{
+				Success:      false,
+				ErrorCode:    "forbidden",
+				ErrorMessage: fmt.Sprintf("permission not configured for this endpoint: %s %s", method, pattern),
+			})
 			return
 		}
 
@@ -170,11 +212,12 @@ func CasbinMiddleware(enforcer *auth.CasbinEnforcer, permissionSystemEnabled boo
 
 // lookupRouteMapping finds the resource and action for a given method + pattern.
 // Uses exact match on both method and pattern to avoid prefix-matching conflicts.
+// Lookup is O(1) via the pre-built routeMap index (initialized in init()).
 func lookupRouteMapping(method, pattern string) (resource, action string, found bool) {
-	for _, m := range routeResourceMap {
-		if m.method == method && m.pattern == pattern {
-			return m.resource, m.action, true
-		}
+	key := routeMapKey(method, pattern)
+	mapping, ok := routeMap[key]
+	if !ok {
+		return "", "", false
 	}
-	return "", "", false
+	return mapping.resource, mapping.action, true
 }
