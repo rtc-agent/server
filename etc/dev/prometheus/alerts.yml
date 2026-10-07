@@ -222,7 +222,7 @@ groups:
       # MinIO 磁盘使用率过高
       - alert: MinIODiskUsageHigh
         expr: |
-          (minio_node_disk_used_bytes / minio_node_disk_total_bytes) > 0.85
+          (minio_node_drive_used_bytes / minio_node_drive_total_bytes) > 0.85
         for: 5m
         labels:
           severity: warning
@@ -233,7 +233,7 @@ groups:
       # MinIO 磁盘使用率严重
       - alert: MinIODiskUsageCritical
         expr: |
-          (minio_node_disk_used_bytes / minio_node_disk_total_bytes) > 0.95
+          (minio_node_drive_used_bytes / minio_node_drive_total_bytes) > 0.95
         for: 1m
         labels:
           severity: critical
@@ -241,36 +241,25 @@ groups:
           summary: "MinIO 磁盘使用率 > 95%"
           description: "MinIO 节点 {{ $labels.instance }} 磁盘使用率: {{ $value | humanizePercentage }}，即将满载"
 
-      # MinIO 请求错误率
+      # MinIO 请求错误率（基于 rejected 请求）
       - alert: MinIOHighErrorRate
         expr: |
           (
-            sum(rate(minio_s3_requests_total{job="minio",code=~"5.."}[5m]))
-            / sum(rate(minio_s3_requests_total{job="minio"}[5m]))
+            sum(rate(minio_s3_requests_rejected_auth_total{job="minio"}[5m])
+              + rate(minio_s3_requests_rejected_invalid_total{job="minio"}[5m]))
+            /
+            (sum(rate(minio_s3_requests_total{job="minio"}[5m])) > 0)
           ) > 0.05
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "MinIO S3 请求错误率 > 5%"
-          description: "MinIO S3 API 5xx 错误率: {{ $value | humanizePercentage }}"
-
-      # MinIO 请求延迟过高
-      - alert: MinIOHighLatency
-        expr: |
-          histogram_quantile(0.95,
-            rate(minio_s3_request_duration_seconds_bucket{job="minio"}[5m])
-          ) > 5
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "MinIO S3 请求 p95 延迟 > 5s"
-          description: "MinIO S3 API p95 延迟: {{ $value | humanizeDuration }}"
+          summary: "MinIO S3 请求错误率异常"
+          description: "MinIO S3 API 拒绝请求比率异常"
 
       # MinIO 离线节点
       - alert: MinIOOfflineNodes
-        expr: minio_node_offline_total > 0
+        expr: minio_cluster_nodes_offline_total > 0
         for: 1m
         labels:
           severity: critical
@@ -278,15 +267,15 @@ groups:
           summary: "MinIO 有节点离线"
           description: "MinIO 集群中有 {{ $value }} 个节点离线"
 
-      # MinIO 配额超限（如果配置了配额）
-      - alert: MinIOQuotaExceeded
-        expr: minio_bucket_usage_total_bytes > 10737418240  # 10GB
+      # MinIO 离线磁盘
+      - alert: MinIOOfflineDrives
+        expr: minio_node_drive_offline_total > 0
         for: 1m
         labels:
-          severity: warning
+          severity: critical
         annotations:
-          summary: "MinIO bucket 使用量超过 10GB"
-          description: "Bucket {{ $labels.bucket }} 使用量: {{ $value | humanize1024 }}iB"
+          summary: "MinIO 有磁盘离线"
+          description: "MinIO 节点有 {{ $value }} 个磁盘离线"
 
   - name: oss3-alerts
     rules:

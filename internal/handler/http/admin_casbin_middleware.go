@@ -80,6 +80,7 @@ var routeResourceMap = []routeResourceMapping{
 	// Admin user-role management
 	{"GET", "/api/admin-users", "admin_user", "read"},
 	{"POST", "/api/admin-users", "admin_user", "write"},
+	{"PUT", "/api/admin-users/me", "admin_user_self", "write"},
 	{"PUT", "/api/admin-users/:id", "admin_user", "write"},
 	{"GET", "/api/admin-users/:id/roles", "admin_user_role", "read"},
 	{"POST", "/api/admin-users/:id/roles", "admin_user_role", "write"},
@@ -121,15 +122,30 @@ var routeResourceMap = []routeResourceMapping{
 	// Dashboard metrics proxy (Prometheus reverse proxy)
 	{"GET", "/api/metrics/*path", "dashboard", "read"},
 	{"POST", "/api/metrics/*path", "dashboard", "read"},
+	{"PUT", "/api/metrics/*path", "dashboard", "read"},
+	{"DELETE", "/api/metrics/*path", "dashboard", "read"},
+	{"PATCH", "/api/metrics/*path", "dashboard", "read"},
 
 	// Grafana dashboard iframe proxy
 	{"GET", "/api/grafana/*path", "dashboard", "read"},
+	{"POST", "/api/grafana/*path", "dashboard", "read"},
+	{"PUT", "/api/grafana/*path", "dashboard", "read"},
+	{"DELETE", "/api/grafana/*path", "dashboard", "read"},
+	{"PATCH", "/api/grafana/*path", "dashboard", "read"},
 
 	// Jaeger tracing proxy
 	{"GET", "/api/jaeger/*path", "dashboard", "read"},
+	{"POST", "/api/jaeger/*path", "dashboard", "read"},
+	{"PUT", "/api/jaeger/*path", "dashboard", "read"},
+	{"DELETE", "/api/jaeger/*path", "dashboard", "read"},
+	{"PATCH", "/api/jaeger/*path", "dashboard", "read"},
 
 	// Pyroscope profiling proxy
 	{"GET", "/api/pyroscope/*path", "dashboard", "read"},
+	{"POST", "/api/pyroscope/*path", "dashboard", "read"},
+	{"PUT", "/api/pyroscope/*path", "dashboard", "read"},
+	{"DELETE", "/api/pyroscope/*path", "dashboard", "read"},
+	{"PATCH", "/api/pyroscope/*path", "dashboard", "read"},
 }
 
 // CasbinMiddleware creates a Gin middleware that checks Casbin permissions.
@@ -195,13 +211,13 @@ func CasbinMiddleware(enforcer *auth.CasbinEnforcer, permissionSystemEnabled boo
 		// Check permission
 		allowed, err := enforcer.Enforce(c.Request.Context(), userID, resource, action)
 		if err != nil {
-			Error(c, "server_error", "权限检查失败")
+			Error(c, "server_error", "permission check failed")
 			c.Abort()
 			return
 		}
 
 		if !allowed {
-			Error(c, "forbidden", "权限不足")
+			Error(c, "forbidden", "permission denied")
 			c.Abort()
 			return
 		}
