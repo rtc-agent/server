@@ -29,6 +29,7 @@ type AdminAuthHandler struct {
 	enforcer                *auth.CasbinEnforcer
 	permissionSystemEnabled bool
 	passwordEnabled         bool
+	cookieSecure            bool
 }
 
 // NewAdminAuthHandler creates a new AdminAuthHandler.
@@ -67,6 +68,12 @@ func (h *AdminAuthHandler) SetEmailOTPUsecase(uc *usecase.EmailOTPUsecase) {
 // SetPasswordEnabled sets whether password login is enabled.
 func (h *AdminAuthHandler) SetPasswordEnabled(enabled bool) {
 	h.passwordEnabled = enabled
+}
+
+// SetCookieSecure sets whether authentication cookies require the Secure flag (HTTPS only).
+// Enable this in production environments served over TLS.
+func (h *AdminAuthHandler) SetCookieSecure(secure bool) {
+	h.cookieSecure = secure
 }
 
 // RegisterRoutes registers admin auth routes to the Gin router.
@@ -138,22 +145,27 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 	result, err := h.adminAuthUsecase.Login(ctx, req.Email, req.Password, clientIP)
 	if err != nil {
 		if errors.Is(err, usecase.ErrInvalidCredentials) {
-			Error(c, "invalid_credentials", "邮箱或密码错误")
+			Error(c, "invalid_credentials", "Invalid email or password")
 			return
 		}
 		if errors.Is(err, usecase.ErrLoginLocked) {
 			Error(c, "login_locked", err.Error())
 			return
 		}
-		logger.Error(ctx, "admin_auth.login_failed", zap.Error(err))
-		Error(c, "server_error", "服务器内部错误")
+		logger.Error(ctx, "admin_auth.login_failed",
+			zap.String("email", req.Email),
+			zap.String("client_ip", clientIP),
+			zap.Error(err))
+		Error(c, "server_error", "Internal server error")
 		return
 	}
 
-	// 登录成功返回统一格式的响应
-	// 同时设置 access_token cookie，供 iframe 嵌入场景使用（如 Grafana）
+	// Login succeeded — issue unified response.
+	// Also sets the access_token cookie for iframe embedding scenarios (e.g., Grafana).
+	// SameSite=Lax balances CSRF protection with iframe usability.
+	// Secure flag is enabled in production HTTPS deployments to prevent cookie leakage over HTTP.
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("access_token", result.AccessToken, int(result.ExpiresIn), "/", "", false, true)
+	c.SetCookie("access_token", result.AccessToken, int(result.ExpiresIn), "/", "", h.cookieSecure, true)
 
 	Success(c, LoginResponse{
 		AccessToken:  result.AccessToken,
@@ -173,20 +185,24 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		Error(c, "unauthorized", "管理员未认证")
+		Error(c, "unauthorized", "Admin not authenticated")
 		return
 	}
 
 	// Convert userID from string to uuid.UUID
 	userIDStr, ok := userID.(string)
 	if !ok {
-		Error(c, "unauthorized", "无效的管理员 ID")
+		logger.Error(c.Request.Context(), "admin_auth.get_current_user_invalid_id_type",
+			zap.Any("user_id_raw", userID))
+		Error(c, "unauthorized", "Invalid admin ID")
 		return
 	}
 
 	userUUID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		Error(c, "unauthorized", "管理员 ID 格式错误")
+		logger.Error(c.Request.Context(), "admin_auth.get_current_user_invalid_id_format",
+			zap.String("user_id", userIDStr))
+		Error(c, "unauthorized", "Invalid admin ID format")
 		return
 	}
 
@@ -194,11 +210,13 @@ func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 	user, err := h.adminAuthUsecase.GetCurrentUser(ctx, userUUID)
 	if err != nil {
 		if errors.Is(err, usecase.ErrAdminUserNotFound) {
-			Error(c, "admin_user_not_found", "管理员不存在")
+			Error(c, "admin_user_not_found", "Admin user not found")
 			return
 		}
-		logger.Error(ctx, "admin_auth.get_current_admin_user_failed", zap.Error(err))
-		Error(c, "server_error", "服务器内部错误")
+		logger.Error(ctx, "admin_auth.get_current_user_failed",
+			zap.String("user_id", userUUID.String()),
+			zap.Error(err))
+		Error(c, "server_error", "Internal server error")
 		return
 	}
 
@@ -206,16 +224,18 @@ func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 	if h.permissionSystemEnabled && h.roleRepo != nil && h.enforcer != nil {
 		resp, err := GetCurrentUserWithRoles(ctx, user, h.adminUserRoleRepo, h.roleRepo, h.enforcer)
 		if err != nil {
-			logger.Error(ctx, "admin_auth.get_current_user_roles_failed", zap.Error(err))
-			Error(c, "server_error", "服务器内部错误")
+			logger.Error(ctx, "admin_auth.get_current_user_roles_failed",
+				zap.String("user_id", userUUID.String()),
+				zap.Error(err))
+			Error(c, "server_error", "Internal server error")
 			return
 		}
 		Success(c, resp)
 		return
 	}
 
-	// Permission system disabled: return admin user with default admin role
-	// This ensures frontend knows the admin user has full access
+	// Permission system disabled: return admin user with default admin role.
+	// This ensures the frontend knows the admin user has full access.
 	Success(c, UserResponse{
 		ID:        user.ID.String(),
 		Email:     user.Email,
@@ -224,7 +244,7 @@ func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 		Roles: []RoleInfo{
 			{
 				Name:        "admin",
-				DisplayName: "管理员",
+				DisplayName: "Admin",
 			},
 		},
 	})
@@ -244,21 +264,23 @@ func (h *AdminAuthHandler) RefreshToken(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrInvalidRefreshToken):
-			Error(c, "invalid_grant", "刷新令牌无效")
+			Error(c, "invalid_grant", "Invalid refresh token")
 		case errors.Is(err, usecase.ErrRefreshTokenRevoked):
-			Error(c, "invalid_grant", "刷新令牌已被撤销")
+			Error(c, "invalid_grant", "Refresh token revoked")
 		case errors.Is(err, usecase.ErrRefreshTokenExpired):
-			Error(c, "invalid_grant", "刷新令牌已过期")
+			Error(c, "invalid_grant", "Refresh token expired")
 		default:
 			logger.Error(ctx, "admin_auth.refresh_token_failed", zap.Error(err))
-			Error(c, "server_error", "服务器内部错误")
+			Error(c, "server_error", "Internal server error")
 		}
 		return
 	}
 
-	// Update access_token cookie with new token
+	// Update access_token cookie with new token.
+	// SameSite=Lax balances CSRF protection with iframe usability.
+	// Secure flag is enabled in production HTTPS deployments.
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("access_token", result.AccessToken, int(result.ExpiresIn), "/", "", false, true)
+	c.SetCookie("access_token", result.AccessToken, int(result.ExpiresIn), "/", "", h.cookieSecure, true)
 
 	Success(c, RefreshResponse{
 		AccessToken:  result.AccessToken,
@@ -280,12 +302,12 @@ func (h *AdminAuthHandler) Logout(c *gin.Context) {
 	ctx := c.Request.Context()
 	if err := h.adminAuthUsecase.Logout(ctx, req.RefreshToken); err != nil {
 		logger.Error(ctx, "admin_auth.logout_failed", zap.Error(err))
-		Error(c, "server_error", "服务器内部错误")
+		Error(c, "server_error", "Internal server error")
 		return
 	}
 
-	// Clear access_token cookie
-	c.SetCookie("access_token", "", -1, "/", "", false, true)
+	// Clear access_token cookie by setting expiration in the past.
+	c.SetCookie("access_token", "", -1, "/", "", h.cookieSecure, true)
 
 	Success(c, gin.H{"status": "ok"})
 }
@@ -295,7 +317,7 @@ func (h *AdminAuthHandler) JWKS(c *gin.Context) {
 	jwks, err := h.jwtSigner.GetJWKS()
 	if err != nil {
 		logger.Error(c.Request.Context(), "admin_auth.jwks_generation_failed", zap.Error(err))
-		Error(c, "server_error", "生成 JWKS 失败")
+		Error(c, "server_error", "Failed to generate JWKS")
 		return
 	}
 
@@ -303,7 +325,7 @@ func (h *AdminAuthHandler) JWKS(c *gin.Context) {
 	jwksJSON, err := json.Marshal(jwks)
 	if err != nil {
 		logger.Error(c.Request.Context(), "admin_auth.jwks_serialization_failed", zap.Error(err))
-		Error(c, "server_error", "序列化 JWKS 失败")
+		Error(c, "server_error", "Failed to serialize JWKS")
 		return
 	}
 
@@ -320,7 +342,7 @@ func (h *AdminAuthHandler) Health(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, ResponseStructure{
 			Success:      false,
 			ErrorCode:    "database_unavailable",
-			ErrorMessage: "数据库不可用",
+			ErrorMessage: "Database unavailable",
 		})
 		return
 	}
@@ -329,7 +351,7 @@ func (h *AdminAuthHandler) Health(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, ResponseStructure{
 			Success:      false,
 			ErrorCode:    "database_unavailable",
-			ErrorMessage: "数据库不可用",
+			ErrorMessage: "Database unavailable",
 		})
 		return
 	}
@@ -363,7 +385,7 @@ func (h *AdminAuthHandler) JWTAuthMiddleware() gin.HandlerFunc {
 		}
 
 		if tokenString == "" {
-			Error(c, "unauthorized", "缺少认证信息")
+			Error(c, "unauthorized", "Authentication required")
 			c.Abort()
 			return
 		}
@@ -374,7 +396,7 @@ func (h *AdminAuthHandler) JWTAuthMiddleware() gin.HandlerFunc {
 			// flooding logs with malformed token attempts. Do NOT log the token value.
 			logger.Info(c.Request.Context(), "admin_auth.jwt_rejected",
 				zap.String("error", err.Error()))
-			Error(c, "unauthorized", "令牌无效或已过期")
+			Error(c, "unauthorized", "Invalid or expired token")
 			c.Abort()
 			return
 		}

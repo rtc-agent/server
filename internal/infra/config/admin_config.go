@@ -46,6 +46,10 @@ type AdminSecurityConfig struct {
 	// LoginLockDuration is the lockout duration in seconds after exceeding max attempts.
 	// Defaults to 900 (15 minutes).
 	LoginLockDuration int `mapstructure:"login_lock_duration"`
+	// CookieSecure controls the Secure flag on authentication cookies.
+	// When true, cookies are only sent over HTTPS. Enable in production with TLS.
+	// Default: false (suitable for development). Set true for production HTTPS deployments.
+	CookieSecure bool `mapstructure:"cookie_secure"`
 }
 
 // AdminFeaturesConfig controls feature flags for the admin server.

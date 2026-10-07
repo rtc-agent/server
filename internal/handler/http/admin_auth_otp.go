@@ -25,32 +25,32 @@ func (h *AdminAuthHandler) SendOTP(c *gin.Context) {
 	clientIP := c.ClientIP()
 
 	if h.emailOTPUsecase == nil {
-		Error(c, "otp_not_configured", "邮箱验证码功能未配置")
+		Error(c, "otp_not_configured", "Email verification is not configured")
 		return
 	}
 
 	if err := h.emailOTPUsecase.SendOTP(ctx, req.Email, clientIP); err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrEmailNotRegistered):
-			// SECURITY: Return generic message to prevent email enumeration
-			// Don't reveal whether the email exists
-			Success(c, gin.H{"message": "如果邮箱已注册，验证码已发送"})
+			// SECURITY: Return generic message to prevent email enumeration.
+			// Do not reveal whether the email exists.
+			Success(c, gin.H{"message": "If the email is registered, a verification code has been sent"})
 			return
 		case errors.Is(err, usecase.ErrOTPRateLimited):
-			Error(c, "rate_limited", "请求过于频繁，请稍后再试")
+			Error(c, "rate_limited", "Too many requests, please try again later")
 			return
 		case errors.Is(err, usecase.ErrOTPLocked):
-			Error(c, "locked", "验证码功能已暂时锁定，请稍后再试")
+			Error(c, "locked", "Verification is temporarily locked, please try again later")
 			return
 		default:
 			logger.Error(ctx, "admin_auth.send_otp_failed", zap.Error(err))
-			Error(c, "server_error", "发送验证码失败")
+			Error(c, "server_error", "Failed to send verification code")
 			return
 		}
 	}
 
-	// Always return success to prevent email enumeration
-	Success(c, gin.H{"message": "如果邮箱已注册，验证码已发送"})
+	// Always return success to prevent email enumeration.
+	Success(c, gin.H{"message": "If the email is registered, a verification code has been sent"})
 }
 
 // LoginWithOTP handles POST /api/auth/login/otp
@@ -65,7 +65,7 @@ func (h *AdminAuthHandler) LoginWithOTP(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	if h.emailOTPUsecase == nil {
-		Error(c, "otp_not_configured", "邮箱验证码功能未配置")
+		Error(c, "otp_not_configured", "Email verification is not configured")
 		return
 	}
 
@@ -73,17 +73,17 @@ func (h *AdminAuthHandler) LoginWithOTP(c *gin.Context) {
 	if err := h.emailOTPUsecase.VerifyOTP(ctx, req.Email, req.OTP); err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrOTPNotFound):
-			Error(c, "invalid_otp", "验证码无效或已过期")
+			Error(c, "invalid_otp", "Invalid or expired verification code")
 			return
 		case errors.Is(err, usecase.ErrOTPInvalid):
-			Error(c, "invalid_otp", "验证码错误")
+			Error(c, "invalid_otp", "Invalid verification code")
 			return
 		case errors.Is(err, usecase.ErrOTPLocked):
 			Error(c, "locked", err.Error())
 			return
 		default:
 			logger.Error(ctx, "admin_auth.verify_otp_failed", zap.Error(err))
-			Error(c, "server_error", "验证失败")
+			Error(c, "server_error", "Verification failed")
 			return
 		}
 	}
@@ -92,17 +92,19 @@ func (h *AdminAuthHandler) LoginWithOTP(c *gin.Context) {
 	result, err := h.adminAuthUsecase.LoginWithOTP(ctx, req.Email)
 	if err != nil {
 		if errors.Is(err, usecase.ErrAdminUserNotFound) {
-			Error(c, "invalid_credentials", "邮箱或验证码错误")
+			Error(c, "invalid_credentials", "Invalid email or verification code")
 			return
 		}
 		logger.Error(ctx, "admin_auth.otp_login_failed", zap.Error(err))
-		Error(c, "server_error", "服务器内部错误")
+		Error(c, "server_error", "Internal server error")
 		return
 	}
 
-	// 3. Set cookie and return response (same as password login)
+	// 3. Set cookie and return response (same as password login).
+	// SameSite=Lax balances CSRF protection with iframe usability.
+	// Secure flag is enabled in production HTTPS deployments.
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("access_token", result.AccessToken, int(result.ExpiresIn), "/", "", false, true)
+	c.SetCookie("access_token", result.AccessToken, int(result.ExpiresIn), "/", "", h.cookieSecure, true)
 
 	Success(c, LoginResponse{
 		AccessToken:  result.AccessToken,

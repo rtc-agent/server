@@ -76,6 +76,11 @@ func (c *AdminConfig) setDefaults(v *viper.Viper) {
 	if c.Security.LoginLockDuration <= 0 {
 		c.Security.LoginLockDuration = 900 // 15 minutes
 	}
+	// CookieSecure defaults to true in production, false in development.
+	// Only set default if not explicitly configured in the config file.
+	if !v.IsSet("security.cookie_secure") {
+		c.Security.CookieSecure = c.Server.Env == "production"
+	}
 	// Features: permission_system defaults to true per spec section 8.2.
 	// Only set default if not explicitly configured in the config file.
 	if !v.IsSet("features.permission_system") {

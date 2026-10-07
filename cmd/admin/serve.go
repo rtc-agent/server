@@ -500,6 +500,9 @@ func setupRouter(deps routerDeps) *gin.Engine {
 	// Recovery middleware
 	router.Use(gin.Recovery())
 
+	// Request ID middleware — generates/propagates X-Request-ID for tracing
+	router.Use(httphandler.AdminRequestIDMiddleware())
+
 	// Logger middleware
 	router.Use(gin.Logger())
 
