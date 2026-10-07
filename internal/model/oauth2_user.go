@@ -19,7 +19,7 @@ type OAuth2User struct {
 	BannedReason string     `gorm:"size:500" json:"banned_reason,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
-	DeletedAt    *time.Time `gorm:"index" json:"-"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // BeforeCreate generates a UUID v7 identifier if one is not already set.

@@ -32,12 +32,13 @@ type LoginProtectionConfig struct {
 // expires. Both dimensions are tracked independently — locking an IP does not
 // lock an email, and vice versa.
 type LoginProtection struct {
-	mu           sync.Mutex
-	attempts     map[string]int // key: "ip:<addr>" or "email:<addr>"
-	lockedUntil  map[string]time.Time
-	maxAttempts  int
-	lockDuration time.Duration
-	stopCh       chan struct{} // signals the cleanup goroutine to stop
+	mu              sync.Mutex
+	attempts        map[string]int       // key: "ip:<addr>" or "email:<addr>"
+	lastAttemptTime map[string]time.Time // key: same as attempts; tracks last activity
+	lockedUntil     map[string]time.Time
+	maxAttempts     int
+	lockDuration    time.Duration
+	stopCh          chan struct{} // signals the cleanup goroutine to stop
 }
 
 // NewLoginProtection creates a new LoginProtection instance.
@@ -49,11 +50,12 @@ func NewLoginProtection(cfg LoginProtectionConfig) *LoginProtection {
 		cfg.LockDuration = 15 * time.Minute
 	}
 	lp := &LoginProtection{
-		attempts:     make(map[string]int),
-		lockedUntil:  make(map[string]time.Time),
-		maxAttempts:  cfg.MaxAttempts,
-		lockDuration: cfg.LockDuration,
-		stopCh:       make(chan struct{}),
+		attempts:        make(map[string]int),
+		lastAttemptTime: make(map[string]time.Time),
+		lockedUntil:     make(map[string]time.Time),
+		maxAttempts:     cfg.MaxAttempts,
+		lockDuration:    cfg.LockDuration,
+		stopCh:          make(chan struct{}),
 	}
 	go lp.cleanupLoop()
 	return lp
@@ -93,6 +95,7 @@ func (lp *LoginProtection) RecordFailedLogin(_ context.Context, ip, email string
 	// Record IP failure
 	ipKey := "ip:" + ip
 	lp.attempts[ipKey]++
+	lp.lastAttemptTime[ipKey] = now
 	if lp.attempts[ipKey] >= lp.maxAttempts {
 		lp.lockedUntil[ipKey] = now.Add(lp.lockDuration)
 	}
@@ -100,6 +103,7 @@ func (lp *LoginProtection) RecordFailedLogin(_ context.Context, ip, email string
 	// Record email failure
 	emailKey := "email:" + email
 	lp.attempts[emailKey]++
+	lp.lastAttemptTime[emailKey] = now
 	if lp.attempts[emailKey] >= lp.maxAttempts {
 		lp.lockedUntil[emailKey] = now.Add(lp.lockDuration)
 	}
@@ -115,6 +119,8 @@ func (lp *LoginProtection) ResetLoginAttempts(_ context.Context, ip, email strin
 	delete(lp.attempts, "email:"+email)
 	delete(lp.lockedUntil, "ip:"+ip)
 	delete(lp.lockedUntil, "email:"+email)
+	delete(lp.lastAttemptTime, "ip:"+ip)
+	delete(lp.lastAttemptTime, "email:"+email)
 }
 
 // Stop stops the cleanup goroutine.
@@ -142,6 +148,15 @@ func (lp *LoginProtection) cleanupLoop() {
 				if now.After(until) {
 					delete(lp.lockedUntil, key)
 					delete(lp.attempts, key)
+					delete(lp.lastAttemptTime, key)
+				}
+			}
+			// Also clean up stale attempt counters that haven't been updated
+			// in 30 minutes (prevents unbounded map growth from one-off attempts).
+			for key, lastAttempt := range lp.lastAttemptTime {
+				if now.Sub(lastAttempt) > 30*time.Minute {
+					delete(lp.attempts, key)
+					delete(lp.lastAttemptTime, key)
 				}
 			}
 			lp.mu.Unlock()

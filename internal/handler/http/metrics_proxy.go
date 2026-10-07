@@ -7,7 +7,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -46,11 +45,7 @@ func NewMetricsProxyHandler(prometheusURL string) *MetricsProxyHandler {
 			r.Out.URL.Path = rewritePath(r.Out.URL.Path)
 			r.Out.URL.RawPath = "" // clear RawPath so URL.Path is used
 		},
-		Transport: &http.Transport{
-			MaxIdleConns:        100,
-			IdleConnTimeout:     90 * time.Second,
-			MaxIdleConnsPerHost: 100,
-		},
+		Transport: sharedProxyTransport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error(r.Context(), "admin.metrics_proxy_error",
 				zap.String("path", r.URL.Path), zap.Error(err))

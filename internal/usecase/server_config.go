@@ -32,14 +32,14 @@ var (
 
 // ServerConfigUsecase handles dynamic configuration management.
 type ServerConfigUsecase struct {
-	configRepo     repo.ConfigRepo
+	configRepo     repo.ServerConfigRepo
 	auditLogRepo   repo.AuditLogRepo
 	oauth2UserRepo repo.OAuth2UserRepo
 	db             *gorm.DB
 }
 
 // NewServerConfigUsecase creates a new ServerConfigUsecase.
-func NewServerConfigUsecase(configRepo repo.ConfigRepo, auditLogRepo repo.AuditLogRepo, oauth2UserRepo repo.OAuth2UserRepo, db *gorm.DB) *ServerConfigUsecase {
+func NewServerConfigUsecase(configRepo repo.ServerConfigRepo, auditLogRepo repo.AuditLogRepo, oauth2UserRepo repo.OAuth2UserRepo, db *gorm.DB) *ServerConfigUsecase {
 	return &ServerConfigUsecase{
 		configRepo:     configRepo,
 		auditLogRepo:   auditLogRepo,

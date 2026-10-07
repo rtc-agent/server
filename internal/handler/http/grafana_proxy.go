@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -49,11 +48,7 @@ func NewGrafanaProxyHandler(grafanaURL string) *GrafanaProxyHandler {
 			r.Out.Host = r.In.Host
 			r.Out.URL.RawPath = ""
 		},
-		Transport: &http.Transport{
-			MaxIdleConns:        100,
-			IdleConnTimeout:     90 * time.Second,
-			MaxIdleConnsPerHost: 100,
-		},
+		Transport: sharedProxyTransport,
 		ModifyResponse: func(resp *http.Response) error {
 			// Remove X-Frame-Options and CSP frame-ancestors so the iframe can embed Grafana
 			resp.Header.Del("X-Frame-Options")

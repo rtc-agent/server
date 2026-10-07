@@ -59,12 +59,12 @@ type Dependencies struct {
 	// When non-nil, createAgent and background LLM calls use this instead of ChatModel.
 	ChatModelFactory ChatModelFactoryInterface
 
-	// ConfigRepo provides access to the dynamic configuration system.
+	// ServerConfigRepo provides access to the dynamic configuration system.
 	// Required when ChatModelFactory is non-nil.
-	ConfigRepo repo.ConfigRepo
+	ServerConfigRepo repo.ServerConfigRepo
 
 	// ConfigProvider provides type-safe access to dynamic configuration values.
-	// Wraps ConfigRepo with three-tier resolution (user override > system default > yaml baseline).
+	// Wraps ServerConfigRepo with three-tier resolution (user override > system default > yaml baseline).
 	// V1 implementation reads from DB on every call; V2 can add caching.
 	ConfigProvider config.ConfigProvider
 

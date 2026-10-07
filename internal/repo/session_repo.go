@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -158,6 +157,37 @@ func (r *sessionRepo) GetByUser(ctx context.Context, userID uuid.UUID, cursor *s
 }
 
 func (r *sessionRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status protocol.SessionStatus) error {
+	db := DBFromContext(ctx, r.db)
+
+	// Define valid state transitions.
+	validTransitions := map[string][]string{
+		string(model.SessionStatusActive): {string(model.SessionStatusIdle), string(model.SessionStatusClosed)},
+		string(model.SessionStatusIdle):   {string(model.SessionStatusActive), string(model.SessionStatusClosed)},
+		string(model.SessionStatusClosed): {}, // terminal state
+	}
+
+	// Get current status.
+	var current model.Session
+	if err := db.Select("status").First(&current, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("update session %s status: %w", id, ErrSessionNotFound)
+		}
+		return fmt.Errorf("update session %s status: %w", id, err)
+	}
+
+	// Check if transition is valid.
+	allowed := validTransitions[current.Status]
+	valid := false
+	for _, s := range allowed {
+		if s == string(status) {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return fmt.Errorf("invalid state transition from %s to %s", current.Status, status)
+	}
+
 	now := time.Now()
 	updates := map[string]any{
 		"status":     string(status),
@@ -166,8 +196,7 @@ func (r *sessionRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status pro
 	if status == model.SessionStatusClosed {
 		updates["closed_at"] = now
 	}
-	result := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&model.Session{}).
+	result := db.Model(&model.Session{}).
 		Where("id = ?", id).
 		Updates(updates)
 	if result.Error != nil {
@@ -305,11 +334,7 @@ func (r *sessionRepo) ListForAdmin(ctx context.Context, filter SessionAdminFilte
 		query = query.Where("created_at <= ?", *filter.EndTime)
 	}
 	if filter.Search != "" {
-		escaped := strings.NewReplacer(
-			`\`, `\\`,
-			`%`, `\%`,
-			`_`, `\_`,
-		).Replace(filter.Search)
+		escaped := escapeLikePattern(filter.Search)
 		query = query.Where("title ILIKE ? ESCAPE '\\'", "%"+escaped+"%")
 	}
 
@@ -348,6 +373,12 @@ func (r *sessionRepo) AggregateTokenStats(ctx context.Context, userID string, da
 }
 
 func (r *sessionRepo) ListTopByTokens(ctx context.Context, userID string, limit int) ([]*model.Session, error) {
+	if limit > 100 {
+		limit = 100
+	}
+	if limit < 1 {
+		limit = 10
+	}
 	var sessions []*model.Session
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("owner_ref_id = ? AND owner_kind = ?", userID, "user").

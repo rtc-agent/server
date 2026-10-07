@@ -39,7 +39,7 @@ func (h *UserConfigHandler) List(c *gin.Context) {
 	category := c.Query("category")
 	items, err := h.uc.GetUserConfigsView(c.Request.Context(), userID, category)
 	if err != nil {
-		Error(c, "server_error", "查询用户配置失败")
+		Error(c, "server_error", "Failed to query user config")
 		return
 	}
 	Success(c, gin.H{"user_id": userID.String(), "items": items})
@@ -55,10 +55,10 @@ func (h *UserConfigHandler) Get(c *gin.Context) {
 	item, err := h.uc.GetUserConfig(c.Request.Context(), userID, key)
 	if err != nil {
 		if errors.Is(err, usecase.ErrConfigKeyNotFound) {
-			Error(c, "CONFIG_KEY_NOT_FOUND", "配置项不存在")
+			Error(c, "CONFIG_KEY_NOT_FOUND", "Config key not found")
 			return
 		}
-		Error(c, "server_error", "查询用户配置失败")
+		Error(c, "server_error", "Failed to query user config")
 		return
 	}
 	Success(c, item)
@@ -74,7 +74,7 @@ func (h *UserConfigHandler) Update(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req updateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Error(c, "VALIDATION_ERROR", "请求参数错误: "+err.Error())
+		Error(c, "validation_error", sanitizeBindingError(err))
 		return
 	}
 
@@ -146,10 +146,10 @@ func (h *UserConfigHandler) GetHistory(c *gin.Context) {
 	items, total, err := h.uc.GetHistory(c.Request.Context(), key, &userID, page, pageSize)
 	if err != nil {
 		if errors.Is(err, usecase.ErrConfigKeyNotFound) {
-			Error(c, "CONFIG_KEY_NOT_FOUND", "配置项不存在")
+			Error(c, "CONFIG_KEY_NOT_FOUND", "Config key not found")
 			return
 		}
-		Error(c, "server_error", "查询变更历史失败")
+		Error(c, "server_error", "Failed to query change history")
 		return
 	}
 	Success(c, gin.H{"items": items, "total": total, "page": page, "page_size": pageSize})
@@ -165,7 +165,7 @@ func (h *UserConfigHandler) Rollback(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req rollbackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Error(c, "VALIDATION_ERROR", "请求参数错误: "+err.Error())
+		Error(c, "validation_error", sanitizeBindingError(err))
 		return
 	}
 
@@ -195,15 +195,15 @@ func (h *UserConfigHandler) Rollback(c *gin.Context) {
 func (h *UserConfigHandler) handleUserUpdateError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, usecase.ErrConfigKeyNotFound):
-		Error(c, "CONFIG_KEY_NOT_FOUND", "配置项不存在")
+		Error(c, "CONFIG_KEY_NOT_FOUND", "Config key not found")
 	case errors.Is(err, usecase.ErrUserNotFound):
-		Error(c, "USER_NOT_FOUND", "用户不存在")
+		Error(c, "USER_NOT_FOUND", "User not found")
 	case errors.Is(err, usecase.ErrOptimisticLock):
-		Error(c, "OPTIMISTIC_LOCK_CONFLICT", "配置已被其他管理员修改，请重新加载后重试")
+		Error(c, "OPTIMISTIC_LOCK_CONFLICT", "Config has been modified by another admin, please reload and retry")
 	case errors.Is(err, usecase.ErrValidation):
 		Error(c, "VALIDATION_ERROR", err.Error())
 	default:
-		Error(c, "server_error", "更新用户配置失败")
+		Error(c, "server_error", "Failed to update user config")
 	}
 }
 
@@ -211,13 +211,13 @@ func (h *UserConfigHandler) handleUserUpdateError(c *gin.Context, err error) {
 func (h *UserConfigHandler) handleUserDeleteError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, usecase.ErrConfigKeyNotFound):
-		Error(c, "CONFIG_KEY_NOT_FOUND", "配置项不存在")
+		Error(c, "CONFIG_KEY_NOT_FOUND", "Config key not found")
 	case errors.Is(err, usecase.ErrConfigNotFound):
-		Error(c, "CONFIG_NOT_FOUND", "该用户无此配置覆盖记录")
+		Error(c, "CONFIG_NOT_FOUND", "No config override record for this user")
 	case errors.Is(err, usecase.ErrOptimisticLock):
-		Error(c, "OPTIMISTIC_LOCK_CONFLICT", "配置已被其他管理员修改，请重新加载后重试")
+		Error(c, "OPTIMISTIC_LOCK_CONFLICT", "Config has been modified by another admin, please reload and retry")
 	default:
-		Error(c, "server_error", "删除用户配置失败")
+		Error(c, "server_error", "Failed to delete user config")
 	}
 }
 
@@ -225,16 +225,16 @@ func (h *UserConfigHandler) handleUserDeleteError(c *gin.Context, err error) {
 func (h *UserConfigHandler) handleUserRollbackError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, usecase.ErrConfigKeyNotFound):
-		Error(c, "CONFIG_KEY_NOT_FOUND", "配置项不存在")
+		Error(c, "CONFIG_KEY_NOT_FOUND", "Config key not found")
 	case errors.Is(err, usecase.ErrConfigNotFound):
-		Error(c, "CONFIG_NOT_FOUND", "该配置项无数据库记录，无法回滚")
+		Error(c, "CONFIG_NOT_FOUND", "No database record for this config, cannot rollback")
 	case errors.Is(err, usecase.ErrVersionNotFound):
-		Error(c, "VERSION_NOT_FOUND", "目标版本不存在，可能已超出保留期限")
+		Error(c, "VERSION_NOT_FOUND", "Target version not found, may have exceeded retention period")
 	case errors.Is(err, usecase.ErrNoOp):
-		Error(c, "NO_OP", "目标版本与当前版本相同，无需回滚")
+		Error(c, "NO_OP", "Target version is same as current, no rollback needed")
 	case errors.Is(err, usecase.ErrOptimisticLock):
-		Error(c, "OPTIMISTIC_LOCK_CONFLICT", "配置已被其他管理员修改，请重新加载后重试")
+		Error(c, "OPTIMISTIC_LOCK_CONFLICT", "Config has been modified by another admin, please reload and retry")
 	default:
-		Error(c, "server_error", "回滚用户配置失败")
+		Error(c, "server_error", "Failed to rollback user config")
 	}
 }

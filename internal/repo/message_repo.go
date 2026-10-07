@@ -11,6 +11,7 @@ import (
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // MessageRepo provides message persistence operations.
@@ -127,16 +128,30 @@ func (r *messageRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cu
 }
 
 func (r *messageRepo) GetNextGlobalOffset(ctx context.Context, sessionID uuid.UUID) (uint32, error) {
-	var maxOffset uint32
-	err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&model.Message{}).
-		Where("session_id = ?", sessionID).
-		Select("COALESCE(MAX(global_offset), 0)").
-		Scan(&maxOffset).Error
-	if err != nil {
-		return 0, fmt.Errorf("get next global offset for session %s: %w", sessionID, err)
-	}
-	return maxOffset + 1, nil
+	db := DBFromContext(ctx, r.db)
+	var nextOffset uint32
+
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Lock the session row to prevent concurrent offset allocation.
+		var session model.Session
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&session, "id = ?", sessionID).Error; err != nil {
+			return fmt.Errorf("lock session %s: %w", sessionID, err)
+		}
+
+		var maxOffset uint32
+		if err := tx.Model(&model.Message{}).
+			Where("session_id = ?", sessionID).
+			Select("COALESCE(MAX(global_offset), 0)").
+			Scan(&maxOffset).Error; err != nil {
+			return fmt.Errorf("get max offset for session %s: %w", sessionID, err)
+		}
+
+		nextOffset = maxOffset + 1
+		return nil
+	})
+
+	return nextOffset, err
 }
 
 func (r *messageRepo) UpdateStreamingStatus(ctx context.Context, id uuid.UUID, status protocol.MessageStreamingStatus, content string) error {

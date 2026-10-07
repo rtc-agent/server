@@ -48,7 +48,7 @@ func TestConfigRepo_NullUserID_Integration(t *testing.T) {
 	`).Error
 	require.NoError(t, err)
 
-	repo := NewConfigRepo(db)
+	repo := NewServerConfigRepo(db)
 	ctx := context.Background()
 
 	// Clean up before test

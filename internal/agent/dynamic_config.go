@@ -17,7 +17,7 @@ import (
 // resolveEffectiveValue fetches the effective config value for a key.
 // Resolution order: user override > system default > yaml baseline.
 // userID=nil skips user-level overrides (background calls).
-func resolveEffectiveValue(ctx context.Context, configRepo repo.ConfigRepo, key string, userID *uuid.UUID) (any, error) {
+func resolveEffectiveValue(ctx context.Context, configRepo repo.ServerConfigRepo, key string, userID *uuid.UUID) (any, error) {
 	if userID != nil {
 		cfg, err := configRepo.Get(ctx, key, userID)
 		if err == nil {
@@ -43,7 +43,7 @@ func resolveEffectiveValue(ctx context.Context, configRepo repo.ConfigRepo, key 
 // resolveOverrides reads dynamic config values from the DB and builds ChatModelOverrides.
 // Resolution order per key: user override > system default > yaml baseline.
 // userID=nil skips user-level overrides (background calls).
-func resolveOverrides(ctx context.Context, configRepo repo.ConfigRepo, userID *uuid.UUID) (usecase.ChatModelOverrides, error) {
+func resolveOverrides(ctx context.Context, configRepo repo.ServerConfigRepo, userID *uuid.UUID) (usecase.ChatModelOverrides, error) {
 	overrides := usecase.ChatModelOverrides{}
 
 	// Table-driven resolution: each entry maps a config key to a setter.
@@ -150,11 +150,11 @@ func toFloat64(v any) (float64, bool) {
 // Exported for use by RPC handlers and other non-helper code paths.
 // Falls back to deps.ChatModel when dynamic config is unavailable or resolution fails.
 func ResolveChatModel(ctx context.Context, deps *usecase.Dependencies) einomodel.ToolCallingChatModel {
-	if deps.ChatModelFactory == nil || deps.ConfigRepo == nil {
+	if deps.ChatModelFactory == nil || deps.ServerConfigRepo == nil {
 		return deps.ChatModel
 	}
 
-	overrides, err := resolveOverrides(ctx, deps.ConfigRepo, nil)
+	overrides, err := resolveOverrides(ctx, deps.ServerConfigRepo, nil)
 	if err != nil {
 		return deps.ChatModel
 	}

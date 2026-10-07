@@ -49,6 +49,8 @@ type MemoryOTPStore struct {
 	maxVerifyAttempts int
 	lockDuration      time.Duration
 	sendCooldownDur   time.Duration
+	// stopCleanup signals the background cleanup goroutine to stop.
+	stopCleanup chan struct{}
 }
 
 type otpEntry struct {
@@ -62,8 +64,10 @@ type rateEntry struct {
 }
 
 // NewMemoryOTPStore creates a new MemoryOTPStore.
+// Starts a background goroutine that periodically cleans up expired entries
+// to prevent memory leaks in long-running processes.
 func NewMemoryOTPStore(maxSendPerIP, maxVerifyAttempts int, lockDuration, sendCooldown time.Duration) *MemoryOTPStore {
-	return &MemoryOTPStore{
+	store := &MemoryOTPStore{
 		otps:              make(map[string]otpEntry),
 		sendCooldown:      make(map[string]time.Time),
 		sendRateIP:        make(map[string]rateEntry),
@@ -73,6 +77,71 @@ func NewMemoryOTPStore(maxSendPerIP, maxVerifyAttempts int, lockDuration, sendCo
 		maxVerifyAttempts: maxVerifyAttempts,
 		lockDuration:      lockDuration,
 		sendCooldownDur:   sendCooldown,
+		stopCleanup:       make(chan struct{}),
+	}
+	go store.cleanupLoop()
+	return store
+}
+
+// Close stops the background cleanup goroutine.
+func (s *MemoryOTPStore) Close() {
+	select {
+	case <-s.stopCleanup:
+		// already stopped
+	default:
+		close(s.stopCleanup)
+	}
+}
+
+// cleanupLoop periodically removes expired entries to prevent memory leaks.
+func (s *MemoryOTPStore) cleanupLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.cleanup()
+		case <-s.stopCleanup:
+			return
+		}
+	}
+}
+
+// cleanup removes expired OTPs, cooldowns, rate limits, and lockouts.
+func (s *MemoryOTPStore) cleanup() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+
+	// Remove expired OTPs
+	for email, entry := range s.otps {
+		if now.After(entry.expiresAt) {
+			delete(s.otps, email)
+		}
+	}
+
+	// Remove expired send cooldowns
+	for email, lastSend := range s.sendCooldown {
+		if now.After(lastSend.Add(s.sendCooldownDur)) {
+			delete(s.sendCooldown, email)
+		}
+	}
+
+	// Remove expired send rate IP entries
+	for ip, entry := range s.sendRateIP {
+		if now.After(entry.resetTime) {
+			delete(s.sendRateIP, ip)
+		}
+	}
+
+	// Remove expired verify lockouts and their failure counters
+	for email, lockedUntil := range s.verifyLockout {
+		if now.After(lockedUntil) {
+			delete(s.verifyLockout, email)
+			delete(s.verifyFailures, email)
+		}
 	}
 }
 

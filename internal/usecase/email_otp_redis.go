@@ -106,21 +106,36 @@ func (s *RedisOTPStore) CheckVerifyAllowed(ctx context.Context, emailAddr string
 	return nil
 }
 
+// recordVerifyFailureScript atomically increments the verify failure counter,
+// sets TTL on first failure, and locks the account when max attempts is reached.
+// Using a Lua script prevents race conditions between Incr, Expire, Set, and Del.
+var recordVerifyFailureScript = redis.NewScript(`
+local failKey = KEYS[1]
+local lockKey = KEYS[2]
+local maxAttempts = tonumber(ARGV[1])
+local lockDuration = tonumber(ARGV[2])
+
+local count = redis.call('INCR', failKey)
+if count == 1 then
+    redis.call('EXPIRE', failKey, lockDuration)
+end
+if count >= maxAttempts then
+    redis.call('SET', lockKey, '1', 'EX', lockDuration)
+    redis.call('DEL', failKey)
+end
+return count
+`)
+
 // RecordVerifyFailure records a failed verification attempt.
+// Uses a Lua script for atomicity: increment counter, set TTL on first failure,
+// and lock the account when max attempts is reached — all in a single round-trip.
 func (s *RedisOTPStore) RecordVerifyFailure(ctx context.Context, emailAddr string) {
 	failKey := fmt.Sprintf("admin:otp:verify:%s", emailAddr)
-	count, _ := s.rdb.Incr(ctx, failKey).Result()
-
-	if count == 1 {
-		s.rdb.Expire(ctx, failKey, s.lockDuration)
-	}
-
-	if count >= int64(s.maxVerifyAttempts) {
-		lockKey := fmt.Sprintf("admin:otp:lock:%s", emailAddr)
-		s.rdb.Set(ctx, lockKey, "1", s.lockDuration)
-		// Reset failure counter after lockout
-		s.rdb.Del(ctx, failKey)
-	}
+	lockKey := fmt.Sprintf("admin:otp:lock:%s", emailAddr)
+	_, _ = recordVerifyFailureScript.Run(ctx, s.rdb,
+		[]string{failKey, lockKey},
+		s.maxVerifyAttempts, int(s.lockDuration.Seconds()),
+	).Result()
 }
 
 // ResetVerifyFailures resets the failure counter for the email.

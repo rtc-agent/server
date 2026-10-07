@@ -3,6 +3,7 @@ package httphandler
 
 import (
 	"errors"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -24,7 +25,7 @@ func NewPermissionHandler(permissionUsecase *usecase.PermissionUsecase) *Permiss
 func (h *PermissionHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/permissions", h.List)
 	r.POST("/permissions", h.Create)
-	r.DELETE("/permissions", h.Delete)
+	r.DELETE("/permissions/:role_id/:resource/:action", h.Delete)
 	r.POST("/permissions/check", h.Check)
 }
 
@@ -35,12 +36,9 @@ type CreatePermissionRequest struct {
 	Action   string `json:"action" binding:"required,min=1,max=100"`
 }
 
-// DeletePermissionRequest is the request body for DELETE /api/permissions.
-type DeletePermissionRequest struct {
-	RoleID   string `json:"role_id" binding:"required"`
-	Resource string `json:"resource" binding:"required"`
-	Action   string `json:"action" binding:"required"`
-}
+// DeletePermissionRequest is no longer used — DELETE now uses path parameters.
+// Deprecated: kept for backwards compatibility reference only.
+// Use path parameters: DELETE /permissions/:role_id/:resource/:action
 
 // CheckPermissionRequest is the request body for POST /api/permissions/check.
 type CheckPermissionRequest struct {
@@ -66,15 +64,28 @@ func (h *PermissionHandler) List(c *gin.Context) {
 		Resource: c.Query("resource"),
 	}
 
-	policies, err := h.permissionUsecase.ListPermissions(ctx, filter)
+	// Parse pagination parameters (with caps to prevent excessive memory use)
+	page := parseIntDefault(c.Query("page"), 1)
+	pageSize := parseIntDefault(c.Query("page_size"), 20)
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if page < 1 {
+		page = 1
+	}
+
+	policies, err := h.permissionUsecase.ListPermissionsPaginated(ctx, filter, page, pageSize)
 	if err != nil {
-		Error(c, "server_error", "查询权限列表失败")
+		Error(c, "server_error", "Failed to query permissions")
 		return
 	}
 
 	// Build response items
-	items := make([]PolicyResponse, 0, len(policies))
-	for _, p := range policies {
+	items := make([]PolicyResponse, 0, len(policies.Items))
+	for _, p := range policies.Items {
 		if len(p) >= 3 {
 			items = append(items, PolicyResponse{
 				RoleID:   p[0],
@@ -84,26 +95,12 @@ func (h *PermissionHandler) List(c *gin.Context) {
 		}
 	}
 
-	total := len(items)
-
-	// Apply pagination
-	page := parseIntDefault(c.Query("page"), 1)
-	pageSize := parseIntDefault(c.Query("page_size"), 20)
-	start := (page - 1) * pageSize
-	if start > total {
-		start = total
-	}
-	end := start + pageSize
-	if end > total {
-		end = total
-	}
-	items = items[start:end]
-
-	Success(c, gin.H{"items": items, "total": total})
+	Success(c, gin.H{"items": items, "total": policies.Total, "page": page, "page_size": pageSize})
 }
 
 // Create adds a new permission policy.
 func (h *PermissionHandler) Create(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req CreatePermissionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
@@ -112,7 +109,7 @@ func (h *PermissionHandler) Create(c *gin.Context) {
 
 	// Validate UUID format
 	if _, err := uuid.Parse(req.RoleID); err != nil {
-		Error(c, "validation_error", "无效的角色 ID 格式")
+		Error(c, "validation_error", "Invalid role ID format")
 		return
 	}
 
@@ -125,14 +122,14 @@ func (h *PermissionHandler) Create(c *gin.Context) {
 		Action:   req.Action,
 	}, operatorID, operatorIP); err != nil {
 		if errors.Is(err, usecase.ErrRoleNotFound) {
-			Error(c, "role_not_found", "角色不存在")
+			Error(c, "role_not_found", "Role not found")
 			return
 		}
 		if errors.Is(err, usecase.ErrPermissionExists) {
-			Error(c, "permission_exists", "权限策略已存在")
+			Error(c, "permission_exists", "Permission policy already exists")
 			return
 		}
-		Error(c, "server_error", "创建权限策略失败")
+		Error(c, "server_error", "Failed to create permission policy")
 		return
 	}
 
@@ -140,10 +137,21 @@ func (h *PermissionHandler) Create(c *gin.Context) {
 }
 
 // Delete removes a permission policy.
+// Uses path parameters instead of request body (P2 fix: DELETE with body).
 func (h *PermissionHandler) Delete(c *gin.Context) {
-	var req DeletePermissionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Error(c, "validation_error", sanitizeBindingError(err))
+	roleID := c.Param("role_id")
+	resource := c.Param("resource")
+	action := c.Param("action")
+
+	// Validate role_id is a valid UUID
+	if _, err := uuid.Parse(roleID); err != nil {
+		Error(c, "validation_error", "Invalid role ID format")
+		return
+	}
+
+	// Validate resource and action are not empty
+	if resource == "" || action == "" {
+		Error(c, "validation_error", "Resource and action are required")
 		return
 	}
 
@@ -151,11 +159,11 @@ func (h *PermissionHandler) Delete(c *gin.Context) {
 	operatorID := getOperatorID(c)
 	operatorIP := c.ClientIP()
 	if err := h.permissionUsecase.DeletePermission(ctx, usecase.DeletePermissionInput{
-		RoleID:   req.RoleID,
-		Resource: req.Resource,
-		Action:   req.Action,
+		RoleID:   roleID,
+		Resource: resource,
+		Action:   action,
 	}, operatorID, operatorIP); err != nil {
-		Error(c, "server_error", "删除权限策略失败")
+		Error(c, "server_error", "Failed to delete permission policy")
 		return
 	}
 
@@ -164,6 +172,7 @@ func (h *PermissionHandler) Delete(c *gin.Context) {
 
 // Check checks whether a user has a specific permission.
 func (h *PermissionHandler) Check(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req CheckPermissionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
@@ -172,14 +181,14 @@ func (h *PermissionHandler) Check(c *gin.Context) {
 
 	userID, err := uuid.Parse(req.UserID)
 	if err != nil {
-		Error(c, "validation_error", "无效的用户 ID 格式")
+		Error(c, "validation_error", "Invalid user ID format")
 		return
 	}
 
 	ctx := c.Request.Context()
 	allowed, err := h.permissionUsecase.CheckPermission(ctx, userID, req.Resource, req.Action)
 	if err != nil {
-		Error(c, "server_error", "权限检查失败")
+		Error(c, "server_error", "Permission check failed")
 		return
 	}
 

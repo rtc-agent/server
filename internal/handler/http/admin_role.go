@@ -3,6 +3,7 @@ package httphandler
 
 import (
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -72,7 +73,7 @@ func (h *AdminRoleHandler) List(c *gin.Context) {
 
 	roles, total, err := h.adminRoleUsecase.ListRolesPaginated(ctx, page, pageSize)
 	if err != nil {
-		Error(c, "server_error", "查询角色列表失败")
+		Error(c, "server_error", "Failed to query roles")
 		return
 	}
 
@@ -102,7 +103,7 @@ func (h *AdminRoleHandler) Get(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的角色 ID")
+		Error(c, "validation_error", "Invalid role ID")
 		return
 	}
 
@@ -110,10 +111,10 @@ func (h *AdminRoleHandler) Get(c *gin.Context) {
 	role, err := h.adminRoleUsecase.GetRole(ctx, id)
 	if err != nil {
 		if usecase.IsNotFound(err) {
-			Error(c, "role_not_found", "角色不存在")
+			Error(c, "role_not_found", "Role not found")
 			return
 		}
-		Error(c, "server_error", "查询角色失败")
+		Error(c, "server_error", "Failed to query role")
 		return
 	}
 
@@ -130,6 +131,7 @@ func (h *AdminRoleHandler) Get(c *gin.Context) {
 
 // Create creates a new role.
 func (h *AdminRoleHandler) Create(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req CreateRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
@@ -142,11 +144,11 @@ func (h *AdminRoleHandler) Create(c *gin.Context) {
 	// Validate name contains only ASCII characters (role names are system identifiers)
 	for i, r := range req.Name {
 		if r > 127 {
-			Error(c, "validation_error", "角色名称只能包含 ASCII 字符")
+			Error(c, "validation_error", "Role name must contain only ASCII characters")
 			return
 		}
 		if i == 0 && (r < 'a' || r > 'z') {
-			Error(c, "validation_error", "角色名称必须以小写字母开头")
+			Error(c, "validation_error", "Role name must start with a lowercase letter")
 			return
 		}
 	}
@@ -162,10 +164,10 @@ func (h *AdminRoleHandler) Create(c *gin.Context) {
 	}, operatorID, operatorIP)
 	if err != nil {
 		if errors.Is(err, usecase.ErrRoleNameExists) {
-			Error(c, "role_name_exists", "角色名称已存在")
+			Error(c, "role_name_exists", "Role name already exists")
 			return
 		}
-		Error(c, "server_error", "创建角色失败")
+		Error(c, "server_error", "Failed to create role")
 		return
 	}
 
@@ -192,10 +194,11 @@ func (h *AdminRoleHandler) Update(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的角色 ID")
+		Error(c, "validation_error", "Invalid role ID")
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req UpdateRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
@@ -213,14 +216,14 @@ func (h *AdminRoleHandler) Update(c *gin.Context) {
 	}, operatorID, operatorIP)
 	if err != nil {
 		if usecase.IsNotFound(err) {
-			Error(c, "role_not_found", "角色不存在")
+			Error(c, "role_not_found", "Role not found")
 			return
 		}
 		if errors.Is(err, usecase.ErrConflict) {
-			Error(c, "conflict", "角色已被其他用户修改，请刷新后重试")
+			Error(c, "conflict", "Role has been modified by another user, please refresh and retry")
 			return
 		}
-		Error(c, "server_error", "更新角色失败")
+		Error(c, "server_error", "Failed to update role")
 		return
 	}
 
@@ -240,7 +243,7 @@ func (h *AdminRoleHandler) Delete(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的角色 ID")
+		Error(c, "validation_error", "Invalid role ID")
 		return
 	}
 
@@ -251,13 +254,13 @@ func (h *AdminRoleHandler) Delete(c *gin.Context) {
 	if err := h.adminRoleUsecase.DeleteRole(ctx, id, operatorID, operatorIP); err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrCannotDeleteSystemRole):
-			Error(c, "cannot_delete_system_role", "系统内置角色不可删除")
+			Error(c, "cannot_delete_system_role", "System built-in roles cannot be deleted")
 		case errors.Is(err, usecase.ErrCannotRemoveLastAdmin):
-			Error(c, "cannot_remove_last_admin", "不能删除最后一个管理员角色")
+			Error(c, "cannot_remove_last_admin", "Cannot delete the last admin role")
 		case usecase.IsNotFound(err):
-			Error(c, "role_not_found", "角色不存在")
+			Error(c, "role_not_found", "Role not found")
 		default:
-			Error(c, "server_error", "删除角色失败")
+			Error(c, "server_error", "Failed to delete role")
 		}
 		return
 	}
@@ -270,7 +273,7 @@ func (h *AdminRoleHandler) GetPolicies(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的角色 ID")
+		Error(c, "validation_error", "Invalid role ID")
 		return
 	}
 
@@ -278,10 +281,10 @@ func (h *AdminRoleHandler) GetPolicies(c *gin.Context) {
 	policies, err := h.adminRoleUsecase.GetRolePolicies(ctx, id)
 	if err != nil {
 		if usecase.IsNotFound(err) {
-			Error(c, "role_not_found", "角色不存在")
+			Error(c, "role_not_found", "Role not found")
 			return
 		}
-		Error(c, "server_error", "查询角色权限失败")
+		Error(c, "server_error", "Failed to query role permissions")
 		return
 	}
 

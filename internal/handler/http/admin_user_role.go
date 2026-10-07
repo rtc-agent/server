@@ -23,6 +23,7 @@ type (
 	}
 	roleLookup interface {
 		GetByID(ctx context.Context, id uuid.UUID) (*model.AdminRole, error)
+		GetByIDs(ctx context.Context, ids []uuid.UUID) ([]*model.AdminRole, error)
 	}
 	adminUserLookup interface {
 		GetByID(ctx context.Context, id uuid.UUID) (*model.AdminUser, error)
@@ -82,7 +83,7 @@ func (h *AdminUserRoleHandler) ListUserRoles(c *gin.Context) {
 	userIDStr := c.Param("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的管理员 ID")
+		Error(c, "validation_error", "Invalid admin user ID")
 		return
 	}
 
@@ -90,10 +91,10 @@ func (h *AdminUserRoleHandler) ListUserRoles(c *gin.Context) {
 	urs, err := h.adminUserRoleUsecase.ListUserRoles(ctx, userID)
 	if err != nil {
 		if errors.Is(err, usecase.ErrAdminUserNotFound) {
-			Error(c, "admin_user_not_found", "管理员不存在")
+			Error(c, "admin_user_not_found", "Admin user not found")
 			return
 		}
-		Error(c, "server_error", "查询管理员角色失败")
+		Error(c, "server_error", "Failed to query admin roles")
 		return
 	}
 
@@ -115,7 +116,7 @@ func (h *AdminUserRoleHandler) AssignRoles(c *gin.Context) {
 	userIDStr := c.Param("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的管理员 ID")
+		Error(c, "validation_error", "Invalid admin user ID")
 		return
 	}
 
@@ -135,14 +136,14 @@ func (h *AdminUserRoleHandler) AssignRoles(c *gin.Context) {
 	}, operatorID, operatorIP); err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrAdminUserNotFound):
-			Error(c, "admin_user_not_found", "管理员不存在")
+			Error(c, "admin_user_not_found", "Admin user not found")
 		case errors.Is(err, usecase.ErrRoleNotFound):
-			Error(c, "role_not_found", "角色不存在")
+			Error(c, "role_not_found", "Role not found")
 		case errors.Is(err, usecase.ErrRoleDisabled):
-			Error(c, "role_disabled", "角色已禁用")
+			Error(c, "role_disabled", "Role is disabled")
 		default:
 			logger.Error(ctx, "admin_user_role.assign_failed", zap.Error(err))
-			Error(c, "server_error", "分配角色失败")
+			Error(c, "server_error", "Failed to assign role")
 		}
 		return
 	}
@@ -155,14 +156,14 @@ func (h *AdminUserRoleHandler) RemoveRole(c *gin.Context) {
 	userIDStr := c.Param("id")
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的管理员 ID")
+		Error(c, "validation_error", "Invalid admin user ID")
 		return
 	}
 
 	roleIDStr := c.Param("roleId")
 	roleID, err := uuid.Parse(roleIDStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的角色 ID")
+		Error(c, "validation_error", "Invalid role ID")
 		return
 	}
 
@@ -176,14 +177,14 @@ func (h *AdminUserRoleHandler) RemoveRole(c *gin.Context) {
 	}, operatorID, operatorIP); err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrRoleNotFound):
-			Error(c, "role_not_found", "角色不存在")
+			Error(c, "role_not_found", "Role not found")
 		case errors.Is(err, usecase.ErrCannotRemoveLastAdmin):
-			Error(c, "cannot_remove_last_admin", "不能移除最后一个管理员角色")
+			Error(c, "cannot_remove_last_admin", "Cannot remove the last admin role")
 		case errors.Is(err, usecase.ErrCannotRemoveSelfAdmin):
-			Error(c, "cannot_remove_self_admin", "不能移除自己的管理员角色")
+			Error(c, "cannot_remove_self_admin", "Cannot remove your own admin role")
 		default:
 			logger.Error(ctx, "admin_user_role.remove_failed", zap.Error(err))
-			Error(c, "server_error", "移除角色失败")
+			Error(c, "server_error", "Failed to remove role")
 		}
 		return
 	}
@@ -204,7 +205,7 @@ func (h *AdminUserRoleHandler) ListRoleUsers(c *gin.Context) {
 	roleIDStr := c.Param("id")
 	roleID, err := uuid.Parse(roleIDStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的角色 ID")
+		Error(c, "validation_error", "Invalid role ID")
 		return
 	}
 
@@ -213,9 +214,9 @@ func (h *AdminUserRoleHandler) ListRoleUsers(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrRoleNotFound):
-			Error(c, "role_not_found", "角色不存在")
+			Error(c, "role_not_found", "Role not found")
 		default:
-			Error(c, "server_error", "查询角色管理员失败")
+			Error(c, "server_error", "Failed to query role admins")
 		}
 		return
 	}
@@ -261,14 +262,30 @@ func GetCurrentUserWithRoles(
 		DisplayName string `json:"display_name"`
 	}
 
+	// Batch-fetch all roles in a single query to avoid N+1
+	roleIDs := make([]uuid.UUID, 0, len(urs))
+	for _, ur := range urs {
+		roleIDs = append(roleIDs, ur.RoleID)
+	}
+
+	var allRoles []*model.AdminRole
+	if len(roleIDs) > 0 {
+		allRoles, err = roleRepo.GetByIDs(ctx, roleIDs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	roleMap := make(map[uuid.UUID]*model.AdminRole, len(allRoles))
+	for _, role := range allRoles {
+		roleMap[role.ID] = role
+	}
+
 	roles := make([]RoleBrief, 0, len(urs))
 	for _, ur := range urs {
-		role, err := roleRepo.GetByID(ctx, ur.RoleID)
-		if err != nil {
-			if errors.Is(err, usecase.ErrRoleNotFound) {
-				continue
-			}
-			return nil, err
+		role, ok := roleMap[ur.RoleID]
+		if !ok {
+			continue // role not found (may have been deleted)
 		}
 		if !role.IsEnabled {
 			continue // Skip disabled roles

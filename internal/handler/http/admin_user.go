@@ -29,6 +29,7 @@ func (h *AdminUserHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/admin-users", h.ListUsers)
 	r.POST("/admin-users", h.CreateUser)
 	r.PUT("/admin-users/:id", h.UpdateUser)
+	r.PUT("/admin-users/me", h.UpdateCurrentUser) // Self-service: update own profile
 }
 
 // AdminUserResponse is the response body for an admin user.
@@ -208,6 +209,55 @@ func (h *AdminUserHandler) UpdateUser(c *gin.Context) {
 			return
 		}
 		Error(c, "server_error", "Failed to update admin user")
+		return
+	}
+
+	Success(c, AdminUserResponse{
+		ID:        user.ID.String(),
+		Email:     user.Email,
+		Name:      user.Name,
+		AvatarURL: user.AvatarURL,
+		CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt: user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	})
+}
+
+// UpdateCurrentUser updates the current authenticated user's own profile.
+// No permission check required - users can only modify their own data.
+func (h *AdminUserHandler) UpdateCurrentUser(c *gin.Context) {
+	// Get user ID from JWT context (set by JWTAuthMiddleware)
+	userIDStr := c.GetString("user_id")
+	if userIDStr == "" {
+		Error(c, "unauthorized", "User not authenticated")
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		Error(c, "validation_error", "invalid user ID")
+		return
+	}
+
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	var req UpdateAdminUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Error(c, "validation_error", sanitizeBindingError(err))
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Update user
+	user, err := h.adminUserUsecase.UpdateUser(ctx, userID, usecase.UpdateUserInput{
+		Name:     req.Name,
+		Password: req.Password,
+	})
+	if err != nil {
+		if errors.Is(err, usecase.ErrAdminUserNotFound) {
+			Error(c, "admin_user_not_found", "Admin user not found")
+			return
+		}
+		Error(c, "server_error", "Failed to update profile")
 		return
 	}
 

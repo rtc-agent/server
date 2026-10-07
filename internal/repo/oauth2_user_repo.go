@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
@@ -137,11 +136,7 @@ func (r *oauth2UserRepo) ListWithFilters(ctx context.Context, filter OAuth2UserF
 	// Apply search filter
 	if filter.Search != "" {
 		// Escape ILIKE special characters: %, _, and backslash
-		escaped := strings.NewReplacer(
-			`\`, `\\`,
-			`%`, `\%`,
-			`_`, `\_`,
-		).Replace(filter.Search)
+		escaped := escapeLikePattern(filter.Search)
 		searchPattern := "%" + escaped + "%"
 		query = query.Where("(email ILIKE ? ESCAPE '\\' OR name ILIKE ? ESCAPE '\\')", searchPattern, searchPattern)
 	}
@@ -163,12 +158,13 @@ func (r *oauth2UserRepo) ListWithFilters(ctx context.Context, filter OAuth2UserF
 }
 
 // IsUserBanned checks if a user account is banned.
+// Returns ErrOAuth2UserNotFound if the user does not exist.
 func (r *oauth2UserRepo) IsUserBanned(ctx context.Context, userID uuid.UUID) (bool, error) {
 	var user model.OAuth2User
 	err := DBFromContext(ctx, r.db).WithContext(ctx).Select("banned_at").First(&user, "id = ?", userID).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return false, nil // User not found, not banned
+			return false, fmt.Errorf("check user ban status %s: %w", userID, ErrOAuth2UserNotFound)
 		}
 		return false, fmt.Errorf("check user ban status %s: %w", userID, err)
 	}

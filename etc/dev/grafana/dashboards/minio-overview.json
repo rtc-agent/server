@@ -1,217 +1,318 @@
 {
-  "dashboard": {
-    "id": null,
-    "uid": "minio-overview",
-    "title": "MinIO Object Storage",
-    "tags": ["minio", "storage", "rtc-agent"],
-    "timezone": "browser",
-    "schemaVersion": 16,
-    "version": 0,
-    "refresh": "10s",
-    "panels": [
-      {
-        "id": 1,
-        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
-        "type": "stat",
-        "title": "MinIO Status",
-        "targets": [
-          {
-            "expr": "up{job=\"minio\"}",
-            "legendFormat": "{{instance}}"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "mappings": [
-              {"options": {"0": {"text": "DOWN"}}, "type": "value"},
-              {"options": {"1": {"text": "UP"}}, "type": "value"}
-            ],
-            "thresholds": {
-              "mode": "absolute",
-              "steps": [
-                {"color": "red", "value": null},
-                {"color": "green", "value": 1}
-              ]
-            }
-          }
+  "id": null,
+  "uid": "minio-overview",
+  "title": "MinIO Object Storage",
+  "tags": [
+    "minio",
+    "storage",
+    "rtc-agent"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 16,
+  "version": 0,
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "type": "stat",
+      "title": "MinIO Status",
+      "targets": [
+        {
+          "expr": "up{job=\"minio\"}",
+          "legendFormat": "{{instance}}"
         }
-      },
-      {
-        "id": 2,
-        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
-        "type": "stat",
-        "title": "Online Nodes",
-        "targets": [
-          {
-            "expr": "minio_node_online_total",
-            "legendFormat": "Online"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "thresholds": {
-              "mode": "absolute",
-              "steps": [
-                {"color": "red", "value": null},
-                {"color": "green", "value": 1}
-              ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "DOWN"
+                }
+              },
+              "type": "value"
+            },
+            {
+              "options": {
+                "1": {
+                  "text": "UP"
+                }
+              },
+              "type": "value"
             }
-          }
-        }
-      },
-      {
-        "id": 3,
-        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
-        "type": "stat",
-        "title": "Offline Nodes",
-        "targets": [
-          {
-            "expr": "minio_node_offline_total",
-            "legendFormat": "Offline"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "thresholds": {
-              "mode": "absolute",
-              "steps": [
-                {"color": "green", "value": null},
-                {"color": "red", "value": 1}
-              ]
-            }
-          }
-        }
-      },
-      {
-        "id": 4,
-        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
-        "type": "stat",
-        "title": "Total Buckets",
-        "targets": [
-          {
-            "expr": "count(minio_bucket_usage_total_bytes)",
-            "legendFormat": "Buckets"
-          }
-        ]
-      },
-      {
-        "id": 10,
-        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
-        "type": "timeseries",
-        "title": "S3 Request Rate",
-        "targets": [
-          {
-            "expr": "sum(rate(minio_s3_requests_total{job=\"minio\"}[5m])) by (api)",
-            "legendFormat": "{{api}}"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "unit": "reqps",
-            "custom": {
-              "drawStyle": "line",
-              "lineInterpolation": "smooth"
-            }
-          }
-        }
-      },
-      {
-        "id": 11,
-        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
-        "type": "timeseries",
-        "title": "S3 Request Errors",
-        "targets": [
-          {
-            "expr": "sum(rate(minio_s3_requests_total{job=\"minio\",code=~\"[45]..\"}[5m])) by (code)",
-            "legendFormat": "{{code}}"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "unit": "reqps",
-            "custom": {
-              "drawStyle": "bars"
-            }
-          }
-        }
-      },
-      {
-        "id": 20,
-        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
-        "type": "timeseries",
-        "title": "S3 Request Latency (p95)",
-        "targets": [
-          {
-            "expr": "histogram_quantile(0.95, sum(rate(minio_s3_request_duration_seconds_bucket{job=\"minio\"}[5m])) by (le, api))",
-            "legendFormat": "{{api}}"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "unit": "s",
-            "custom": {
-              "drawStyle": "line",
-              "lineInterpolation": "smooth"
-            }
-          }
-        }
-      },
-      {
-        "id": 21,
-        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
-        "type": "timeseries",
-        "title": "Disk Usage",
-        "targets": [
-          {
-            "expr": "sum(minio_node_disk_used_bytes) by (instance)",
-            "legendFormat": "{{instance}} Used"
-          },
-          {
-            "expr": "sum(minio_node_disk_total_bytes) by (instance)",
-            "legendFormat": "{{instance}} Total"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "unit": "bytes",
-            "custom": {
-              "drawStyle": "line",
-              "fillOpacity": 20
-            }
-          }
-        }
-      },
-      {
-        "id": 30,
-        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20},
-        "type": "table",
-        "title": "Bucket Usage",
-        "targets": [
-          {
-            "expr": "minio_bucket_usage_total_bytes",
-            "format": "table",
-            "instant": true
-          }
-        ],
-        "transformations": [
-          {
-            "id": "organize",
-            "options": {
-              "excludeByName": {"Time": true, "__name__": true, "instance": true, "job": true},
-              "renameByName": {"bucket": "Bucket", "Value": "Size"}
-            }
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "unit": "bytes"
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
           }
         }
       }
-    ],
-    "time": {
-      "from": "now-1h",
-      "to": "now"
+    },
+    {
+      "id": 2,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "type": "stat",
+      "title": "Online Nodes",
+      "targets": [
+        {
+          "expr": "minio_cluster_nodes_online_total",
+          "legendFormat": "Online"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "type": "stat",
+      "title": "Offline Nodes",
+      "targets": [
+        {
+          "expr": "minio_cluster_nodes_offline_total",
+          "legendFormat": "Offline"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "type": "stat",
+      "title": "Online Drives",
+      "targets": [
+        {
+          "expr": "minio_node_drive_online_total",
+          "legendFormat": "Drives"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "type": "timeseries",
+      "title": "S3 Traffic",
+      "targets": [
+        {
+          "expr": "rate(minio_s3_traffic_received_bytes{job=\"minio\"}[5m])",
+          "legendFormat": "Received"
+        },
+        {
+          "expr": "rate(minio_s3_traffic_sent_bytes{job=\"minio\"}[5m])",
+          "legendFormat": "Sent"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth"
+          }
+        }
+      }
+    },
+    {
+      "id": 11,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "type": "timeseries",
+      "title": "S3 Rejected Requests",
+      "targets": [
+        {
+          "expr": "rate(minio_s3_requests_rejected_auth_total{job=\"minio\"}[5m])",
+          "legendFormat": "Auth"
+        },
+        {
+          "expr": "rate(minio_s3_requests_rejected_invalid_total{job=\"minio\"}[5m])",
+          "legendFormat": "Invalid"
+        },
+        {
+          "expr": "rate(minio_s3_requests_rejected_header_total{job=\"minio\"}[5m])",
+          "legendFormat": "Header"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "bars"
+          }
+        }
+      }
+    },
+    {
+      "id": 20,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "type": "timeseries",
+      "title": "Memory & CPU",
+      "targets": [
+        {
+          "expr": "minio_process_resident_memory_bytes{job=\"minio\"}",
+          "legendFormat": "RSS Memory"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth"
+          }
+        }
+      }
+    },
+    {
+      "id": 21,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "type": "timeseries",
+      "title": "Disk Usage",
+      "targets": [
+        {
+          "expr": "sum(minio_node_drive_used_bytes) by (instance)",
+          "legendFormat": "{{instance}} Used"
+        },
+        {
+          "expr": "sum(minio_node_drive_total_bytes) by (instance)",
+          "legendFormat": "{{instance}} Total"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20
+          }
+        }
+      }
+    },
+    {
+      "id": 30,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "type": "stat",
+      "title": "Drive Health",
+      "targets": [
+        {
+          "expr": "minio_node_drive_online_total",
+          "legendFormat": "Online"
+        },
+        {
+          "expr": "minio_node_drive_offline_total",
+          "legendFormat": "Offline"
+        },
+        {
+          "expr": "minio_node_drive_errors_ioerror",
+          "legendFormat": "IO Errors"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      }
     }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
   }
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
@@ -68,7 +69,10 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, adminRoleRepo repo.AdminRo
 	txErr := db.Transaction(func(tx *gorm.DB) error {
 		txCtx := repo.WithTx(ctx, tx)
 
-		// Create roles that don't exist yet
+		// Create roles that don't exist yet.
+		// Uses ON CONFLICT DO NOTHING for concurrent safety: if another instance
+		// creates the same role concurrently, the conflict is silently skipped
+		// and we re-fetch the existing role.
 		if adminErr != nil {
 			adminRole = &model.AdminRole{
 				Name:        "admin",
@@ -77,8 +81,17 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, adminRoleRepo repo.AdminRo
 				IsSystem:    true,
 				IsEnabled:   true,
 			}
-			if err := adminRoleRepo.Create(txCtx, adminRole); err != nil {
+			if err := tx.WithContext(ctx).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "name"}},
+				DoNothing: true,
+			}).Create(adminRole).Error; err != nil {
 				return fmt.Errorf("create admin role: %w", err)
+			}
+			// If DO NOTHING fired, adminRole.ID may be zero; re-fetch by name
+			if adminRole.ID == uuid.Nil {
+				if err := tx.WithContext(ctx).Where("name = ?", "admin").First(adminRole).Error; err != nil {
+					return fmt.Errorf("re-fetch admin role after conflict: %w", err)
+				}
 			}
 		}
 		if operatorErr != nil {
@@ -89,8 +102,16 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, adminRoleRepo repo.AdminRo
 				IsSystem:    false,
 				IsEnabled:   true,
 			}
-			if err := adminRoleRepo.Create(txCtx, operatorRole); err != nil {
+			if err := tx.WithContext(ctx).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "name"}},
+				DoNothing: true,
+			}).Create(operatorRole).Error; err != nil {
 				return fmt.Errorf("create operator role: %w", err)
+			}
+			if operatorRole.ID == uuid.Nil {
+				if err := tx.WithContext(ctx).Where("name = ?", "operator").First(operatorRole).Error; err != nil {
+					return fmt.Errorf("re-fetch operator role after conflict: %w", err)
+				}
 			}
 		}
 		if viewerErr != nil {
@@ -101,10 +122,20 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, adminRoleRepo repo.AdminRo
 				IsSystem:    false,
 				IsEnabled:   true,
 			}
-			if err := adminRoleRepo.Create(txCtx, viewerRole); err != nil {
+			if err := tx.WithContext(ctx).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "name"}},
+				DoNothing: true,
+			}).Create(viewerRole).Error; err != nil {
 				return fmt.Errorf("create viewer role: %w", err)
 			}
+			if viewerRole.ID == uuid.Nil {
+				if err := tx.WithContext(ctx).Where("name = ?", "viewer").First(viewerRole).Error; err != nil {
+					return fmt.Errorf("re-fetch viewer role after conflict: %w", err)
+				}
+			}
 		}
+
+		_ = txCtx // txCtx available if repo calls are needed
 
 		createdAdminID = adminRole.ID.String()
 		createdOperatorID = operatorRole.ID.String()

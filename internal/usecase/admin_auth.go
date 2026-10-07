@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
@@ -35,6 +36,7 @@ const bcryptCost = 12
 
 // AdminAuthUsecase handles admin authentication operations.
 type AdminAuthUsecase struct {
+	db               *gorm.DB
 	adminUserRepo    repo.AdminUserRepo
 	refreshTokenRepo repo.AdminRefreshTokenRepo
 	signer           AdminTokenSigner
@@ -43,11 +45,13 @@ type AdminAuthUsecase struct {
 
 // NewAdminAuthUsecase creates a new AdminAuthUsecase.
 func NewAdminAuthUsecase(
+	db *gorm.DB,
 	adminUserRepo repo.AdminUserRepo,
 	refreshTokenRepo repo.AdminRefreshTokenRepo,
 	signer AdminTokenSigner,
 ) *AdminAuthUsecase {
 	return &AdminAuthUsecase{
+		db:               db,
 		adminUserRepo:    adminUserRepo,
 		refreshTokenRepo: refreshTokenRepo,
 		signer:           signer,
@@ -217,70 +221,90 @@ type RefreshTokenResult struct {
 }
 
 // RefreshToken validates and rotates a refresh token, issuing a new token pair.
+// Wrapped in a transaction to prevent concurrent refresh token use from creating
+// multiple valid token pairs (P0 race condition fix).
 func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain string) (*RefreshTokenResult, error) {
-	// 1. Hash the refresh token and look it up
-	refreshHash := hashRefreshToken(refreshTokenPlain)
-	rt, err := uc.refreshTokenRepo.FindByHash(ctx, refreshHash)
-	if err != nil {
-		if repo.IsNotFound(err) {
-			return nil, ErrInvalidRefreshToken
+	var result *RefreshTokenResult
+
+	err := uc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txCtx := repo.WithTx(ctx, tx)
+
+		// 1. Hash the refresh token and look it up (within transaction)
+		refreshHash := hashRefreshToken(refreshTokenPlain)
+		rt, err := uc.refreshTokenRepo.FindByHash(txCtx, refreshHash)
+		if err != nil {
+			if repo.IsNotFound(err) {
+				return ErrInvalidRefreshToken
+			}
+			return fmt.Errorf("admin auth find refresh token: %w", err)
 		}
-		return nil, fmt.Errorf("admin auth find refresh token: %w", err)
-	}
 
-	// 2. Check if token is revoked
-	if rt.Revoked {
-		logger.Warn(ctx, "admin_auth.refresh_token_reuse_detected",
-			zap.String("token_hash_prefix", refreshHash[:16]))
-		return nil, ErrRefreshTokenRevoked
-	}
+		// 2. Check if token is revoked
+		if rt.Revoked {
+			logger.Warn(txCtx, "admin_auth.refresh_token_reuse_detected",
+				zap.String("token_hash_prefix", refreshHash[:16]))
+			return ErrRefreshTokenRevoked
+		}
 
-	// 3. Check if token is expired
-	if time.Now().After(rt.ExpiresAt) {
-		return nil, ErrRefreshTokenExpired
-	}
+		// 3. Check if token is expired
+		if time.Now().After(rt.ExpiresAt) {
+			return ErrRefreshTokenExpired
+		}
 
-	// 4. Revoke the old refresh token (rotation)
-	if err := uc.refreshTokenRepo.Revoke(ctx, rt.ID); err != nil {
-		return nil, fmt.Errorf("admin auth revoke old refresh token: %w", err)
-	}
+		// 4. Revoke the old refresh token (rotation)
+		if err := uc.refreshTokenRepo.Revoke(txCtx, rt.ID); err != nil {
+			return fmt.Errorf("admin auth revoke old refresh token: %w", err)
+		}
 
-	// 5. Get admin user info
-	user, err := uc.adminUserRepo.GetByID(ctx, rt.UserID)
+		// 5. Get admin user info
+		user, err := uc.adminUserRepo.GetByID(txCtx, rt.UserID)
+		if err != nil {
+			return fmt.Errorf("admin auth get admin user for refresh: %w", err)
+		}
+
+		// 6. Sign new access token
+		accessToken, _, err := uc.signer.SignAccessToken(user.ID, user.Email, user.Name)
+		if err != nil {
+			return fmt.Errorf("admin auth sign new access token: %w", err)
+		}
+
+		// 7. Generate and store new refresh token
+		newRefreshPlain := generateRefreshTokenPlain()
+		newRefreshHash := hashRefreshToken(newRefreshPlain)
+		newRefreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
+
+		newRT := &model.AdminRefreshToken{
+			TokenHash: newRefreshHash,
+			UserID:    user.ID,
+			ExpiresAt: newRefreshExpiresAt,
+			Revoked:   false,
+		}
+		if err := uc.refreshTokenRepo.Create(txCtx, newRT); err != nil {
+			return fmt.Errorf("admin auth store new refresh token: %w", err)
+		}
+
+		result = &RefreshTokenResult{
+			AccessToken:  accessToken,
+			RefreshToken: newRefreshPlain,
+			ExpiresIn:    int64(uc.signer.AccessTTL().Seconds()),
+			UserID:       user.ID,
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("admin auth get admin user for refresh: %w", err)
-	}
-
-	// 6. Sign new access token
-	accessToken, _, err := uc.signer.SignAccessToken(user.ID, user.Email, user.Name)
-	if err != nil {
-		return nil, fmt.Errorf("admin auth sign new access token: %w", err)
-	}
-
-	// 7. Generate and store new refresh token
-	newRefreshPlain := generateRefreshTokenPlain()
-	newRefreshHash := hashRefreshToken(newRefreshPlain)
-	newRefreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
-
-	newRT := &model.AdminRefreshToken{
-		TokenHash: newRefreshHash,
-		UserID:    user.ID,
-		ExpiresAt: newRefreshExpiresAt,
-		Revoked:   false,
-	}
-	if err := uc.refreshTokenRepo.Create(ctx, newRT); err != nil {
-		return nil, fmt.Errorf("admin auth store new refresh token: %w", err)
+		// Return sentinel errors as-is; wrap unexpected errors
+		if errors.Is(err, ErrInvalidRefreshToken) ||
+			errors.Is(err, ErrRefreshTokenRevoked) ||
+			errors.Is(err, ErrRefreshTokenExpired) {
+			return nil, err
+		}
+		return nil, err
 	}
 
 	logger.Info(ctx, "admin_auth.token_refresh_succeeded",
-		zap.String("user_id", user.ID.String()))
+		zap.String("user_id", result.UserID.String()))
 
-	return &RefreshTokenResult{
-		AccessToken:  accessToken,
-		RefreshToken: newRefreshPlain,
-		ExpiresIn:    int64(uc.signer.AccessTTL().Seconds()),
-		UserID:       user.ID,
-	}, nil
+	return result, nil
 }
 
 // Logout revokes a refresh token.

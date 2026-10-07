@@ -7,7 +7,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -54,11 +53,7 @@ func NewPyroscopeProxyHandler(pyroscopeURL string) *PyroscopeProxyHandler {
 			}
 			r.Out.URL.RawPath = ""
 		},
-		Transport: &http.Transport{
-			MaxIdleConns:        100,
-			IdleConnTimeout:     90 * time.Second,
-			MaxIdleConnsPerHost: 100,
-		},
+		Transport: sharedProxyTransport,
 		ModifyResponse: func(resp *http.Response) error {
 			return modifyResponseForProxy(resp, "/api/pyroscope")
 		},

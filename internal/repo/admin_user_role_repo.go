@@ -28,6 +28,9 @@ type AdminUserRoleRepo interface {
 	DeleteWithAdminCheck(ctx context.Context, userID, adminRoleID uuid.UUID) error
 	// ListByUserID returns all role IDs assigned to a user.
 	ListByUserID(ctx context.Context, userID uuid.UUID) ([]model.AdminUserRole, error)
+	// ListByUserIDs returns all user-role assignments for the given user IDs.
+	// This is used for batch operations to avoid N+1 queries.
+	ListByUserIDs(ctx context.Context, userIDs []uuid.UUID) ([]model.AdminUserRole, error)
 	// ListByRoleID returns all user IDs assigned to a role.
 	ListByRoleID(ctx context.Context, roleID uuid.UUID) ([]model.AdminUserRole, error)
 	// CountByRoleID counts how many users are assigned a given role.
@@ -47,6 +50,10 @@ func NewAdminUserRoleRepo(db *gorm.DB) AdminUserRoleRepo {
 	return &adminUserRoleRepo{db: db}
 }
 
+// Create assigns a role to a user.
+// NOTE: This does not validate that the user or role exists. The caller (usecase layer)
+// is responsible for ensuring both the user and role exist before calling Create.
+// Foreign key constraints at the database level will reject invalid references if added.
 func (r *adminUserRoleRepo) Create(ctx context.Context, userID, roleID uuid.UUID) error {
 	ur := &model.AdminUserRole{UserID: userID, RoleID: roleID}
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).Create(ur).Error; err != nil {
@@ -132,6 +139,19 @@ func (r *adminUserRoleRepo) ListByUserID(ctx context.Context, userID uuid.UUID) 
 		Where("user_id = ?", userID).
 		Find(&urs).Error; err != nil {
 		return nil, fmt.Errorf("list user roles for user %s: %w", userID, err)
+	}
+	return urs, nil
+}
+
+func (r *adminUserRoleRepo) ListByUserIDs(ctx context.Context, userIDs []uuid.UUID) ([]model.AdminUserRole, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+	var urs []model.AdminUserRole
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("user_id IN ?", userIDs).
+		Find(&urs).Error; err != nil {
+		return nil, fmt.Errorf("list user roles for users: %w", err)
 	}
 	return urs, nil
 }

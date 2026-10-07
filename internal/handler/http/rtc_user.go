@@ -2,6 +2,7 @@
 package httphandler
 
 import (
+	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -50,9 +51,23 @@ func (h *RtcUserHandler) ListUsers(c *gin.Context) {
 		}
 	}
 
+	// Validate and parse status filter
+	status := c.Query("status")
+	if status != "" && status != "active" && status != "banned" {
+		Error(c, "validation_error", "Invalid status value, must be 'active' or 'banned'")
+		return
+	}
+
+	// Validate search length to prevent excessive queries
+	search := c.Query("search")
+	if len(search) > 200 {
+		Error(c, "validation_error", "Search query too long, maximum 200 characters")
+		return
+	}
+
 	filter := usecase.ListUsersFilter{
-		Status:   c.Query("status"),
-		Search:   c.Query("search"),
+		Status:   status,
+		Search:   search,
 		Page:     page,
 		PageSize: pageSize,
 	}
@@ -71,7 +86,7 @@ func (h *RtcUserHandler) ListUsers(c *gin.Context) {
 			status = "banned"
 		}
 
-		item := gin.H{
+		item := map[string]any{
 			"id":         user.ID,
 			"provider":   user.Provider,
 			"sub":        user.Sub,
@@ -79,12 +94,12 @@ func (h *RtcUserHandler) ListUsers(c *gin.Context) {
 			"name":       user.Name,
 			"avatar_url": user.AvatarURL,
 			"status":     status,
-			"created_at": user.CreatedAt,
-			"updated_at": user.UpdatedAt,
+			"created_at": user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			"updated_at": user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		}
 
 		if user.BannedAt != nil {
-			item["banned_at"] = user.BannedAt
+			item["banned_at"] = user.BannedAt.Format("2006-01-02T15:04:05Z07:00")
 			item["banned_reason"] = user.BannedReason
 		}
 
@@ -120,7 +135,7 @@ func (h *RtcUserHandler) GetUser(c *gin.Context) {
 		status = "banned"
 	}
 
-	result := gin.H{
+	result := map[string]any{
 		"id":         user.ID,
 		"provider":   user.Provider,
 		"sub":        user.Sub,
@@ -128,12 +143,12 @@ func (h *RtcUserHandler) GetUser(c *gin.Context) {
 		"name":       user.Name,
 		"avatar_url": user.AvatarURL,
 		"status":     status,
-		"created_at": user.CreatedAt,
-		"updated_at": user.UpdatedAt,
+		"created_at": user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		"updated_at": user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
 	if user.BannedAt != nil {
-		result["banned_at"] = user.BannedAt
+		result["banned_at"] = user.BannedAt.Format("2006-01-02T15:04:05Z07:00")
 		result["banned_reason"] = user.BannedReason
 	}
 
@@ -155,26 +170,16 @@ func (h *RtcUserHandler) BanUser(c *gin.Context) {
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var input BanUserInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		Error(c, "invalid_param", "reason is required")
 		return
 	}
 
-	// Get admin user ID from context (set by JWT middleware)
-	adminUserIDStr, exists := c.Get("user_id")
-	if !exists {
+	adminUserID := getOperatorID(c)
+	if adminUserID == uuid.Nil {
 		Error(c, "unauthorized", "admin user ID not found in context")
-		return
-	}
-	adminUserIDRaw, ok := adminUserIDStr.(string)
-	if !ok {
-		Error(c, "unauthorized", "invalid admin user ID type")
-		return
-	}
-	adminUserID, err := uuid.Parse(adminUserIDRaw)
-	if err != nil {
-		Error(c, "invalid_param", "invalid admin user ID")
 		return
 	}
 
@@ -193,7 +198,7 @@ func (h *RtcUserHandler) BanUser(c *gin.Context) {
 	Success(c, gin.H{
 		"id":            user.ID,
 		"status":        "banned",
-		"banned_at":     user.BannedAt,
+		"banned_at":     user.BannedAt.Format("2006-01-02T15:04:05Z07:00"),
 		"banned_reason": user.BannedReason,
 	})
 }
@@ -208,20 +213,9 @@ func (h *RtcUserHandler) UnbanUser(c *gin.Context) {
 		return
 	}
 
-	// Get admin user ID from context (set by JWT middleware)
-	adminUserIDStr, exists := c.Get("user_id")
-	if !exists {
+	adminUserID := getOperatorID(c)
+	if adminUserID == uuid.Nil {
 		Error(c, "unauthorized", "admin user ID not found in context")
-		return
-	}
-	adminUserIDRaw, ok := adminUserIDStr.(string)
-	if !ok {
-		Error(c, "unauthorized", "invalid admin user ID type")
-		return
-	}
-	adminUserID, err := uuid.Parse(adminUserIDRaw)
-	if err != nil {
-		Error(c, "invalid_param", "invalid admin user ID")
 		return
 	}
 
@@ -264,8 +258,8 @@ func (h *RtcUserHandler) ListUserDevices(c *gin.Context) {
 			"device_id":      d.Device.DeviceID,
 			"name":           d.Device.Name,
 			"user_agent":     d.Device.UserAgent,
-			"last_active_at": d.Device.LastActiveAt,
-			"created_at":     d.Device.CreatedAt,
+			"last_active_at": d.Device.LastActiveAt.Format("2006-01-02T15:04:05Z07:00"),
+			"created_at":     d.Device.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 			"is_online":      d.IsOnline,
 		})
 	}

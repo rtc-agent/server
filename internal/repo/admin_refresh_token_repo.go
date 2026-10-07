@@ -50,9 +50,15 @@ func (r *adminRefreshTokenRepo) FindByHash(ctx context.Context, hash string) (*m
 }
 
 func (r *adminRefreshTokenRepo) Revoke(ctx context.Context, id uuid.UUID) error {
-	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.AdminRefreshToken{}).Where("id = ?", id).Update("revoked", true)
+	result := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.AdminRefreshToken{}).
+		Where("id = ? AND revoked = false", id).
+		Update("revoked", true)
 	if result.Error != nil {
 		return fmt.Errorf("revoke admin refresh token %s: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("revoke admin refresh token %s: %w", id, ErrNotFound)
 	}
 	return nil
 }

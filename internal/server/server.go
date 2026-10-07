@@ -218,7 +218,6 @@ func (s *Server) Start() error {
 	rateLimiter := middleware.NewRateLimiter(50, 100) // 50 req/s per user, burst 100
 	handler := middleware.Chain(
 		middleware.CORS(s.cfg.CORS.AllowOrigins, isDev),
-		middleware.SecurityHeaders,
 		middleware.HTTPMetrics(),
 		rateLimiter.Middleware(),
 		middleware.RequestLogger,

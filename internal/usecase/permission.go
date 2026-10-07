@@ -145,7 +145,61 @@ type ListPermissionsFilter struct {
 	Resource string
 }
 
+// PaginatedPolicies holds paginated policy results.
+type PaginatedPolicies struct {
+	Items    [][]string
+	Total    int
+	Page     int
+	PageSize int
+}
+
+// ListPermissionsPaginated returns permission policies with pagination applied at the
+// usecase level. Since Casbin stores policies in memory, we filter then paginate in-memory.
+func (uc *PermissionUsecase) ListPermissionsPaginated(_ context.Context, filter ListPermissionsFilter, page, pageSize int) (*PaginatedPolicies, error) {
+	enforcer := uc.enforcer.Enforcer()
+	policies, err := enforcer.GetPolicy()
+	if err != nil {
+		return nil, fmt.Errorf("get policies: %w", err)
+	}
+
+	// Apply filters
+	filtered := make([][]string, 0, len(policies))
+	for _, p := range policies {
+		if len(p) < 3 {
+			continue
+		}
+		if filter.RoleID != "" && p[0] != filter.RoleID {
+			continue
+		}
+		if filter.Resource != "" && p[1] != filter.Resource {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+
+	total := len(filtered)
+
+	// Apply pagination
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	items := filtered[start:end]
+
+	return &PaginatedPolicies{
+		Items:    items,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
 // ListPermissions returns permission policies, optionally filtered by role_id or resource.
+// Deprecated: use ListPermissionsPaginated for paginated results.
 func (uc *PermissionUsecase) ListPermissions(_ context.Context, filter ListPermissionsFilter) ([][]string, error) {
 	enforcer := uc.enforcer.Enforcer()
 	policies, err := enforcer.GetPolicy()

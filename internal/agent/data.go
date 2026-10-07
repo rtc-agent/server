@@ -513,13 +513,13 @@ func (h *helpers) publishEvent(ctx context.Context, sessionID string, turnID str
 // resolveChatModel builds a per-turn ChatModel from dynamic config when ChatModelFactory
 // is available. Falls back to the static ChatModel (h.deps.ChatModel) when:
 //   - ChatModelFactory is nil (factory not wired)
-//   - ConfigRepo is nil (dynamic config not available)
+//   - ServerConfigRepo is nil (dynamic config not available)
 //   - Any config resolution error occurs (logged as warning, not fatal)
 //
 // User-level overrides are applied when user_id is present in the context
 // (set via turnagent.WithUserID in the RPC handler).
 func (h *helpers) resolveChatModel(ctx context.Context) (einomodel.ToolCallingChatModel, error) {
-	if h.deps.ChatModelFactory == nil || h.deps.ConfigRepo == nil {
+	if h.deps.ChatModelFactory == nil || h.deps.ServerConfigRepo == nil {
 		return nil, nil // no dynamic config; caller uses static ChatModel
 	}
 
@@ -531,7 +531,7 @@ func (h *helpers) resolveChatModel(ctx context.Context) (einomodel.ToolCallingCh
 		}
 	}
 
-	overrides, err := resolveOverrides(ctx, h.deps.ConfigRepo, userIDPtr)
+	overrides, err := resolveOverrides(ctx, h.deps.ServerConfigRepo, userIDPtr)
 	if err != nil {
 		return nil, fmt.Errorf("resolve config overrides: %w", err)
 	}

@@ -16,11 +16,11 @@ import (
 // DBConfigProvider is the V1 ConfigProvider implementation.
 // It reads from the database on every call (no caching).
 type DBConfigProvider struct {
-	configRepo repo.ConfigRepo
+	configRepo repo.ServerConfigRepo
 }
 
 // NewDBConfigProvider creates a new DBConfigProvider.
-func NewDBConfigProvider(configRepo repo.ConfigRepo) ConfigProvider {
+func NewDBConfigProvider(configRepo repo.ServerConfigRepo) ConfigProvider {
 	return &DBConfigProvider{configRepo: configRepo}
 }
 

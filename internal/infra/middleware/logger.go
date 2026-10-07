@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/felixge/httpsnoop"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -14,27 +16,6 @@ import (
 
 	"github.com/rtc-agent/server/pkg/logger"
 )
-
-// responseWriter wraps http.ResponseWriter to capture status codes and error response bodies.
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode  int
-	body        *bytes.Buffer
-	captureBody bool
-}
-
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
-}
-
-func (rw *responseWriter) Write(b []byte) (int, error) {
-	// If this is an error response and body capture is enabled, copy to buffer.
-	if rw.captureBody && rw.statusCode >= 400 {
-		rw.body.Write(b)
-	}
-	return rw.ResponseWriter.Write(b)
-}
 
 // RequestLogger middleware creates a trace span for each request,
 // records the trace_id in logs, and logs request duration and status code.
@@ -87,21 +68,58 @@ func RequestLogger(next http.Handler) http.Handler {
 		)
 		defer span.End()
 
-		// Regular HTTP requests: wrap ResponseWriter to capture status code and error body.
-		rw := &responseWriter{
-			ResponseWriter: w,
-			statusCode:     http.StatusOK,
-			body:           &bytes.Buffer{},
-			captureBody:    true,
-		}
+		// Use httpsnoop to wrap the ResponseWriter, preserving Hijacker/Flusher/Pusher
+		// interfaces while capturing status code and error response body.
+		var (
+			statusCode  int
+			body        bytes.Buffer
+			captureBody bool
+			mu          sync.Mutex
+		)
+		captureBody = true
 
-		next.ServeHTTP(rw, r.WithContext(ctx))
+		wrapped := httpsnoop.Wrap(w, httpsnoop.Hooks{
+			WriteHeader: func(next httpsnoop.WriteHeaderFunc) httpsnoop.WriteHeaderFunc {
+				return func(code int) {
+					mu.Lock()
+					statusCode = code
+					mu.Unlock()
+					next(code)
+				}
+			},
+			Write: func(next httpsnoop.WriteFunc) httpsnoop.WriteFunc {
+				return func(b []byte) (int, error) {
+					mu.Lock()
+					sc := statusCode
+					mu.Unlock()
+					// If status hasn't been set yet (implicit 200), sc will be 0.
+					// Capture body for error responses (status >= 400).
+					if captureBody && sc >= 400 {
+						mu.Lock()
+						body.Write(b)
+						mu.Unlock()
+					}
+					return next(b)
+				}
+			},
+		})
+
+		next.ServeHTTP(wrapped, r.WithContext(ctx))
 
 		duration := time.Since(start)
 
+		// Default to 200 if WriteHeader was never called.
+		mu.Lock()
+		if statusCode == 0 {
+			statusCode = http.StatusOK
+		}
+		finalStatus := statusCode
+		errorBody := body.String()
+		mu.Unlock()
+
 		// Record span status.
-		span.SetAttributes(attribute.Int("http.status_code", rw.statusCode))
-		if rw.statusCode >= 500 {
+		span.SetAttributes(attribute.Int("http.status_code", finalStatus))
+		if finalStatus >= 500 {
 			span.SetStatus(codes.Error, "server error")
 		}
 
@@ -109,14 +127,13 @@ func RequestLogger(next http.Handler) http.Handler {
 		fields := []zap.Field{
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
-			zap.Int("status", rw.statusCode),
+			zap.Int("status", finalStatus),
 			zap.Duration("duration", duration),
 			zap.String("trace_id", span.SpanContext().TraceID().String()),
 		}
 
 		// If this is an error response with a captured body, add error info.
-		if rw.statusCode >= 400 && rw.body.Len() > 0 {
-			errorBody := rw.body.String()
+		if finalStatus >= 400 && len(errorBody) > 0 {
 			// Limit error body length to avoid oversized logs.
 			if len(errorBody) > 500 {
 				errorBody = errorBody[:500] + "...(truncated)"
@@ -125,9 +142,9 @@ func RequestLogger(next http.Handler) http.Handler {
 		}
 
 		// Choose log level based on status code.
-		if rw.statusCode >= 500 {
+		if finalStatus >= 500 {
 			logger.Error(ctx, "HTTP request failed", fields...)
-		} else if rw.statusCode >= 400 {
+		} else if finalStatus >= 400 {
 			logger.Warn(ctx, "HTTP request client error", fields...)
 		} else {
 			logger.Info(ctx, "HTTP request", fields...)

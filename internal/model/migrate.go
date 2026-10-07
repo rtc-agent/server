@@ -56,5 +56,19 @@ func AutoMigrate(db *gorm.DB) error {
 	// Silently ignored if the column is already jsonb or doesn't exist.
 	_ = db.Exec("ALTER TABLE user_memories ALTER COLUMN tags TYPE jsonb USING to_jsonb(tags)").Error
 
+	// Composite indexes for query performance.
+	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_session_offset ON messages(session_id, global_offset)").Error; err != nil {
+		return fmt.Errorf("create index idx_messages_session_offset: %w", err)
+	}
+	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_kind, owner_ref_id)").Error; err != nil {
+		return fmt.Errorf("create index idx_sessions_owner: %w", err)
+	}
+	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_operator_time ON admin_audit_logs(operator_id, created_at)").Error; err != nil {
+		return fmt.Errorf("create index idx_admin_audit_logs_operator_time: %w", err)
+	}
+	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_resource_time ON admin_audit_logs(resource_type, created_at)").Error; err != nil {
+		return fmt.Errorf("create index idx_admin_audit_logs_resource_time: %w", err)
+	}
+
 	return nil
 }

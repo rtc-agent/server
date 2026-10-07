@@ -52,9 +52,15 @@ func (r *refreshTokenRepo) FindByHash(ctx context.Context, hash string) (*model.
 }
 
 func (r *refreshTokenRepo) Revoke(ctx context.Context, id uuid.UUID) error {
-	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.RefreshToken{}).Where("id = ?", id).Update("revoked", true)
+	result := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.RefreshToken{}).
+		Where("id = ? AND revoked = false", id).
+		Update("revoked", true)
 	if result.Error != nil {
 		return fmt.Errorf("revoke refresh token %s: %w", id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("revoke refresh token %s: %w", id, ErrRefreshTokenNotFound)
 	}
 	return nil
 }

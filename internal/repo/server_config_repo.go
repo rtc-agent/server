@@ -8,11 +8,12 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/rtc-agent/server/internal/model"
 )
 
-// ConfigRepo provides dynamic configuration persistence operations.
+// ServerConfigRepo provides dynamic configuration persistence operations.
 // All write operations use atomic CAS (WHERE version = expectedVersion) for optimistic locking.
 //
 // Column name convention: GORM raw strings are used in WHERE clauses throughout this repo,
@@ -20,7 +21,7 @@ import (
 //   - "key"      -> ServerConfig.Key (primaryKey)
 //   - "user_id"  -> ServerConfig.UserID (primaryKey, nullable; NULL = system config)
 //   - "version"  -> ServerConfig.Version (optimistic lock counter)
-type ConfigRepo interface {
+type ServerConfigRepo interface {
 	// Get returns a single config by key and user_id.
 	// userID=nil queries system config (user_id IS NULL).
 	// Returns ErrNotFound if the record does not exist.
@@ -61,8 +62,8 @@ type configRepo struct {
 	db *gorm.DB
 }
 
-// NewConfigRepo creates a new ConfigRepo.
-func NewConfigRepo(db *gorm.DB) ConfigRepo {
+// NewServerConfigRepo creates a new ServerConfigRepo.
+func NewServerConfigRepo(db *gorm.DB) ServerConfigRepo {
 	return &configRepo{db: db}
 }
 
@@ -178,40 +179,41 @@ func (r *configRepo) Upsert(ctx context.Context, cfg *model.ServerConfig, expect
 // Delete performs an atomic CAS delete.
 // Returns the deleted config (for history/audit).
 // Returns ErrNotFound if the record does not exist, ErrConflict if the version does not match.
-// WHERE clause uses raw column names (see ConfigRepo interface doc for column mapping).
+// Uses SELECT FOR UPDATE within a transaction to prevent TOCTOU races between
+// the existence check and the delete.
 func (r *configRepo) Delete(ctx context.Context, key string, userID *uuid.UUID, expectedVersion int) (*model.ServerConfig, error) {
 	db := DBFromContext(ctx, r.db)
 
-	// Step 1: Check if the record exists (without version check) to distinguish
-	// "not found" from "version mismatch".
-	existQuery := db.WithContext(ctx).Where("key = ?", key)
-	if userID == nil {
-		existQuery = existQuery.Where("user_id IS NULL")
-	} else {
-		existQuery = existQuery.Where("user_id = ?", *userID)
-	}
 	var existing model.ServerConfig
-	if err := existQuery.First(&existing).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("delete config %q: %w", key, ErrNotFound)
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Lock + fetch in one atomic step to prevent TOCTOU races.
+		fetchQuery := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("key = ?", key)
+		if userID == nil {
+			fetchQuery = fetchQuery.Where("user_id IS NULL")
+		} else {
+			fetchQuery = fetchQuery.Where("user_id = ?", *userID)
 		}
-		return nil, fmt.Errorf("delete config %q: %w", key, err)
-	}
+		if err := fetchQuery.First(&existing).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("delete config %q: %w", key, ErrNotFound)
+			}
+			return fmt.Errorf("delete config %q: %w", key, err)
+		}
 
-	// Step 2: Atomic CAS delete with version check.
-	delQuery := db.WithContext(ctx).Where("key = ? AND version = ?", key, expectedVersion)
-	if userID == nil {
-		delQuery = delQuery.Where("user_id IS NULL")
-	} else {
-		delQuery = delQuery.Where("user_id = ?", *userID)
-	}
-	result := delQuery.Delete(&model.ServerConfig{})
-	if result.Error != nil {
-		return nil, fmt.Errorf("delete config %q: %w", key, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		// Record exists but version does not match.
-		return nil, fmt.Errorf("delete config %q: %w", key, ErrConflict)
+		// Version check (row is locked, no concurrent modification possible).
+		if existing.Version != expectedVersion {
+			return fmt.Errorf("delete config %q: %w", key, ErrConflict)
+		}
+
+		// Delete the locked row.
+		if err := tx.Where("id = ?", existing.ID).Delete(&model.ServerConfig{}).Error; err != nil {
+			return fmt.Errorf("delete config %q: %w", key, err)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
 	return &existing, nil
 }

@@ -65,7 +65,7 @@ var RepositorySet = wire.NewSet(
 	repo.NewFileRepo,
 	repo.NewMultipartUploadRepo,
 	repo.NewTemporaryCredentialRepo,
-	repo.NewConfigRepo,
+	repo.NewServerConfigRepo,
 )
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
@@ -247,8 +247,8 @@ func provideUsecaseDependencies(
 		GoalRepo:         svcCtx.GoalRepo,
 		LoopRepo:         svcCtx.LoopRepo,
 		MemoryRepo:       svcCtx.MemoryRepo,
-		ConfigRepo:       svcCtx.ConfigRepo,
-		ConfigProvider:   config.NewDBConfigProvider(svcCtx.ConfigRepo),
+		ServerConfigRepo:       svcCtx.ServerConfigRepo,
+		ConfigProvider:   config.NewDBConfigProvider(svcCtx.ServerConfigRepo),
 		UpdatePublisher:  svcCtx.UpdatePublisher,
 		ChatModel:        chatModelResult.model,
 		LLMConfig:        cfg.LLM,

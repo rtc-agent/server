@@ -195,7 +195,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	auditLogRepo := repo.NewAuditLogRepo(db)
 	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
 	mainRefreshTokenRepo := repo.NewRefreshTokenRepo(db)
-	configRepo := repo.NewConfigRepo(db)
+	configRepo := repo.NewServerConfigRepo(db)
 	deviceRepo := repo.NewDeviceRepo(db)
 	sessionRepo := repo.NewSessionRepo(db)
 	messageRepo := repo.NewMessageRepo(db)
@@ -288,12 +288,12 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 
 	// Init usecases
-	adminAuthUsecase := usecase.NewAdminAuthUsecase(adminUserRepo, refreshTokenRepo, jwtSigner)
+	adminAuthUsecase := usecase.NewAdminAuthUsecase(db, adminUserRepo, refreshTokenRepo, jwtSigner)
 	adminAuthUsecase.SetLoginProtection(loginProtection)
 	adminRoleUsecase := usecase.NewAdminRoleUsecase(adminRoleRepo, adminUserRoleRepo, auditLogRepo, enforcer)
 	permissionUsecase := usecase.NewPermissionUsecase(adminRoleRepo, enforcer, auditLogRepo)
-	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer, auditLogRepo)
-	adminUserUsecase := usecase.NewAdminUserUsecase(adminUserRepo, adminUserRoleRepo, adminRoleRepo, enforcer)
+	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(db, adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer, auditLogRepo)
+	adminUserUsecase := usecase.NewAdminUserUsecase(db, adminUserRepo, adminUserRoleRepo, adminRoleRepo, enforcer)
 	rtcUserUsecase := usecase.NewRtcUserUsecase(db, oauth2UserRepo, mainRefreshTokenRepo, auditLogRepo, deviceRepo)
 	rtcSessionUsecase := usecase.NewRtcSessionUsecase(sessionRepo, messageRepo)
 	serverConfigUsecase := usecase.NewServerConfigUsecase(configRepo, auditLogRepo, oauth2UserRepo, db)
@@ -507,9 +507,6 @@ func setupRouter(deps routerDeps) *gin.Engine {
 	// Logger middleware
 	router.Use(gin.Logger())
 
-	// Security headers middleware (P0 #8)
-	router.Use(httphandler.SecurityHeadersMiddleware())
-
 	// Rate limiting middleware (P0 #2) — applied globally
 	router.Use(httphandler.AdminRateLimitMiddleware(deps.middleware.rateLimiter))
 
@@ -554,6 +551,8 @@ func setupRouter(deps routerDeps) *gin.Engine {
 			c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+			c.Writer.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
+			c.Writer.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
 		}
 
 		if c.Request.Method == "OPTIONS" {

@@ -5,7 +5,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -109,42 +109,40 @@ func (c *BanCache) Invalidate(ctx context.Context, userID uuid.UUID) {
 }
 
 // globalBanCache is a shared cache instance for ban status checks across all JWT middleware instances.
-// Initialized via InitBanCache during server startup. Uses sync.Once to ensure thread-safe initialization.
-var (
-	globalBanCache     *BanCache
-	globalBanCacheOnce sync.Once
-)
+// Initialized via InitBanCache during server startup. Uses atomic.Pointer for lock-free, thread-safe
+// reads after initialization (P1 data race fix).
+var globalBanCache atomic.Pointer[BanCache]
 
 // InitBanCache initializes the global ban cache with a Redis client.
 // Must be called during server startup before any requests are processed.
-// Thread-safe: uses sync.Once to ensure initialization happens exactly once.
+// Thread-safe: uses atomic.Pointer.Store for safe concurrent publication.
 func InitBanCache(rdb redis.UniversalClient, ttl time.Duration) {
-	globalBanCacheOnce.Do(func() {
-		globalBanCache = NewBanCache(rdb, ttl)
-	})
+	cache := NewBanCache(rdb, ttl)
+	globalBanCache.Store(cache)
 }
 
 // InvalidateBanCache removes a user's ban status from the global cache.
 // Called when a user is unbanned to ensure immediate effect.
 func InvalidateBanCache(ctx context.Context, userID uuid.UUID) {
-	if globalBanCache != nil {
-		globalBanCache.Invalidate(ctx, userID)
+	if cache := globalBanCache.Load(); cache != nil {
+		cache.Invalidate(ctx, userID)
 	}
 }
 
 // GetBanCache retrieves a user's ban status from the global cache.
 // Returns (banned, cached) where cached indicates if the value was found in cache.
 func GetBanCache(ctx context.Context, userID uuid.UUID) (bool, bool) {
-	if globalBanCache == nil {
+	cache := globalBanCache.Load()
+	if cache == nil {
 		return false, false
 	}
-	return globalBanCache.Get(ctx, userID)
+	return cache.Get(ctx, userID)
 }
 
 // SetBanCache stores a user's ban status in the global cache.
 func SetBanCache(ctx context.Context, userID uuid.UUID, banned bool) {
-	if globalBanCache != nil {
-		globalBanCache.Set(ctx, userID, banned)
+	if cache := globalBanCache.Load(); cache != nil {
+		cache.Set(ctx, userID, banned)
 	}
 }
 

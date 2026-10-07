@@ -160,7 +160,7 @@ func (uc *AdminRoleUsecase) DeleteRole(ctx context.Context, roleID uuid.UUID, op
 	}
 
 	// Step 4: Soft delete the role (set is_enabled=false)
-	if err := uc.adminRoleRepo.Delete(ctx, roleID); err != nil {
+	if err := uc.adminRoleRepo.SoftDelete(ctx, roleID); err != nil {
 		return fmt.Errorf("soft delete role: %w", err)
 	}
 

@@ -3,7 +3,9 @@ package httphandler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -38,14 +40,14 @@ func (h *AuditLogHandler) RegisterRoutes(r *gin.RouterGroup) {
 
 // AuditLogResponse is the response body for a single audit log entry.
 type AuditLogResponse struct {
-	ID           string      `json:"id"`
-	OperatorID   string      `json:"operator_id"`
-	OperatorIP   string      `json:"operator_ip,omitempty"`
-	EventType    string      `json:"event_type"`
-	ResourceType string      `json:"resource_type"`
-	ResourceID   string      `json:"resource_id,omitempty"`
-	Details      interface{} `json:"details,omitempty"`
-	CreatedAt    string      `json:"created_at"`
+	ID           string          `json:"id"`
+	OperatorID   string          `json:"operator_id"`
+	OperatorIP   string          `json:"operator_ip,omitempty"`
+	EventType    string          `json:"event_type"`
+	ResourceType string          `json:"resource_type"`
+	ResourceID   string          `json:"resource_id,omitempty"`
+	Details      json.RawMessage `json:"details,omitempty"`
+	CreatedAt    string          `json:"created_at"`
 }
 
 // List queries audit logs with filters and pagination.
@@ -73,25 +75,43 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 			filter.ResourceID = &id
 		}
 	}
+	// Parse and validate time range filters
+	var startTime, endTime *time.Time
 	if startTimeStr := c.Query("start_time"); startTimeStr != "" {
 		if t, err := time.Parse(time.RFC3339, startTimeStr); err == nil {
-			filter.StartTime = &t
+			startTime = &t
+			filter.StartTime = startTime
+		} else {
+			Error(c, "validation_error", "Invalid start_time format, use RFC3339")
+			return
 		}
 	}
 	if endTimeStr := c.Query("end_time"); endTimeStr != "" {
 		if t, err := time.Parse(time.RFC3339, endTimeStr); err == nil {
-			filter.EndTime = &t
+			endTime = &t
+			filter.EndTime = endTime
+		} else {
+			Error(c, "validation_error", "Invalid end_time format, use RFC3339")
+			return
 		}
+	}
+	// Validate time range: start must be before end
+	if startTime != nil && endTime != nil && startTime.After(*endTime) {
+		Error(c, "validation_error", "start_time must be before end_time")
+		return
 	}
 
 	// Parse pagination
 	page := parseIntDefault(c.Query("page"), 1)
 	pageSize := parseIntDefault(c.Query("page_size"), 20)
+	if pageSize > 100 {
+		pageSize = 100
+	}
 
 	ctx := c.Request.Context()
 	logs, total, err := h.auditLogRepo.List(ctx, filter, page, pageSize)
 	if err != nil {
-		Error(c, "server_error", "查询审计日志失败")
+		Error(c, "server_error", "Failed to query audit logs")
 		return
 	}
 
@@ -104,7 +124,7 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 			EventType:    l.EventType,
 			ResourceType: l.ResourceType,
 			ResourceID:   l.ResourceID.String(),
-			Details:      l.Details,
+			Details:      json.RawMessage(l.Details),
 			CreatedAt:    l.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
@@ -117,7 +137,7 @@ func (h *AuditLogHandler) Get(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		Error(c, "validation_error", "无效的审计日志 ID")
+		Error(c, "validation_error", "Invalid audit log ID")
 		return
 	}
 
@@ -125,10 +145,10 @@ func (h *AuditLogHandler) Get(c *gin.Context) {
 	log, err := h.auditLogRepo.Get(ctx, id)
 	if err != nil {
 		if errors.Is(err, usecase.ErrNotFound) {
-			Error(c, "audit_log_not_found", "审计日志不存在")
+			Error(c, "audit_log_not_found", "Audit log not found")
 			return
 		}
-		Error(c, "server_error", "查询审计日志失败")
+		Error(c, "server_error", "Failed to query audit logs")
 		return
 	}
 
@@ -139,7 +159,7 @@ func (h *AuditLogHandler) Get(c *gin.Context) {
 		EventType:    log.EventType,
 		ResourceType: log.ResourceType,
 		ResourceID:   log.ResourceID.String(),
-		Details:      log.Details,
+		Details:      json.RawMessage(log.Details),
 		CreatedAt:    log.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
@@ -147,19 +167,16 @@ func (h *AuditLogHandler) Get(c *gin.Context) {
 }
 
 // parseIntDefault parses an int from a string, returning the default if parsing fails.
-func parseIntDefault(s string, def int) int {
+func parseIntDefault(s string, defaultVal int) int {
 	if s == "" {
-		return def
+		return defaultVal
 	}
-	var n int
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return def
-		}
-		n = n*10 + int(c-'0')
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return defaultVal
 	}
 	if n < 1 {
-		return def
+		return defaultVal
 	}
 	return n
 }

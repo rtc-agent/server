@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
@@ -17,6 +18,7 @@ import (
 
 // AdminUserRoleUsecase handles admin user-role association operations.
 type AdminUserRoleUsecase struct {
+	db                *gorm.DB
 	adminUserRepo     repo.AdminUserRepo
 	adminRoleRepo     repo.AdminRoleRepo
 	adminUserRoleRepo repo.AdminUserRoleRepo
@@ -27,6 +29,7 @@ type AdminUserRoleUsecase struct {
 
 // NewAdminUserRoleUsecase creates a new AdminUserRoleUsecase.
 func NewAdminUserRoleUsecase(
+	db *gorm.DB,
 	adminUserRepo repo.AdminUserRepo,
 	adminRoleRepo repo.AdminRoleRepo,
 	adminUserRoleRepo repo.AdminUserRoleRepo,
@@ -34,6 +37,7 @@ func NewAdminUserRoleUsecase(
 	auditLogRepo repo.AuditLogRepo,
 ) *AdminUserRoleUsecase {
 	return &AdminUserRoleUsecase{
+		db:                db,
 		adminUserRepo:     adminUserRepo,
 		adminRoleRepo:     adminRoleRepo,
 		adminUserRoleRepo: adminUserRoleRepo,
@@ -123,47 +127,57 @@ func (uc *AdminUserRoleUsecase) AssignRoles(ctx context.Context, input AssignRol
 		return err
 	}
 
-	// Create all assignments atomically in a transaction
-	if len(newRoleIDs) > 0 {
-		if err := uc.adminUserRoleRepo.CreateBatch(ctx, input.UserID, newRoleIDs); err != nil {
+	// Nothing new to assign
+	if len(newRoleIDs) == 0 {
+		return nil
+	}
+
+	// Wrap DB writes and Casbin policy additions in a transaction
+	// so that if Casbin fails, DB changes are rolled back.
+	return uc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txCtx := repo.WithTx(ctx, tx)
+
+		// Create all assignments atomically in a transaction
+		if err := uc.adminUserRoleRepo.CreateBatch(txCtx, input.UserID, newRoleIDs); err != nil {
 			return fmt.Errorf("batch create role assignments: %w", err)
 		}
-	}
 
-	// Add Casbin grouping policies synchronously
-	for _, role := range newRoles {
-		if err := uc.enforcer.AddGroupingPolicy(ctx, input.UserID.String(), role.ID.String()); err != nil {
-			return fmt.Errorf("add casbin grouping policy for user %s role %s: %w",
-				input.UserID.String(), role.ID.String(), err)
-		}
-	}
-
-	// Publish policy change for multi-instance sync
-	if uc.policyPublisher != nil && len(newRoleIDs) > 0 {
-		rules := make([][]string, 0, len(newRoleIDs))
-		for _, roleID := range newRoleIDs {
-			rules = append(rules, []string{input.UserID.String(), roleID.String()})
-		}
-		if err := uc.policyPublisher.PublishChange(ctx, "g", "add_grouping_policies", rules); err != nil {
-			logger.Warn(ctx, "admin_user_role.publish_policy_change_failed", zap.Error(err))
-		}
-	}
-
-	// Audit log
-	if uc.auditLogRepo != nil {
-		roleNames := make([]string, 0, len(newRoles))
+		// Add Casbin grouping policies synchronously
 		for _, role := range newRoles {
-			roleNames = append(roleNames, role.Name)
+			if err := uc.enforcer.AddGroupingPolicy(ctx, input.UserID.String(), role.ID.String()); err != nil {
+				// Returning error here will rollback the DB transaction
+				return fmt.Errorf("add casbin grouping policy for user %s role %s: %w",
+					input.UserID.String(), role.ID.String(), err)
+			}
 		}
-		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
-			operatorID, operatorIP, "assign_roles", "admin_user", input.UserID,
-			map[string]any{"role_ids": newRoleIDs, "role_names": roleNames},
-		)); err != nil {
-			logger.Error(ctx, "admin_user_role.assign_audit_log_failed", zap.Error(err))
-		}
-	}
 
-	return nil
+		// Publish policy change for multi-instance sync (outside tx, best-effort)
+		if uc.policyPublisher != nil {
+			rules := make([][]string, 0, len(newRoleIDs))
+			for _, roleID := range newRoleIDs {
+				rules = append(rules, []string{input.UserID.String(), roleID.String()})
+			}
+			if err := uc.policyPublisher.PublishChange(ctx, "g", "add_grouping_policies", rules); err != nil {
+				logger.Warn(ctx, "admin_user_role.publish_policy_change_failed", zap.Error(err))
+			}
+		}
+
+		// Audit log (outside tx, best-effort)
+		if uc.auditLogRepo != nil {
+			roleNames := make([]string, 0, len(newRoles))
+			for _, role := range newRoles {
+				roleNames = append(roleNames, role.Name)
+			}
+			if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+				operatorID, operatorIP, "assign_roles", "admin_user", input.UserID,
+				map[string]any{"role_ids": newRoleIDs, "role_names": roleNames},
+			)); err != nil {
+				logger.Error(ctx, "admin_user_role.assign_audit_log_failed", zap.Error(err))
+			}
+		}
+
+		return nil
+	})
 }
 
 // RemoveRoleInput defines the input for removing a role from a user.

@@ -39,7 +39,7 @@ func (h *ServerConfigHandler) List(c *gin.Context) {
 
 	items, total, err := h.uc.ListSystemConfigs(c.Request.Context(), category, page, pageSize)
 	if err != nil {
-		Error(c, "server_error", "查询配置列表失败")
+		Error(c, "server_error", "Failed to query configs")
 		return
 	}
 	Success(c, gin.H{"items": items, "total": total, "page": page, "page_size": pageSize})
@@ -51,10 +51,10 @@ func (h *ServerConfigHandler) Get(c *gin.Context) {
 	item, err := h.uc.GetSystemConfig(c.Request.Context(), key)
 	if err != nil {
 		if errors.Is(err, usecase.ErrConfigKeyNotFound) {
-			Error(c, "CONFIG_KEY_NOT_FOUND", "配置项不存在")
+			Error(c, "CONFIG_KEY_NOT_FOUND", "Config key not found")
 			return
 		}
-		Error(c, "server_error", "查询配置失败")
+		Error(c, "server_error", "Failed to query config")
 		return
 	}
 	Success(c, item)
@@ -74,7 +74,7 @@ func (h *ServerConfigHandler) Update(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req updateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Error(c, "VALIDATION_ERROR", "请求参数错误: "+err.Error())
+		Error(c, "validation_error", sanitizeBindingError(err))
 		return
 	}
 
@@ -137,10 +137,10 @@ func (h *ServerConfigHandler) GetHistory(c *gin.Context) {
 	items, total, err := h.uc.GetHistory(c.Request.Context(), key, nil, page, pageSize)
 	if err != nil {
 		if errors.Is(err, usecase.ErrConfigKeyNotFound) {
-			Error(c, "CONFIG_KEY_NOT_FOUND", "配置项不存在")
+			Error(c, "CONFIG_KEY_NOT_FOUND", "Config key not found")
 			return
 		}
-		Error(c, "server_error", "查询变更历史失败")
+		Error(c, "server_error", "Failed to query change history")
 		return
 	}
 	Success(c, gin.H{"items": items, "total": total, "page": page, "page_size": pageSize})
@@ -159,7 +159,7 @@ func (h *ServerConfigHandler) Rollback(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req rollbackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Error(c, "VALIDATION_ERROR", "请求参数错误: "+err.Error())
+		Error(c, "validation_error", sanitizeBindingError(err))
 		return
 	}
 
@@ -188,13 +188,13 @@ func (h *ServerConfigHandler) Rollback(c *gin.Context) {
 func (h *ServerConfigHandler) handleUpdateError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, usecase.ErrConfigKeyNotFound):
-		Error(c, "CONFIG_KEY_NOT_FOUND", "配置项不存在")
+		Error(c, "CONFIG_KEY_NOT_FOUND", "Config key not found")
 	case errors.Is(err, usecase.ErrOptimisticLock):
 		h.respondOptimisticLock(c, "配置已被其他管理员修改，请重新加载后重试")
 	case errors.Is(err, usecase.ErrValidation):
 		Error(c, "VALIDATION_ERROR", err.Error())
 	default:
-		Error(c, "server_error", "更新配置失败")
+		Error(c, "server_error", "Failed to update config")
 	}
 }
 
@@ -202,13 +202,13 @@ func (h *ServerConfigHandler) handleUpdateError(c *gin.Context, err error) {
 func (h *ServerConfigHandler) handleDeleteError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, usecase.ErrConfigKeyNotFound):
-		Error(c, "CONFIG_KEY_NOT_FOUND", "配置项不存在")
+		Error(c, "CONFIG_KEY_NOT_FOUND", "Config key not found")
 	case errors.Is(err, usecase.ErrConfigNotFound):
-		Error(c, "CONFIG_NOT_FOUND", "该配置项无数据库记录，无法删除")
+		Error(c, "CONFIG_NOT_FOUND", "No database record for this config, cannot delete")
 	case errors.Is(err, usecase.ErrOptimisticLock):
 		h.respondOptimisticLock(c, "配置已被其他管理员修改，请重新加载后重试")
 	default:
-		Error(c, "server_error", "删除配置失败")
+		Error(c, "server_error", "Failed to delete config")
 	}
 }
 
@@ -216,17 +216,17 @@ func (h *ServerConfigHandler) handleDeleteError(c *gin.Context, err error) {
 func (h *ServerConfigHandler) handleRollbackError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, usecase.ErrConfigKeyNotFound):
-		Error(c, "CONFIG_KEY_NOT_FOUND", "配置项不存在")
+		Error(c, "CONFIG_KEY_NOT_FOUND", "Config key not found")
 	case errors.Is(err, usecase.ErrConfigNotFound):
-		Error(c, "CONFIG_NOT_FOUND", "该配置项无数据库记录，无法回滚")
+		Error(c, "CONFIG_NOT_FOUND", "No database record for this config, cannot rollback")
 	case errors.Is(err, usecase.ErrVersionNotFound):
-		Error(c, "VERSION_NOT_FOUND", "目标版本不存在，可能已超出保留期限")
+		Error(c, "VERSION_NOT_FOUND", "Target version not found, may have exceeded retention period")
 	case errors.Is(err, usecase.ErrNoOp):
-		Error(c, "NO_OP", "目标版本与当前版本相同，无需回滚")
+		Error(c, "NO_OP", "Target version is same as current, no rollback needed")
 	case errors.Is(err, usecase.ErrOptimisticLock):
 		h.respondOptimisticLock(c, "配置已被其他管理员修改，请重新加载后重试")
 	default:
-		Error(c, "server_error", "回滚配置失败")
+		Error(c, "server_error", "Failed to rollback config")
 	}
 }
 
@@ -242,7 +242,7 @@ func parseUserIDParam(c *gin.Context) (uuid.UUID, bool) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		Error(c, "VALIDATION_ERROR", "无效的用户 ID")
+		Error(c, "VALIDATION_ERROR", "Invalid user ID")
 		return uuid.Nil, false
 	}
 	return id, true

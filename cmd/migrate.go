@@ -124,7 +124,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 	// Bootstrap dynamic configs from registry (idempotent).
 	// This ensures "out-of-box" experience: new deployments have all configs ready for editing.
-	configRepo := repo.NewConfigRepo(db)
+	configRepo := repo.NewServerConfigRepo(db)
 	auditLogRepo := repo.NewAuditLogRepo(db)
 	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
 	serverConfigUsecase := usecase.NewServerConfigUsecase(configRepo, auditLogRepo, oauth2UserRepo, db)

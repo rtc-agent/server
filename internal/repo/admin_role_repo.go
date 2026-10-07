@@ -26,8 +26,10 @@ type AdminRoleRepo interface {
 	ListPaginated(ctx context.Context, page, pageSize int) ([]*model.AdminRole, int64, error)
 	// Update persists changes to an admin role.
 	Update(ctx context.Context, role *model.AdminRole) error
-	// Delete removes an admin role by ID.
-	Delete(ctx context.Context, id uuid.UUID) error
+	// SoftDelete disables an admin role by setting is_enabled=false.
+	// This follows the spec: admin roles are never hard-deleted to preserve audit trail
+	// and foreign key references in admin_user_roles / admin_casbin_rule.
+	SoftDelete(ctx context.Context, id uuid.UUID) error
 	// Count returns total number of admin roles.
 	Count(ctx context.Context) (int64, error)
 	// GetByIDs returns admin roles matching the given IDs. Missing IDs are silently omitted.
@@ -143,10 +145,10 @@ func (r *adminRoleRepo) Update(ctx context.Context, role *model.AdminRole) error
 	return nil
 }
 
-// Delete performs a soft delete by setting is_enabled=false.
+// SoftDelete performs a soft delete by setting is_enabled=false.
 // This follows the spec: admin roles are never hard-deleted to preserve audit trail
 // and foreign key references in admin_user_roles / admin_casbin_rule.
-func (r *adminRoleRepo) Delete(ctx context.Context, id uuid.UUID) error {
+func (r *adminRoleRepo) SoftDelete(ctx context.Context, id uuid.UUID) error {
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.AdminRole{}).
 		Where("id = ?", id).
