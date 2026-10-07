@@ -80,7 +80,6 @@ var routeResourceMap = []routeResourceMapping{
 	// Admin user-role management
 	{"GET", "/api/admin-users", "admin_user", "read"},
 	{"POST", "/api/admin-users", "admin_user", "write"},
-	{"PUT", "/api/admin-users/me", "admin_user_self", "write"},
 	{"PUT", "/api/admin-users/:id", "admin_user", "write"},
 	{"GET", "/api/admin-users/:id/roles", "admin_user_role", "read"},
 	{"POST", "/api/admin-users/:id/roles", "admin_user_role", "write"},
@@ -188,6 +187,15 @@ func CasbinMiddleware(enforcer *auth.CasbinEnforcer, permissionSystemEnabled boo
 		pattern := c.FullPath()
 		if pattern == "" {
 			// FullPath returns empty for unregistered routes — let Gin handle 404
+			c.Next()
+			return
+		}
+
+		// SECURITY: Self-service profile update bypasses Casbin.
+		// PUT /api/admin-users/me only modifies the caller's own data (userID from JWT,
+		// not request body). This is safe for all authenticated users — no privilege
+		// escalation possible. Bypassing Casbin avoids unnecessary policy configuration.
+		if method == "PUT" && pattern == "/api/admin-users/me" {
 			c.Next()
 			return
 		}
