@@ -139,13 +139,37 @@ func (uc *PermissionUsecase) CheckPermission(ctx context.Context, userID uuid.UU
 	return uc.enforcer.Enforce(ctx, userID.String(), resource, action)
 }
 
-// ListPermissions returns all permission policies across all roles.
-func (uc *PermissionUsecase) ListPermissions(_ context.Context) ([][]string, error) {
-	// Get all policies from the enforcer
+// ListPermissionsFilter defines optional filters for listing permission policies.
+type ListPermissionsFilter struct {
+	RoleID   string
+	Resource string
+}
+
+// ListPermissions returns permission policies, optionally filtered by role_id or resource.
+func (uc *PermissionUsecase) ListPermissions(_ context.Context, filter ListPermissionsFilter) ([][]string, error) {
 	enforcer := uc.enforcer.Enforcer()
 	policies, err := enforcer.GetPolicy()
 	if err != nil {
 		return nil, fmt.Errorf("get policies: %w", err)
 	}
-	return policies, nil
+
+	// Apply filters
+	if filter.RoleID == "" && filter.Resource == "" {
+		return policies, nil
+	}
+
+	filtered := make([][]string, 0, len(policies))
+	for _, p := range policies {
+		if len(p) < 3 {
+			continue
+		}
+		if filter.RoleID != "" && p[0] != filter.RoleID {
+			continue
+		}
+		if filter.Resource != "" && p[1] != filter.Resource {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+	return filtered, nil
 }

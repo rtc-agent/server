@@ -21,6 +21,7 @@ import (
 	httphandler "github.com/rtc-agent/server/internal/handler/http"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/infra/email"
 	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -188,13 +189,58 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Info(ctx, "admin.memory_login_protection_enabled_single_instance_only")
 	}
 
+	// Init email sender (optional — required for email OTP login)
+	var emailSender email.Sender
+	if cfg.Email.SMTPHost != "" && cfg.Email.FromAddress != "" {
+		emailSender = email.NewSMTPSender(email.SMTPConfig{
+			Host:        cfg.Email.SMTPHost,
+			Port:        cfg.Email.SMTPPort,
+			User:        cfg.Email.SMTPUser,
+			Password:    cfg.Email.SMTPPassword,
+			FromAddress: cfg.Email.FromAddress,
+			FromName:    cfg.Email.FromName,
+		})
+		logger.Info(ctx, "admin.smtp_email_sender_configured",
+			zap.String("host", cfg.Email.SMTPHost),
+			zap.String("from", cfg.Email.FromAddress))
+	} else {
+		logger.Warn(ctx, "admin.email_not_configured_otp_login_disabled")
+	}
+
+	// Init OTP usecase (requires email sender)
+	var emailOTPUsecase *usecase.EmailOTPUsecase
+	if emailSender != nil {
+		otpCfg := usecase.EmailOTPConfig{
+			TTL:               time.Duration(cfg.OTP.TTL) * time.Second,
+			Length:            cfg.OTP.Length,
+			SendCooldown:      time.Duration(cfg.OTP.SendCooldown) * time.Second,
+			MaxSendPerIP:      cfg.OTP.MaxSendPerIP,
+			MaxVerifyAttempts: cfg.OTP.MaxVerifyAttempts,
+			LockDuration:      time.Duration(cfg.OTP.LockDuration) * time.Second,
+		}
+		var otpStore usecase.OTPStore
+		if rdb != nil {
+			otpStore = usecase.NewRedisOTPStore(rdb, cfg.OTP.MaxSendPerIP, cfg.OTP.MaxVerifyAttempts,
+				time.Duration(cfg.OTP.LockDuration)*time.Second,
+				time.Duration(cfg.OTP.SendCooldown)*time.Second)
+			logger.Info(ctx, "admin.redis_otp_store_enabled")
+		} else {
+			otpStore = usecase.NewMemoryOTPStore(cfg.OTP.MaxSendPerIP, cfg.OTP.MaxVerifyAttempts,
+				time.Duration(cfg.OTP.LockDuration)*time.Second,
+				time.Duration(cfg.OTP.SendCooldown)*time.Second)
+			logger.Info(ctx, "admin.memory_otp_store_enabled_single_instance_only")
+		}
+		emailOTPUsecase = usecase.NewEmailOTPUsecase(adminUserRepo, emailSender, otpStore, otpCfg)
+		logger.Info(ctx, "admin.email_otp_usecase_enabled")
+	}
+
 	// Init usecases
 	adminAuthUsecase := usecase.NewAdminAuthUsecase(adminUserRepo, refreshTokenRepo, jwtSigner)
 	adminAuthUsecase.SetLoginProtection(loginProtection)
 	adminRoleUsecase := usecase.NewAdminRoleUsecase(adminRoleRepo, adminUserRoleRepo, auditLogRepo, enforcer)
 	permissionUsecase := usecase.NewPermissionUsecase(adminRoleRepo, enforcer, auditLogRepo)
 	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer, auditLogRepo)
-	adminUserUsecase := usecase.NewAdminUserUsecase(adminUserRepo)
+	adminUserUsecase := usecase.NewAdminUserUsecase(adminUserRepo, adminUserRoleRepo, adminRoleRepo, enforcer)
 	rtcUserUsecase := usecase.NewRtcUserUsecase(db, oauth2UserRepo, mainRefreshTokenRepo, auditLogRepo, deviceRepo)
 	rtcSessionUsecase := usecase.NewRtcSessionUsecase(sessionRepo, messageRepo)
 	serverConfigUsecase := usecase.NewServerConfigUsecase(configRepo, auditLogRepo, oauth2UserRepo, db)
@@ -237,6 +283,14 @@ func runServe(cmd *cobra.Command, args []string) {
 	// Wire permission system deps to auth handler
 	permissionSystemEnabled := cfg.Features.PermissionSystem
 	adminAuthHandler.SetPermissionDeps(adminRoleRepo, adminUserRoleRepo, enforcer, permissionSystemEnabled)
+
+	// Wire email OTP usecase to auth handler (if configured)
+	if emailOTPUsecase != nil {
+		adminAuthHandler.SetEmailOTPUsecase(emailOTPUsecase)
+	}
+
+	// Wire password login configuration to auth handler
+	adminAuthHandler.SetPasswordEnabled(cfg.Features.PasswordEnabled)
 
 	// Setup router
 	router := setupRouter(routerDeps{

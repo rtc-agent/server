@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -17,6 +18,10 @@ func LoadAdminConfig(cfgFile string) (*AdminConfig, error) {
 		v.SetConfigFile(cfgFile)
 	}
 
+	// Support environment variable overrides: EMAIL__SMTP_HOST → email.smtp_host
+	v.AutomaticEnv()
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
+
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read admin config: %w", err)
 	}
@@ -28,6 +33,9 @@ func LoadAdminConfig(cfgFile string) (*AdminConfig, error) {
 
 	// Set defaults
 	cfg.setDefaults(v)
+
+	// Expand environment variable references in sensitive fields (${VAR_NAME} form)
+	expandAdminEnvVars(&cfg)
 
 	return &cfg, nil
 }
@@ -72,6 +80,37 @@ func (c *AdminConfig) setDefaults(v *viper.Viper) {
 	// Only set default if not explicitly configured in the config file.
 	if !v.IsSet("features.permission_system") {
 		c.Features.PermissionSystem = true
+	}
+	// Features: password_enabled defaults to false for security.
+	// Only set default if not explicitly configured in the config file or environment.
+	if !v.IsSet("features.password_enabled") {
+		c.Features.PasswordEnabled = false
+	}
+	// Email defaults
+	if c.Email.SMTPPort == 0 {
+		c.Email.SMTPPort = 587
+	}
+	if c.Email.FromName == "" {
+		c.Email.FromName = "RTC Agent"
+	}
+	// OTP defaults
+	if c.OTP.TTL == 0 {
+		c.OTP.TTL = 300 // 5 minutes
+	}
+	if c.OTP.Length == 0 {
+		c.OTP.Length = 6
+	}
+	if c.OTP.SendCooldown == 0 {
+		c.OTP.SendCooldown = 60 // 1 minute
+	}
+	if c.OTP.MaxSendPerIP == 0 {
+		c.OTP.MaxSendPerIP = 5
+	}
+	if c.OTP.MaxVerifyAttempts == 0 {
+		c.OTP.MaxVerifyAttempts = 5
+	}
+	if c.OTP.LockDuration == 0 {
+		c.OTP.LockDuration = 900 // 15 minutes
 	}
 }
 

@@ -89,6 +89,10 @@ func (h *AdminUserRoleHandler) ListUserRoles(c *gin.Context) {
 	ctx := c.Request.Context()
 	urs, err := h.adminUserRoleUsecase.ListUserRoles(ctx, userID)
 	if err != nil {
+		if errors.Is(err, usecase.ErrAdminUserNotFound) {
+			Error(c, "admin_user_not_found", "管理员不存在")
+			return
+		}
 		Error(c, "server_error", "查询管理员角色失败")
 		return
 	}

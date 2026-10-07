@@ -147,6 +147,55 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password, clientIP
 	}, nil
 }
 
+// LoginWithOTP authenticates a user after OTP verification.
+// This is called after the OTP has been verified by EmailOTPUsecase.
+// Unlike password login, this does not need login protection (OTP has its own).
+func (uc *AdminAuthUsecase) LoginWithOTP(ctx context.Context, email string) (*LoginResult, error) {
+	// 1. Find admin user by email
+	user, err := uc.adminUserRepo.GetByEmail(ctx, email)
+	if err != nil {
+		if repo.IsNotFound(err) {
+			// This should not happen if OTP verification was successful,
+			// but handle it defensively
+			logger.Warn(ctx, "admin_auth.otp_login_user_not_found", zap.String("email", email))
+			return nil, ErrAdminUserNotFound
+		}
+		return nil, fmt.Errorf("admin auth get user by email: %w", err)
+	}
+
+	// 2. Sign access token
+	accessToken, _, err := uc.signer.SignAccessToken(user.ID, user.Email, user.Name)
+	if err != nil {
+		return nil, fmt.Errorf("admin auth sign access token: %w", err)
+	}
+
+	// 3. Generate and store refresh token
+	refreshPlain := generateRefreshTokenPlain()
+	refreshHash := hashRefreshToken(refreshPlain)
+	refreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
+
+	rt := &model.AdminRefreshToken{
+		TokenHash: refreshHash,
+		UserID:    user.ID,
+		ExpiresAt: refreshExpiresAt,
+		Revoked:   false,
+	}
+	if err := uc.refreshTokenRepo.Create(ctx, rt); err != nil {
+		return nil, fmt.Errorf("admin auth store refresh token: %w", err)
+	}
+
+	logger.Info(ctx, "admin_auth.otp_login_succeeded",
+		zap.String("user_id", user.ID.String()),
+		zap.String("email", email))
+
+	return &LoginResult{
+		AccessToken:  accessToken,
+		RefreshToken: refreshPlain,
+		ExpiresIn:    int64(uc.signer.AccessTTL().Seconds()),
+		User:         user,
+	}, nil
+}
+
 // GetCurrentUser retrieves the current admin user by ID.
 func (uc *AdminAuthUsecase) GetCurrentUser(ctx context.Context, userID uuid.UUID) (*model.AdminUser, error) {
 	user, err := uc.adminUserRepo.GetByID(ctx, userID)
@@ -261,110 +310,6 @@ func (uc *AdminAuthUsecase) Logout(ctx context.Context, refreshTokenPlain string
 		zap.String("user_id", rt.UserID.String()))
 
 	return nil
-}
-
-// OAuthUserInfo holds OAuth user information for FindOrCreateUser.
-type OAuthUserInfo struct {
-	Provider  string
-	Sub       string
-	Email     string
-	Name      string
-	AvatarURL string
-}
-
-// FindOrCreateUser finds or creates an admin user from OAuth provider information.
-// This is used for OAuth-based admin authentication.
-//
-// Lookup order:
-//  1. By (provider, subject) — primary key for OAuth identity.
-//  2. By email — links OAuth login to an existing local admin user.
-//  3. Create a new admin user if neither matches.
-func (uc *AdminAuthUsecase) FindOrCreateUser(ctx context.Context, provider, sub, email, name, avatarURL string) (*model.AdminUser, error) {
-	// 1. Try to find by OAuth provider + subject.
-	user, err := uc.adminUserRepo.GetByProviderAndSubject(ctx, provider, sub)
-	if err == nil {
-		// Found — update profile fields if they changed.
-		uc.updateOAuthProfile(ctx, user, name, avatarURL)
-		return user, nil
-	}
-	if !repo.IsNotFound(err) {
-		return nil, fmt.Errorf("admin auth get admin user by provider/subject: %w", err)
-	}
-
-	// 2. Fall back to email lookup (link OAuth to an existing local admin user).
-	user, err = uc.adminUserRepo.GetByEmail(ctx, email)
-	if err != nil && !repo.IsNotFound(err) {
-		return nil, fmt.Errorf("admin auth get admin user by email: %w", err)
-	}
-
-	if err == nil {
-		// Existing admin user found by email — attach OAuth identity.
-		user.Provider = provider
-		user.ProviderSubject = sub
-		if name != "" {
-			user.Name = name
-		}
-		if avatarURL != "" {
-			user.AvatarURL = avatarURL
-		}
-		if err := uc.adminUserRepo.Update(ctx, user); err != nil {
-			return nil, fmt.Errorf("admin auth attach oauth to existing admin user: %w", err)
-		}
-		logger.Info(ctx, "admin_auth.oauth_linked_to_existing_admin_user",
-			zap.String("admin_user_id", user.ID.String()),
-			zap.String("provider", provider),
-			zap.String("email", email))
-		return user, nil
-	}
-
-	// 3. Create a new admin user.
-	// OAuth-only admin users have an empty PasswordHash; they cannot log in locally.
-	user = &model.AdminUser{
-		Email:           email,
-		Name:            name,
-		AvatarURL:       avatarURL,
-		Provider:        provider,
-		ProviderSubject: sub,
-	}
-
-	if err := uc.adminUserRepo.Create(ctx, user); err != nil {
-		if errors.Is(err, repo.ErrDuplicateEmail) {
-			// Concurrent creation — re-find by email.
-			user, err = uc.adminUserRepo.GetByEmail(ctx, email)
-			if err != nil {
-				return nil, fmt.Errorf("admin auth re-find admin user after concurrent create: %w", err)
-			}
-			return user, nil
-		}
-		return nil, fmt.Errorf("admin auth create admin user: %w", err)
-	}
-
-	logger.Info(ctx, "admin_auth.oauth_admin_user_created",
-		zap.String("admin_user_id", user.ID.String()),
-		zap.String("provider", provider),
-		zap.String("email", email))
-
-	return user, nil
-}
-
-// updateOAuthProfile updates mutable profile fields for an existing OAuth admin user.
-func (uc *AdminAuthUsecase) updateOAuthProfile(ctx context.Context, user *model.AdminUser, name, avatarURL string) {
-	updated := false
-	if name != "" && user.Name != name {
-		user.Name = name
-		updated = true
-	}
-	if avatarURL != "" && user.AvatarURL != avatarURL {
-		user.AvatarURL = avatarURL
-		updated = true
-	}
-	if updated {
-		if err := uc.adminUserRepo.Update(ctx, user); err != nil {
-			logger.Warn(ctx, "admin_auth.oauth_profile_update_failed",
-				zap.Error(err),
-				zap.String("admin_user_id", user.ID.String()))
-		}
-	}
 }
 
 // HashPassword hashes a password using bcrypt.

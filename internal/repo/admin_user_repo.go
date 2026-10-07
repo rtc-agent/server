@@ -20,8 +20,6 @@ type AdminUserRepo interface {
 	GetByEmail(ctx context.Context, email string) (*model.AdminUser, error)
 	// GetByID looks up an admin user by ID.
 	GetByID(ctx context.Context, id uuid.UUID) (*model.AdminUser, error)
-	// GetByProviderAndSubject looks up an admin user by OAuth2 provider and subject ID.
-	GetByProviderAndSubject(ctx context.Context, provider, subject string) (*model.AdminUser, error)
 	// Update persists changes to an admin user record.
 	Update(ctx context.Context, user *model.AdminUser) error
 	// GetByIDs returns admin users matching the given IDs. Missing IDs are silently omitted.
@@ -70,21 +68,6 @@ func (r *adminUserRepo) GetByID(ctx context.Context, id uuid.UUID) (*model.Admin
 			return nil, fmt.Errorf("get admin user %s: %w", id, ErrNotFound)
 		}
 		return nil, fmt.Errorf("get admin user %s: %w", id, err)
-	}
-	return &user, nil
-}
-
-// GetByProviderAndSubject looks up an admin user by OAuth2 provider and subject ID.
-func (r *adminUserRepo) GetByProviderAndSubject(ctx context.Context, provider, subject string) (*model.AdminUser, error) {
-	var user model.AdminUser
-	err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Where("provider = ? AND provider_subject = ?", provider, subject).
-		First(&user).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("get admin user by provider %s subject %s: %w", provider, subject, ErrNotFound)
-		}
-		return nil, fmt.Errorf("get admin user by provider %s subject %s: %w", provider, subject, err)
 	}
 	return &user, nil
 }

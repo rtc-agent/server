@@ -8,6 +8,26 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required,min=6"`
 }
 
+// CreateAdminUserRequest request payload for creating a new admin user
+type CreateAdminUserRequest struct {
+	// Email admin user email address (must be unique)
+	Email string `json:"email" binding:"required,email"`
+	// Password admin user password (minimum 6 characters)
+	Password string `json:"password" binding:"required,min=6"`
+	// Name admin user display name (optional)
+	Name string `json:"name" binding:"omitempty,max=100"`
+	// RoleIDs optional list of role IDs to assign after creation
+	RoleIDs []string `json:"role_ids" binding:"omitempty,dive,uuid"`
+}
+
+// UpdateAdminUserRequest request payload for updating an admin user
+type UpdateAdminUserRequest struct {
+	// Name admin user display name (optional)
+	Name *string `json:"name" binding:"omitempty,max=100"`
+	// Password new password (optional, minimum 6 characters)
+	Password *string `json:"password" binding:"omitempty,min=6"`
+}
+
 // LoginResponse admin login success response
 type LoginResponse struct {
 	// AccessToken JWT access token for authenticating API requests
@@ -76,4 +96,18 @@ type HealthResponse struct {
 	Status string `json:"status"`
 	// Timestamp server timestamp in RFC3339 format
 	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// SendOTPRequest email OTP send request payload
+type SendOTPRequest struct {
+	// Email admin user email address
+	Email string `json:"email" binding:"required,email"`
+}
+
+// OTPLoginRequest email OTP login request payload
+type OTPLoginRequest struct {
+	// Email admin user email address
+	Email string `json:"email" binding:"required,email"`
+	// OTP verification code (6 digits)
+	OTP string `json:"otp" binding:"required,len=6"`
 }

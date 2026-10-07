@@ -17,6 +17,10 @@ type AdminConfig struct {
 	Security AdminSecurityConfig `mapstructure:"security"`
 	// Features configuration for feature flags
 	Features AdminFeaturesConfig `mapstructure:"features"`
+	// Email configuration for sending verification codes and notifications
+	Email AdminEmailConfig `mapstructure:"email"`
+	// OTP configuration for email verification code settings
+	OTP AdminOTPConfig `mapstructure:"otp"`
 	// PrometheusURL is the base URL of the Prometheus instance for metrics proxying.
 	// If empty, the metrics proxy endpoint returns 501 Not Implemented.
 	PrometheusURL string `mapstructure:"prometheus_url"`
@@ -50,6 +54,10 @@ type AdminFeaturesConfig struct {
 	// When false, all authenticated users have full admin access (legacy behavior).
 	// Default: true (per spec section 8.2)
 	PermissionSystem bool `mapstructure:"permission_system"`
+	// PasswordEnabled enables password-based login.
+	// When false, only OTP login is available.
+	// Default: false for security; set to true in development environments.
+	PasswordEnabled bool `mapstructure:"password_enabled"`
 }
 
 // AdminRedisConfig Redis connection settings for admin-server
@@ -96,4 +104,37 @@ type AdminCORSConfig struct {
 	// Empty means all origins are allowed (development only).
 	// Production deployments MUST specify explicit origins.
 	AllowedOrigins []string `mapstructure:"allowed_origins"`
+}
+
+// AdminEmailConfig SMTP email settings for admin-server.
+// Used for sending verification codes and other notifications.
+type AdminEmailConfig struct {
+	// SMTPHost SMTP server host (e.g. "smtp.gmail.com")
+	SMTPHost string `mapstructure:"smtp_host"`
+	// SMTPPort SMTP server port (e.g. 587 for STARTTLS)
+	SMTPPort int `mapstructure:"smtp_port"`
+	// SMTPUser SMTP authentication username
+	SMTPUser string `mapstructure:"smtp_user"`
+	// SMTPPassword SMTP authentication password. Supports ${ENV_VAR} syntax.
+	SMTPPassword string `mapstructure:"smtp_password"`
+	// FromAddress sender email address (e.g. "noreply@example.com")
+	FromAddress string `mapstructure:"from_address"`
+	// FromName sender display name (e.g. "RTC Agent")
+	FromName string `mapstructure:"from_name"`
+}
+
+// AdminOTPConfig settings for email verification code (OTP).
+type AdminOTPConfig struct {
+	// TTL verification code validity period in seconds. Default: 300 (5 minutes).
+	TTL int `mapstructure:"ttl"`
+	// Length verification code length. Default: 6.
+	Length int `mapstructure:"length"`
+	// SendCooldown cooldown period in seconds between sending codes to the same email. Default: 60.
+	SendCooldown int `mapstructure:"send_cooldown"`
+	// MaxSendPerIP max OTP send requests per IP per minute. Default: 5.
+	MaxSendPerIP int `mapstructure:"max_send_per_ip"`
+	// MaxVerifyAttempts max failed verification attempts before lockout. Default: 5.
+	MaxVerifyAttempts int `mapstructure:"max_verify_attempts"`
+	// LockDuration lockout duration in seconds after exceeding max verify attempts. Default: 900 (15 minutes).
+	LockDuration int `mapstructure:"lock_duration"`
 }

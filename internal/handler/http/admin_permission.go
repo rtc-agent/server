@@ -56,19 +56,27 @@ type PolicyResponse struct {
 	Action   string `json:"action"`
 }
 
-// List lists all permission policies.
+// List lists permission policies with optional filtering and pagination.
 func (h *PermissionHandler) List(c *gin.Context) {
 	ctx := c.Request.Context()
-	policies, err := h.permissionUsecase.ListPermissions(ctx)
+
+	// Parse query parameters
+	filter := usecase.ListPermissionsFilter{
+		RoleID:   c.Query("role_id"),
+		Resource: c.Query("resource"),
+	}
+
+	policies, err := h.permissionUsecase.ListPermissions(ctx, filter)
 	if err != nil {
 		Error(c, "server_error", "查询权限列表失败")
 		return
 	}
 
-	result := make([]PolicyResponse, 0, len(policies))
+	// Build response items
+	items := make([]PolicyResponse, 0, len(policies))
 	for _, p := range policies {
 		if len(p) >= 3 {
-			result = append(result, PolicyResponse{
+			items = append(items, PolicyResponse{
 				RoleID:   p[0],
 				Resource: p[1],
 				Action:   p[2],
@@ -76,7 +84,22 @@ func (h *PermissionHandler) List(c *gin.Context) {
 		}
 	}
 
-	Success(c, gin.H{"items": result, "total": len(result)})
+	total := len(items)
+
+	// Apply pagination
+	page := parseIntDefault(c.Query("page"), 1)
+	pageSize := parseIntDefault(c.Query("page_size"), 20)
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	items = items[start:end]
+
+	Success(c, gin.H{"items": items, "total": total})
 }
 
 // Create adds a new permission policy.

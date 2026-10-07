@@ -35,6 +35,29 @@ security:
   login_max_attempts: 5        # Max failed login attempts before lockout
   login_lock_duration: 900     # Lockout duration in seconds (15 minutes)
 
+features:
+  permission_system: true      # Enable Casbin RBAC permission system
+  password_enabled: false      # Disable password login in production (use OTP only)
+
+# Email configuration for OTP login
+# Set credentials via environment variables: EMAIL__SMTP_USER, EMAIL__SMTP_PASSWORD
+email:
+  smtp_host: "smtp.qq.com"       # SMTP server host
+  smtp_port: 587                 # SMTP server port (587 for QQ with STARTTLS)
+  smtp_user: ""                  # SMTP username (set via EMAIL__SMTP_USER env var)
+  smtp_password: ""              # SMTP password (set via EMAIL__SMTP_PASSWORD env var)
+  from_address: "524041286@qq.com" # Sender email address
+  from_name: "RTC Agent"         # Sender display name
+
+# OTP verification code settings
+otp:
+  ttl: 300                     # Code validity in seconds (5 minutes)
+  length: 6                    # Code length (6 digits)
+  send_cooldown: 60            # Cooldown between sends to same email (seconds)
+  max_send_per_ip: 5           # Max send requests per IP per minute
+  max_verify_attempts: 5       # Max failed verification attempts before lockout
+  lock_duration: 900           # Lockout duration in seconds (15 minutes)
+
 prometheus_url: "http://prometheus:9090"
 grafana_url: "http://grafana:3000"
 jaeger_url: "http://jaeger:16686"

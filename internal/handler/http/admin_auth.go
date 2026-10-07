@@ -21,12 +21,14 @@ import (
 // AdminAuthHandler handles admin authentication endpoints.
 type AdminAuthHandler struct {
 	adminAuthUsecase        *usecase.AdminAuthUsecase
+	emailOTPUsecase         *usecase.EmailOTPUsecase // optional, nil if email not configured
 	jwtSigner               *auth.AdminJWTSigner
 	db                      *gorm.DB
 	roleRepo                roleLookup
 	adminUserRoleRepo       adminUserRoleLister
 	enforcer                *auth.CasbinEnforcer
 	permissionSystemEnabled bool
+	passwordEnabled         bool
 }
 
 // NewAdminAuthHandler creates a new AdminAuthHandler.
@@ -56,10 +58,31 @@ func (h *AdminAuthHandler) SetPermissionDeps(
 	h.permissionSystemEnabled = permissionSystemEnabled
 }
 
+// SetEmailOTPUsecase injects the email OTP usecase into the handler.
+// Call this after construction if email OTP login is configured.
+func (h *AdminAuthHandler) SetEmailOTPUsecase(uc *usecase.EmailOTPUsecase) {
+	h.emailOTPUsecase = uc
+}
+
+// SetPasswordEnabled sets whether password login is enabled.
+func (h *AdminAuthHandler) SetPasswordEnabled(enabled bool) {
+	h.passwordEnabled = enabled
+}
+
 // RegisterRoutes registers admin auth routes to the Gin router.
 func (h *AdminAuthHandler) RegisterRoutes(r *gin.Engine) {
 	// Public routes (no JWT required)
-	r.POST("/api/auth/login", h.Login)
+	r.POST("/api/auth/otp/send", h.SendOTP)
+	r.POST("/api/auth/login/otp", h.LoginWithOTP)
+
+	// Password login is conditionally registered based on configuration
+	if h.passwordEnabled {
+		r.POST("/api/auth/login", h.Login)
+	}
+
+	// Login config endpoint (public, no JWT required)
+	r.GET("/api/auth/config", h.GetLoginConfig)
+
 	// Refresh is public: the client needs to exchange a refresh_token for a new
 	// access_token even when the original access_token has expired.
 	r.POST("/api/auth/refresh", h.RefreshToken)
@@ -73,6 +96,15 @@ func (h *AdminAuthHandler) RegisterRoutes(r *gin.Engine) {
 		protected.GET("/me", h.GetCurrentUser)
 		protected.POST("/logout", h.Logout)
 	}
+}
+
+// GetLoginConfig handles GET /api/auth/config
+// Returns the login configuration to the frontend (which login methods are enabled).
+func (h *AdminAuthHandler) GetLoginConfig(c *gin.Context) {
+	Success(c, gin.H{
+		"password_enabled": h.passwordEnabled,
+		"otp_enabled":      h.emailOTPUsecase != nil,
+	})
 }
 
 // maxAdminRequestBodySize is the maximum allowed size for admin auth request bodies.

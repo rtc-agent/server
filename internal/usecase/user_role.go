@@ -262,6 +262,14 @@ type UserRoleResponse struct {
 
 // ListUserRoles lists all roles assigned to an admin user.
 func (uc *AdminUserRoleUsecase) ListUserRoles(ctx context.Context, userID uuid.UUID) ([]UserRoleResponse, error) {
+	// Verify admin user exists
+	if _, err := uc.adminUserRepo.GetByID(ctx, userID); err != nil {
+		if repo.IsNotFound(err) {
+			return nil, ErrAdminUserNotFound
+		}
+		return nil, fmt.Errorf("get admin user: %w", err)
+	}
+
 	urs, err := uc.adminUserRoleRepo.ListByUserID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list user roles: %w", err)

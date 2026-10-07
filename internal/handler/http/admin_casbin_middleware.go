@@ -41,6 +41,8 @@ var routeResourceMap = []routeResourceMapping{
 
 	// Admin user-role management
 	{"GET", "/api/admin-users", "admin_user", "read"},
+	{"POST", "/api/admin-users", "admin_user", "write"},
+	{"PUT", "/api/admin-users/:id", "admin_user", "write"},
 	{"GET", "/api/admin-users/:id/roles", "admin_user_role", "read"},
 	{"POST", "/api/admin-users/:id/roles", "admin_user_role", "write"},
 	{"DELETE", "/api/admin-users/:id/roles/:roleId", "admin_user_role", "delete"},
