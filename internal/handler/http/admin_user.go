@@ -3,6 +3,7 @@ package httphandler
 
 import (
 	"errors"
+	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -30,6 +31,32 @@ func (h *AdminUserHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.PUT("/admin-users/:id", h.UpdateUser)
 }
 
+// AdminUserResponse is the response body for an admin user.
+type AdminUserResponse struct {
+	ID        string           `json:"id"`
+	Email     string           `json:"email"`
+	Name      string           `json:"name"`
+	AvatarURL string           `json:"avatar_url,omitempty"`
+	CreatedAt string           `json:"created_at"`
+	UpdatedAt string           `json:"updated_at"`
+	Roles     []AdminRoleBrief `json:"roles,omitempty"`
+}
+
+// AdminRoleBrief is a brief representation of a role embedded in user responses.
+type AdminRoleBrief struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+}
+
+// ListUsersResponse is the response body for ListUsers.
+type ListUsersResponse struct {
+	Items    []AdminUserResponse `json:"items"`
+	Total    int64               `json:"total"`
+	Page     int                 `json:"page"`
+	PageSize int                 `json:"page_size"`
+}
+
 // ListUsers returns a paginated list of admin users.
 // Query parameters: page (default 1), page_size (default 20, max 100)
 func (h *AdminUserHandler) ListUsers(c *gin.Context) {
@@ -51,44 +78,61 @@ func (h *AdminUserHandler) ListUsers(c *gin.Context) {
 
 	users, total, err := h.adminUserUsecase.ListUsersPaginated(ctx, page, pageSize)
 	if err != nil {
-		Error(c, "server_error", "获取管理员列表失败")
+		Error(c, "server_error", "Failed to get admin users")
+		return
+	}
+
+	// Collect user IDs for batch role fetching
+	userIDs := make([]uuid.UUID, 0, len(users))
+	for _, user := range users {
+		userIDs = append(userIDs, user.ID)
+	}
+
+	// Batch-fetch roles for all users to avoid N+1 queries
+	rolesMap, err := h.adminUserUsecase.GetUsersRolesBatch(ctx, userIDs)
+	if err != nil {
+		Error(c, "server_error", "Failed to get user roles")
 		return
 	}
 
 	// Build response with user details and their roles
-	result := make([]gin.H, 0, len(users))
+	result := make([]AdminUserResponse, 0, len(users))
 	for _, user := range users {
-		// Fetch roles for this user
-		roles, err := h.adminUserUsecase.GetUserRoles(ctx, user.ID)
-		if err != nil {
-			// Log error but continue, roles will be empty
-			roles = nil
+		roles := rolesMap[user.ID]
+		roleBriefs := make([]AdminRoleBrief, 0, len(roles))
+		for _, role := range roles {
+			roleBriefs = append(roleBriefs, AdminRoleBrief{
+				ID:          role.ID.String(),
+				Name:        role.Name,
+				DisplayName: role.DisplayName,
+			})
 		}
 
-		result = append(result, gin.H{
-			"id":         user.ID,
-			"email":      user.Email,
-			"name":       user.Name,
-			"avatar_url": user.AvatarURL,
-			"created_at": user.CreatedAt,
-			"updated_at": user.UpdatedAt,
-			"roles":      roles,
+		result = append(result, AdminUserResponse{
+			ID:        user.ID.String(),
+			Email:     user.Email,
+			Name:      user.Name,
+			AvatarURL: user.AvatarURL,
+			CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			UpdatedAt: user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			Roles:     roleBriefs,
 		})
 	}
 
-	Success(c, gin.H{
-		"items":     result,
-		"total":     total,
-		"page":      page,
-		"page_size": pageSize,
+	Success(c, ListUsersResponse{
+		Items:    result,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
 	})
 }
 
 // CreateUser creates a new admin user.
 func (h *AdminUserHandler) CreateUser(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req CreateAdminUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Error(c, "validation_error", err.Error())
+		Error(c, "validation_error", sanitizeBindingError(err))
 		return
 	}
 
@@ -114,25 +158,24 @@ func (h *AdminUserHandler) CreateUser(c *gin.Context) {
 	})
 	if err != nil {
 		if errors.Is(err, usecase.ErrAdminUserNotFound) {
-			Error(c, "admin_user_not_found", "管理员不存在")
+			Error(c, "admin_user_not_found", "Admin user not found")
 			return
 		}
-		// Check if email already exists
-		if err.Error() == "email already exists" {
-			Error(c, "email_exists", "邮箱已存在")
+		if errors.Is(err, usecase.ErrEmailAlreadyExists) {
+			Error(c, "email_exists", "Email already exists")
 			return
 		}
-		Error(c, "server_error", "创建管理员失败")
+		Error(c, "server_error", "Failed to create admin user")
 		return
 	}
 
-	Success(c, gin.H{
-		"id":         user.ID,
-		"email":      user.Email,
-		"name":       user.Name,
-		"avatar_url": user.AvatarURL,
-		"created_at": user.CreatedAt,
-		"updated_at": user.UpdatedAt,
+	Success(c, AdminUserResponse{
+		ID:        user.ID.String(),
+		Email:     user.Email,
+		Name:      user.Name,
+		AvatarURL: user.AvatarURL,
+		CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt: user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	})
 }
 
@@ -145,9 +188,10 @@ func (h *AdminUserHandler) UpdateUser(c *gin.Context) {
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
 	var req UpdateAdminUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Error(c, "validation_error", err.Error())
+		Error(c, "validation_error", sanitizeBindingError(err))
 		return
 	}
 
@@ -160,19 +204,19 @@ func (h *AdminUserHandler) UpdateUser(c *gin.Context) {
 	})
 	if err != nil {
 		if errors.Is(err, usecase.ErrAdminUserNotFound) {
-			Error(c, "admin_user_not_found", "管理员不存在")
+			Error(c, "admin_user_not_found", "Admin user not found")
 			return
 		}
-		Error(c, "server_error", "更新管理员失败")
+		Error(c, "server_error", "Failed to update admin user")
 		return
 	}
 
-	Success(c, gin.H{
-		"id":         user.ID,
-		"email":      user.Email,
-		"name":       user.Name,
-		"avatar_url": user.AvatarURL,
-		"created_at": user.CreatedAt,
-		"updated_at": user.UpdatedAt,
+	Success(c, AdminUserResponse{
+		ID:        user.ID.String(),
+		Email:     user.Email,
+		Name:      user.Name,
+		AvatarURL: user.AvatarURL,
+		CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt: user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	})
 }

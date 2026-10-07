@@ -240,6 +240,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		loginProtection = usecase.NewLoginProtection(lpCfg)
 		logger.Info(ctx, "admin.memory_login_protection_enabled_single_instance_only")
 	}
+	defer loginProtection.Stop()
 
 	// Init email sender (optional — required for email OTP login)
 	var emailSender email.Sender

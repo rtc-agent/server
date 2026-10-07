@@ -9,6 +9,17 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// rateLimitScript atomically increments a counter and sets its TTL on first increment.
+// This prevents the race condition where INCR succeeds but EXPIRE is lost if the
+// process crashes between the two commands.
+var rateLimitScript = redis.NewScript(`
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+`)
+
 // RedisRateLimiter implements distributed rate limiting using Redis.
 //
 // Uses a sliding window counter per IP key with TTL auto-expiry.
@@ -32,24 +43,21 @@ func NewRedisRateLimiter(rdb *redis.Client, maxRequestsPerMinute int) *RedisRate
 }
 
 // Allow checks whether the request from the given IP should be allowed.
-// Uses Redis INCR + EXPIRE for atomic counting.
+// Uses a Lua script for atomic INCR + EXPIRE to prevent race conditions.
 func (rl *RedisRateLimiter) Allow(ip string) bool {
-	ctx := context.Background()
+	// Use a timeout context to avoid blocking indefinitely on Redis issues.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	key := fmt.Sprintf("admin:ratelimit:%s", ip)
 
-	// Atomic increment
-	count, err := rl.rdb.Incr(ctx, key).Result()
+	count, err := rateLimitScript.Run(ctx, rl.rdb, []string{key}, int(rl.window.Seconds())).Int()
 	if err != nil {
 		// Redis failure — fail open (allow request) to avoid blocking all traffic
 		return true
 	}
 
-	// Set expiry on first request in window
-	if count == 1 {
-		rl.rdb.Expire(ctx, key, rl.window)
-	}
-
-	return count <= int64(rl.rate)
+	return count <= rl.rate
 }
 
 // Stop is a no-op for Redis rate limiter (no background goroutines).

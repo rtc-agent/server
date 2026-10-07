@@ -2,6 +2,7 @@
 package usecase
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -10,9 +11,10 @@ import (
 // LoginProtectionInterface defines the contract for login brute-force protection.
 // Both in-memory and Redis-backed implementations satisfy this interface.
 type LoginProtectionInterface interface {
-	CheckLoginAllowed(ip, email string) error
-	RecordFailedLogin(ip, email string)
-	ResetLoginAttempts(ip, email string)
+	CheckLoginAllowed(ctx context.Context, ip, email string) error
+	RecordFailedLogin(ctx context.Context, ip, email string)
+	ResetLoginAttempts(ctx context.Context, ip, email string)
+	Stop()
 }
 
 // LoginProtectionConfig configures login lockout behavior.
@@ -35,6 +37,7 @@ type LoginProtection struct {
 	lockedUntil  map[string]time.Time
 	maxAttempts  int
 	lockDuration time.Duration
+	stopCh       chan struct{} // signals the cleanup goroutine to stop
 }
 
 // NewLoginProtection creates a new LoginProtection instance.
@@ -45,17 +48,20 @@ func NewLoginProtection(cfg LoginProtectionConfig) *LoginProtection {
 	if cfg.LockDuration <= 0 {
 		cfg.LockDuration = 15 * time.Minute
 	}
-	return &LoginProtection{
+	lp := &LoginProtection{
 		attempts:     make(map[string]int),
 		lockedUntil:  make(map[string]time.Time),
 		maxAttempts:  cfg.MaxAttempts,
 		lockDuration: cfg.LockDuration,
+		stopCh:       make(chan struct{}),
 	}
+	go lp.cleanupLoop()
+	return lp
 }
 
 // CheckLoginAllowed returns nil if login is allowed for the given IP and email,
 // or an error describing which dimension is locked out.
-func (lp *LoginProtection) CheckLoginAllowed(ip, email string) error {
+func (lp *LoginProtection) CheckLoginAllowed(_ context.Context, ip, email string) error {
 	lp.mu.Lock()
 	defer lp.mu.Unlock()
 
@@ -78,7 +84,7 @@ func (lp *LoginProtection) CheckLoginAllowed(ip, email string) error {
 
 // RecordFailedLogin records a failed login attempt for the given IP and email.
 // If either dimension exceeds the max attempts threshold, it is locked.
-func (lp *LoginProtection) RecordFailedLogin(ip, email string) {
+func (lp *LoginProtection) RecordFailedLogin(_ context.Context, ip, email string) {
 	lp.mu.Lock()
 	defer lp.mu.Unlock()
 
@@ -101,7 +107,7 @@ func (lp *LoginProtection) RecordFailedLogin(ip, email string) {
 
 // ResetLoginAttempts clears the failed login counters for the given IP and email.
 // Called after a successful login.
-func (lp *LoginProtection) ResetLoginAttempts(ip, email string) {
+func (lp *LoginProtection) ResetLoginAttempts(_ context.Context, ip, email string) {
 	lp.mu.Lock()
 	defer lp.mu.Unlock()
 
@@ -109,6 +115,40 @@ func (lp *LoginProtection) ResetLoginAttempts(ip, email string) {
 	delete(lp.attempts, "email:"+email)
 	delete(lp.lockedUntil, "ip:"+ip)
 	delete(lp.lockedUntil, "email:"+email)
+}
+
+// Stop stops the cleanup goroutine.
+func (lp *LoginProtection) Stop() {
+	select {
+	case <-lp.stopCh:
+		// already stopped
+	default:
+		close(lp.stopCh)
+	}
+}
+
+// cleanupLoop periodically removes expired entries from the attempts and lockedUntil maps
+// to prevent memory leaks in long-running processes.
+func (lp *LoginProtection) cleanupLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			lp.mu.Lock()
+			now := time.Now()
+			for key, until := range lp.lockedUntil {
+				if now.After(until) {
+					delete(lp.lockedUntil, key)
+					delete(lp.attempts, key)
+				}
+			}
+			lp.mu.Unlock()
+		case <-lp.stopCh:
+			return
+		}
+	}
 }
 
 // formatDuration formats a duration for human-readable display.

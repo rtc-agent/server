@@ -72,7 +72,7 @@ type LoginResult struct {
 func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password, clientIP string) (*LoginResult, error) {
 	// 0. Check login protection (IP + email dual lockout)
 	if uc.loginProtection != nil {
-		if err := uc.loginProtection.CheckLoginAllowed(clientIP, email); err != nil {
+		if err := uc.loginProtection.CheckLoginAllowed(ctx, clientIP, email); err != nil {
 			logger.Warn(ctx, "admin_auth.login_blocked_by_protection",
 				zap.String("email", email),
 				zap.String("ip", clientIP),
@@ -92,7 +92,7 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password, clientIP
 			_ = bcrypt.CompareHashAndPassword(dummyPasswordHash, []byte(password))
 			// Record failed attempt even for unknown user (email enumeration countermeasure)
 			if uc.loginProtection != nil {
-				uc.loginProtection.RecordFailedLogin(clientIP, email)
+				uc.loginProtection.RecordFailedLogin(ctx, clientIP, email)
 			}
 			logger.Info(ctx, "admin_auth.login_user_not_found", zap.String("email", email))
 			return nil, ErrInvalidCredentials
@@ -103,7 +103,7 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password, clientIP
 	// 2. Verify password
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		if uc.loginProtection != nil {
-			uc.loginProtection.RecordFailedLogin(clientIP, email)
+			uc.loginProtection.RecordFailedLogin(ctx, clientIP, email)
 		}
 		logger.Info(ctx, "admin_auth.login_invalid_password", zap.String("email", email))
 		return nil, ErrInvalidCredentials
@@ -132,7 +132,7 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password, clientIP
 
 	// Reset login protection counters on success
 	if uc.loginProtection != nil {
-		uc.loginProtection.ResetLoginAttempts(clientIP, email)
+		uc.loginProtection.ResetLoginAttempts(ctx, clientIP, email)
 	}
 
 	logger.Info(ctx, "admin_auth.login_succeeded",
