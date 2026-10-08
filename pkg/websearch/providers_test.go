@@ -88,7 +88,7 @@ func TestDuckDuckGoProvider_WithSOCKS5Proxy(t *testing.T) {
 
 	// Create SOCKS5 proxy
 	proxyObj := &proxy.Proxy{
-		URL:      "socks5://192.168.31.60:7897",
+		URL:      "socks5://192.168.31.60:7890",
 		Type:     proxy.ProxyTypeSOCKS5,
 		Region:   "global",
 		Priority: 10,

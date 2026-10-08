@@ -226,7 +226,7 @@ func buildMessagesFromSummaryItems(items []primitives.SummaryItem, createdAt tim
 	msgs := make([]*turnagent.Message, 0, len(items))
 	for i, item := range items {
 		msg := &turnagent.Message{
-			Role:      item.Role,
+			Role:      turnagent.RoleUser,
 			Content:   item.Content,
 			CreatedAt: createdAt,
 		}

@@ -171,9 +171,10 @@ func (h *helpers) logSummarizeTokenUsage(ctx context.Context, resp *schema.Messa
 // loadMessages function will find the summary message and truncate the
 // history at that point.
 //
-// The first message in `compressed` is expected to be the summary message
-// (a user message containing the formatted summary). We persist this as
-// a system message with ContentTypeSummary.
+// The summary message is the first user-role message in `compressed` (it
+// is created by buildCompressedResult with Role=User). After normalization
+// (normalizeSchemaMessagesForLLM), system messages are moved to the front,
+// so the summary is no longer necessarily at index 0. We scan for it.
 func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*schema.Message) error {
 	if len(compressed) == 0 {
 		return nil
@@ -199,14 +200,28 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 		return nil
 	}
 
-	// The first message is the summary (created by compressContext).
-	// Extract its content as the summary text.
-	summaryText := compressed[0].Content
+	// Find the summary message: the first user-role message in the compressed
+	// slice. After normalization, system messages are leading, so the summary
+	// (user role) appears after them.
+	var summaryText string
+	for _, msg := range compressed {
+		if msg.Role == schema.User {
+			summaryText = msg.Content
+			break
+		}
+	}
+	if summaryText == "" {
+		h.logger.Warn(ctx, "persistCompressedMessages.no_summary_found", map[string]any{
+			"session_id":     sessionID.String(),
+			"compressed_len": len(compressed),
+		})
+		return nil
+	}
 
 	// Create a single SummaryItem containing the summary.
 	contents := []primitives.SummaryItem{
 		{
-			Role:    "system",
+			Role:    "user",
 			Content: summaryText,
 		},
 	}
@@ -216,11 +231,11 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 	if err != nil {
 		return fmt.Errorf("create summary content data: %w", err)
 	}
-	_, err = primitives.CreateMessage(
+	summaryMsg, err := primitives.CreateMessage(
 		ctx, h.deps,
 		sessionID,
 		nil, // turnID — summary doesn't belong to a specific turn
-		protocol.MessageRoleSystem,
+		protocol.MessageRoleUser,
 		usecase.SystemCreator{},
 		summaryContentData,
 		protocol.MessageStreamingCompleted,
@@ -231,8 +246,22 @@ func (h *helpers) persistCompressedMessages(ctx context.Context, compressed []*s
 		return fmt.Errorf("create summary message: %w", err)
 	}
 
+	// Persist the summary boundary on the session so that loadMessages and
+	// ForkSession can use it as the context start without scanning messages.
+	if summaryMsg != nil {
+		if updateErr := h.deps.SessionRepo.Update(ctx, sessionID, map[string]any{
+			"latest_summary_offset": summaryMsg.GlobalOffset,
+		}); updateErr != nil {
+			h.logger.Warn(ctx, "persistCompressedMessages.update_summary_offset_failed", map[string]any{
+				"session_id": sessionID.String(),
+				"error":      updateErr.Error(),
+			})
+		}
+	}
+
 	h.logger.Info(ctx, "persistCompressedMessages.done", map[string]any{
-		"session_id": sessionID.String(),
+		"session_id":            sessionID.String(),
+		"latest_summary_offset": summaryMsg.GlobalOffset,
 	})
 
 	// After compression, write back current_context_tokens: use the actual token count of the compressed messages.

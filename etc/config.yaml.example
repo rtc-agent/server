@@ -153,9 +153,9 @@ worker:
   # background_concurrency: 5  # 后台任务并发数，默认 5
   # system_prompt: ""          # Agent 系统提示词
 
-  context_tokens_limit: 180000        # 触发上下文压缩的 token 阈值，默认 25000
-  auto_compact_buffer_tokens: 20000   # 自动压缩缓冲 token 数，默认 13000
-  max_output_tokens_for_summary: 20000  # 压缩最大输出 token 数，默认 20000
+  context_tokens_limit: 131072        # 模型的 context window 限制（Claude: 200K, qwen3.7-plus: 100万），建议设置为模型窗口的 80-90% 留安全边际
+  auto_compact_buffer_tokens: 52429   # 自动压缩缓冲 token 数（建议 50-60%），压缩阈值 = context_tokens_limit - auto_compact_buffer_tokens
+  max_output_tokens_for_summary: 20000  # 压缩/摘要任务的最大输出 token 数（默认 20000，建议根据模型输出能力调整）
   # checkpoint_ttl: 24h              # eino checkpoint 在 Redis 中的 TTL，默认 24h
   stream_chunk_ttl: "5m"             # 流式消息 chunk 在 Redis 中的 TTL，默认 5m
   # interrupt_answer_ttl: 10m        # 中断回答在 Redis 中的 TTL，默认 10m

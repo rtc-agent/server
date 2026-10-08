@@ -110,6 +110,17 @@ type Session struct {
 	MemoryExtractionLastMessages int `gorm:"default:0" json:"memory_extraction_last_messages"`
 
 	// ========================================================================
+	// Summary boundary (for context loading and fork)
+	// ========================================================================
+
+	// LatestSummaryOffset is the global_offset of the most recently created
+	// summary message. 0 means no summary exists yet. Updated by the
+	// compression flow (persistCompressedMessages / finalizeSummaryStream)
+	// so that loadMessages and ForkSession can use it as the context start
+	// boundary without scanning the messages table.
+	LatestSummaryOffset uint32 `gorm:"default:0" json:"latest_summary_offset"`
+
+	// ========================================================================
 	// Metadata
 	// ========================================================================
 

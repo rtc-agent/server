@@ -23,22 +23,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// clampForkLimit normalizes the fork limit to [1, 1000].
-func clampForkLimit(ptr *int) int {
-	const defaultLimit = 200
-	if ptr == nil {
-		return defaultLimit
-	}
-	l := *ptr
-	if l < 1 {
-		return 1
-	}
-	if l > 1000 {
-		return 1000
-	}
-	return l
-}
-
 // buildForkMessages constructs the message list for a fork operation.
 // All messages are copied from the old session, except the last one which
 // is replaced with the new content.
@@ -168,18 +152,14 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		return nil, apiErr
 	}
 
-	limit := clampForkLimit(req.Limit)
-
 	span.SetAttributes(
 		attribute.String("user.id", userID.String()),
-		attribute.Int("limit", limit),
 	)
 
 	logger.Info(ctx, "[ForkSession] start",
 		zap.String("user", userID.String()),
 		zap.String("old_session", oldSessionID.String()),
-		zap.String("old_message", oldMessageID.String()),
-		zap.Int("limit", limit))
+		zap.String("old_message", oldMessageID.String()))
 
 	oldSession, err := h.validateForkSource(ctx, oldSessionID, creator)
 	if err != nil {
@@ -200,7 +180,12 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		return nil, h.internalError(ctx, "message.error", "internal error", err)
 	}
 
-	oldMessages, err := h.deps.Deps.MessageRepo.ListBySessionBeforeOffset(ctx, oldSessionID, oldMessage.GlobalOffset, limit)
+	// Use the session's latest summary offset as the lower bound.
+	// This ensures the forked context always starts at a summary (or the very
+	// first message), preventing the "first non-system message is assistant" bug.
+	minOffset := oldSession.LatestSummaryOffset
+
+	oldMessages, err := h.deps.Deps.MessageRepo.ListBySessionBeforeOffset(ctx, oldSessionID, minOffset, oldMessage.GlobalOffset, 0)
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
@@ -280,15 +265,16 @@ func (h *Handler) validateForkSource(ctx context.Context, oldSessionID uuid.UUID
 func buildForkSessionModel(old *model.Session, clientID string, creator usecase.UserCreator, deviceID string) *model.Session {
 	now := time.Now()
 	return &model.Session{
-		ID:          uuid.Must(uuid.NewV7()),
-		ClientID:    clientID,
-		OwnerKind:   string(creator.Kind()),
-		OwnerRefID:  creator.ReferenceID(),
-		DeviceID:    deviceID,
-		Title:       old.Title,
-		Status:      string(protocol.SessionStatusActive),
-		AgentPrompt: old.AgentPrompt,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:                  uuid.Must(uuid.NewV7()),
+		ClientID:            clientID,
+		OwnerKind:           string(creator.Kind()),
+		OwnerRefID:          creator.ReferenceID(),
+		DeviceID:            deviceID,
+		Title:               old.Title,
+		Status:              string(protocol.SessionStatusActive),
+		AgentPrompt:         old.AgentPrompt,
+		LatestSummaryOffset: old.LatestSummaryOffset,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 }

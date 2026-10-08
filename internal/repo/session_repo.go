@@ -163,7 +163,7 @@ func (r *sessionRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status pro
 	validTransitions := map[string][]string{
 		string(model.SessionStatusActive): {string(model.SessionStatusIdle), string(model.SessionStatusClosed)},
 		string(model.SessionStatusIdle):   {string(model.SessionStatusActive), string(model.SessionStatusClosed)},
-		string(model.SessionStatusClosed): {}, // terminal state
+		string(model.SessionStatusClosed): {string(model.SessionStatusIdle)}, // allow reopen via OpenSession API
 	}
 
 	// Get current status.

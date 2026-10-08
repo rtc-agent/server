@@ -1,11 +1,20 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/cloudwego/eino/schema"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
+
+// testNoopLogger is a minimal Logger implementation for unit tests.
+type testNoopLogger struct{}
+
+func (testNoopLogger) Debug(_ context.Context, _ string, _ map[string]any) {}
+func (testNoopLogger) Info(_ context.Context, _ string, _ map[string]any)  {}
+func (testNoopLogger) Warn(_ context.Context, _ string, _ map[string]any)  {}
+func (testNoopLogger) Error(_ context.Context, _ string, _ map[string]any) {}
 
 // =============================================================================
 // extractSystemMessages
@@ -819,4 +828,203 @@ func TestFullNormalizationPipeline_Integration(t *testing.T) {
 			}
 		})
 	}
+}
+
+// =============================================================================
+// normalizeSchemaMessagesForLLM — comprehensive table-driven tests
+// =============================================================================
+
+// TestNormalizeSchemaMessages_ComprehensiveTables verifies that
+// normalizeSchemaMessagesForLLM correctly normalizes two comprehensive message
+// tables: one without summary (pre-compression diversity) and one with summary
+// (post-compression scenario — the exact bug case).
+func TestNormalizeSchemaMessages_ComprehensiveTables(t *testing.T) {
+	h := &helpers{logger: testNoopLogger{}}
+	ctx := t.Context()
+	// Use a dummy sessionID — normalizeSchemaMessagesForLLM only uses it for logging.
+	sid := [16]byte{0x01}
+
+	t.Run("table1_no_summary_all_message_types", func(t *testing.T) {
+		// Table 1: Without summary. Contains all message types/roles the system
+		// can produce, deliberately in a scrambled order that violates API
+		// invariants. This exercises every normalization step.
+		//
+		// Input order (intentionally broken):
+		//   [user, assistant(tool_call), system(scattered), tool(result),
+		//    user, assistant(text), system(another), user, assistant(text)]
+		//
+		// Expected after normalization:
+		//   [system, system, user, assistant(tool_call), tool(result),
+		//    user, assistant(text), user, assistant(text)]
+		input := []*schema.Message{
+			{Role: schema.User, Content: "first user message"},
+			{Role: schema.Assistant, Content: "let me check",
+				ToolCalls: []schema.ToolCall{{ID: "tc1", Function: schema.FunctionCall{Name: "read_file", Arguments: `{"path":"/foo"}`}}}},
+			{Role: schema.System, Content: "system prompt A"},
+			{Role: schema.Tool, Content: "file contents", ToolCallID: "tc1"},
+			{Role: schema.User, Content: "second user message"},
+			{Role: schema.Assistant, Content: "here is the result"},
+			{Role: schema.System, Content: "system prompt B"},
+			{Role: schema.User, Content: "third user message"},
+			{Role: schema.Assistant, Content: "final response"},
+		}
+
+		result, err := h.normalizeSchemaMessagesForLLM(ctx, sid, input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Verify: system messages are leading.
+		verifySystemLeading(t, result)
+
+		// Verify: first non-system is user.
+		verifyFirstNonSystemIsUser(t, result)
+
+		// Verify: tool pairing is valid.
+		verifyToolPairing(t, result)
+
+		// Verify: no consecutive same-role user messages (they should be merged).
+		verifyNoConsecutiveSameRoleUser(t, result)
+
+		// Users are separated by tool/assistant, so no merging happens.
+		// Total = 2 system + 3 user + 3 assistant + 1 tool = 9.
+		if len(result) != 9 {
+			t.Errorf("expected 9 messages after normalization, got %d", len(result))
+			for i, m := range result {
+				t.Logf("  [%d] role=%s content=%q", i, m.Role, truncateContent(m.Content, 40))
+			}
+		}
+	})
+
+	t.Run("table2_with_summary_post_compression_bug_scenario", func(t *testing.T) {
+		// Table 2: The EXACT bug scenario. This is what buildCompressedResult
+		// + appendPostCompactAttachments produces BEFORE normalization:
+		//
+		//   [summary(user), system(agent_prompt), system(session_memory),
+		//    system(post_compact_attachment), assistant(retained), user(retained)]
+		//
+		// Without normalization: preProcessMessages sees user first, then system
+		// messages are NOT extracted → API rejects with "first non-system message
+		// should be user message" (because systems end up in messages array).
+		//
+		// After normalization: systems extracted to front →
+		//   [system, system, system, summary(user), assistant, user]
+		// preProcessMessages extracts leading systems → API parameter.
+		// Messages array: [summary(user), assistant, user] → valid!
+		input := []*schema.Message{
+			// Summary (user role) — from buildCompressedResult
+			{Role: schema.User, Content: "<summary>Conversation about file /foo.go...</summary>"},
+			// System messages from discarded portion
+			{Role: schema.System, Content: "You are a helpful assistant."},
+			{Role: schema.System, Content: "SessionMemory: user prefers Go"},
+			// Post-compact file recovery attachment (system-reminder)
+			{Role: schema.System, Content: "<system-reminder>Recently read file: /foo.go\ncontent...</system-reminder>"},
+			// Retained conversation messages
+			{Role: schema.Assistant, Content: "I've read the file. Here's my analysis..."},
+			{Role: schema.User, Content: "Thanks, now edit it."},
+		}
+
+		result, err := h.normalizeSchemaMessagesForLLM(ctx, sid, input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Verify: system messages are leading.
+		verifySystemLeading(t, result)
+
+		// Verify: first non-system is user (the summary).
+		verifyFirstNonSystemIsUser(t, result)
+
+		// Verify: system count = 3 (agent_prompt, session_memory, post_compact).
+		systemCount := 0
+		for _, m := range result {
+			if m.Role == schema.System {
+				systemCount++
+			}
+		}
+		if systemCount != 3 {
+			t.Errorf("expected 3 system messages, got %d", systemCount)
+		}
+
+		// Verify: total = 3 system + 1 summary(user) + 1 assistant + 1 user = 6.
+		if len(result) != 6 {
+			t.Errorf("expected 6 messages after normalization, got %d", len(result))
+		}
+
+		// Verify: exact expected order.
+		expectedRoles := []schema.RoleType{schema.System, schema.System, schema.System, schema.User, schema.Assistant, schema.User}
+		for i, want := range expectedRoles {
+			if i >= len(result) {
+				t.Fatalf("result too short: expected role %q at index %d, but only %d messages", want, i, len(result))
+			}
+			if result[i].Role != want {
+				t.Errorf("index %d: expected role %q, got %q", i, want, result[i].Role)
+			}
+		}
+	})
+}
+
+// -----------------------------------------------------------------------------
+// Test helpers for normalizeSchemaMessagesForLLM tests
+// -----------------------------------------------------------------------------
+
+func verifySystemLeading(t *testing.T, msgs []*schema.Message) {
+	t.Helper()
+	inConversation := false
+	for i, m := range msgs {
+		if m.Role == schema.System {
+			if inConversation {
+				t.Errorf("system message at position %d after conversation start", i)
+			}
+		} else {
+			inConversation = true
+		}
+	}
+}
+
+func verifyFirstNonSystemIsUser(t *testing.T, msgs []*schema.Message) {
+	t.Helper()
+	for _, m := range msgs {
+		if m.Role != schema.System {
+			if m.Role != schema.User {
+				t.Errorf("first non-system message has role %q, expected %q", m.Role, schema.User)
+			}
+			return
+		}
+	}
+}
+
+func verifyToolPairing(t *testing.T, msgs []*schema.Message) {
+	t.Helper()
+	pending := 0
+	for i, m := range msgs {
+		switch m.Role {
+		case schema.Assistant:
+			pending += len(m.ToolCalls)
+		case schema.Tool:
+			if pending <= 0 {
+				t.Errorf("tool message at position %d without matching assistant tool_call", i)
+			}
+			pending--
+		}
+	}
+	if pending > 0 {
+		t.Errorf("%d assistant tool_call(s) without matching tool result", pending)
+	}
+}
+
+func verifyNoConsecutiveSameRoleUser(t *testing.T, msgs []*schema.Message) {
+	t.Helper()
+	for i := 1; i < len(msgs); i++ {
+		if msgs[i].Role == schema.User && msgs[i-1].Role == schema.User {
+			t.Errorf("consecutive user messages at positions %d-%d (should be merged)", i-1, i)
+		}
+	}
+}
+
+func truncateContent(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

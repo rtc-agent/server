@@ -158,6 +158,10 @@ func (h *helpers) finalizeSummaryStreamOnError(
 // preservation, they would be lost after compression. This ensures the
 // LLM always has access to behavioral rules and persistent context.
 //
+// NOTE: The message order produced here is NOT final. compressContext
+// calls normalizeMessagesForLLM after this function to ensure the result
+// satisfies the Anthropic Messages API invariants (system messages leading).
+//
 // Shared by compressContext and forceCompressContext.
 func buildCompressedResult(
 	msgs []*schema.Message,
@@ -297,6 +301,20 @@ func (h *helpers) finalizeSummaryStreamWithMetadata(
 		h.logger.Warn(ctx, "summarize.finalize_failed", map[string]any{
 			"error": chunkErr.Error(),
 		})
+		return
+	}
+
+	// Persist the summary boundary on the session so that loadMessages and
+	// ForkSession can use it as the context start without scanning messages.
+	if summaryMsg, getErr := h.deps.MessageRepo.GetByID(ctx, summaryMsgID); getErr == nil && summaryMsg != nil {
+		if updateErr := h.deps.SessionRepo.Update(ctx, sessionID, map[string]any{
+			"latest_summary_offset": summaryMsg.GlobalOffset,
+		}); updateErr != nil {
+			h.logger.Warn(ctx, "summarize.update_summary_offset_failed", map[string]any{
+				"session_id": sessionID.String(),
+				"error":      updateErr.Error(),
+			})
+		}
 	}
 }
 
@@ -398,6 +416,16 @@ func (h *helpers) compressContext(ctx context.Context, msgs []*schema.Message, c
 	discarded := msgs[:retentionIndex]
 	result = appendPostCompactAttachments(ctx, h, result, discarded)
 
+	// Phase 10: Normalize compressed messages through the same pipeline as
+	// loadMessages. This ensures system messages are leading, tool pairing is
+	// valid, and consecutive same-role messages are merged — a single source
+	// of truth for message ordering, instead of hardcoding order in
+	// buildCompressedResult.
+	result, err = h.normalizeSchemaMessagesForLLM(ctx, sessionID, result)
+	if err != nil {
+		return nil, fmt.Errorf("compress.normalize: %w", err)
+	}
+
 	compressDuration := time.Since(compressStart)
 	tokensAfter := estimateTokensAfterCompact(msgs, retentionIndex, summary)
 
@@ -455,7 +483,11 @@ func (h *helpers) summarizeMessagesStreaming(
 	// Use dynamic config for summarization LLM calls when available.
 	chatModel := h.resolveChatModelForBackground(ctx)
 
-	stream, err := chatModel.Stream(ctx, []*schema.Message{userPrompt}, h.noThinkingOptions(ctx)...)
+	// Build options: disable thinking + limit output tokens for summarization.
+	opts := h.noThinkingOptions(ctx)
+	opts = append(opts, model.WithMaxTokens(h.maxOutputTokensForSummary))
+
+	stream, err := chatModel.Stream(ctx, []*schema.Message{userPrompt}, opts...)
 	if err != nil {
 		return "", nil, fmt.Errorf("chat model stream: %w", err)
 	}

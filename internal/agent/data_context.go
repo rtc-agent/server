@@ -37,9 +37,26 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		return nil, fmt.Errorf("loadMessages: invalid session ID %q: %w", sessionID, err)
 	}
 
-	// Load recent messages from DB
-	const historyLimit = 200
-	dbMsgs, err := h.deps.MessageRepo.ListRecentBySession(ctx, sid, historyLimit)
+	// Load session to get the latest summary offset. This avoids a full
+	// messages-table scan to find the summary boundary.
+	session, err := h.deps.SessionRepo.GetByID(ctx, sid)
+	if err != nil {
+		return nil, fmt.Errorf("loadMessages: get session %s: %w", sessionID, err)
+	}
+
+	// Load messages starting from the summary boundary (if any).
+	// When LatestSummaryOffset > 0, only messages from that offset onward are
+	// loaded — everything before has been compressed into the summary.
+	// When 0, all messages are loaded (no compression has happened yet).
+	var dbMsgs []*model.Message
+	if session != nil && session.LatestSummaryOffset > 0 {
+		// Use summary offset - 1 as cursor so that global_offset > (summaryOffset-1)
+		// includes the summary message itself.
+		cursor := session.LatestSummaryOffset - 1
+		dbMsgs, err = h.deps.MessageRepo.ListBySession(ctx, sid, &cursor, 0)
+	} else {
+		dbMsgs, err = h.deps.MessageRepo.ListBySession(ctx, sid, nil, 0)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("loadMessages: list messages for session %s: %w", sessionID, err)
 	}
@@ -55,40 +72,42 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		}
 	}
 
-	// Summary truncation: find the most recent summary message and truncate
-	// history to start from it. Messages before the summary are already
-	// compressed into it and would not be sent to the agent.
+	// Summary truncation: when LatestSummaryOffset was not set on the session
+	// (e.g., old sessions before this field was introduced), fall back to
+	// scanning for the most recent summary message.
 	//
 	// Exception: prompt-type messages are always preserved regardless of
 	// position, because they contain persistent system instructions that
 	// must survive compaction (design principle: "system prompts must
 	// always remain present in the context").
-	summaryIdx := -1
-	for i := len(dbMsgs) - 1; i >= 0; i-- {
-		if parsedOK[dbMsgs[i]] && parsedContents[dbMsgs[i]].Type == protocol.ContentTypeSummary {
-			summaryIdx = i
-			break
-		}
-	}
-
-	if summaryIdx > 0 {
-		// Collect prompt messages that are before the summary boundary.
-		// These would be lost by truncation but must be preserved.
-		var preservedPrompts []*model.Message
-		for i := 0; i < summaryIdx; i++ {
-			if parsedOK[dbMsgs[i]] && parsedContents[dbMsgs[i]].Type == protocol.ContentTypePrompt {
-				preservedPrompts = append(preservedPrompts, dbMsgs[i])
+	if session == nil || session.LatestSummaryOffset == 0 {
+		summaryIdx := -1
+		for i := len(dbMsgs) - 1; i >= 0; i-- {
+			if parsedOK[dbMsgs[i]] && parsedContents[dbMsgs[i]].Type == protocol.ContentTypeSummary {
+				summaryIdx = i
+				break
 			}
 		}
-		// Truncate to summary boundary, then prepend preserved prompt messages.
-		// preservedPrompts are in global_offset order (scanned left to right).
-		dbMsgs = append(preservedPrompts, dbMsgs[summaryIdx:]...)
-	} else if summaryIdx == 0 {
-		// Summary is the first message — keep all messages from summary onward.
-		// No messages before summary to preserve.
-		dbMsgs = dbMsgs[summaryIdx:]
+
+		if summaryIdx > 0 {
+			// Collect prompt messages that are before the summary boundary.
+			// These would be lost by truncation but must be preserved.
+			var preservedPrompts []*model.Message
+			for i := 0; i < summaryIdx; i++ {
+				if parsedOK[dbMsgs[i]] && parsedContents[dbMsgs[i]].Type == protocol.ContentTypePrompt {
+					preservedPrompts = append(preservedPrompts, dbMsgs[i])
+				}
+			}
+			// Truncate to summary boundary, then prepend preserved prompt messages.
+			// preservedPrompts are in global_offset order (scanned left to right).
+			dbMsgs = append(preservedPrompts, dbMsgs[summaryIdx:]...)
+		} else if summaryIdx == 0 {
+			// Summary is the first message — keep all messages from summary onward.
+			// No messages before summary to preserve.
+			dbMsgs = dbMsgs[summaryIdx:]
+		}
+		// If summaryIdx < 0, no summary found — keep all messages as-is.
 	}
-	// If summaryIdx < 0, no summary found — keep all messages as-is.
 
 	// Convert DB messages to turn-agent Messages.
 	// The conversion logic mirrors the old SchemaMessages method in context.go,

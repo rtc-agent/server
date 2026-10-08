@@ -80,9 +80,9 @@ llm:
 
 # Worker 配置
 worker:
-  context_tokens_limit: 600000
-  auto_compact_buffer_tokens: 100000
-  max_output_tokens_for_summary: 20000
+  context_tokens_limit: 900000           # 模型的 context window 限制（qwen3.7-plus: 100万），设置为 90% 留安全边际
+  auto_compact_buffer_tokens: 495000     # 自动压缩缓冲 token 数（55%），压缩阈值 = 900000 - 495000 = 405000（45% 触发）
+  max_output_tokens_for_summary: 131072  # 压缩最大输出 token 数（充分利用模型 13.1 万输出能力）
   stream_chunk_ttl: "30m"
   token_counter_mode: "tokenizer"
 
@@ -109,7 +109,7 @@ web_search:
       include_answer: false
 
   proxies:
-    - url: "socks5://192.168.31.60:7897"
+    - url: "socks5://192.168.31.60:7890"
       type: "socks5"
       region: "global"
       priority: 10
@@ -170,7 +170,7 @@ web_fetch:
 
   # 代理池配置
   proxies:
-    - url: "socks5://192.168.31.60:7897"
+    - url: "socks5://192.168.31.60:7890"
       type: "socks5"
       region: "global"
       priority: 10
