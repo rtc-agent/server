@@ -121,7 +121,7 @@ llm:
   # api_key 通过环境变量 LLM__API_KEY 配置
   # base_url: ""      # 自定义 API 端点（可选，用于代理或企业部署）
   model: "claude-sonnet-4-20250514"
-  max_tokens: 8192
+  max_tokens: 8192    # 模型最大输出
   # temperature: 1.0  # 采样温度（可选，0.0-2.0）
   # timeout: 60s      # API 请求超时（可选）
   # thinking_budget_tokens: 50000  # Claude thinking 模式 token 预算（可选）
