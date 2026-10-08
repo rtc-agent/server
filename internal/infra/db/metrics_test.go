@@ -203,3 +203,39 @@ func TestIsContextError(t *testing.T) {
 		})
 	}
 }
+
+// TestMetricsPlugin_RecordNotFoundNotError tests that ErrRecordNotFound is not counted as error.
+func TestMetricsPlugin_RecordNotFoundNotError(t *testing.T) {
+	db := openTestDB(t)
+
+	type testModel struct {
+		ID   uint   `gorm:"primarykey"`
+		Name string `gorm:"size:100"`
+	}
+	if err := db.AutoMigrate(&testModel{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Record baseline
+	errorBefore := getCounterValue(sharedPlugin, "select", "error")
+	successBefore := getCounterValue(sharedPlugin, "select", "success")
+
+	// Query a non-existent record - should return ErrRecordNotFound
+	var result testModel
+	err := db.First(&result, "name = ?", "non_existent_record").Error
+	if err == nil {
+		t.Fatal("expected ErrRecordNotFound")
+	}
+
+	// ErrRecordNotFound should NOT be counted as error
+	errorAfter := getCounterValue(sharedPlugin, "select", "error")
+	if errorAfter > errorBefore {
+		t.Errorf("ErrRecordNotFound counted as DB error: before=%v, after=%v", errorBefore, errorAfter)
+	}
+
+	// It should be counted as success (query executed successfully, just no record found)
+	successAfter := getCounterValue(sharedPlugin, "select", "success")
+	if successAfter <= successBefore {
+		t.Errorf("ErrRecordNotFound not counted as success: before=%v, after=%v", successBefore, successAfter)
+	}
+}

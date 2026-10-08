@@ -5,6 +5,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -101,7 +102,10 @@ func (cb *metricsCallbacks) before(db *gorm.DB) {
 func (cb *metricsCallbacks) after(operation string) func(*gorm.DB) {
 	return func(db *gorm.DB) {
 		status := "success"
-		if db.Error != nil && !isContextError(db.Statement.Context) {
+		// Exclude context errors and ErrRecordNotFound from error status.
+		// ErrRecordNotFound is normal control flow (e.g., .First() when record doesn't exist),
+		// not a real database error.
+		if db.Error != nil && !isContextError(db.Statement.Context) && !errors.Is(db.Error, gorm.ErrRecordNotFound) {
 			status = "error"
 		}
 
