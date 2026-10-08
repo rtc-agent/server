@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "file": "admin-management.md",
+      "id": "admin-management",
+      "name": "Admin Management",
+      "description": "Cross-system workflows involving admin roles, permissions, and audit logs"
+    }
+  ]
+}

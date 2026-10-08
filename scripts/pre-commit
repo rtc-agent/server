@@ -70,6 +70,10 @@ while IFS= read -r file; do
     if [ ! -f "$file" ]; then
         continue
     fi
+    # Skip large file check for admin UI build artifacts
+    if [[ "$file" == cmd/admin/web/admin/* ]]; then
+        continue
+    fi
     file_size=$(wc -c < "$file" | tr -d ' ')
     if [ "$file_size" -gt "$MAX_SIZE" ]; then
         size_mb=$(awk "BEGIN {printf \"%.2f\", $file_size/1024/1024}")

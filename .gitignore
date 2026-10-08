@@ -39,10 +39,6 @@ logs/
 .env.local
 etc/config.local.yaml
 
-# Admin UI build artifacts (embedded via go:embed)
-cmd/admin/web/admin/*
-!cmd/admin/web/admin/.embed-placeholder
-
 # FRP (local dev only)
 docker-compose.frp.yml
 frpc.toml
