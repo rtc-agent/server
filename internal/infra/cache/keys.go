@@ -172,6 +172,71 @@ const (
 	// Value: error message count within the current hour (uint64); TTL: 1 hour.
 	// Use case: prevents error message storms caused by Worker failures (max 20 messages per Session per hour).
 	PrefixErrorMessageRateLimit = "error_msg_rate:"
+
+	// ========== rtc-oss3 object storage prefixes ==========
+
+	// PrefixOSS3Quota is per-user storage quota counter.
+	// Full key: oss3:quota:{user_id}
+	// Value: total bytes used (int64); no TTL (persistent, reconciled by cleanup).
+	PrefixOSS3Quota = "oss3:quota:"
+
+	// PrefixOSS3QuotaPending is per-user pending (reserved but not yet committed) quota.
+	// Used by Lua script OSS3QuotaReserve for two-phase quota allocation.
+	// Full key: oss3:quota:pending:{user_id}:{request_id}
+	// Value: reserved bytes (int64); TTL: pendingTTL (e.g. 5m, auto-expire to prevent leaks).
+	PrefixOSS3QuotaPending = "oss3:quota:pending:"
+
+	// PrefixOSS3QuotaPendingAgg is per-user ZSET that aggregates ALL pending reservations.
+	// Solves the multi-concurrent-reserve problem: when multiple Reserve calls happen in
+	// parallel for the same user, each call can see the SUM of all other users' pending
+	// amounts (not just its own) and correctly enforce the quota limit.
+	// Full key: oss3:quota:pending_agg:{user_id}
+	// Value: ZSET where member=requestID, score=pending amount;
+	//        entries are added by Reserve, removed by Commit/Rollback.
+	//        Stale entries (whose pending key expired via TTL) are cleaned up lazily
+	//        during Reserve/Commit/Rollback when the pending key GET returns nil.
+	// TTL: 0 (self-managing; entries are explicitly removed on Commit/Rollback).
+	PrefixOSS3QuotaPendingAgg = "oss3:quota:pending_agg:"
+
+	// PrefixOSS3RateLimit is per-user S3 API rate limiter (ZSET-based sliding window).
+	// Full key: oss3:rate:{user_id}
+	// Value: ZSET where member=requestID, score=timestamp;
+	//        Lua script OSS3RateLimitCheck atomically prunes expired entries and counts.
+	// TTL: 0 (managed by ZREMRANGEBYSCORE in Lua; key auto-empty when window slides past).
+	PrefixOSS3RateLimit = "oss3:rate:"
+
+	// PrefixOSS3ConcurrentUpload is per-user concurrent multipart upload counter.
+	// Full key: oss3:upload:{user_id}
+	// Value: active upload count (int64); no TTL.
+	PrefixOSS3ConcurrentUpload = "oss3:upload:"
+
+	// PrefixOSS3CredentialCache caches temporary credential lookup by AccessKeyID.
+	// Full key: oss3:cred_cache:{access_key_id}
+	// Value: JSON {user_id, secret_access_key, expires_at}; TTL: min(remaining TTL, 5m).
+	PrefixOSS3CredentialCache = "oss3:cred_cache:"
+
+	// PrefixOSS3Lock is generic distributed lock prefix for OSS3 operations.
+	// Used by AcquireLock/ExtendLock/ReleaseLock Lua scripts.
+	// Full key: oss3:lock:{resource_name}  (e.g. oss3:lock:cleanup)
+	// Value: holderUUID (string); TTL: seconds (configurable per lock).
+	PrefixOSS3Lock = "oss3:lock:"
+
+	// PrefixOSS3QuotaCommitMarker is an idempotency marker for quota commits.
+	// Full key: oss3:quota_commit:{user_id}:{request_id}
+	// Value: "1"; TTL: 24h (covers retry window).
+	// SETNX before commit prevents duplicate quota increments on network retries.
+	PrefixOSS3QuotaCommitMarker = "oss3:quota_commit:"
+
+	// PrefixJWKS is the JWKS public key cache prefix.
+	// Full key: jwks:{issuer}:{kid}
+	// Value: JSON-encoded JWK; TTL: configurable (default 1 hour).
+	PrefixJWKS = "jwks:"
+
+	// PrefixJWKSLock is the distributed lock prefix for JWKS cache refresh.
+	// Full key: jwks:lock:{issuer}
+	// Value: holder UUID; TTL: 10 seconds (covers fetch duration).
+	// Prevents multiple instances from simultaneously refreshing the same issuer's JWKS.
+	PrefixJWKSLock = "jwks:lock:"
 )
 
 // ========== Constructor functions ==========
@@ -312,4 +377,50 @@ func RtcBatchInterruptMap(turnID string) string {
 // ErrorMessageRateLimit returns the Redis key for the error message rate limiting counter.
 func ErrorMessageRateLimit(sessionID, hour string) string {
 	return PrefixErrorMessageRateLimit + sessionID + ":" + hour
+}
+
+// ========== rtc-oss3 object storage ==========
+
+// OSS3Quota returns the Redis key for per-user storage quota counter.
+func OSS3Quota(userID string) string { return PrefixOSS3Quota + userID }
+
+// OSS3QuotaPending returns the Redis key for per-user pending quota reservation.
+func OSS3QuotaPending(userID, requestID string) string {
+	return PrefixOSS3QuotaPending + userID + ":" + requestID
+}
+
+// OSS3QuotaPendingAgg returns the Redis key for the per-user pending aggregation ZSET.
+// The ZSET tracks ALL pending reservations for a user so that concurrent Reserve calls
+// can correctly compute total pending usage (member=requestID, score=amount).
+func OSS3QuotaPendingAgg(userID string) string {
+	return PrefixOSS3QuotaPendingAgg + userID
+}
+
+// OSS3RateLimit returns the Redis key for per-user S3 API rate limiter.
+func OSS3RateLimit(userID string) string { return PrefixOSS3RateLimit + userID }
+
+// OSS3ConcurrentUpload returns the Redis key for per-user concurrent upload counter.
+func OSS3ConcurrentUpload(userID string) string { return PrefixOSS3ConcurrentUpload + userID }
+
+// OSS3CredentialCache returns the Redis key for temporary credential cache.
+func OSS3CredentialCache(accessKeyID string) string { return PrefixOSS3CredentialCache + accessKeyID }
+
+// OSS3Lock returns the Redis key for generic distributed lock.
+func OSS3Lock(resource string) string { return PrefixOSS3Lock + resource }
+
+// OSS3QuotaCommitMarker returns the Redis key for quota commit idempotency marker.
+func OSS3QuotaCommitMarker(userID, requestID string) string {
+	return PrefixOSS3QuotaCommitMarker + userID + ":" + requestID
+}
+
+// ========== JWKS cache ==========
+
+// JWKSKey returns the Redis key for a cached JWKS public key.
+func JWKSKey(issuer, kid string) string {
+	return PrefixJWKS + issuer + ":" + kid
+}
+
+// JWKSLockKey returns the Redis key for the JWKS refresh distributed lock.
+func JWKSLockKey(issuer string) string {
+	return PrefixJWKSLock + issuer
 }

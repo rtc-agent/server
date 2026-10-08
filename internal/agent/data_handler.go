@@ -55,7 +55,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 	// double-counting: both messages originate from the same LLM call, and
 	// the markdown message is the primary assistant response.
 	if event.Content != "" {
-		if err := h.appendStreamChunk(ctx, sessionID, turnID, event.Content, event.FinishReason, &state.markdownMsgID, &state.markdownFinalized, primitives.MarkdownContentData, "markdown", event.TokenUsage); err != nil {
+		if err := h.appendStreamChunk(ctx, sessionID, turnID, event.Content, event.FinishReason, &state.markdownMsgID, &state.markdownFinalized, primitives.MarkdownContentData, "markdown", event.TokenUsage, &state.ownerRefID); err != nil {
 			// If the markdown message record was already created (first chunk succeeded
 			// in creating it but a subsequent operation failed), best-effort finalize
 			// it so it is not left in "streaming" status permanently. Without this,
@@ -76,7 +76,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 
 	// Handle reasoning/thinking content.
 	if event.ReasoningContent != "" {
-		if err := h.appendStreamChunk(ctx, sessionID, turnID, event.ReasoningContent, event.FinishReason, &state.thinkingMsgID, &state.thinkingFinalized, primitives.ThinkingContentData, "thinking", nil); err != nil {
+		if err := h.appendStreamChunk(ctx, sessionID, turnID, event.ReasoningContent, event.FinishReason, &state.thinkingMsgID, &state.thinkingFinalized, primitives.ThinkingContentData, "thinking", nil, &state.ownerRefID); err != nil {
 			// If the markdown appendStreamChunk succeeded above but the thinking one
 			// failed, the markdown message is left in "streaming" status permanently.
 			// Best-effort finalization: close the markdown message so the user doesn't

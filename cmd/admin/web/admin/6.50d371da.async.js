@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunk_rtc_agent_admin_ui=self.webpackChunk_rtc_agent_admin_ui||[]).push([[6],{58006:(function(e,n,t){t.r(n),t.d(n,{default:function(){return _}});var c=t(98067),u=t(26949),E=t(86195);function _(){var a=(0,u.useOutletContext)();return(0,E.jsx)(u.Outlet,{context:a})}})}]);

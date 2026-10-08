@@ -3,6 +3,7 @@ package agent
 import (
 	"testing"
 
+	"github.com/cloudwego/eino/schema"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -236,6 +237,66 @@ func TestMergeConsecutiveSameRole(t *testing.T) {
 			wantRoles:    []string{"assistant", "assistant"},
 			wantContents: []string{"", ""},
 		},
+		{
+			name: "two consecutive user messages with MultiContent merged",
+			input: []*turnagent.Message{
+				{
+					Role:    turnagent.RoleUser,
+					Content: "first message",
+					MultiContent: []schema.MessageInputPart{
+						{Type: schema.ChatMessagePartTypeText, Text: "text1"},
+					},
+				},
+				{
+					Role:    turnagent.RoleUser,
+					Content: "second message",
+					MultiContent: []schema.MessageInputPart{
+						{Type: schema.ChatMessagePartTypeText, Text: "text2"},
+					},
+				},
+			},
+			wantLen:      1,
+			wantRoles:    []string{"user"},
+			wantContents: []string{"first message\nsecond message"},
+		},
+		{
+			name: "first user has MultiContent, second does not",
+			input: []*turnagent.Message{
+				{
+					Role:    turnagent.RoleUser,
+					Content: "first",
+					MultiContent: []schema.MessageInputPart{
+						{Type: schema.ChatMessagePartTypeText, Text: "text1"},
+					},
+				},
+				{
+					Role:    turnagent.RoleUser,
+					Content: "second",
+				},
+			},
+			wantLen:      1,
+			wantRoles:    []string{"user"},
+			wantContents: []string{"first\nsecond"},
+		},
+		{
+			name: "first user has no MultiContent, second has MultiContent",
+			input: []*turnagent.Message{
+				{
+					Role:    turnagent.RoleUser,
+					Content: "first",
+				},
+				{
+					Role:    turnagent.RoleUser,
+					Content: "second",
+					MultiContent: []schema.MessageInputPart{
+						{Type: schema.ChatMessagePartTypeText, Text: "text2"},
+					},
+				},
+			},
+			wantLen:      1,
+			wantRoles:    []string{"user"},
+			wantContents: []string{"first\nsecond"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -258,6 +319,78 @@ func TestMergeConsecutiveSameRole(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMergeConsecutiveSameRole_MultiContent(t *testing.T) {
+	t.Run("two consecutive user messages each with MultiContent", func(t *testing.T) {
+		input := []*turnagent.Message{
+			{
+				Role:    turnagent.RoleUser,
+				Content: "first",
+				MultiContent: []schema.MessageInputPart{
+					{Type: schema.ChatMessagePartTypeText, Text: "text1"},
+				},
+			},
+			{
+				Role:    turnagent.RoleUser,
+				Content: "second",
+				MultiContent: []schema.MessageInputPart{
+					{Type: schema.ChatMessagePartTypeText, Text: "text2"},
+				},
+			},
+		}
+
+		result := mergeConsecutiveSameRole(input)
+
+		if len(result) != 1 {
+			t.Fatalf("got %d messages, want 1", len(result))
+		}
+		if len(result[0].MultiContent) != 2 {
+			t.Fatalf("got %d MultiContent parts, want 2", len(result[0].MultiContent))
+		}
+		if result[0].MultiContent[0].Text != "text1" {
+			t.Errorf("MultiContent[0].Text = %q, want %q", result[0].MultiContent[0].Text, "text1")
+		}
+		if result[0].MultiContent[1].Text != "text2" {
+			t.Errorf("MultiContent[1].Text = %q, want %q", result[0].MultiContent[1].Text, "text2")
+		}
+	})
+
+	t.Run("backing array independence after merge", func(t *testing.T) {
+		// Verify that modifying the merged message's MultiContent doesn't affect original messages
+		orig1 := &turnagent.Message{
+			Role:    turnagent.RoleUser,
+			Content: "first",
+			MultiContent: []schema.MessageInputPart{
+				{Type: schema.ChatMessagePartTypeText, Text: "text1"},
+			},
+		}
+		orig2 := &turnagent.Message{
+			Role:    turnagent.RoleUser,
+			Content: "second",
+			MultiContent: []schema.MessageInputPart{
+				{Type: schema.ChatMessagePartTypeText, Text: "text2"},
+			},
+		}
+		input := []*turnagent.Message{orig1, orig2}
+
+		result := mergeConsecutiveSameRole(input)
+
+		// Modify the merged message's MultiContent
+		if len(result) > 0 && len(result[0].MultiContent) > 0 {
+			result[0].MultiContent[0].Text = "modified"
+		}
+
+		// Original messages should not be affected
+		if orig1.MultiContent[0].Text != "text1" {
+			t.Errorf("orig1.MultiContent[0].Text was modified to %q, should still be %q",
+				orig1.MultiContent[0].Text, "text1")
+		}
+		if orig2.MultiContent[0].Text != "text2" {
+			t.Errorf("orig2.MultiContent[0].Text was modified to %q, should still be %q",
+				orig2.MultiContent[0].Text, "text2")
+		}
+	})
 }
 
 func TestMergeConsecutiveSameRole_NoMutation(t *testing.T) {

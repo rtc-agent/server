@@ -27,17 +27,17 @@ func ShouldSkipErrorMessage(ctx context.Context) bool {
 // MarshalSubmitPayload constructs a JSON payload for a kind="submit" work item.
 // attempt is the reactive compact escalation level (0 = first attempt). It is
 // stored in the payload so that the next Process invocation can escalate
-// compression (L1 → L2 → L3) instead of repeating L1 forever.
-func MarshalSubmitPayload(sessionID string, attempt int) []byte {
+// compression (L1 -> L2 -> L3) instead of repeating L1 forever.
+func MarshalSubmitPayload(sessionID, userID string, attempt int) ([]byte, error) {
 	p := WorkPayload{
 		Kind:                   WorkKindSubmit,
 		SessionID:              sessionID,
+		UserID:                 userID,
 		ReactiveCompactAttempt: attempt,
 	}
 	data, err := json.Marshal(p)
 	if err != nil {
-		// WorkPayload contains only simple fields; marshaling should never fail.
-		panic(fmt.Sprintf("turnagent: marshal submit payload: %v", err))
+		return nil, fmt.Errorf("turnagent: marshal submit payload: %w", err)
 	}
-	return data
+	return data, nil
 }

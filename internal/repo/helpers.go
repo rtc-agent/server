@@ -126,35 +126,59 @@ func updateWithAutoTimestamp(
 	return nil
 }
 
-// listByCategory is a generic category-scoped query.
-// scopeCol: scope column name, e.g. "session_id" or "user_id".
-// orderClause: ORDER BY clause, e.g. "created_at DESC".
-// extraWhere: additional WHERE conditions, e.g. "AND deleted_at IS NULL"; empty to skip.
-func listByCategory[T any](
+// updateWithStateGuard updates an entity with state transition guards.
+// Prevents transitioning from terminal states back to any non-terminal state
+// (e.g., completed -> active, completed -> paused). Only terminal -> terminal
+// transitions (e.g., active -> completed) and non-status updates are unrestricted.
+func updateWithStateGuard(
 	ctx context.Context,
 	db *gorm.DB,
-	scopeCol string,
-	scopeID uuid.UUID,
-	category string,
-	limit int,
-	orderClause string,
-	extraWhere string,
+	entity any,
+	id uuid.UUID,
+	fields map[string]any,
+	terminalStatuses []any,
 	entityName string,
-) ([]*T, error) {
-	if limit <= 0 {
-		limit = 20
+	notFoundErr error,
+) error {
+	// Copy to avoid mutating the caller's map.
+	updates := make(map[string]any, len(fields))
+	for k, v := range fields {
+		updates[k] = v
 	}
-	var items []*T
-	where := scopeCol + " = ? AND category = ?"
-	if extraWhere != "" {
-		where += " " + extraWhere
+	autoFillCompletedAt(updates, terminalStatuses)
+
+	// Build string slice for SQL NOT IN clause from terminal statuses.
+	excludedStatuses := make([]string, 0, len(terminalStatuses))
+	for _, ts := range terminalStatuses {
+		excludedStatuses = append(excludedStatuses, fmt.Sprintf("%v", ts))
 	}
-	if err := DBFromContext(ctx, db).WithContext(ctx).
-		Where(where, scopeID, category).
-		Order(orderClause).
-		Limit(limit).
-		Find(&items).Error; err != nil {
-		return nil, fmt.Errorf("list %s by category %s: %w", entityName, category, err)
+
+	// State guard: prevent resurrection from terminal states to any non-terminal state.
+	query := DBFromContext(ctx, db).WithContext(ctx).Model(entity)
+	if newStatus, ok := updates["status"]; ok {
+		statusStr := fmt.Sprintf("%v", newStatus)
+		isTerminal := false
+		for _, excluded := range excludedStatuses {
+			if statusStr == excluded {
+				isTerminal = true
+				break
+			}
+		}
+		if !isTerminal {
+			// Target is a non-terminal status: block if current DB row is in a terminal state.
+			query = query.Where("id = ? AND status NOT IN ?", id, excludedStatuses)
+		} else {
+			query = query.Where("id = ?", id)
+		}
+	} else {
+		query = query.Where("id = ?", id)
 	}
-	return items, nil
+	result := query.Updates(updates)
+	if result.Error != nil {
+		return fmt.Errorf("update %s %s: %w", entityName, id, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("update %s %s: %w", entityName, id, notFoundErr)
+	}
+	return nil
 }

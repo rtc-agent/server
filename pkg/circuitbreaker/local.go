@@ -11,6 +11,7 @@ import (
 // CircuitState represents the state of a circuit breaker
 type CircuitState = gobreaker.State
 
+// Circuit breaker states.
 const (
 	StateClosed   = gobreaker.StateClosed
 	StateOpen     = gobreaker.StateOpen
@@ -76,6 +77,10 @@ func NewCircuitBreaker(cfg CircuitBreakerConfig, providerName string) *CircuitBr
 				Timestamp:    time.Now(),
 				Reason:       "state transition",
 			}
+
+			// Record metrics for state change
+			recordMetricsForEvent(event)
+
 			cb.callbacksMu.RLock()
 			callbacks := make([]CircuitBreakerCallback, len(cb.onStateChange))
 			copy(callbacks, cb.onStateChange)
@@ -88,6 +93,10 @@ func NewCircuitBreaker(cfg CircuitBreakerConfig, providerName string) *CircuitBr
 	}
 
 	cb.cb = gobreaker.NewCircuitBreaker[any](settings)
+
+	// Initialize the current state gauge to "closed" on creation
+	globalCBMetrics.currentState.WithLabelValues(providerName, "closed").Set(1)
+
 	return cb
 }
 

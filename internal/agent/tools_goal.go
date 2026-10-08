@@ -55,10 +55,10 @@ func (t *createGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.createGoal",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.create_goal",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -70,7 +70,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	if args.Condition == "" {
 		return "Error: condition is required and cannot be empty", nil
 	}
-	span.SetAttributes(attribute.Int("condition_length", len(args.Condition)))
+	span.SetAttributes(attribute.Int("tool.condition_length", len(args.Condition)))
 
 	// 1. Check for existing active goal.
 	existing, err := t.helpers.deps.GoalRepo.FindActive(ctx, t.session.ID)
@@ -139,7 +139,7 @@ func (t *createGoalTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return "", fmt.Errorf("createGoal: publish messages: %w", err)
 	}
 
-	span.SetAttributes(attribute.String("goal_id", goal.ID.String()))
+	span.SetAttributes(attribute.String("goal.id", goal.ID.String()))
 	t.helpers.logger.Info(ctx, "createGoal.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"goal_id":    goal.ID.String(),
@@ -157,10 +157,6 @@ type completeGoalTool struct {
 	session *model.Session
 	helpers *helpers
 	turnID  uuid.UUID
-}
-
-type completeGoalArgs struct {
-	Reason string `json:"reason"`
 }
 
 // goalResult is the JSON returned to LLM for both completeGoal and
@@ -188,14 +184,8 @@ func (t *completeGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *completeGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	var args completeGoalArgs
-	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "completeGoal", argumentsInJSON, &args); !ok {
-		return errMsg, nil
-	}
-	if args.Reason == "" {
-		return "Error: reason is required and cannot be empty", nil
-	}
-	return finalizeGoalStatus(ctx, t.helpers, t.session, t.turnID, "completeGoal", "completeGoal.completed", model.GoalStatusCompleted, args.Reason, "no active goal to complete", argumentsInJSON)
+	var args goalStatusArgs
+	return runGoalStatusTool(ctx, t.helpers, t.session, t.turnID, "completeGoal", "completeGoal.completed", model.GoalStatusCompleted, "no active goal to complete", argumentsInJSON, &args)
 }
 
 // ---------------------------------------------------------------------------
@@ -206,10 +196,6 @@ type cancelGoalTool struct {
 	session *model.Session
 	helpers *helpers
 	turnID  uuid.UUID
-}
-
-type cancelGoalArgs struct {
-	Reason string `json:"reason"`
 }
 
 func (t *cancelGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -227,19 +213,38 @@ func (t *cancelGoalTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *cancelGoalTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	var args cancelGoalArgs
-	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "cancelGoal", argumentsInJSON, &args); !ok {
-		return errMsg, nil
-	}
-	if args.Reason == "" {
-		return "Error: reason is required and cannot be empty", nil
-	}
-	return finalizeGoalStatus(ctx, t.helpers, t.session, t.turnID, "cancelGoal", "cancelGoal.completed", model.GoalStatusCancelled, args.Reason, "no active goal to cancel", argumentsInJSON)
+	var args goalStatusArgs
+	return runGoalStatusTool(ctx, t.helpers, t.session, t.turnID, "cancelGoal", "cancelGoal.completed", model.GoalStatusCancelled, "no active goal to cancel", argumentsInJSON, &args)
 }
 
 // ---------------------------------------------------------------------------
 // finalizeGoalStatus — shared implementation for complete/cancel goal tools
 // ---------------------------------------------------------------------------
+
+// goalStatusArgs is a generic args struct for goal status tools.
+type goalStatusArgs struct {
+	Reason string `json:"reason"`
+}
+
+// runGoalStatusTool is a generic helper for completeGoal and cancelGoal tools.
+func runGoalStatusTool(
+	ctx context.Context,
+	h *helpers,
+	session *model.Session,
+	turnID uuid.UUID,
+	toolName, logEvent string,
+	status model.GoalStatus,
+	notFoundMsg, argumentsInJSON string,
+	args *goalStatusArgs,
+) (string, error) {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, h, session.ID, session.OwnerRefID, turnID, toolName, argumentsInJSON, args); !ok {
+		return errMsg, nil
+	}
+	if args.Reason == "" {
+		return "Error: reason is required and cannot be empty", nil
+	}
+	return finalizeGoalStatus(ctx, h, session, turnID, toolName, logEvent, status, args.Reason, notFoundMsg, argumentsInJSON)
+}
 
 // finalizeGoalStatus finds the active goal, updates its status, publishes tool
 // result messages, and returns the JSON-serialized result.
@@ -260,10 +265,10 @@ func finalizeGoalStatus(
 ) (string, error) {
 	ctx, span := h.tracer.Start(ctx, "tool."+toolName,
 		trace.WithAttributes(
-			attribute.String("session_id", session.ID.String()),
-			attribute.String("turn_id", turnID.String()),
-			attribute.String("target_status", string(status)),
-			attribute.Int("reason_length", len(reason)),
+			attribute.String("session.id", session.ID.String()),
+			attribute.String("turn.id", turnID.String()),
+			attribute.String("tool.target_status", string(status)),
+			attribute.Int("tool.reason_length", len(reason)),
 		),
 	)
 	defer span.End()
@@ -317,7 +322,7 @@ func finalizeGoalStatus(
 		return "", fmt.Errorf("%s: publish messages: %w", toolName, err)
 	}
 
-	span.SetAttributes(attribute.String("goal_id", goal.ID.String()))
+	span.SetAttributes(attribute.String("goal.id", goal.ID.String()))
 	h.logger.Info(ctx, logEvent, map[string]any{
 		"session_id": session.ID.String(),
 		"goal_id":    goal.ID.String(),

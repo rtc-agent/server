@@ -81,7 +81,7 @@ func (a *Agent) handleNonOwnerCompletion(
 			return nil
 		}
 
-		_, requeueSpan := a.startSpanIfEnabled(ctx, "requeue_abandoned_work",
+		_, requeueSpan := a.startSpanIfEnabled(ctx, "turn_agent.requeue_abandoned_work",
 			trace.WithAttributes(
 				attribute.String("session.id", sessionID),
 				attribute.String("turn.id", turnID),
@@ -273,7 +273,7 @@ func (a *Agent) pushOrReplace(
 		"turn_id":    turnID,
 	})
 
-	_, replaceSpan := a.startSpanIfEnabled(ctx, "push_or_replace",
+	_, replaceSpan := a.startSpanIfEnabled(ctx, "turn_agent.push_or_replace",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 			attribute.String("turn.id", turnID),
@@ -299,7 +299,10 @@ func (a *Agent) pushOrReplace(
 		isNew = true
 	}
 
-	pushed, _ = replacedMgr.Loop().Push(workItem)
+	pushed, pushErr := replacedMgr.Loop().Push(workItem)
+	if pushErr != nil {
+		return nil, false, fmt.Errorf("turnagent: push after replacement: %v", pushErr)
+	}
 	if !pushed {
 		return nil, false, fmt.Errorf("turnagent: failed to push work item after replacement")
 	}
@@ -344,7 +347,7 @@ func (a *Agent) handleOwnerLifecycleEnd(
 				"message":    "owner's work abandoned but session cancelled; skipping requeue",
 			})
 		} else {
-			_, requeueSpan := a.startSpanIfEnabled(ctx, "requeue_owner_work",
+			_, requeueSpan := a.startSpanIfEnabled(ctx, "turn_agent.requeue_owner_work",
 				trace.WithAttributes(
 					attribute.String("session.id", p.SessionID),
 					attribute.String("turn.id", turnID),
@@ -461,7 +464,7 @@ func (a *Agent) tryReactiveCompactRecovery(
 	turnDuration time.Duration,
 	exitReason error,
 ) bool {
-	recoveryCtx, recoverySpan := a.startSpanIfEnabled(ctx, "reactive_compact_recovery",
+	recoveryCtx, recoverySpan := a.startSpanIfEnabled(ctx, "turn_agent.reactive_compact_recovery",
 		trace.WithAttributes(
 			attribute.String("session.id", p.SessionID),
 			attribute.String("turn.id", turnID),
@@ -507,8 +510,8 @@ func (a *Agent) tryReactiveCompactRecovery(
 		recoverySpan.AddEvent("insert_feedback_message")
 		if err := a.cfg.InsertFeedbackMessage(recoveryCtx, p.SessionID, turnID,
 			"context",
-			"上下文超出限制",
-			"对话内容太长，系统正在自动压缩后重试。请稍等片刻。",
+			"Context Limit Exceeded",
+			"Conversation is too long. The system is automatically compressing and retrying. Please wait.",
 			true, ""); err != nil {
 			a.log(recoveryCtx, LogLevelWarn, "turn.insert_feedback_message_failed", map[string]any{
 				"session_id": p.SessionID,
@@ -546,6 +549,7 @@ func (a *Agent) tryReactiveCompactRecovery(
 	payloadBytes, err := json.Marshal(WorkPayload{
 		Kind:                   WorkKindSubmit,
 		SessionID:              p.SessionID,
+		UserID:                 p.UserID,
 		ReactiveCompactAttempt: attempt,
 		TraceID:                traceID,
 		SpanID:                 spanID,

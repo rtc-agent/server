@@ -40,6 +40,7 @@ type ServiceContext struct {
 	ScriptExecutionRepo repo.ScriptExecutionRepo
 	MemoryRepo          memory.Repository // Phase 2: unified Memory storage
 	LoopRepo            repo.LoopRepo
+	ServerConfigRepo    repo.ServerConfigRepo // Dynamic configuration repository
 
 	// Infrastructure
 	UpdatePublisher *updates.UpdatePublisher
@@ -62,6 +63,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
 	memoryRepo := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
+	configRepo := repo.NewServerConfigRepo(db)
 
 	updatePublisher := updates.NewUpdatePublisher(db, rdb, sessionRepo, messageRepo, turnRepo, rtcRepo)
 
@@ -73,14 +75,21 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		logger.Fatal(context.Background(), "init JWT signer", zap.Error(err))
 	}
 
+	// Set default ClientQueueMaxSize to 50MB if not configured
+	clientQueueMaxSize := cfg.Server.ClientQueueMaxSize
+	if clientQueueMaxSize == 0 {
+		clientQueueMaxSize = 50 * 1024 * 1024 // 50MB
+	}
+
 	node, err := centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelInfo,
-		LogHandler: createCentrifugeLogHandler(),
+		LogLevel:           centrifuge.LogLevelInfo,
+		LogHandler:         createCentrifugeLogHandler(),
+		ClientQueueMaxSize: clientQueueMaxSize,
 	})
 	if err != nil {
 		logger.Fatal(context.Background(), "create centrifuge node", zap.Error(err))
 	}
-	dualBroker, err := AssembleDualBroker(node, cfg, updatePublisher, jwtSigner)
+	dualBroker, err := AssembleDualBroker(node, cfg, updatePublisher, jwtSigner, oauth2UserRepo)
 	if err != nil {
 		if shutdownErr := node.Shutdown(context.Background()); shutdownErr != nil {
 			logger.Error(context.Background(), "centrifuge node shutdown after broker assembly failure", zap.Error(shutdownErr))
@@ -92,6 +101,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 		sessionRepo, messageRepo, turnRepo, rtcRepo,
 		goalRepo, oauth2UserRepo, deviceRepo, refreshTokenRepo,
 		scriptExecutionRepo, memoryRepo, loopRepo,
+		configRepo,
 		updatePublisher, node, dualBroker, jwtSigner)
 }
 
@@ -114,6 +124,7 @@ func NewServiceContextWithDeps(
 	scriptExecutionRepo repo.ScriptExecutionRepo,
 	memoryRepo memory.Repository,
 	loopRepo repo.LoopRepo,
+	configRepo repo.ServerConfigRepo,
 	updatePublisher *updates.UpdatePublisher,
 	node *centrifuge.Node,
 	broker *centrifugeplus.DualBroker,
@@ -139,6 +150,7 @@ func NewServiceContextWithDeps(
 		ScriptExecutionRepo: scriptExecutionRepo,
 		MemoryRepo:          memoryRepo,
 		LoopRepo:            loopRepo,
+		ServerConfigRepo:    configRepo,
 		UpdatePublisher:     updatePublisher,
 		CentrifugeNode:      node,
 		Broker:              broker,
@@ -147,6 +159,10 @@ func NewServiceContextWithDeps(
 }
 
 // configureUpdatePublisher sets compression trigger thresholds (with 80% fallback protection).
+// TODO(dynamic-config): Read worker.context_tokens_limit and worker.auto_compact_buffer_tokens
+// from ConfigProvider dynamically. Currently uses static YAML config because UpdatePublisher
+// is a singleton initialized at startup. Requires a mechanism to push threshold updates to
+// the publisher at runtime (e.g., a SetCompressionThreshold callback triggered by config changes).
 func configureUpdatePublisher(u *updates.UpdatePublisher, cfg *config.Config) {
 	contextLimit := cfg.Worker.ContextTokensLimit
 	if contextLimit <= 0 {
@@ -170,6 +186,10 @@ func configureUpdatePublisher(u *updates.UpdatePublisher, cfg *config.Config) {
 }
 
 // initTokenCounter initialises the global TokenCounter.
+// TODO(dynamic-config): Read worker.token_counter_mode from ConfigProvider dynamically.
+// Currently uses static YAML config because TokenCounter is a global singleton set once
+// at startup. Changing it at runtime would require re-creating the tokenizer and updating
+// all concurrent readers, which is complex for minimal benefit.
 func initTokenCounter(cfg *config.Config) {
 	tc := turnagent.NewTokenCounter(cfg.Worker.TokenCounterMode)
 	turnagent.SetGlobalTokenCounter(tc)

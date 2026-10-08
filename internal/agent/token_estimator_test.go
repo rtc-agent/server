@@ -75,6 +75,15 @@ func (m *mockSessionRepo) FindActiveByParent(_ context.Context, _ uuid.UUID) ([]
 func (m *mockSessionRepo) AtomicAddTokenUsage(_ context.Context, _ uuid.UUID, _ repo.TokenUsageDelta) error {
 	panic("not implemented")
 }
+func (m *mockSessionRepo) ListForAdmin(_ context.Context, _ repo.SessionAdminFilter) ([]*model.Session, int64, error) {
+	panic("not implemented")
+}
+func (m *mockSessionRepo) AggregateTokenStats(_ context.Context, _ string, _ int) ([]*repo.DailyTokenStat, error) {
+	panic("not implemented")
+}
+func (m *mockSessionRepo) ListTopByTokens(_ context.Context, _ string, _ int) ([]*model.Session, error) {
+	panic("not implemented")
+}
 
 // newTestEstimator creates a TokenEstimator backed by a mock SessionRepo.
 func newTestEstimator(t *testing.T) (*TokenEstimator, *mockSessionRepo) {

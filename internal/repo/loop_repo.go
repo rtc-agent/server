@@ -77,15 +77,8 @@ func (r *loopRepo) FindActive(ctx context.Context, sessionID uuid.UUID) (*model.
 }
 
 func (r *loopRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]any) error {
-	autoFillCompletedAt(fields, loopTerminalStatuses)
-	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Loop{}).Where("id = ?", id).Updates(fields)
-	if result.Error != nil {
-		return fmt.Errorf("update loop %s: %w", id, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("update loop %s: %w", id, ErrLoopNotFound)
-	}
-	return nil
+	return updateWithStateGuard(ctx, r.db, &model.Loop{}, id, fields, loopTerminalStatuses,
+		"loop", ErrLoopNotFound)
 }
 
 func (r *loopRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Loop, error) {

@@ -23,10 +23,6 @@ type cancelLoopTool struct {
 	turnID  uuid.UUID
 }
 
-type cancelLoopArgs struct {
-	Reason string `json:"reason"`
-}
-
 // loopResult is the JSON-serializable response for both cancelLoop and
 // completeLoop tools. Both produce structurally identical output.
 type loopResult struct {
@@ -52,14 +48,8 @@ func (t *cancelLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *cancelLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	var args cancelLoopArgs
-	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "cancelLoop", argumentsInJSON, &args); !ok {
-		return errMsg, nil
-	}
-	if args.Reason == "" {
-		return "Error: reason is required and cannot be empty", nil
-	}
-	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "cancelLoop", "cancelLoop.completed", model.LoopStatusCancelled, args.Reason, "no active loop to cancel", argumentsInJSON)
+	var args loopStatusArgs
+	return runLoopStatusTool(ctx, t.helpers, t.session, t.turnID, "cancelLoop", "cancelLoop.completed", model.LoopStatusCancelled, "no active loop to cancel", argumentsInJSON, &args)
 }
 
 // ---------------------------------------------------------------------------
@@ -70,10 +60,6 @@ type completeLoopTool struct {
 	session *model.Session
 	helpers *helpers
 	turnID  uuid.UUID
-}
-
-type completeLoopArgs struct {
-	Reason string `json:"reason"`
 }
 
 func (t *completeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -91,19 +77,38 @@ func (t *completeLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *completeLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	var args completeLoopArgs
-	if ok, errMsg := parseToolArgsWithPersist(ctx, t.helpers, t.session.ID, t.session.OwnerRefID, t.turnID, "completeLoop", argumentsInJSON, &args); !ok {
-		return errMsg, nil
-	}
-	if args.Reason == "" {
-		return "Error: reason is required and cannot be empty", nil
-	}
-	return finalizeLoopStatus(ctx, t.helpers, t.session, t.turnID, "completeLoop", "completeLoop.completed", model.LoopStatusCompleted, args.Reason, "no active loop to complete", argumentsInJSON)
+	var args loopStatusArgs
+	return runLoopStatusTool(ctx, t.helpers, t.session, t.turnID, "completeLoop", "completeLoop.completed", model.LoopStatusCompleted, "no active loop to complete", argumentsInJSON, &args)
 }
 
 // ---------------------------------------------------------------------------
 // finalizeLoopStatus — shared implementation for cancel/complete loop tools
 // ---------------------------------------------------------------------------
+
+// loopStatusArgs is a generic args struct for loop status tools.
+type loopStatusArgs struct {
+	Reason string `json:"reason"`
+}
+
+// runLoopStatusTool is a generic helper for cancelLoop and completeLoop tools.
+func runLoopStatusTool(
+	ctx context.Context,
+	h *helpers,
+	session *model.Session,
+	turnID uuid.UUID,
+	toolName, logEvent string,
+	status model.LoopStatus,
+	notFoundMsg, argumentsInJSON string,
+	args *loopStatusArgs,
+) (string, error) {
+	if ok, errMsg := parseToolArgsWithPersist(ctx, h, session.ID, session.OwnerRefID, turnID, toolName, argumentsInJSON, args); !ok {
+		return errMsg, nil
+	}
+	if args.Reason == "" {
+		return "Error: reason is required and cannot be empty", nil
+	}
+	return finalizeLoopStatus(ctx, h, session, turnID, toolName, logEvent, status, args.Reason, notFoundMsg, argumentsInJSON)
+}
 
 // finalizeLoopStatus finds the active loop, updates its status to the given
 // value, cancels any scheduled asynq task, publishes tool result messages,
@@ -125,10 +130,10 @@ func finalizeLoopStatus(
 ) (string, error) {
 	ctx, span := h.tracer.Start(ctx, "tool."+toolName,
 		trace.WithAttributes(
-			attribute.String("session_id", session.ID.String()),
-			attribute.String("turn_id", turnID.String()),
-			attribute.String("target_status", string(status)),
-			attribute.Int("reason_length", len(reason)),
+			attribute.String("session.id", session.ID.String()),
+			attribute.String("turn.id", turnID.String()),
+			attribute.String("tool.target_status", string(status)),
+			attribute.Int("tool.reason_length", len(reason)),
 		),
 	)
 	defer span.End()
@@ -186,7 +191,7 @@ func finalizeLoopStatus(
 		return "", fmt.Errorf("%s: publish messages: %w", toolName, err)
 	}
 
-	span.SetAttributes(attribute.String("loop_id", loop.ID.String()))
+	span.SetAttributes(attribute.String("loop.id", loop.ID.String()))
 	h.logger.Info(ctx, logEvent, map[string]any{
 		"session_id": session.ID.String(),
 		"loop_id":    loop.ID.String(),

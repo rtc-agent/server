@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // MessageRepo provides message persistence operations.
@@ -43,6 +45,17 @@ type MessageRepo interface {
 	// UpdateTokenUsage updates the token usage fields for a message.
 	// Used to record LLM token usage on assistant messages after stream finalization.
 	UpdateTokenUsage(ctx context.Context, id uuid.UUID, usage *model.TokenUsageUpdate) error
+	// ListForAdmin returns a paginated list of messages for a session with admin filters.
+	ListForAdmin(ctx context.Context, sessionID uuid.UUID, filter MessageAdminFilter) ([]*model.Message, int64, error)
+}
+
+// MessageAdminFilter holds filter criteria for admin message listing.
+type MessageAdminFilter struct {
+	Role          string
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+	Page          int
+	PageSize      int
 }
 
 type messageRepo struct {
@@ -115,16 +128,30 @@ func (r *messageRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cu
 }
 
 func (r *messageRepo) GetNextGlobalOffset(ctx context.Context, sessionID uuid.UUID) (uint32, error) {
-	var maxOffset uint32
-	err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Model(&model.Message{}).
-		Where("session_id = ?", sessionID).
-		Select("COALESCE(MAX(global_offset), 0)").
-		Scan(&maxOffset).Error
-	if err != nil {
-		return 0, fmt.Errorf("get next global offset for session %s: %w", sessionID, err)
-	}
-	return maxOffset + 1, nil
+	db := DBFromContext(ctx, r.db)
+	var nextOffset uint32
+
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Lock the session row to prevent concurrent offset allocation.
+		var session model.Session
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&session, "id = ?", sessionID).Error; err != nil {
+			return fmt.Errorf("lock session %s: %w", sessionID, err)
+		}
+
+		var maxOffset uint32
+		if err := tx.Model(&model.Message{}).
+			Where("session_id = ?", sessionID).
+			Select("COALESCE(MAX(global_offset), 0)").
+			Scan(&maxOffset).Error; err != nil {
+			return fmt.Errorf("get max offset for session %s: %w", sessionID, err)
+		}
+
+		nextOffset = maxOffset + 1
+		return nil
+	})
+
+	return nextOffset, err
 }
 
 func (r *messageRepo) UpdateStreamingStatus(ctx context.Context, id uuid.UUID, status protocol.MessageStreamingStatus, content string) error {
@@ -223,4 +250,39 @@ func (r *messageRepo) UpdateTokenUsage(ctx context.Context, id uuid.UUID, usage 
 		return fmt.Errorf("update message %s token usage: %w", id, ErrMessageNotFound)
 	}
 	return nil
+}
+
+func (r *messageRepo) ListForAdmin(ctx context.Context, sessionID uuid.UUID, filter MessageAdminFilter) ([]*model.Message, int64, error) {
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.PageSize < 1 || filter.PageSize > 100 {
+		filter.PageSize = 20
+	}
+
+	query := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Message{}).
+		Where("session_id = ?", sessionID)
+
+	if filter.Role != "" {
+		query = query.Where("role = ?", filter.Role)
+	}
+	if filter.CreatedAfter != nil {
+		query = query.Where("created_at >= ?", *filter.CreatedAfter)
+	}
+	if filter.CreatedBefore != nil {
+		query = query.Where("created_at <= ?", *filter.CreatedBefore)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count admin messages: %w", err)
+	}
+
+	var messages []*model.Message
+	offset := (filter.Page - 1) * filter.PageSize
+	if err := query.Order("global_offset DESC").Offset(offset).Limit(filter.PageSize).Find(&messages).Error; err != nil {
+		return nil, 0, fmt.Errorf("list admin messages: %w", err)
+	}
+
+	return messages, total, nil
 }

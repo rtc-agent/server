@@ -199,18 +199,20 @@ func ParseContentDataToolCall(data any) (protocol.ToolCall, error) {
 	return tc, nil
 }
 
-// ParseContentDataToolCallRaw 从原始 ContentData JSON 字符串直接解析 ToolCall，
-// 保留 JSON key 的原始顺序。
+// ParseContentDataToolCallRaw parses a ToolCall directly from the raw
+// ContentData JSON string, preserving the original JSON key order.
 //
-// 与 ParseContentDataToolCall 的区别：
-//   - ParseContentDataToolCall 先解析为 ContentData{Data:interface{}}，
-//     再 marshal/unmarshal，丢失 JSON key 顺序
-//   - ParseContentDataToolCallRaw 直接从原始 JSON 提取 data 字段的原始字节，
-//     然后解析为 ToolCallData（使用 json.RawMessage 保留顺序）
+// Difference from ParseContentDataToolCall:
+//   - ParseContentDataToolCall first parses into ContentData{Data:interface{}},
+//     then marshal/unmarshal, losing JSON key order
+//   - ParseContentDataToolCallRaw extracts the raw bytes of the data field
+//     directly from the original JSON, then parses into ToolCallData
+//     (using json.RawMessage to preserve order)
 //
-// 这对 LLM 缓存命中至关重要：工具结果的 JSON key 顺序在不同请求间必须一致。
+// This is critical for LLM cache hit rate: the JSON key order of tool
+// results must be consistent across requests.
 func ParseContentDataToolCallRaw(contentDataJSON string) (protocol.ToolCall, error) {
-	// 第一步：提取 data 字段的原始 JSON 字节
+	// Step 1: extract the raw JSON bytes of the data field
 	var envelope struct {
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`
@@ -219,18 +221,19 @@ func ParseContentDataToolCallRaw(contentDataJSON string) (protocol.ToolCall, err
 		return protocol.ToolCall{}, fmt.Errorf("parse content data envelope: %w", err)
 	}
 
-	// 第二步：将 data 解析为 ToolCallData（使用 json.RawMessage 保留 key 顺序）
+	// Step 2: parse data into ToolCallData (using json.RawMessage to preserve key order)
 	var tcd ToolCallData
 	if err := json.Unmarshal(envelope.Data, &tcd); err != nil {
 		return protocol.ToolCall{}, fmt.Errorf("parse tool call data: %w", err)
 	}
 
-	// 第三步：转换为 protocol.ToolCall
+	// Step 3: convert to protocol.ToolCall
 	return toolCallDataToProtocol(tcd)
 }
 
-// toolCallDataToProtocol 将 ToolCallData（DB 格式）转换为 protocol.ToolCall（应用格式）
-// 保留 JSON key 的原始顺序，对 LLM 缓存命中至关重要。
+// toolCallDataToProtocol converts ToolCallData (DB format) to
+// protocol.ToolCall (application format), preserving the original JSON
+// key order, which is critical for LLM cache hit rate.
 func toolCallDataToProtocol(tcd ToolCallData) (protocol.ToolCall, error) {
 	tc := protocol.ToolCall{
 		Id:       tcd.Id,
@@ -238,36 +241,36 @@ func toolCallDataToProtocol(tcd ToolCallData) (protocol.ToolCall, error) {
 		Status:   tcd.Status,
 	}
 
-	// Input: json.RawMessage → string
+	// Input: json.RawMessage -> string
 	if len(tcd.Input) > 0 {
-		// 检查是否是 JSON 字符串（旧格式）还是 JSON 对象（新格式）
+		// Check whether it is a JSON string (legacy) or JSON object (current).
 		trimmed := bytes.TrimSpace(tcd.Input)
 		if len(trimmed) > 0 && trimmed[0] == '"' {
-			// 旧格式：JSON 字符串 → unquote
+			// Legacy format: JSON string -> unquote
 			var s string
 			if err := json.Unmarshal(trimmed, &s); err != nil {
 				return protocol.ToolCall{}, fmt.Errorf("unmarshal input string: %w", err)
 			}
 			tc.Input = s
 		} else {
-			// 新格式：JSON 对象 → 直接使用原始字节（保留 key 顺序）
+			// Current format: JSON object -> use raw bytes directly (preserve key order)
 			tc.Input = string(tcd.Input)
 		}
 	}
 
-	// Output: json.RawMessage → *string（保留原始 key 顺序）
+	// Output: json.RawMessage -> *string (preserve original key order)
 	if len(tcd.Output) > 0 {
 		trimmed := bytes.TrimSpace(tcd.Output)
 		if len(trimmed) > 0 && string(trimmed) != "null" {
 			if trimmed[0] == '"' {
-				// 旧格式：JSON 字符串 → unquote
+				// Legacy format: JSON string -> unquote
 				var s string
 				if err := json.Unmarshal(trimmed, &s); err != nil {
 					return protocol.ToolCall{}, fmt.Errorf("unmarshal output string: %w", err)
 				}
 				tc.Output = &s
 			} else {
-				// 新格式：JSON 对象 → 直接使用原始字节（保留 key 顺序）
+				// Current format: JSON object -> use raw bytes directly (preserve key order)
 				s := string(tcd.Output)
 				tc.Output = &s
 			}
@@ -305,13 +308,13 @@ func toolCallToStorage(tc protocol.ToolCall) (ToolCallData, error) {
 		}
 	}
 
-	// Output: 保留原始 JSON 字段顺序（对 LLM 缓存命中至关重要）
+	// Output: preserve original JSON field order (critical for LLM cache hit rate).
 	if tc.Output != nil && *tc.Output != "" {
 		if json.Valid([]byte(*tc.Output)) {
-			// 合法 JSON，直接使用原始字节，不重新序列化
+			// Valid JSON — use raw bytes directly without re-serializing.
 			s.Output = json.RawMessage(*tc.Output)
 		} else {
-			// Fallback: 不是合法 JSON，作为字符串存储
+			// Fallback: not valid JSON — store as string.
 			s.Output, _ = json.Marshal(*tc.Output)
 		}
 	}

@@ -180,7 +180,10 @@ func buildUserMemoryMetadata(old model.UserMemory) memory.JSONBString {
 		metadata["last_accessed_at"] = old.LastAccessedAt.Format(time.RFC3339)
 	}
 
-	b, _ := json.Marshal(metadata)
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		return memory.JSONBString([]byte("{}"))
+	}
 	return memory.JSONBString(b)
 }
 

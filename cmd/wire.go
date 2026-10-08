@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,7 @@ import (
 	httphandler "github.com/rtc-agent/server/internal/handler/http"
 	rpchandler "github.com/rtc-agent/server/internal/handler/rpc"
 	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/loop"
 	"github.com/rtc-agent/server/internal/oauth"
@@ -36,6 +38,7 @@ import (
 	"github.com/rtc-agent/server/pkg/circuitbreaker"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/proxy"
+	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"github.com/rtc-agent/server/pkg/webfetch"
@@ -59,6 +62,10 @@ var RepositorySet = wire.NewSet(
 	repo.NewScriptExecutionRepo,
 	repo.NewMemoryRepo,
 	repo.NewLoopRepo,
+	repo.NewFileRepo,
+	repo.NewMultipartUploadRepo,
+	repo.NewTemporaryCredentialRepo,
+	repo.NewServerConfigRepo,
 )
 
 // ServiceSet provides core services (UpdatePublisher, JWTSigner, Centrifuge).
@@ -78,6 +85,9 @@ var UsecaseSet = wire.NewSet(
 	provideWebSearchManager,
 	provideWebFetchManager,
 	provideUsecaseDependencies,
+	provideOSS3Backend,
+	provideOSS3LuaScripts,
+	provideOSS3Usecase,
 )
 
 // AsynqSet provides asynq components for loop task scheduling.
@@ -105,6 +115,9 @@ var HandlerSet = wire.NewSet(
 	provideOAuth2Handler,
 	provideInterruptHandler,
 	provideMemoriesHandler,
+	provideOSS3Handler,
+	provideSTSHandler,
+	provideSTSPresignHandler,
 )
 
 // ServerSet provides the main Server.
@@ -135,10 +148,17 @@ func provideJWTSigner(cfg *config.Config) (*auth.JWTSigner, error) {
 	return auth.NewJWTSigner(cfg.Auth.JWTSecret, time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second)
 }
 
-func provideCentrifugeNode() (*centrifuge.Node, error) {
+func provideCentrifugeNode(cfg *config.Config) (*centrifuge.Node, error) {
+	// Set default ClientQueueMaxSize to 50MB if not configured
+	clientQueueMaxSize := cfg.Server.ClientQueueMaxSize
+	if clientQueueMaxSize == 0 {
+		clientQueueMaxSize = 50 * 1024 * 1024 // 50MB
+	}
+
 	return centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelDebug, // elevated to Debug level
-		LogHandler: newCentrifugeLogHandler(),
+		LogLevel:         centrifuge.LogLevelDebug, // elevated to Debug level
+		LogHandler:       newCentrifugeLogHandler(),
+		ClientQueueMaxSize: clientQueueMaxSize,
 	})
 }
 
@@ -183,8 +203,9 @@ func provideDualBroker(
 	node *centrifuge.Node,
 	updatePublisher *updates.UpdatePublisher,
 	jwtSigner *auth.JWTSigner,
+	oauth2UserRepo repo.OAuth2UserRepo,
 ) (*centrifugeplus.DualBroker, error) {
-	return svc.AssembleDualBroker(node, cfg, updatePublisher, jwtSigner)
+	return svc.AssembleDualBroker(node, cfg, updatePublisher, jwtSigner, oauth2UserRepo)
 }
 
 // chatModelResult wraps the optional ChatModel to handle Wire's error semantics.
@@ -214,26 +235,37 @@ func provideUsecaseDependencies(
 	taskScheduler usecase.TaskScheduler,
 	webSearchManager *websearch.WebSearchManager,
 	webFetchManager *webfetch.WebFetchManager,
+	metrics *turnagent.PrometheusMetrics,
 ) *usecase.Dependencies {
 	deps := &usecase.Dependencies{
-		DB:                svcCtx.DB,
-		Redis:             svcCtx.Redis,
-		SessionRepo:       svcCtx.SessionRepo,
-		MessageRepo:       svcCtx.MessageRepo,
-		TurnRepo:          svcCtx.TurnRepo,
-		RtcRepo:           svcCtx.RtcRepo,
-		GoalRepo:          svcCtx.GoalRepo,
-		LoopRepo:          svcCtx.LoopRepo,
-		MemoryRepo:        svcCtx.MemoryRepo,
-		UpdatePublisher:   svcCtx.UpdatePublisher,
-		ChatModel:         chatModelResult.model,
-		LLMConfig:         cfg.LLM,
-		SystemPrompt:      cfg.Worker.SystemPrompt,
-		WorkerConfig:      cfg.Worker,
-		CommandRegistry:   command.NewCommandRegistry(),
-		TaskScheduler:     taskScheduler,
-		WebSearchManager:  webSearchManager,
-		WebFetchManager:   webFetchManager,
+		DB:               svcCtx.DB,
+		Redis:            svcCtx.Redis,
+		SessionRepo:      svcCtx.SessionRepo,
+		MessageRepo:      svcCtx.MessageRepo,
+		TurnRepo:         svcCtx.TurnRepo,
+		RtcRepo:          svcCtx.RtcRepo,
+		GoalRepo:         svcCtx.GoalRepo,
+		LoopRepo:         svcCtx.LoopRepo,
+		MemoryRepo:       svcCtx.MemoryRepo,
+		ServerConfigRepo:       svcCtx.ServerConfigRepo,
+		ConfigProvider:   config.NewDBConfigProvider(svcCtx.ServerConfigRepo),
+		UpdatePublisher:  svcCtx.UpdatePublisher,
+		ChatModel:        chatModelResult.model,
+		LLMConfig:        cfg.LLM,
+		SystemPrompt:     cfg.Worker.SystemPrompt,
+		WorkerConfig:     cfg.Worker,
+		CommandRegistry:  command.NewCommandRegistry(),
+		TaskScheduler:    taskScheduler,
+		WebSearchManager: webSearchManager,
+		WebFetchManager:  webFetchManager,
+	}
+
+	// Wire ChatModelFactory for dynamic per-turn config resolution.
+	// When ChatModelFactory is non-nil, createAgent and background LLM calls
+	// resolve model settings from the dynamic config registry (DB > yaml)
+	// instead of using the static startup-time ChatModel.
+	if chatModelResult.model != nil {
+		deps.ChatModelFactory = server.NewChatModelFactory(cfg.LLM, metrics, logger.IsDebugMode())
 	}
 
 	// Inject LLM extractor into WebFetchManager now that deps is available.
@@ -264,6 +296,7 @@ func provideAgent(
 	queue *rtcqueue.Queue,
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
+	ossBackend rtcoss3.Backend,
 ) (*turnagent.Agent, error) {
 	return agent.New(agent.Config{
 		Deps:                            deps,
@@ -277,11 +310,13 @@ func provideAgent(
 		CheckpointTTL:                   cfg.Worker.CheckpointTTL,
 		StreamChunkTTL:                  cfg.Worker.StreamChunkTTL,
 		Logger:                          agent.NewLogger(),
-		Tracer:                          otel.GetTracerProvider().Tracer("turnagent"),
+		Tracer:                          otel.GetTracerProvider().Tracer("turn-agent"),
 		Metrics:                         metrics,
 		ModelPricing:                    convertModelPricing(cfg.LLM.Pricing),
 		EnableStrategicCacheBreakpoints: cfg.Worker.EnableStrategicCacheBreakpoints,
 		ShowRawErrors:                   cfg.Debug.Enabled && cfg.Debug.ShowRawErrors,
+		OSS3Backend:                     ossBackend,
+		OSS3Bucket:                      cfg.Storage.MinIO.Bucket,
 	})
 }
 
@@ -407,9 +442,9 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 
 	// Convert config types.
 	wsCfg := websearch.WebSearchConfig{
-		BalancerType:    cfg.WebSearch.BalancerType,
-		GlobalTimeout:   cfg.WebSearch.GlobalTimeout,
-		ProxyHealthURL:  cfg.WebSearch.ProxyHealthURL,
+		BalancerType:       cfg.WebSearch.BalancerType,
+		GlobalTimeout:      cfg.WebSearch.GlobalTimeout,
+		ProxyHealthURL:     cfg.WebSearch.ProxyHealthURL,
 		ProxyCheckInterval: cfg.WebSearch.ProxyCheckInterval,
 		CircuitBreaker: circuitbreaker.CircuitBreakerConfig{
 			FailureThreshold:    cfg.WebSearch.CircuitBreaker.FailureThreshold,
@@ -474,23 +509,23 @@ func provideWebFetchManager(cfg *config.Config, redisClient redis.UniversalClien
 	}
 
 	wfCfg := webfetch.WebFetchConfig{
-		Enabled:                    cfg.WebFetch.Enabled,
-		MaxConcurrency:             cfg.WebFetch.MaxConcurrency,
-		MaxDomainConcurrency:       cfg.WebFetch.MaxDomainConcurrency,
-		CacheTTL:                   cfg.WebFetch.CacheTTL,
-		MaxURLLength:               cfg.WebFetch.MaxURLLength,
-		MaxContentSize:             cfg.WebFetch.MaxContentSize,
-		FetchTimeout:               cfg.WebFetch.FetchTimeout,
-		MaxRedirects:               cfg.WebFetch.MaxRedirects,
-		LLMExtractThresholdBytes:   cfg.WebFetch.LLMExtractThresholdBytes,
-		LLMMaxTokens:               cfg.WebFetch.LLMMaxTokens,
-		MaxLLMExtractPerSession:    cfg.WebFetch.MaxLLMExtractPerSession,
-		UserAgent:                  cfg.WebFetch.UserAgent,
-		RespectRobotsTxt:           cfg.WebFetch.RespectRobotsTxt,
-		RobotsCacheTTL:             cfg.WebFetch.RobotsCacheTTL,
-		PreApprovedDomains:         cfg.WebFetch.PreApprovedDomains,
-		BlockedDomains:             cfg.WebFetch.BlockedDomains,
-		AllowedSchemes:             []string{"https", "http"},
+		Enabled:                  cfg.WebFetch.Enabled,
+		MaxConcurrency:           cfg.WebFetch.MaxConcurrency,
+		MaxDomainConcurrency:     cfg.WebFetch.MaxDomainConcurrency,
+		CacheTTL:                 cfg.WebFetch.CacheTTL,
+		MaxURLLength:             cfg.WebFetch.MaxURLLength,
+		MaxContentSize:           cfg.WebFetch.MaxContentSize,
+		FetchTimeout:             cfg.WebFetch.FetchTimeout,
+		MaxRedirects:             cfg.WebFetch.MaxRedirects,
+		LLMExtractThresholdBytes: cfg.WebFetch.LLMExtractThresholdBytes,
+		LLMMaxTokens:             cfg.WebFetch.LLMMaxTokens,
+		MaxLLMExtractPerSession:  cfg.WebFetch.MaxLLMExtractPerSession,
+		UserAgent:                cfg.WebFetch.UserAgent,
+		RespectRobotsTxt:         cfg.WebFetch.RespectRobotsTxt,
+		RobotsCacheTTL:           cfg.WebFetch.RobotsCacheTTL,
+		PreApprovedDomains:       cfg.WebFetch.PreApprovedDomains,
+		BlockedDomains:           cfg.WebFetch.BlockedDomains,
+		AllowedSchemes:           []string{"https", "http"},
 		RateLimit: webfetch.RateLimitConfig{
 			GlobalRPS:   cfg.WebFetch.RateLimit.GlobalRPS,
 			GlobalBurst: cfg.WebFetch.RateLimit.GlobalBurst,
@@ -581,7 +616,11 @@ func toZapFields(kv []any) []zap.Field {
 }
 
 func provideStateStore(redisClient redis.UniversalClient) *oauth.RedisStore {
-	return oauth.NewRedisStore(redisClient)
+	store, err := oauth.NewRedisStore(redisClient)
+	if err != nil {
+		panic(fmt.Sprintf("failed to create redis state store: %v", err))
+	}
+	return store
 }
 
 func provideOAuth2ProviderClient(cfg *config.Config) *oauth.Client {
@@ -597,6 +636,7 @@ func provideRPCHandler(
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
 	inspector *hibikenasynq.Inspector,
+	fileRepo repo.FileRepo,
 ) *rpchandler.Handler {
 	handler := rpchandler.NewHandler(&rpchandler.Dependencies{
 		Deps:                deps,
@@ -606,6 +646,7 @@ func provideRPCHandler(
 		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
 		Metrics:             metrics,
 		AsynqInspector:      inspector,
+		FileRepo:            fileRepo,
 	})
 	// Register globally for Centrifuge RPC callbacks
 	svc.RegisterRPCHandler(handler)
@@ -613,7 +654,11 @@ func provideRPCHandler(
 }
 
 func provideHTTPHandler(svcCtx *svc.ServiceContext) *httphandler.Handler {
-	return httphandler.NewHandler(svcCtx)
+	return httphandler.NewHandler(
+		svcCtx.DB,
+		svcCtx.Redis,
+		svcCtx.CentrifugeNode,
+	)
 }
 
 func provideOAuth2Handler(
@@ -623,7 +668,39 @@ func provideOAuth2Handler(
 	providerClient *oauth.Client,
 	cfg *config.Config,
 ) *httphandler.OAuth2Handler {
-	return httphandler.NewOAuth2Handler(svcCtx, jwtSigner, stateStore, providerClient, cfg.Auth)
+	authUC := usecase.NewAuthUsecase(
+		svcCtx.OAuth2UserRepo,
+		svcCtx.DeviceRepo,
+		svcCtx.RefreshTokenRepo,
+		jwtSigner,
+		cfg.Auth.RefreshTokenTTL,
+	)
+	handler := httphandler.NewOAuth2Handler(authUC, jwtSigner, stateStore, providerClient, cfg.Auth)
+
+	// Wire Token Exchange (RFC 8693) if external issuers are configured.
+	if len(cfg.TokenExchange.ExternalIssuers) > 0 {
+		jwksClient, err := auth.NewJWKSClient(auth.JWKSClientConfig{
+			RedisClient:     svcCtx.Redis,
+			DefaultCacheTTL: time.Hour,
+			LockTTL:         10 * time.Second,
+		})
+		if err != nil {
+			logger.Fatal(context.Background(), "init JWKS client", zap.Error(err))
+		}
+		teUC := usecase.NewTokenExchangeUsecase(
+			svcCtx.OAuth2UserRepo,
+			svcCtx.DeviceRepo,
+			jwtSigner,
+			jwksClient,
+			cfg.TokenExchange,
+		)
+		teHandler := httphandler.NewTokenExchangeHandler(teUC)
+		handler.SetTokenExchangeHandler(teHandler)
+		logger.Info(context.Background(), "token exchange enabled",
+			zap.Int("external_issuers", len(cfg.TokenExchange.ExternalIssuers)))
+	}
+
+	return handler
 }
 
 func provideInterruptHandler(
@@ -632,14 +709,78 @@ func provideInterruptHandler(
 	svcCtx *svc.ServiceContext,
 	jwtSigner *auth.JWTSigner,
 ) *httphandler.InterruptHandler {
-	return httphandler.NewInterruptHandler(redisClient, cfg.Worker, svcCtx.SessionRepo, jwtSigner)
+	interruptUC := usecase.NewInterruptUsecase(redisClient, cfg.Worker, svcCtx.SessionRepo)
+	return httphandler.NewInterruptHandler(interruptUC, jwtSigner, svcCtx.OAuth2UserRepo)
 }
 
 func provideMemoriesHandler(
 	svcCtx *svc.ServiceContext,
 	jwtSigner *auth.JWTSigner,
 ) *httphandler.MemoriesHandler {
-	return httphandler.NewMemoriesHandler(svcCtx, jwtSigner)
+	memoryUC := usecase.NewMemoryUsecase(svcCtx.MemoryRepo, svcCtx.SessionRepo)
+	return httphandler.NewMemoriesHandler(memoryUC, jwtSigner, svcCtx.OAuth2UserRepo)
+}
+
+func provideOSS3Backend(cfg *config.Config) (rtcoss3.Backend, error) {
+	if cfg.Storage.Backend == "" {
+		return nil, nil
+	}
+	minioCfg := cfg.Storage.MinIO
+	return rtcoss3.NewMinIOBackend(rtcoss3.MinIOOptions{
+		Endpoint:            minioCfg.Endpoint,
+		AccessKey:           minioCfg.AccessKey,
+		SecretKey:           minioCfg.SecretKey,
+		Bucket:              minioCfg.Bucket,
+		PublicURL:           minioCfg.PublicURL,
+		Region:              minioCfg.Region,
+		UseSSL:              minioCfg.UseSSL,
+		MaxIdleConns:        minioCfg.MaxIdleConns,
+		MaxIdleConnsPerHost: minioCfg.MaxIdleConnsPerHost,
+		IdleConnTimeout:     minioCfg.IdleConnTimeout,
+	})
+}
+
+func provideOSS3LuaScripts(redisClient *redis.Client) (map[string]*redis.Script, error) {
+	return cache.RegisterOSS3Scripts(redisClient), nil
+}
+
+func provideOSS3Usecase(
+	backend rtcoss3.Backend,
+	db *gorm.DB,
+	fileRepo repo.FileRepo,
+	uploadRepo repo.MultipartUploadRepo,
+	credRepo repo.TemporaryCredentialRepo,
+	redisClient *redis.Client,
+	scripts map[string]*redis.Script,
+	cfg *config.Config,
+) (*usecase.OSS3Usecase, error) {
+	if backend == nil {
+		return nil, nil
+	}
+	return usecase.NewOSS3Usecase(backend, db, fileRepo, uploadRepo, credRepo, redisClient, scripts, cfg.Storage)
+}
+
+func provideOSS3Handler(oss3UC *usecase.OSS3Usecase, cfg *config.Config) *httphandler.OSS3Handler {
+	if oss3UC == nil {
+		return nil
+	}
+	return httphandler.NewOSS3Handler(oss3UC, cfg.Storage.MinIO.Bucket, cfg.Storage.Quota.MaxFileSizeBytes)
+}
+
+func provideSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config, svcCtx *svc.ServiceContext) *httphandler.STSHandler {
+	if oss3UC == nil {
+		return nil
+	}
+	isDev := cfg.Server.Env == "development"
+	return httphandler.NewSTSHandler(oss3UC, signer, isDev, svcCtx.OAuth2UserRepo)
+}
+
+func provideSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config, svcCtx *svc.ServiceContext) *httphandler.STSPresignHandler {
+	if oss3UC == nil {
+		return nil
+	}
+	isDev := cfg.Server.Env == "development"
+	return httphandler.NewSTSPresignHandler(oss3UC, signer, isDev, svcCtx.OAuth2UserRepo)
 }
 
 func provideServer(
@@ -650,6 +791,9 @@ func provideServer(
 	oauth2Handler *httphandler.OAuth2Handler,
 	interruptHandler *httphandler.InterruptHandler,
 	memoriesHandler *httphandler.MemoriesHandler,
+	oss3Handler *httphandler.OSS3Handler,
+	stsHandler *httphandler.STSHandler,
+	stsPresignHandler *httphandler.STSPresignHandler,
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
 	streamStore *agent.StreamStore,
@@ -669,6 +813,9 @@ func provideServer(
 		oauth2Handler,
 		interruptHandler,
 		memoriesHandler,
+		oss3Handler,
+		stsHandler,
+		stsPresignHandler,
 		queueWorker,
 		queue,
 		asynqServer,
@@ -685,19 +832,11 @@ func provideServer(
 // provideTaskScheduler creates the asynq-based TaskScheduler.
 // It returns the usecase.TaskScheduler interface for injection into usecase.Dependencies.
 func provideTaskScheduler(cfg *config.Config) (usecase.TaskScheduler, error) {
-	addr := cfg.Asynq.RedisAddr
-	if addr == "" {
-		addr = cfg.Redis.Addr
-	}
-	return taskscheduler.NewTaskScheduler(addr)
+	return taskscheduler.NewTaskScheduler(asynqRedisOpt(cfg))
 }
 
 // provideAsynqServer creates the asynq Server for processing loop tasks.
 func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
-	addr := cfg.Asynq.RedisAddr
-	if addr == "" {
-		addr = cfg.Redis.Addr
-	}
 	concurrency := cfg.Asynq.Concurrency
 	if concurrency <= 0 {
 		concurrency = 10
@@ -707,7 +846,7 @@ func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
 		queueName = "loop"
 	}
 	return hibikenasynq.NewServer(
-		hibikenasynq.RedisClientOpt{Addr: addr},
+		asynqRedisOpt(cfg),
 		hibikenasynq.Config{
 			Concurrency: concurrency,
 			Queues: map[string]int{
@@ -722,7 +861,7 @@ func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
 func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, deps *usecase.Dependencies) *hibikenasynq.ServeMux {
 	// Create the notification creator callback for loop worker
 	notificationCreator := agent.CreateLoopNotification(deps)
-	worker := loop.NewWorker(queue, loopRepo, notificationCreator)
+	worker := loop.NewWorker(queue, loopRepo, deps.SessionRepo, notificationCreator)
 	mux := hibikenasynq.NewServeMux()
 	worker.RegisterHandlers(mux)
 	return mux
@@ -730,11 +869,25 @@ func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, deps *usecas
 
 // provideAsynqInspector creates the asynq Inspector for task management.
 func provideAsynqInspector(cfg *config.Config) *hibikenasynq.Inspector {
+	return hibikenasynq.NewInspector(asynqRedisOpt(cfg))
+}
+
+// asynqRedisOpt builds a RedisClientOpt for asynq components.
+// Uses Asynq-specific config when available, falling back to the shared Redis config.
+func asynqRedisOpt(cfg *config.Config) hibikenasynq.RedisClientOpt {
 	addr := cfg.Asynq.RedisAddr
 	if addr == "" {
 		addr = cfg.Redis.Addr
 	}
-	return hibikenasynq.NewInspector(hibikenasynq.RedisClientOpt{Addr: addr})
+	password := cfg.Asynq.RedisPassword
+	if password == "" {
+		password = cfg.Redis.Password
+	}
+	return hibikenasynq.RedisClientOpt{
+		Addr:     addr,
+		Password: password,
+		DB:       cfg.Asynq.RedisDB,
+	}
 }
 
 // provideRecoveryCancel creates the recovery goroutine and returns its cancel function.

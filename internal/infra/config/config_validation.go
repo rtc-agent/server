@@ -3,10 +3,19 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 // Validate checks required configuration fields, returning the first error found.
 func (c *Config) Validate() error {
+	// Validate server environment.
+	switch c.Server.Env {
+	case "development", "production":
+		// valid
+	default:
+		return fmt.Errorf("server.env must be 'development' or 'production', got %q", c.Server.Env)
+	}
+
 	// Validate database configuration.
 	if c.Database.DSN == "" {
 		return fmt.Errorf("database.dsn is required")
@@ -21,10 +30,22 @@ func (c *Config) Validate() error {
 	if c.LLM.APIKey == "" {
 		return fmt.Errorf("llm.api_key is required: set it via LLM__API_KEY environment variable")
 	}
+	// Validate reasoning_effort if set.
+	switch c.LLM.ReasoningEffort {
+	case "", "low", "medium", "high":
+		// valid
+	default:
+		return fmt.Errorf("llm.reasoning_effort (%q) must be \"low\", \"medium\", or \"high\"", c.LLM.ReasoningEffort)
+	}
 
 	// Validate that at least one OAuth provider is enabled.
 	if !c.Providers.Mock.Enabled && !c.Providers.GitHub.Enabled && !c.Providers.Google.Enabled {
 		return fmt.Errorf("at least one OAuth provider must be enabled (mock, github, or google)")
+	}
+
+	// Mock OAuth provider must not be enabled in production.
+	if c.Server.Env == "production" && c.Providers.Mock.Enabled {
+		return fmt.Errorf("providers.mock.enabled must be false in production environment")
 	}
 
 	// Validate OAuth2 provider URL format.
@@ -38,8 +59,17 @@ func (c *Config) Validate() error {
 	if c.Auth.JWTSecret == "" {
 		return fmt.Errorf("auth.jwt_secret is required")
 	}
+	// Security: reject weak/default JWT secrets in production.
+	const weakJWTSecrets = "rtc-agent-dev-jwt-secret-change-me-in-production"
+	if c.Server.Env == "production" && c.Auth.JWTSecret == weakJWTSecrets {
+		return fmt.Errorf("auth.jwt_secret must not use the default development value in production: generate a secure random string")
+	}
 	if c.Auth.AccessTokenTTLSeconds <= 0 {
 		return fmt.Errorf("auth.access_token_ttl_seconds must be positive, got %d", c.Auth.AccessTokenTTLSeconds)
+	}
+	// Security: enforce redirect URI whitelist in production to prevent open redirect attacks.
+	if c.Server.Env == "production" && len(c.Auth.AllowedRedirectURIs) == 0 {
+		return fmt.Errorf("auth.allowed_redirect_uris is required in production environment")
 	}
 
 	// Validate worker compression threshold configuration.
@@ -50,6 +80,83 @@ func (c *Config) Validate() error {
 	// Validate asynq configuration.
 	if err := c.Asynq.Validate(); err != nil {
 		return err
+	}
+
+	// Validate storage configuration (only when storage is enabled).
+	if c.Storage.IsEnabled() {
+		// Validate storage encryption configuration.
+		if err := c.Storage.Encryption.Validate(); err != nil {
+			return err
+		}
+		if err := c.Storage.Quota.Validate(); err != nil {
+			return err
+		}
+		if err := c.Storage.RateLimit.Validate(); err != nil {
+			return err
+		}
+	}
+
+	// Validate token exchange configuration (only when external issuers are configured).
+	if err := c.TokenExchange.Validate(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Validate checks TokenExchangeConfig fields.
+// Each external issuer must have a valid name, issuer, and JWKS URI.
+// JWKS URIs must use HTTPS in production to prevent cache poisoning.
+func (c *TokenExchangeConfig) Validate() error {
+	for i, iss := range c.ExternalIssuers {
+		if iss.Name == "" {
+			return fmt.Errorf("token_exchange.external_issuers[%d].name is required", i)
+		}
+		if iss.Issuer == "" {
+			return fmt.Errorf("token_exchange.external_issuers[%d].issuer is required", i)
+		}
+		if iss.JWKSURI == "" {
+			return fmt.Errorf("token_exchange.external_issuers[%d].jwks_uri is required", i)
+		}
+		u, err := url.Parse(iss.JWKSURI)
+		if err != nil {
+			return fmt.Errorf("token_exchange.external_issuers[%d].jwks_uri is invalid: %w", i, err)
+		}
+		// Security: require HTTPS for JWKS endpoints in production to prevent MITM cache poisoning.
+		// Allow HTTP in development environment for:
+		// - localhost, 127.0.0.1
+		// - .local, .orb.local domains
+		// - Docker internal service names (no dots in hostname)
+		if u.Scheme != "https" {
+			host := u.Hostname()
+			isLocal := host == "localhost" || host == "127.0.0.1" ||
+				strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".orb.local")
+			// Allow hostnames without dots (Docker internal services like "admin-server")
+			hasNoDots := !strings.Contains(host, ".")
+			if !isLocal && !hasNoDots {
+				return fmt.Errorf("token_exchange.external_issuers[%d].jwks_uri must use HTTPS for external hosts, got %q", i, u.Scheme)
+			}
+		}
+	}
+	return nil
+}
+
+// Validate checks EncryptionConfig fields.
+// SessionTokenKey must be a secure random value, not empty or the default test value.
+func (c *EncryptionConfig) Validate() error {
+	if c.SessionTokenKey == "" {
+		return fmt.Errorf("storage.encryption.session_token_key is required: set it via STORAGE__ENCRYPTION__SESSION_TOKEN_KEY environment variable")
+	}
+
+	// Check for the default test value from config.docker.yaml
+	const defaultTestKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if c.SessionTokenKey == defaultTestKey {
+		return fmt.Errorf("storage.encryption.session_token_key must not use the default test value in production: generate a secure random 64-character hex string")
+	}
+
+	// Validate length (64 hex chars = 32 bytes for AES-256)
+	if len(c.SessionTokenKey) != 64 {
+		return fmt.Errorf("storage.encryption.session_token_key must be 64 hex characters (32 bytes), got %d characters", len(c.SessionTokenKey))
 	}
 
 	return nil
@@ -93,6 +200,33 @@ func (c *WorkerConfig) Validate() error {
 		// valid
 	default:
 		return fmt.Errorf("worker.token_counter_mode (%q) must be \"heuristic\" or \"tokenizer\"", c.TokenCounterMode)
+	}
+	return nil
+}
+
+// Validate checks QuotaConfig fields.
+// All quota limits must be positive to ensure meaningful constraints.
+func (c *QuotaConfig) Validate() error {
+	if c.MaxFileSizeBytes <= 0 {
+		return fmt.Errorf("storage.quota.max_file_size_bytes must be positive, got %d", c.MaxFileSizeBytes)
+	}
+	if c.MaxUserQuotaBytes <= 0 {
+		return fmt.Errorf("storage.quota.max_user_quota_bytes must be positive, got %d", c.MaxUserQuotaBytes)
+	}
+	if c.MaxConcurrentUploads <= 0 {
+		return fmt.Errorf("storage.quota.max_concurrent_uploads must be positive, got %d", c.MaxConcurrentUploads)
+	}
+	if c.PendingTTL <= 0 {
+		return fmt.Errorf("storage.quota.pending_ttl must be positive, got %v", c.PendingTTL)
+	}
+	return nil
+}
+
+// Validate checks RateLimitConfig fields.
+// Rate limit must be positive to allow requests.
+func (c *RateLimitConfig) Validate() error {
+	if c.RequestsPerMinute <= 0 {
+		return fmt.Errorf("storage.rate_limit.requests_per_minute must be positive, got %d", c.RequestsPerMinute)
 	}
 	return nil
 }

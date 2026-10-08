@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
@@ -179,6 +180,16 @@ func mergeConsecutiveSameRole(messages []*turnagent.Message) []*turnagent.Messag
 				}
 				prev.Content = joinContent(prev.Content, curr.Content)
 				prev.ReasoningContent = joinContent(prev.ReasoningContent, curr.ReasoningContent)
+				// Merge MultiContent (images, etc.) from consecutive user messages.
+				// Use make + append for safe copying to avoid sharing the backing array
+				// between prev and curr. prev is already a shallow copy (copy-on-first-merge),
+				// but its MultiContent slice header still points to the original backing array.
+				if len(curr.MultiContent) > 0 {
+					merged := make([]schema.MessageInputPart, 0, len(prev.MultiContent)+len(curr.MultiContent))
+					merged = append(merged, prev.MultiContent...)
+					merged = append(merged, curr.MultiContent...)
+					prev.MultiContent = merged
+				}
 				continue
 			}
 		}

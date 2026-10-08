@@ -4,6 +4,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -67,18 +68,45 @@ func (s *JWTSigner) AccessTTL() time.Duration {
 
 // ParseAccessToken parses and validates an access token, returning claims.
 func (s *JWTSigner) ParseAccessToken(tokenString string) (*Claims, error) {
+	if tokenString == "" {
+		RecordFailure("jwt", "missing")
+		return nil, errors.New("parse access token: token is empty")
+	}
+
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			RecordFailure("jwt", "signature")
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return s.secret, nil
 	})
 	if err != nil {
+		// Classify the error reason for metrics
+		reason := classifyJWTError(err)
+		RecordFailure("jwt", reason)
 		return nil, fmt.Errorf("parse access token: %w", err)
 	}
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
+		RecordFailure("jwt", "claims")
 		return nil, errors.New("invalid access token")
 	}
 	return claims, nil
+}
+
+// classifyJWTError categorizes a JWT parsing error for metrics.
+func classifyJWTError(err error) string {
+	errStr := err.Error()
+	switch {
+	case strings.Contains(errStr, "token is expired"):
+		return "expired"
+	case strings.Contains(errStr, "token is not valid yet"):
+		return "not_yet_valid"
+	case strings.Contains(errStr, "token used before issued"):
+		return "issued_after"
+	case strings.Contains(errStr, "signature"):
+		return "signature"
+	default:
+		return "invalid"
+	}
 }

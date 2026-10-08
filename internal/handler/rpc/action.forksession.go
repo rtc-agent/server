@@ -9,7 +9,6 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
@@ -134,7 +133,7 @@ func buildForkMessages(
 //   - Replace the last message with the new content_data
 //   - Trigger the AI flow (via rtc-queue Publish)
 func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequest) (*protocol.ForkSessionResponse, error) {
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.forkSession",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.fork_session",
 		trace.WithAttributes(
 			attribute.String("old_session.id", req.OldServerSessionId),
 			attribute.String("old_message.id", req.OldServerMessageId),
@@ -145,19 +144,27 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		span.SetStatus(codes.Error, "missing user_id in context")
-		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 	deviceID, _ := contextx.GetDeviceID(ctx)
 	creator := usecase.UserCreator{UserID: userID, DeviceID: deviceID}
 
+	// Validate file attachments exist before forking.
+	// This prevents referencing non-existent files or files owned by other users.
+	if apiErr := h.validateFileAttachments(ctx, req.ContentData, userID, "ForkSession"); apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Code)
+		return nil, apiErr
+	}
+
 	oldSessionID, apiErr := parseUUID(req.OldServerSessionId, "old_server_session_id")
 	if apiErr != nil {
-		span.SetStatus(codes.Error, apiErr.Message)
+		span.SetStatus(codes.Error, apiErr.Code)
 		return nil, apiErr
 	}
 	oldMessageID, apiErr := parseUUID(req.OldServerMessageId, "old_server_message_id")
 	if apiErr != nil {
-		span.SetStatus(codes.Error, apiErr.Message)
+		span.SetStatus(codes.Error, apiErr.Code)
 		return nil, apiErr
 	}
 
@@ -184,24 +191,24 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 
 	oldMessage, err := h.deps.Deps.MessageRepo.GetByID(ctx, oldMessageID)
 	if err != nil {
-		if repo.IsNotFound(err) {
+		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "message.not_found")
-			return nil, &APIError{Code: "message.not_found", Message: fmt.Sprintf("old message %s not found", req.OldServerMessageId)}
+			return nil, &APIError{Code: ErrorCodeMessageNotFound, Message: fmt.Sprintf("old message %s not found", req.OldServerMessageId)}
 		}
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		return nil, h.internalError(ctx, "message.error", "internal error", err)
 	}
 
 	oldMessages, err := h.deps.Deps.MessageRepo.ListBySessionBeforeOffset(ctx, oldSessionID, oldMessage.GlobalOffset, limit)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		return nil, h.internalError(ctx, "message.error", "internal error", err)
 	}
 	if len(oldMessages) == 0 {
 		span.SetStatus(codes.Error, "message.not_found")
-		return nil, &APIError{Code: "message.not_found", Message: "no messages found to fork"}
+		return nil, &APIError{Code: ErrorCodeMessageNotFound, Message: "no messages found to fork"}
 	}
 
 	newSession := buildForkSessionModel(oldSession, req.NewClientSessionId, creator, deviceID)
@@ -212,6 +219,8 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		if err := primitives.CreateSession(txCtx, h.deps.Deps, newSession); err != nil {
 			return nil, fmt.Errorf("create session: %w", err)
 		}
+		// Record session creation metric
+		h.deps.Metrics.RecordSessionCreated(txCtx)
 
 		// turnID is nil — the turn is created asynchronously by turn-agent.
 		createdMessages, err = primitives.BatchCreateMessages(txCtx, h.deps.Deps, newSession.ID, nil, messagesToCreate)
@@ -219,7 +228,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 			return nil, fmt.Errorf("batch create messages: %w", err)
 		}
 
-		if err := h.publishSubmitWork(txCtx, newSession.ID); err != nil {
+		if err := h.publishSubmitWork(txCtx, newSession.ID, userID.String()); err != nil {
 			return nil, err
 		}
 
@@ -229,7 +238,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[ForkSession] push failed after commit (data safe)", zap.Error(err))
 		} else {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			return nil, h.internalError(ctx, "fork.error", "internal error", err)
 		}
@@ -256,8 +265,8 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 func (h *Handler) validateForkSource(ctx context.Context, oldSessionID uuid.UUID, creator usecase.UserCreator) (*model.Session, error) {
 	oldSession, err := h.deps.SessionRepo.GetByID(ctx, oldSessionID)
 	if err != nil {
-		if repo.IsNotFound(err) {
-			return nil, &APIError{Code: "session.not_found", Message: fmt.Sprintf("old session %s not found", oldSessionID)}
+		if primitives.IsNotFound(err) {
+			return nil, &APIError{Code: ErrorCodeSessionNotFound, Message: fmt.Sprintf("old session %s not found", oldSessionID)}
 		}
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}

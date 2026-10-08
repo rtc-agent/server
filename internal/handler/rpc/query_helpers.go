@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -46,7 +46,7 @@ func getOwnedByID[T any](
 
 	entity, err := getByID(ctx, entityUUID)
 	if err != nil {
-		if repo.IsNotFound(err) {
+		if primitives.IsNotFound(err) {
 			return nil, uuid.Nil, &APIError{
 				Code:    errorCode,
 				Message: fmt.Sprintf("%s %s not found", entityName, idStr),

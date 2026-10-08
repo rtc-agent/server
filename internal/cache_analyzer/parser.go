@@ -75,6 +75,13 @@ type LLMRequest struct {
 	RequestIndex int            `json:"request_index"`
 }
 
+// streamState tracks the state of a streaming response.
+type streamState struct {
+	sessionID string
+	timestamp time.Time
+	chunks    []string // accumulated SSE chunks
+}
+
 // MessageCount returns the number of messages.
 func (r *LLMRequest) MessageCount() int {
 	return len(r.Messages)
@@ -94,6 +101,10 @@ func ParseLogFile(logFile string) ([]*LLMRequest, []*LLMRequest, error) {
 
 	var requests []*LLMRequest
 	var responses []*LLMRequest
+
+	// Track the current active streaming response
+	// stream_chunk events don't have session_id, so we use the session from the most recent streaming event
+	var currentStream *streamState
 
 	scanner := bufio.NewScanner(file)
 	// Increase buffer size for large lines
@@ -131,11 +142,44 @@ func ParseLogFile(logFile string) ([]*LLMRequest, []*LLMRequest, error) {
 				requests = append(requests, req)
 			}
 
+		case "llm.http.response (streaming)":
+			// Start tracking a new stream
+			currentStream = &streamState{
+				sessionID: sessionID,
+				timestamp: timestamp,
+				chunks:    []string{},
+			}
+
 		case "llm.http.response", "llm.http.response (stream complete)":
-			resp := parseResponse(entry, timestamp, sessionID)
-			if resp != nil {
-				resp.RequestIndex = len(responses)
-				responses = append(responses, resp)
+			// Finalize the current stream
+			if currentStream != nil && len(currentStream.chunks) > 0 {
+				// Parse accumulated chunks as SSE
+				fullResponse := strings.Join(currentStream.chunks, "")
+				cacheStats := extractCacheStats(fullResponse)
+				if cacheStats != nil {
+					resp := &LLMRequest{
+						Timestamp:  currentStream.timestamp,
+						SessionID:  currentStream.sessionID,
+						CacheStats: cacheStats,
+					}
+					resp.RequestIndex = len(responses)
+					responses = append(responses, resp)
+				}
+			} else {
+				// Fallback: try to parse from response_body (old format)
+				resp := parseResponse(entry, timestamp, sessionID)
+				if resp != nil {
+					resp.RequestIndex = len(responses)
+					responses = append(responses, resp)
+				}
+			}
+			currentStream = nil
+
+		case "llm.http.stream_chunk":
+			// Accumulate stream chunks to the current stream
+			chunk, _ := entry["chunk"].(string)
+			if chunk != "" && currentStream != nil {
+				currentStream.chunks = append(currentStream.chunks, chunk)
 			}
 		}
 	}

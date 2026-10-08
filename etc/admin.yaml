@@ -1,0 +1,58 @@
+server:
+  host: "0.0.0.0"
+  port: 8081
+  env: "development"
+
+database:
+  dsn: "postgres://localhost:5432/rtc_agent?sslmode=disable"
+
+redis:
+  addr: "localhost:6379"       # Redis server address (empty to disable)
+  password: ""                 # Redis authentication password (empty for none)
+  db: 0                        # Redis database number (0-15)
+
+cors:
+  allowed_origins: ["http://localhost:23001", "http://localhost:5173", "http://localhost:8000"]
+
+jwt:
+  algorithm: "RS256"
+  issuer: "https://admin.example.com"
+  audience: "https://rtc.example.com"
+  private_key_path: "./etc/keys/admin-private.pem"
+  public_key_path: "./etc/keys/admin-public.pem"
+  access_token_ttl: 3600      # 1 hour
+  refresh_token_ttl: 604800   # 7 days
+
+security:
+  rate_limit_per_minute: 100   # Max requests per minute per IP
+  login_max_attempts: 5        # Max failed login attempts before lockout
+  login_lock_duration: 900     # Lockout duration in seconds (15 minutes)
+  cookie_secure: false         # Set true when served over HTTPS (production with TLS)
+
+features:
+  permission_system: true      # Enable Casbin RBAC permission system
+  password_enabled: true       # Enable password login (development only)
+
+# Email configuration for OTP login (optional)
+# If not configured, email OTP login will be disabled
+email:
+  smtp_host: "smtp.qq.com"       # SMTP server host
+  smtp_port: 587                 # SMTP server port (587 for QQ with STARTTLS)
+  smtp_user: ""                  # SMTP username (set via EMAIL__SMTP_USER env var)
+  smtp_password: ""              # SMTP password (set via EMAIL__SMTP_PASSWORD env var)
+  from_address: "524041286@qq.com" # Sender email address
+  from_name: "RTC Agent"         # Sender display name
+
+# OTP verification code settings
+otp:
+  ttl: 300                     # Code validity in seconds (5 minutes)
+  length: 6                    # Code length (6 digits)
+  send_cooldown: 60            # Cooldown between sends to same email (seconds)
+  max_send_per_ip: 5           # Max send requests per IP per minute
+  max_verify_attempts: 5       # Max failed verification attempts before lockout
+  lock_duration: 900           # Lockout duration in seconds (15 minutes)
+
+prometheus_url: "http://prometheus:9090"
+grafana_url: "http://localhost:3000"
+jaeger_url: "http://localhost:16686"
+pyroscope_url: "http://localhost:4040"

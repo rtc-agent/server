@@ -9,9 +9,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// listSessionsDefaultLimit is the default page size (reuses queryMaxLimit as maximum).
-const listSessionsDefaultLimit = 20
-
 // ListSessions retrieves the current user's session list (ordered by creation time descending, cursor pagination).
 // RPC-specific query, not shared with LLM; business logic is implemented directly here.
 func (h *Handler) ListSessions(ctx context.Context, req *protocol.ListSessionsRequest) (*protocol.ListSessionsResponse, error) {
@@ -20,7 +17,8 @@ func (h *Handler) ListSessions(ctx context.Context, req *protocol.ListSessionsRe
 		return nil, err
 	}
 
-	limit, apiErr := clampLimit(req.Limit, listSessionsDefaultLimit, h.deps.API.QueryMaxLimit)
+	// Use configured default limit from API config instead of hardcoded value.
+	limit, apiErr := clampLimit(req.Limit, h.deps.API.QueryDefaultLimit, h.deps.API.QueryMaxLimit)
 	if apiErr != nil {
 		return nil, apiErr
 	}

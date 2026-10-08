@@ -67,7 +67,7 @@ func NewRedisClient(config RedisConfig) (*RedisClient, error) {
 }
 
 // Client returns the underlying redis.Client
-// Thread-safe: acquires read lock to prevent races with resetClient
+// Thread-safe: acquires read lock to prevent concurrent access races
 func (r *RedisClient) Client() *redis.Client {
 	r.healthMu.RLock()
 	defer r.healthMu.RUnlock()
@@ -120,15 +120,15 @@ func (r *RedisClient) Stop() {
 			r.internalCancel()
 		}
 		r.wg.Wait()
-		// Close Redis client here
-		r.client.Close()
+		// Close Redis client here.
+		_ = r.client.Close()
 	})
 }
 
 // checkHealth performs a health check
 func (r *RedisClient) checkHealth() {
 	// Snapshot the client pointer under the health lock to prevent races
-	// with resetClient (used in recovery/failover scenarios).
+	// with concurrent client access.
 	r.healthMu.RLock()
 	client := r.client
 	r.healthMu.RUnlock()
@@ -151,24 +151,6 @@ func (r *RedisClient) checkHealth() {
 			// Redis became unhealthy
 			r.SetHealthy(false)
 		}
-	}
-}
-
-// resetClient safely replaces the underlying Redis client.
-// This method acquires the health mutex to prevent races with the background
-// checkHealth goroutine. Useful for testing recovery scenarios where the Redis
-// address changes (e.g., failover to a different port).
-func (r *RedisClient) resetClient(addr string) {
-	r.healthMu.Lock()
-	old := r.client
-	r.client = redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: r.config.Password,
-		DB:       r.config.DB,
-	})
-	r.healthMu.Unlock()
-	if old != nil {
-		_ = old.Close() // Best-effort close of the previous connection pool.
 	}
 }
 

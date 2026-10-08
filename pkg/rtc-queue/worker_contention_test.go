@@ -38,9 +38,9 @@ func TestMultiWorkerContention(t *testing.T) {
 	for i := 0; i < numWorkers; i++ {
 		workerID := fmt.Sprintf("worker-%d", i)
 		w := rtcqueue.NewWorker(q, rtcqueue.WorkerConfig{
-			WorkerID:    workerID,
-			Concurrency: 1,
-			HoldLock:    true,
+			WorkerID:      workerID,
+			Concurrency:   1,
+			HoldLock:      true,
 			RenewInterval: 100 * time.Millisecond, // Fast renewal for testing
 			OnWork: func(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) error {
 				// Track this worker as active

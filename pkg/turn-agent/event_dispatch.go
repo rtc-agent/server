@@ -37,7 +37,7 @@ func (mgr *SessionTurnManager) prepareAgent(
 		turnID = TurnIDFromContext(ctx)
 	}
 
-	prepareCtx, prepareSpan := mgr.startSpanIfEnabled(ctx, "prepare_agent",
+	prepareCtx, prepareSpan := mgr.startSpanIfEnabled(ctx, "turn_agent.prepare_agent",
 		trace.WithAttributes(
 			attribute.String("session.id", mgr.sessionID),
 			attribute.String("turn.id", turnID),
@@ -94,7 +94,7 @@ func (mgr *SessionTurnManager) onAgentEvents(
 	events *adk.AsyncIterator[*adk.AgentEvent],
 ) error {
 	turnID := TurnIDFromContext(ctx)
-	eventsCtx, eventsSpan := mgr.startSpanIfEnabled(ctx, "on_agent_events",
+	eventsCtx, eventsSpan := mgr.startSpanIfEnabled(ctx, "turn_agent.on_agent_events",
 		trace.WithAttributes(
 			attribute.String("session.id", mgr.sessionID),
 			attribute.String("turn.id", turnID),

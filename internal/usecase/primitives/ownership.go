@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
 
 	"github.com/google/uuid"
@@ -25,13 +24,13 @@ func CheckSessionOwnership(
 	}
 	existing, err := deps.SessionRepo.GetByID(ctx, sessionID)
 	if err != nil {
-		if repo.IsNotFound(err) {
-			return fmt.Errorf("session %s not found: %w", sessionID, repo.ErrSessionNotFound)
+		if IsNotFound(err) {
+			return fmt.Errorf("session %s not found: %w", sessionID, ErrSessionNotFound)
 		}
 		return fmt.Errorf("get session: %w", err)
 	}
 	if existing.OwnerKind != string(creator.Kind()) || existing.OwnerRefID != creator.ReferenceID() {
-		return fmt.Errorf("session %s: %w", sessionID, repo.ErrPermissionDenied)
+		return fmt.Errorf("session %s: %w", sessionID, ErrPermissionDenied)
 	}
 	return nil
 }

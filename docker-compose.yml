@@ -42,6 +42,31 @@ services:
       retries: 5
     restart: unless-stopped
 
+  minio:
+    build:
+      context: .
+      dockerfile: Dockerfile.minio
+      args:
+        MINIO_VERSION: RELEASE.2025-10-15T17-29-55Z
+    container_name: rtc-full-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ACCESS_KEY:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_SECRET_KEY:-minioadmin}"
+      # Prometheus metrics 公开访问（无需认证），Prometheus scrape 需要
+      MINIO_PROMETHEUS_AUTH_TYPE: "public"
+    ports:
+      - "29000:9000"   # S3 API
+      - "29001:9001"   # MinIO Console
+    volumes:
+      - full-minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   # ===========================================================================
   # 可观测性栈（复用 etc/dev/ 配置）
   # ===========================================================================
@@ -113,6 +138,20 @@ services:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
+      # 禁用自带鉴权，允许 Admin Server 通过 iframe 嵌入访问
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_BASIC_ENABLED=false
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      # 反向代理子路径配置（Admin Server 在 /api/grafana 反代 Grafana）
+      - GF_SERVER_ROOT_URL=http://localhost:8000/api/grafana
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      # 允许 iframe 嵌入及 CSRF 信任源（dev proxy 和 admin server）
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_SECURITY_CSRF_TRUSTED_ORIGINS=http://localhost:8000,http://localhost:28081
+      - GF_SECURITY_CSRF_ENABLED=false
+      # 允许的来源（Grafana 11.x origin 检查）
+      - GF_SERVER_ALLOWED_ORIGINS=http://localhost:8000 http://localhost:28081
     ports:
       - "23001:3000"
     volumes:
@@ -170,6 +209,36 @@ services:
     restart: "no"
 
   # ===========================================================================
+  # Admin Server（后台管理系统）
+  # ===========================================================================
+
+  admin-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rtc-full-admin-server
+    command: ["./rtc-agent", "admin", "serve"]
+    env_file:
+      - .env
+    environment:
+      DEBUG__ENABLED: "true"
+    expose:
+      - "8081"
+    ports:
+      - "28081:8081"
+    volumes:
+      - ./etc/admin.docker.yaml:/app/etc/admin.yaml:ro
+      - full-admin-server-keys:/app/etc/keys  # JWT 密钥对（自动生成）
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ===========================================================================
   # Server 集群（2 实例，验证分布式部署）
   # ===========================================================================
 
@@ -181,8 +250,12 @@ services:
     env_file:
       - .env
     environment:
-      DEBUG: true
+      DEBUG__ENABLED: "true"
       LLM__API_KEY: "${LLM__API_KEY}"
+      AUTH__JWT_SECRET: "${AUTH__JWT_SECRET}"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
+      STORAGE__ENCRYPTION__SESSION_TOKEN_KEY: "${OSS3_SESSION_TOKEN_KEY:-}"
     expose:
       - "8888"
     volumes:
@@ -191,6 +264,8 @@ services:
       migrate:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
       jaeger:
         condition: service_started
@@ -206,8 +281,12 @@ services:
     env_file:
       - .env
     environment:
-      DEBUG: true
+      DEBUG__ENABLED: "true"
       LLM__API_KEY: "${LLM__API_KEY}"
+      AUTH__JWT_SECRET: "${AUTH__JWT_SECRET}"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
+      STORAGE__ENCRYPTION__SESSION_TOKEN_KEY: "${OSS3_SESSION_TOKEN_KEY:-}"
     expose:
       - "8888"
     volumes:
@@ -216,6 +295,8 @@ services:
       migrate:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
       jaeger:
         condition: service_started
@@ -242,9 +323,11 @@ services:
 volumes:
   full-postgres-data:
   full-redis-data:
+  full-minio-data:
   full-prometheus-data:
   full-loki-data:
   full-pyroscope-data:
   full-grafana-data:
   full-alertmanager-data:
   full-promtail-positions:
+  full-admin-server-keys:

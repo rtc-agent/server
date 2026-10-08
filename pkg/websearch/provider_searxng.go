@@ -126,7 +126,7 @@ func (p *searxngProvider) Search(ctx context.Context, req *SearchRequest) (*Sear
 	if err != nil {
 		return nil, fmt.Errorf("execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
@@ -177,7 +177,7 @@ func (p *searxngProvider) HealthCheck(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Consume body to enable connection reuse
 	_, _ = io.Copy(io.Discard, resp.Body)

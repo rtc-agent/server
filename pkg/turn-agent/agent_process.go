@@ -75,6 +75,10 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			})
 			return nil
 		}
+		// Inject user ID into context for ConfigProvider calls
+		if p.UserID != "" {
+			ctx = WithUserID(ctx, p.UserID)
+		}
 		return a.cfg.CompactContext(ctx, p.SessionID, p.CustomInstruction)
 	}
 
@@ -101,23 +105,26 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// (including the LLM call running in mgr.Run) when StopTurn is called.
 	turnCtx, turnCancel := context.WithCancel(ctx)
 	var turnSpan trace.Span
-	turnCtx, turnSpan = a.startSpanIfEnabled(turnCtx, "turn")
+	turnCtx, turnSpan = a.startSpanIfEnabled(turnCtx, "turn_agent.turn")
 	// Enrich context with sessionID so ALL callbacks (not just beginTurn) can
 	// fall back to it when DB lookups fail (e.g., failTurn/cancelTurn session
 	// status update). Without this, a GetByID failure after a terminal turn
 	// status update leaves the session stuck at "active" until the stale
 	// turn scanner runs (5-30 minutes).
 	turnCtx = WithSessionID(turnCtx, p.SessionID)
+	turnCtx = WithUserID(turnCtx, p.UserID)
 	defer turnCancel()
 	defer turnSpan.End()
 	turnSpan.SetAttributes(
 		attribute.String("session.id", p.SessionID),
+		attribute.String("user.id", p.UserID),
 		attribute.String("turn.id", turnID),
 		attribute.String("turn.work_kind", string(p.Kind)),
 	)
 	turnStart := time.Now()
 	a.log(turnCtx, LogLevelInfo, "turn.start", map[string]any{
 		"session_id": p.SessionID,
+		"user_id":    p.UserID,
 		"turn_id":    turnID,
 		"work_kind":  string(p.Kind),
 		"work_id":    work.ID,

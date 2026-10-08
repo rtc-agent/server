@@ -70,6 +70,8 @@ func Init(level string, serverLogFile ...string) {
 		OutputPaths:      []string{"stdout"},
 		ErrorOutputPaths: []string{"stderr"},
 		EncoderConfig:    encoderConfig,
+		// Caller is resolved by our smart resolveCaller(), not zap's built-in mechanism.
+		DisableCaller: true,
 	}
 
 	l, err := config.Build()
@@ -169,29 +171,116 @@ func extractTraceFields(ctx context.Context) []zap.Field {
 	}
 }
 
+// resolveCaller walks the call stack and returns the first non-logger frame.
+// It automatically skips logger wrapper layers using heuristics:
+//  1. Frames in pkg/logger/ directory (the logger package itself, including GormLogger)
+//  2. Frames whose function has a Logger-type receiver (e.g., (*centrifugeLogger).Info)
+//
+// This works regardless of how many layers of wrapping exist between business code and zap.
+// All current adapters (appLogger, workerLogger, centrifugeLogger, GormLogger, defaultLogger)
+// are automatically detected by rule 2.
+func resolveCaller() zapcore.EntryCaller {
+	var pcs [32]uintptr
+	// skip=3: runtime.Callers + resolveCaller + the log function (Info/Debug/etc.)
+	// so the first frame we inspect is the direct caller of the log function.
+	n := runtime.Callers(3, pcs[:])
+	if n == 0 {
+		return zapcore.EntryCaller{}
+	}
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		frame, more := frames.Next()
+		if !isLoggerFrame(frame) {
+			return zapcore.EntryCaller{
+				Defined:  true,
+				File:     formatShortFile(frame.File),
+				Line:     frame.Line,
+				Function: frame.Function,
+			}
+		}
+		if !more {
+			break
+		}
+	}
+	return zapcore.EntryCaller{}
+}
+
+// isLoggerFrame returns true if the frame belongs to a logger wrapper layer
+// that should be skipped when resolving the real caller.
+func isLoggerFrame(f runtime.Frame) bool {
+	// 1. Skip frames in pkg/logger/ directory (logger package itself).
+	if strings.Contains(f.File, "/pkg/logger/") {
+		return true
+	}
+
+	// 2. Skip frames whose function has a Logger-type receiver calling a log method.
+	// Matches: (*centrifugeLogger).Info, defaultLogger.Warn, (*GormLogger).Trace, etc.
+	// Function format: "pkg/path.(*Type).Method" or "pkg/path.Type.Method"
+	fn := f.Function
+	if idx := strings.LastIndex(fn, "."); idx >= 0 {
+		receiver := fn[:idx]
+		if strings.Contains(receiver, "Logger") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// formatShortFile converts an absolute file path to a short relative form.
+// e.g., "/home/user/project/internal/svc/foo.go" → "internal/svc/foo.go"
+func formatShortFile(file string) string {
+	// Try to find a common project root marker.
+	if idx := strings.LastIndex(file, "/server/"); idx >= 0 {
+		return file[idx+len("/server/"):]
+	}
+	// Fallback: last two path segments.
+	if idx := strings.LastIndex(file, "/"); idx >= 0 {
+		if idx2 := strings.LastIndex(file[:idx], "/"); idx2 >= 0 {
+			return file[idx2+1:]
+		}
+	}
+	return file
+}
+
 // Debug logs a debug-level message.
 func Debug(ctx context.Context, msg string, fields ...zap.Field) {
-	log.Debug(msg, append(extractTraceFields(ctx), fields...)...)
+	if ce := log.Check(zapcore.DebugLevel, msg); ce != nil {
+		ce.Caller = resolveCaller()
+		ce.Write(append(extractTraceFields(ctx), fields...)...)
+	}
 }
 
 // Info logs an info-level message.
 func Info(ctx context.Context, msg string, fields ...zap.Field) {
-	log.Info(msg, append(extractTraceFields(ctx), fields...)...)
+	if ce := log.Check(zapcore.InfoLevel, msg); ce != nil {
+		ce.Caller = resolveCaller()
+		ce.Write(append(extractTraceFields(ctx), fields...)...)
+	}
 }
 
 // Warn logs a warning-level message.
 func Warn(ctx context.Context, msg string, fields ...zap.Field) {
-	log.Warn(msg, append(extractTraceFields(ctx), fields...)...)
+	if ce := log.Check(zapcore.WarnLevel, msg); ce != nil {
+		ce.Caller = resolveCaller()
+		ce.Write(append(extractTraceFields(ctx), fields...)...)
+	}
 }
 
 // Error logs an error-level message.
 // If any field contains gorm.ErrRecordNotFound, it is downgraded to Warn.
 func Error(ctx context.Context, msg string, fields ...zap.Field) {
 	if containsErrRecordNotFound(fields) {
-		log.Warn(msg, append(extractTraceFields(ctx), fields...)...)
+		if ce := log.Check(zapcore.WarnLevel, msg); ce != nil {
+			ce.Caller = resolveCaller()
+			ce.Write(append(extractTraceFields(ctx), fields...)...)
+		}
 		return
 	}
-	log.Error(msg, append(extractTraceFields(ctx), fields...)...)
+	if ce := log.Check(zapcore.ErrorLevel, msg); ce != nil {
+		ce.Caller = resolveCaller()
+		ce.Write(append(extractTraceFields(ctx), fields...)...)
+	}
 }
 
 // containsErrRecordNotFound checks if any zap.Field contains gorm.ErrRecordNotFound.
@@ -208,7 +297,10 @@ func containsErrRecordNotFound(fields []zap.Field) bool {
 
 // Fatal logs a fatal-level message and exits.
 func Fatal(ctx context.Context, msg string, fields ...zap.Field) {
-	log.Fatal(msg, append(extractTraceFields(ctx), fields...)...)
+	if ce := log.Check(zapcore.FatalLevel, msg); ce != nil {
+		ce.Caller = resolveCaller()
+		ce.Write(append(extractTraceFields(ctx), fields...)...)
+	}
 }
 
 // CaptureStack captures the current call stack, returning a human-readable string.

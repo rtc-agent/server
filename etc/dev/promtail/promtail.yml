@@ -18,8 +18,11 @@ scrape_configs:
           - name: label
             values: ["com.docker.compose.project=rtc-agent-full"]
     relabel_configs:
+      # Normalize container names: strip project prefix and instance suffix
+      # e.g. /rtc-agent-full-server-1 -> server, /rtc-agent-full-minio -> minio
       - source_labels: ["__meta_docker_container_name"]
-        regex: "/(.*)"
+        regex: "/rtc-agent-full-(.+?)(-\\d+)?$"
+        replacement: "${1}"
         target_label: "container"
       - source_labels: ["__meta_docker_container_log_stream"]
         target_label: "logstream"
@@ -27,3 +30,17 @@ scrape_configs:
         target_label: "service"
     pipeline_stages:
       - docker: {}
+      # MinIO log parsing
+      - match:
+          selector: '{service="minio"}'
+          stages:
+            - json:
+                expressions:
+                  level: level
+                  msg: message
+                  time: time
+            - labels:
+                level:
+            - timestamp:
+                source: time
+                format: RFC3339

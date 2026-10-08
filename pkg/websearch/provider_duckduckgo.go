@@ -96,9 +96,9 @@ func (p *duckDuckGoProvider) Search(ctx context.Context, req *SearchRequest) (*S
 	params.Set("vqd", vqd)
 	params.Set("o", "json")           // Output format: JSON
 	params.Set("kl", p.config.Region) // Region
-	params.Set("ss", "1")            // Show snippets
-	params.Set("sp", "1")            // Show preference cookies
-	params.Set("sc", "1")            // Show category headers
+	params.Set("ss", "1")             // Show snippets
+	params.Set("sp", "1")             // Show preference cookies
+	params.Set("sc", "1")             // Show category headers
 
 	searchURL := duckDuckGoSearchURL + "?" + params.Encode()
 
@@ -117,7 +117,7 @@ func (p *duckDuckGoProvider) Search(ctx context.Context, req *SearchRequest) (*S
 	if err != nil {
 		return nil, fmt.Errorf("execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -202,7 +202,7 @@ func (p *duckDuckGoProvider) getVQD(ctx context.Context, client *http.Client, qu
 	if err != nil {
 		return "", fmt.Errorf("send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -239,7 +239,7 @@ func (p *duckDuckGoProvider) HealthCheck(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("health check failed: status %d", resp.StatusCode)

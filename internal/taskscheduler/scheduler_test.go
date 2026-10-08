@@ -21,7 +21,7 @@ func TestScheduleDelayed_Idempotency(t *testing.T) {
 	defer mr.Close()
 
 	// Create scheduler
-	scheduler, err := NewTaskScheduler(mr.Addr())
+	scheduler, err := NewTaskScheduler(hibikenasynq.RedisClientOpt{Addr: mr.Addr()})
 	if err != nil {
 		t.Fatalf("failed to create scheduler: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestScheduleDelayed_EmptyTaskID(t *testing.T) {
 	}
 	defer mr.Close()
 
-	scheduler, err := NewTaskScheduler(mr.Addr())
+	scheduler, err := NewTaskScheduler(hibikenasynq.RedisClientOpt{Addr: mr.Addr()})
 	if err != nil {
 		t.Fatalf("failed to create scheduler: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestScheduleDelayed_AfterTaskCompleted(t *testing.T) {
 	}
 	defer mr.Close()
 
-	scheduler, err := NewTaskScheduler(mr.Addr())
+	scheduler, err := NewTaskScheduler(hibikenasynq.RedisClientOpt{Addr: mr.Addr()})
 	if err != nil {
 		t.Fatalf("failed to create scheduler: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestScheduleDelayed_ConcurrentScheduling(t *testing.T) {
 	}
 	defer mr.Close()
 
-	scheduler, err := NewTaskScheduler(mr.Addr())
+	scheduler, err := NewTaskScheduler(hibikenasynq.RedisClientOpt{Addr: mr.Addr()})
 	if err != nil {
 		t.Fatalf("failed to create scheduler: %v", err)
 	}

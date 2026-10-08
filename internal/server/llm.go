@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/usecase"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/cloudwego/eino-ext/components/model/claude"
@@ -14,12 +15,69 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
+// ChatModelFactory creates ChatModel instances with dynamic per-turn overrides.
+// Static settings (API key, base URL, timeouts, metrics) are captured at factory
+// creation time. Dynamic overrides (model name, max tokens, temperature, etc.)
+// are supplied per call.
+type ChatModelFactory struct {
+	baseLLMConfig config.LLMConfig
+	metrics       *turnagent.PrometheusMetrics
+	llmPayloadLog bool
+}
+
+// NewChatModelFactory creates a ChatModelFactory from the base infrastructure config.
+func NewChatModelFactory(baseLLMConfig config.LLMConfig, metrics *turnagent.PrometheusMetrics, llmPayloadLog bool) *ChatModelFactory {
+	return &ChatModelFactory{
+		baseLLMConfig: baseLLMConfig,
+		metrics:       metrics,
+		llmPayloadLog: llmPayloadLog,
+	}
+}
+
+// Create builds a new ChatModel by merging the base config with dynamic overrides.
+func (f *ChatModelFactory) Create(overrides usecase.ChatModelOverrides) (model.ToolCallingChatModel, error) {
+	// Clone base config and apply overrides.
+	cfg := f.baseLLMConfig
+	if overrides.Provider != "" {
+		cfg.Provider = overrides.Provider
+	}
+	if overrides.Model != "" {
+		cfg.Model = overrides.Model
+	}
+	if overrides.BaseURL != "" {
+		cfg.BaseURL = overrides.BaseURL
+	}
+	if overrides.MaxTokens > 0 {
+		cfg.MaxTokens = overrides.MaxTokens
+	}
+	if overrides.Temperature != nil {
+		cfg.Temperature = overrides.Temperature
+	}
+	if overrides.ThinkingBudgetTokens > 0 {
+		cfg.ThinkingBudgetTokens = overrides.ThinkingBudgetTokens
+	}
+	if overrides.ReasoningEffort != "" {
+		cfg.ReasoningEffort = overrides.ReasoningEffort
+	}
+	if overrides.RetryMaxAttempts > 0 {
+		cfg.RetryMaxAttempts = overrides.RetryMaxAttempts
+	}
+
+	return newChatModel(context.Background(), &cfg, f.llmPayloadLog, f.metrics)
+}
+
 // NewChatModel creates a ChatModel from config (supports Claude and OpenAI).
 func NewChatModel(cfg *config.Config, metrics *turnagent.PrometheusMetrics) (model.ToolCallingChatModel, error) {
 	return newChatModel(context.Background(), &cfg.LLM, cfg.Log.LLMPayload, metrics)
 }
 
-// newChatModel creates a ChatModel from config (supports Claude and OpenAI).
+// newChatModel creates a ChatModel from config.
+//
+// NOTE: Only Claude protocol is fully supported and tested.
+// TODO: OpenAI protocol support is incomplete. The OpenAI adapter has not been
+// thoroughly tested with our message format, especially for multimodal content
+// (images, files). Production deployments should only use "claude" provider.
+//
 // Observability transport is always injected to ensure 100% metrics coverage.
 // When llmPayloadLog is enabled, full API request/response is logged to logs/llm-payload.log.
 func newChatModel(ctx context.Context, cfg *config.LLMConfig, llmPayloadLog bool, metrics *turnagent.PrometheusMetrics) (model.ToolCallingChatModel, error) {
@@ -43,6 +101,8 @@ func newChatModel(ctx context.Context, cfg *config.LLMConfig, llmPayloadLog bool
 	case "claude":
 		return newClaudeModel(ctx, cfg, httpClient)
 	case "openai":
+		// WARNING: OpenAI support is experimental and not recommended for production.
+		// See TODO comment in config.go for details.
 		return newOpenAIModel(ctx, cfg, httpClient)
 	default:
 		return nil, fmt.Errorf("unsupported llm.provider: %s (supported: claude, openai)", cfg.Provider)
@@ -81,7 +141,7 @@ func newClaudeModel(ctx context.Context, cfg *config.LLMConfig, httpClient *http
 
 	// Wrap with strategic cache breakpoint support.
 	// The wrapper automatically applies cache breakpoints before each API call
-	// to protect stable content from microcompact/tool budget invalidation.
+	// to protect stable content from microcompact/tool result budget invalidation.
 	return &claudeChatModelWrapper{chatModel}, nil
 }
 

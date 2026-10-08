@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/pkg/circuitbreaker"
@@ -260,7 +261,7 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 		respCopy.Cached = true
 		respCopy.DurationMs = time.Since(start).Milliseconds()
 		m.metrics.RecordSuccess("cached", respCopy.DurationMs)
-		m.logAudit(ctx, req, &respCopy, start, nil)
+		m.logAudit(req, &respCopy, start, nil)
 		return &respCopy, nil
 	}
 	m.metrics.RecordCacheMiss()
@@ -268,7 +269,7 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 	// 3. SSRF check.
 	if err := m.security.CheckURL(ctx, req.URL); err != nil {
 		m.metrics.RecordSSRFBlocked()
-		m.logAudit(ctx, req, nil, start, err)
+		m.logAudit(req, nil, start, err)
 		return nil, fmt.Errorf("security check failed: %w", err)
 	}
 
@@ -279,7 +280,7 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 			m.logger.Warn("robots.txt check failed, allowing by default",
 				zap.String("url", req.URL), zap.Error(err))
 		} else if !allowed {
-			m.logAudit(ctx, req, nil, start, fmt.Errorf("blocked by robots.txt"))
+			m.logAudit(req, nil, start, fmt.Errorf("blocked by robots.txt"))
 			return nil, fmt.Errorf("%w: %s", ErrRobotsBlocked, req.URL)
 		}
 	}
@@ -297,7 +298,7 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 
 	// 6. singleflight dedup.
 	ch := m.singleFlight.DoChan(cacheKey, func() (interface{}, error) {
-		rawResult, err := m.doFetch(ctx, req)
+		rawResult, err := m.doFetch(ctx, req, parsedURL)
 		if err != nil {
 			if errors.Is(err, ErrCrossDomainRedirect) {
 				return rawResult, err
@@ -332,12 +333,12 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 				CodeText: http.StatusText(statusCode),
 			}
 			m.metrics.RecordSuccess("redirect", time.Since(start).Milliseconds())
-			m.logAudit(ctx, req, redirectResp, start, nil)
+			m.logAudit(req, redirectResp, start, nil)
 			return redirectResp, nil
 		}
 		if result.Err != nil {
 			m.metrics.RecordError(classifyError(result.Err))
-			m.logAudit(ctx, req, nil, start, result.Err)
+			m.logAudit(req, nil, start, result.Err)
 			return nil, result.Err
 		}
 		resp, ok := result.Val.(*FetchResponse)
@@ -352,12 +353,12 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 			domainType = "pre_approved"
 		}
 		m.metrics.RecordSuccess(domainType, respCopy.DurationMs)
-		m.logAudit(ctx, req, &respCopy, start, nil)
+		m.logAudit(req, &respCopy, start, nil)
 		return &respCopy, nil
 
 	case <-ctx.Done():
 		m.metrics.RecordError("context_canceled")
-		m.logAudit(ctx, req, nil, start, ctx.Err())
+		m.logAudit(req, nil, start, ctx.Err())
 		return nil, fmt.Errorf("fetch canceled: %w", ctx.Err())
 	}
 }
@@ -390,12 +391,11 @@ func (m *WebFetchManager) validateRequest(req *FetchRequest) error {
 }
 
 // doFetch executes the HTTP request.
-func (m *WebFetchManager) doFetch(ctx context.Context, req *FetchRequest) (*rawFetchResult, error) {
+func (m *WebFetchManager) doFetch(ctx context.Context, req *FetchRequest, parsedURL *url.URL) (*rawFetchResult, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, m.config.FetchTimeout)
 	defer cancel()
 
 	// Get circuit breaker for this domain (if enabled).
-	parsedURL, _ := url.Parse(req.URL)
 	domain := ""
 	if parsedURL != nil {
 		domain = parsedURL.Hostname()
@@ -455,7 +455,7 @@ func (m *WebFetchManager) executeHTTPRequest(ctx context.Context, req *FetchRequ
 		}
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		if resp.StatusCode >= 500 {
@@ -511,7 +511,7 @@ func (m *WebFetchManager) processContent(ctx context.Context, req *FetchRequest,
 
 	// LLM extraction decision.
 	llmMined := false
-	result := markdown
+	var result string
 	host := parsedURL.Hostname()
 	isPreApproved := m.security.IsPreApproved(host)
 
@@ -625,14 +625,14 @@ func (m *WebFetchManager) releaseSlots(parsedURL *url.URL) {
 
 func (m *WebFetchManager) classifyHTTPError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("%w: %v", ErrTimeout, err)
+		return fmt.Errorf("%w: %w", ErrTimeout, err)
 	}
 	if errors.Is(err, context.Canceled) {
 		return fmt.Errorf("request canceled: %w", err)
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		return fmt.Errorf("%w: %v", ErrConnectionReset, err)
+		return fmt.Errorf("%w: %w", ErrConnectionReset, err)
 	}
 	return fmt.Errorf("fetch error: %w", err)
 }
@@ -653,7 +653,7 @@ func (m *WebFetchManager) checkRateLimit(rawURL string) error {
 	return nil
 }
 
-func (m *WebFetchManager) logAudit(ctx context.Context, req *FetchRequest, resp *FetchResponse, start time.Time, fetchErr error) {
+func (m *WebFetchManager) logAudit(req *FetchRequest, resp *FetchResponse, start time.Time, fetchErr error) {
 	parsedURL, _ := url.Parse(req.URL)
 	domain := ""
 	if parsedURL != nil {
@@ -697,7 +697,7 @@ func (m *WebFetchManager) logAudit(ctx context.Context, req *FetchRequest, resp 
 func FormatFetchResponse(resp *FetchResponse) string {
 	var sb strings.Builder
 	if resp.Cached || resp.LLMMined {
-		sb.WriteString(fmt.Sprintf("URL: %s", resp.URL))
+		fmt.Fprintf(&sb, "URL: %s", resp.URL)
 		if resp.Cached {
 			sb.WriteString(" [cached]")
 		}
@@ -731,12 +731,18 @@ func formatRedirectMessage(originalURL, redirectURL string, statusCode int) stri
 
 // truncateContent truncates s to maxLen runes (multi-byte safe).
 func truncateContent(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
+	// Fast path: if byte length <= maxLen, rune count is definitely <= maxLen.
+	if len(s) <= maxLen {
 		return s
 	}
+	// Check rune count without allocating []rune.
+	if utf8.RuneCountInString(s) <= maxLen {
+		return s
+	}
+	// Need to truncate: convert to runes.
+	runes := []rune(s)
 	const suffix = "\n\n[... truncated ...]"
-	cut := maxLen - len([]rune(suffix))
+	cut := maxLen - utf8.RuneCountInString(suffix)
 	if cut < 0 {
 		cut = 0
 	}

@@ -12,6 +12,9 @@ import (
 	"github.com/google/uuid"
 	hibikenasynq "github.com/hibiken/asynq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	httphandler "github.com/rtc-agent/server/internal/handler/http"
@@ -21,6 +24,7 @@ import (
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/svc"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -28,26 +32,38 @@ import (
 
 // Server HTTP + WebSocket server.
 type Server struct {
-	cfg              *config.Config
-	svcCtx           *svc.ServiceContext
-	rpcHandler       *rpchandler.Handler
-	httpHandler      *httphandler.Handler
-	oauth2Handler    *httphandler.OAuth2Handler
-	interruptHandler *httphandler.InterruptHandler
-	memoriesHandler  *httphandler.MemoriesHandler
-	httpServer       *http.Server
-	queueWorker      *rtcqueue.Worker // rtc-queue distributed worker
-	queue            *rtcqueue.Queue  // rtc-queue for publishing recovery work items
-	workerCancel     context.CancelFunc
-	asynqServer      *hibikenasynq.Server // asynq worker for loop tasks
-	asynqMux         *hibikenasynq.ServeMux
-	recoveryCancel   context.CancelFunc // cancels the recovery goroutine
-	goroutineCancel  func()             // cancels the goroutine metrics collector
+	cfg               *config.Config
+	svcCtx            *svc.ServiceContext
+	rpcHandler        *rpchandler.Handler
+	httpHandler       *httphandler.Handler
+	oauth2Handler     *httphandler.OAuth2Handler
+	interruptHandler  *httphandler.InterruptHandler
+	memoriesHandler   *httphandler.MemoriesHandler
+	oss3Handler       *httphandler.OSS3Handler
+	stsHandler        *httphandler.STSHandler
+	stsPresignHandler *httphandler.STSPresignHandler
+	httpServer        *http.Server
+	queueWorker       *rtcqueue.Worker // rtc-queue distributed worker
+	queue             *rtcqueue.Queue  // rtc-queue for publishing recovery work items
+	workerCancel      context.CancelFunc
+	asynqServer       *hibikenasynq.Server // asynq worker for loop tasks
+	asynqMux          *hibikenasynq.ServeMux
+	recoveryCancel    context.CancelFunc // cancels the recovery goroutine
+	goroutineCancel   func()             // cancels the goroutine metrics collector
 
 	// Stale turn scanner
 	instanceID         string                       // unique ID for distributed scanner lock
 	staleScannerCancel context.CancelFunc           // cancels the stale turn scanner goroutine
 	metrics            *turnagent.PrometheusMetrics // Prometheus metrics (may be nil)
+
+	// OSS3 cleanup scheduler
+	cleanupCancel context.CancelFunc // cancels the cleanup goroutine
+
+	// IP rate limiter cleanup
+	ipRateLimiterCancel context.CancelFunc // cancels the IP rate limiter cleanup goroutine
+
+	// Ban watcher for distributed user ban sync
+	banWatcher *svc.BanWatcher
 }
 
 // BuildProviderClients constructs the Provider list from config.
@@ -103,7 +119,18 @@ func (s *Server) Start() error {
 	// Recover stale turns from previous crash/restart BEFORE starting worker.
 	// This ensures that turns left in running/pending state are marked as
 	// interrupted and have resume work items published.
-	s.recoverStaleTurns(context.Background())
+	// Create a root span with timeout to provide trace context for all downstream operations.
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ctx, span := otel.Tracer("server").Start(ctx, "server.recoverStaleTurns",
+			trace.WithAttributes(
+				attribute.String("instance_id", s.instanceID),
+			),
+		)
+		defer span.End()
+		s.recoverStaleTurns(ctx)
+	}
 
 	// Start periodic stale turn scanner goroutine.
 	// Uses a Redis distributed lock to ensure only one Server instance scans
@@ -117,6 +144,37 @@ func (s *Server) Start() error {
 		if logger.IsDebugMode() {
 			logger.Debug(ctx, "[Server] stale turn scanner started",
 				zap.String("instance_id", s.instanceID))
+		}
+	}
+
+	// Start OSS3 periodic cleanup goroutine (expired uploads, credentials, quota/orphan reconciliation).
+	// Only started when a storage backend is configured.
+	if s.oss3Handler != nil && s.cfg.Storage.IsEnabled() {
+		oss3UC := s.oss3Handler.OSS3Usecase()
+		if oss3UC != nil && s.cleanupCancel == nil {
+			ctx, cancel := context.WithCancel(context.Background())
+			s.cleanupCancel = cancel
+			interval := s.cfg.Storage.Cleanup.Interval
+			if interval <= 0 {
+				interval = time.Hour
+			}
+			logger.SafeGo("oss3-cleanup", func() {
+				s.oss3CleanupLoop(ctx, oss3UC, interval)
+			})
+			logger.Info(ctx, "[Server] OSS3 cleanup scheduler started",
+				zap.Duration("interval", interval))
+		}
+	}
+
+	// Start BanWatcher for distributed user ban synchronization.
+	// Listens to Redis Pub/Sub for ban events and disconnects banned users.
+	if s.svcCtx.Redis != nil && s.banWatcher == nil {
+		banWatcher, err := svc.NewBanWatcher(s.svcCtx.CentrifugeNode, s.svcCtx.Redis)
+		if err != nil {
+			logger.Error(context.Background(), "[Server] Failed to create ban watcher", zap.Error(err))
+		} else {
+			s.banWatcher = banWatcher
+			logger.Info(context.Background(), "[Server] Ban watcher started")
 		}
 	}
 
@@ -160,7 +218,6 @@ func (s *Server) Start() error {
 	rateLimiter := middleware.NewRateLimiter(50, 100) // 50 req/s per user, burst 100
 	handler := middleware.Chain(
 		middleware.CORS(s.cfg.CORS.AllowOrigins, isDev),
-		middleware.SecurityHeaders,
 		middleware.HTTPMetrics(),
 		rateLimiter.Middleware(),
 		middleware.RequestLogger,
@@ -177,6 +234,7 @@ func (s *Server) Start() error {
 	}
 
 	logger.Info(ctx, "HTTP server listening", zap.String("addr", addr))
+
 	return s.httpServer.ListenAndServe()
 }
 
@@ -220,6 +278,23 @@ func (s *Server) Stop() {
 		s.staleScannerCancel()
 	}
 
+	// Stop OSS3 cleanup goroutine
+	if s.cleanupCancel != nil {
+		s.cleanupCancel()
+	}
+
+	// Stop IP rate limiter cleanup goroutine
+	if s.ipRateLimiterCancel != nil {
+		s.ipRateLimiterCancel()
+	}
+
+	// Stop BanWatcher
+	if s.banWatcher != nil {
+		if err := s.banWatcher.Close(); err != nil {
+			logger.Error(ctx, "[Server] ban watcher close error", zap.Error(err))
+		}
+	}
+
 	// Stop goroutine metrics collector
 	if s.goroutineCancel != nil {
 		s.goroutineCancel()
@@ -237,7 +312,7 @@ func (s *Server) Stop() {
 		logger.Error(ctx, "broker close failed", zap.Error(err))
 	}
 
-	// Close HTTP Server.
+	// Close main HTTP Server
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		logger.Error(ctx, "Server shutdown error", zap.Error(err))
 	}
@@ -253,18 +328,44 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	metricsHandler := promhttp.Handler()
 	if s.cfg.Metrics.User != "" && s.cfg.Metrics.Password != "" {
 		metricsHandler = basicAuth(metricsHandler, s.cfg.Metrics.User, s.cfg.Metrics.Password)
-	} else if s.cfg.Server.Env != "development" {
-		logger.Warn(context.Background(), "metrics endpoint without authentication - configure metrics.user and metrics.password")
+		mux.Handle("GET /metrics", metricsHandler)
+	} else if s.cfg.Server.Env == "development" {
+		// Development mode: allow unauthenticated metrics for local debugging.
+		mux.Handle("GET /metrics", metricsHandler)
+	} else {
+		// Production mode: refuse to serve metrics without authentication.
+		logger.Error(context.Background(), "metrics endpoint disabled: configure metrics.user and metrics.password for production")
+		// Don't register the handler - return 404 for /metrics requests.
 	}
-	mux.Handle("GET /metrics", metricsHandler)
 
 	// Debug endpoints: pprof + goroutine monitoring (optional basic auth).
 	if s.cfg.Debug.Enabled {
 		s.registerDebugRoutes(mux)
 	}
 
-	// OAuth2 endpoints.
+	// OAuth2 endpoints - protect public endpoints with IP rate limiting.
+	// 5 req/s per IP, burst 10, 1 hour TTL for limiter entries.
+	ipRateLimiter := middleware.NewIPRateLimiter(5, 10, time.Hour)
+	s.oauth2Handler.SetIPRateLimiter(ipRateLimiter)
 	s.oauth2Handler.RegisterRoutes(mux)
+
+	// Start IP rate limiter cleanup goroutine to prevent memory growth.
+	{
+		ctx, cancel := context.WithCancel(context.Background())
+		s.ipRateLimiterCancel = cancel
+		logger.SafeGo("ip-rate-limiter-cleanup", func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					ipRateLimiter.Cleanup()
+				}
+			}
+		})
+	}
 
 	// Interrupt endpoints (frontend submits interrupt answers).
 	isDevInterrupt := s.cfg.Server.Env == "development"
@@ -273,6 +374,18 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Memories endpoints (Memory export).
 	isDevMemories := s.cfg.Server.Env == "development"
 	s.memoriesHandler.RegisterRoutes(mux, isDevMemories)
+
+	// STS endpoints (temporary credentials, presigned URLs) — on main API port.
+	if s.stsHandler != nil {
+		s.stsHandler.RegisterRoutes(mux)
+	}
+	if s.stsPresignHandler != nil {
+		s.stsPresignHandler.RegisterRoutes(mux)
+	}
+
+	// OSS3 S3-compatible endpoints — integrated into main server with /s3 prefix.
+	// Routes: /s3/{bucket}/{key}
+	s.registerOSS3Routes(mux)
 
 	// Centrifuge WebSocket endpoint.
 	wsHandler := centrifuge.NewWebsocketHandler(s.svcCtx.CentrifugeNode, centrifuge.WebsocketConfig{
@@ -307,9 +420,17 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 }
 
 // registerDebugRoutes registers /debug/* routes (pprof + goroutines).
-// In production, configure debug.user/password to enable basic auth protection.
+// In production, debug.user/password are REQUIRED to enable these endpoints.
+// In development, endpoints are registered without auth if credentials are not configured.
 func (s *Server) registerDebugRoutes(mux *http.ServeMux) {
 	hasAuth := s.cfg.Debug.User != "" && s.cfg.Debug.Password != ""
+	isProduction := s.cfg.Server.Env != "development"
+
+	// Security: In production, refuse to register debug endpoints without authentication.
+	if isProduction && !hasAuth {
+		logger.Error(context.Background(), "debug endpoints disabled: debug.user and debug.password are required in production environment")
+		return
+	}
 
 	// goroutines endpoint
 	goroutinesHandler := middleware.GoroutinesHandler()
@@ -325,14 +446,51 @@ func (s *Server) registerDebugRoutes(mux *http.ServeMux) {
 		logger.Info(context.Background(), "[Server] debug endpoints protected with basic auth")
 	} else {
 		middleware.RegisterPprofRoutes(mux)
-		if s.cfg.Server.Env != "development" {
-			logger.Warn(context.Background(), "debug endpoints without authentication - configure debug.user and debug.password")
-		}
 	}
 
 	logger.Info(context.Background(), "[Server] debug endpoints registered",
 		zap.Bool("auth_enabled", hasAuth),
 		zap.Int("goroutine_leak_threshold", s.cfg.Debug.GoroutineLeakThreshold),
+	)
+}
+
+// registerOSS3Routes registers S3-compatible object storage routes.
+// Routes are registered under /s3 prefix: /s3/{bucket}/{key}
+func (s *Server) registerOSS3Routes(mux *http.ServeMux) {
+	if s.oss3Handler == nil {
+		logger.Info(context.Background(), "OSS3 handler not initialized, S3 endpoints disabled")
+		return
+	}
+
+	// Get OSS3 usecase from handler
+	oss3UC := s.oss3Handler.OSS3Usecase()
+	if oss3UC == nil {
+		logger.Error(context.Background(), "OSS3 usecase not available")
+		return
+	}
+
+	// Build middleware chain (wrap from innermost to outermost)
+	// Request flow: AccessLog -> RequestID -> Metrics -> SigV4 -> RateLimit -> BusinessRestriction -> Handler
+	// MEDIUM-13 fix: Metrics placed outside SigV4 to count auth-rejected requests.
+	// M5: RequestID middleware added to inject request ID for tracing.
+	// OSS3-26 fix: RateLimit middleware consolidates per-handler rate limit checks.
+	// We build from handler outward (last wrapped = outermost = first to execute):
+	var handler http.Handler = s.oss3Handler
+	handler = httphandler.NewBusinessRestrictionMiddleware(oss3UC, s.cfg.Storage.MinIO.Bucket, handler)
+	handler = httphandler.NewRateLimitMiddleware(oss3UC, handler)
+	handler = httphandler.NewSigV4Middleware(oss3UC, s.cfg.Storage.S3Endpoint.Region, handler)
+	handler = httphandler.NewOSS3MetricsMiddleware()(handler)
+	handler = httphandler.RequestIDMiddleware(handler)
+	handler = httphandler.NewAccessLogMiddleware(oss3UC, handler)
+
+	// Register S3 path-style routes under /s3 prefix: /s3/{bucket}/{key}
+	bucket := s.cfg.Storage.MinIO.Bucket
+	mux.Handle("/s3/"+bucket+"/", handler)
+	mux.Handle("/s3/"+bucket, handler)
+
+	logger.Info(context.Background(), "OSS3 S3 endpoints registered",
+		zap.String("bucket", bucket),
+		zap.String("prefix", "/s3"),
 	)
 }
 
@@ -346,6 +504,9 @@ func NewWithDeps(
 	oauth2Handler *httphandler.OAuth2Handler,
 	interruptHandler *httphandler.InterruptHandler,
 	memoriesHandler *httphandler.MemoriesHandler,
+	oss3Handler *httphandler.OSS3Handler,
+	stsHandler *httphandler.STSHandler,
+	stsPresignHandler *httphandler.STSPresignHandler,
 	queueWorker *rtcqueue.Worker,
 	queue *rtcqueue.Queue,
 	asynqServer *hibikenasynq.Server,
@@ -355,20 +516,23 @@ func NewWithDeps(
 ) *Server {
 	instanceID := "server-" + uuid.Must(uuid.NewV7()).String()
 	return &Server{
-		cfg:              cfg,
-		svcCtx:           svcCtx,
-		rpcHandler:       rpcHandler,
-		httpHandler:      httpHandler,
-		oauth2Handler:    oauth2Handler,
-		interruptHandler: interruptHandler,
-		memoriesHandler:  memoriesHandler,
-		queueWorker:      queueWorker,
-		queue:            queue,
-		asynqServer:      asynqServer,
-		asynqMux:         asynqMux,
-		recoveryCancel:   recoveryCancel,
-		instanceID:       instanceID,
-		metrics:          metrics,
+		cfg:               cfg,
+		svcCtx:            svcCtx,
+		rpcHandler:        rpcHandler,
+		httpHandler:       httpHandler,
+		oauth2Handler:     oauth2Handler,
+		interruptHandler:  interruptHandler,
+		memoriesHandler:   memoriesHandler,
+		oss3Handler:       oss3Handler,
+		stsHandler:        stsHandler,
+		stsPresignHandler: stsPresignHandler,
+		queueWorker:       queueWorker,
+		queue:             queue,
+		asynqServer:       asynqServer,
+		asynqMux:          asynqMux,
+		recoveryCancel:    recoveryCancel,
+		instanceID:        instanceID,
+		metrics:           metrics,
 	}
 }
 
@@ -407,4 +571,34 @@ func basicAuth(next http.Handler, user, password string) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// oss3CleanupLoop runs OSS3 cleanup tasks periodically until ctx is cancelled.
+// Tasks include: expired upload cleanup, credential cleanup, quota reconciliation,
+// and orphan object reconciliation.
+func (s *Server) oss3CleanupLoop(ctx context.Context, uc *usecase.OSS3Usecase, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Run once immediately on startup (after a short delay to let the server settle).
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+		if err := uc.RunCleanup(ctx); err != nil {
+			logger.Error(ctx, "[Server] OSS3 cleanup cycle failed", zap.Error(err))
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info(ctx, "[Server] OSS3 cleanup scheduler stopped")
+			return
+		case <-ticker.C:
+			if err := uc.RunCleanup(ctx); err != nil {
+				logger.Error(ctx, "[Server] OSS3 cleanup cycle failed", zap.Error(err))
+			}
+		}
+	}
 }

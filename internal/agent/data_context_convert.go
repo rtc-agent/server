@@ -1,17 +1,21 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/cloudwego/eino/schema"
+	"github.com/rtc-agent/server/internal/agent/util"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
+	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -32,35 +36,31 @@ import (
 // Returns (nil, nil) for unrecognized content types (silently skipped).
 // Returns (nil, err) for parse errors — callers can log the error for
 // observability while still skipping the unparseable message.
-func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
+//
+// This is a helpers method to access OSS dependencies (ossBackend, ossBucket)
+// for loading file attachments from user messages.
+func (h *helpers) convertDBMessage(ctx context.Context, msg *model.Message) ([]*turnagent.Message, error) {
 	contentData, err := primitives.ParseContentData(msg.Content)
 	if err != nil {
 		return nil, fmt.Errorf("parse content data: %w", err)
 	}
+	return h.convertDBMessageWithContent(ctx, msg, contentData, true)
+}
 
-	// Build TokenUsage from DB fields (populated for assistant messages).
-	var tokenUsage *turnagent.TokenUsage
-	if msg.TotalTokens != nil {
-		tokenUsage = &turnagent.TokenUsage{
-			TotalTokens:  *msg.TotalTokens,
-			InputTokens:  intDeref(msg.InputTokens),
-			OutputTokens: intDeref(msg.OutputTokens),
+// convertDBMessageWithContent converts a single model.Message using pre-parsed ContentData.
+// This avoids redundant JSON parsing when the content has already been parsed (e.g., during
+// summary detection in loadMessages). If contentParsed is false, the function will re-parse.
+func (h *helpers) convertDBMessageWithContent(ctx context.Context, msg *model.Message, contentData protocol.ContentData, contentParsed bool) ([]*turnagent.Message, error) {
+	if !contentParsed {
+		cd, err := primitives.ParseContentData(msg.Content)
+		if err != nil {
+			return nil, fmt.Errorf("parse content data: %w", err)
 		}
-		if msg.CachedTokens != nil {
-			tokenUsage.CachedTokens = *msg.CachedTokens
-		}
-		if msg.ReasoningTokens != nil {
-			tokenUsage.ReasoningTokens = *msg.ReasoningTokens
-		}
+		contentData = cd
 	}
 
-	// Extract TurnID for downstream response-level grouping.
-	// TurnID is used by groupAssistantByResponse to group messages from the
-	// same turn, then detect LLM response boundaries within each group.
-	var turnID string
-	if msg.TurnID != nil {
-		turnID = msg.TurnID.String()
-	}
+	tokenUsage := buildTokenUsage(msg)
+	turnID := extractTurnID(msg)
 
 	switch contentData.Type {
 	case protocol.ContentTypeSummary:
@@ -74,17 +74,7 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 		return msgs, nil
 
 	case protocol.ContentTypeUserMessage:
-		umc, err := primitives.ParseUserMessageContent(contentData.Data)
-		if err != nil {
-			return nil, fmt.Errorf("parse user message content: %w", err)
-		}
-		return []*turnagent.Message{{
-			Role:       msg.Role,
-			Content:    umc.Text,
-			TokenUsage: tokenUsage,
-			CreatedAt:  msg.CreatedAt,
-			TurnID:     turnID,
-		}}, nil
+		return h.convertUserMessage(ctx, msg, contentData, tokenUsage, turnID)
 
 	case protocol.ContentTypeText, protocol.ContentTypeMarkdown:
 		text, _ := primitives.ContentDataString(contentData.Data)
@@ -112,8 +102,8 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 		}}, nil
 
 	case protocol.ContentTypeToolCallInput:
-		// 使用原始 JSON 解析，保留 tool input 的 JSON key 顺序
-		// 这对 LLM 缓存命中至关重要
+		// Use raw JSON parsing to preserve the JSON key order of tool input.
+		// This is critical for LLM cache hit rate.
 		toolCall, err := primitives.ParseContentDataToolCallRaw(msg.Content)
 		if err != nil {
 			return nil, fmt.Errorf("parse tool call input: %w", err)
@@ -131,8 +121,8 @@ func convertDBMessage(msg *model.Message) ([]*turnagent.Message, error) {
 		}}, nil
 
 	case protocol.ContentTypeToolCallOutput:
-		// 使用原始 JSON 解析，保留 tool output 的 JSON key 顺序
-		// 这对 LLM 缓存命中至关重要
+		// Use raw JSON parsing to preserve the JSON key order of tool output.
+		// This is critical for LLM cache hit rate.
 		toolCall, err := primitives.ParseContentDataToolCallRaw(msg.Content)
 		if err != nil {
 			return nil, fmt.Errorf("parse tool call output: %w", err)
@@ -178,6 +168,33 @@ func intDeref(p *int) int {
 		return 0
 	}
 	return *p
+}
+
+// buildTokenUsage constructs a TokenUsage from DB message fields.
+func buildTokenUsage(msg *model.Message) *turnagent.TokenUsage {
+	if msg.TotalTokens == nil {
+		return nil
+	}
+	tu := &turnagent.TokenUsage{
+		TotalTokens:  *msg.TotalTokens,
+		InputTokens:  intDeref(msg.InputTokens),
+		OutputTokens: intDeref(msg.OutputTokens),
+	}
+	if msg.CachedTokens != nil {
+		tu.CachedTokens = *msg.CachedTokens
+	}
+	if msg.ReasoningTokens != nil {
+		tu.ReasoningTokens = *msg.ReasoningTokens
+	}
+	return tu
+}
+
+// extractTurnID extracts the TurnID string from a DB message.
+func extractTurnID(msg *model.Message) string {
+	if msg.TurnID == nil {
+		return ""
+	}
+	return msg.TurnID.String()
 }
 
 // convertSummaryContent expands a summary content block into multiple messages.
@@ -353,10 +370,7 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 				// groupAssistantByResponse to detect response boundaries:
 				// a message with this marker started a new LLM response
 				// (thinking is always produced first in a response).
-				if copied.Extra == nil {
-					copied.Extra = make(map[string]any)
-				}
-				copied.Extra[turnagent.ExtraKeyAbsorbedThinking] = true
+				copied.Extra = util.CloneWith[string, any](copied.Extra, turnagent.ExtraKeyAbsorbedThinking, true)
 				// Drop the thinking-only message; advance past it.
 				i = next
 				msg = &copied
@@ -386,4 +400,231 @@ func mergeAssistantMessages(messages []*turnagent.Message) []*turnagent.Message 
 		i++
 	}
 	return result
+}
+
+// convertUserMessage converts a user message with optional file attachments.
+// Extracted from convertDBMessage to reduce cyclomatic complexity.
+func (h *helpers) convertUserMessage(
+	ctx context.Context,
+	msg *model.Message,
+	contentData protocol.ContentData,
+	tokenUsage *turnagent.TokenUsage,
+	turnID string,
+) ([]*turnagent.Message, error) {
+	umc, err := primitives.ParseUserMessageContent(contentData.Data)
+	if err != nil {
+		return nil, fmt.Errorf("parse user message content: %w", err)
+	}
+
+	result := &turnagent.Message{
+		Role:       msg.Role,
+		Content:    umc.Text,
+		TokenUsage: tokenUsage,
+		CreatedAt:  msg.CreatedAt,
+		TurnID:     turnID,
+	}
+
+	// Process file attachments (images and text files)
+	if umc.Files != nil && len(*umc.Files) > 0 {
+		if h.ossBackend == nil {
+			// OSS not configured: file attachments will be silently skipped.
+			// Log a warning to help diagnose why files are missing from LLM context.
+			h.logger.Warn(ctx, "convertUserMessage.oss_not_configured", map[string]any{
+				"file_count": len(*umc.Files),
+				"message":    "file attachments are skipped because OSS storage is not configured",
+			})
+		} else {
+			h.processFileAttachments(ctx, result, *umc.Files)
+		}
+	}
+
+	return []*turnagent.Message{result}, nil
+}
+
+// processFileAttachments loads and processes file attachments from OSS.
+// Images are added to MultiContent; text files are XML-wrapped and appended to Content.
+//
+// Concurrency model: Files are loaded in parallel using goroutines to improve performance
+// when multiple files are attached. This is safe because:
+//   - LoadImageFromOSS / LoadTextFromOSS are stateless and concurrent-safe
+//   - results array is accessed by index (results[idx]), no race condition
+//   - h.logger is expected to be concurrent-safe (structured loggers typically are)
+//   - Context cancellation propagates to all goroutines via shared ctx; OSS reads
+//     return early on cancel, and wg.Wait() ensures all goroutines complete before
+//     proceeding, preventing resource leaks
+//
+// Design note: The original design doc specified sequential loading, but parallel loading
+// provides better latency for multi-file messages (typical case: 2-5 files, each ~500ms-1s).
+// Sequential loading would be ~2-5s total; parallel is ~1s (bounded by slowest file).
+func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Message, files []protocol.FileAttachment) {
+	if len(files) == 0 {
+		return
+	}
+
+	// Get userID from context to build full OSS keys.
+	userID := turnagent.UserIDFromContext(ctx)
+	h.logger.Info(ctx, "file_attachment.process_start", map[string]any{
+		"file_count": len(files),
+		"user_id":    userID,
+	})
+
+	if userID == "" {
+		h.logger.Error(ctx, "file_attachment.missing_user_id", map[string]any{
+			"message": "UserID not found in context; cannot load file attachments",
+		})
+		return
+	}
+
+	// Parallel loading results (preserving order)
+	type loadResult struct {
+		index       int
+		fileType    string // "image" or "text"
+		imageData   []byte
+		imageMime   string
+		textContent string
+		err         error
+	}
+
+	results := make([]loadResult, len(files))
+	var wg sync.WaitGroup
+
+	// Semaphore to limit concurrent file loads.
+	// Prevents OOM when a user sends many attachments (each image may hold up to 20MB).
+	const maxConcurrentLoads = 10
+	sem := make(chan struct{}, maxConcurrentLoads)
+
+	// Launch parallel loaders
+	for i, file := range files {
+		wg.Add(1)
+		go func(idx int, f protocol.FileAttachment) {
+			defer wg.Done()
+			// Acquire semaphore slot (blocks if maxConcurrentLoads are already running).
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			// Panic recovery to prevent process crash
+			defer func() {
+				if r := recover(); r != nil {
+					h.logger.Error(ctx, "file_attachment.panic_recovery", map[string]any{
+						"index":   idx,
+						"file_id": f.Fileid,
+						"panic":   fmt.Sprintf("%v", r),
+					})
+					results[idx] = loadResult{
+						index:    idx,
+						fileType: "unknown",
+						err:      fmt.Errorf("panic in file loader: %v", r),
+					}
+				}
+			}()
+
+			// Build full OSS key: user-{userID}/{fileID}
+			fullKey := rtcoss3.BuildFileKey(userID, f.Fileid)
+			h.logger.Info(ctx, "file_attachment.loading", map[string]any{
+				"index":    idx,
+				"file_id":  f.Fileid,
+				"full_key": fullKey,
+				"mimetype": f.Mimetype,
+			})
+
+			switch {
+			case strings.HasPrefix(f.Mimetype, "image/"):
+				data, mimeType, err := LoadImageFromOSS(ctx, h.ossBackend, h.ossBucket, fullKey)
+				if err != nil {
+					h.logger.Warn(ctx, "file_attachment.load_image_failed", map[string]any{
+						"file_id":  f.Fileid,
+						"full_key": fullKey,
+						"error":    err.Error(),
+					})
+				} else {
+					h.logger.Info(ctx, "file_attachment.load_image_success", map[string]any{
+						"file_id":   f.Fileid,
+						"full_key":  fullKey,
+						"mime_type": mimeType,
+						"data_size": len(data),
+					})
+				}
+				results[idx] = loadResult{
+					index:     idx,
+					fileType:  "image",
+					imageData: data,
+					imageMime: mimeType,
+					err:       err,
+				}
+
+			case strings.HasPrefix(f.Mimetype, "text/"):
+				content, err := LoadTextFromOSS(ctx, h.ossBackend, h.ossBucket, fullKey)
+				if err != nil {
+					h.logger.Warn(ctx, "file_attachment.load_text_failed", map[string]any{
+						"file_id":  f.Fileid,
+						"full_key": fullKey,
+						"error":    err.Error(),
+					})
+				} else {
+					h.logger.Info(ctx, "file_attachment.load_text_success", map[string]any{
+						"file_id":        f.Fileid,
+						"full_key":       fullKey,
+						"content_length": len(content),
+					})
+				}
+				results[idx] = loadResult{
+					index:       idx,
+					fileType:    "text",
+					textContent: content,
+					err:         err,
+				}
+
+			default:
+				// Unknown MIME type: log warning and skip
+				h.logger.Warn(ctx, "file_attachment.unsupported_mime_type", map[string]any{
+					"file_id":  f.Fileid,
+					"mimetype": f.Mimetype,
+				})
+			}
+		}(i, file)
+	}
+
+	// Wait for all loaders to complete
+	wg.Wait()
+
+	// Process results in order
+	var textContents []string
+	successCount := 0
+	failCount := 0
+	for _, res := range results {
+		if res.err != nil {
+			failCount++
+			continue
+		}
+
+		successCount++
+		switch res.fileType {
+		case "image":
+			msg.MultiContent = append(msg.MultiContent, ImageToInputPart(res.imageData, res.imageMime))
+		case "text":
+			file := files[res.index]
+			name := ExtractFileName(file)
+			textContents = append(textContents, fmt.Sprintf(
+				"<file_content name=%q type=%q>\n%s\n</file_content>",
+				name, file.Mimetype, res.textContent,
+			))
+		}
+	}
+
+	h.logger.Info(ctx, "file_attachment.process_complete", map[string]any{
+		"total_files":   len(files),
+		"success_count": successCount,
+		"fail_count":    failCount,
+		"image_count":   len(msg.MultiContent),
+		"text_count":    len(textContents),
+	})
+
+	// Append text file contents to Content (XML-wrapped)
+	if len(textContents) > 0 {
+		textBlock := strings.Join(textContents, "\n\n")
+		if msg.Content != "" {
+			msg.Content = msg.Content + "\n\n" + textBlock
+		} else {
+			msg.Content = textBlock
+		}
+	}
 }

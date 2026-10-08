@@ -11,7 +11,6 @@ import (
 	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
@@ -53,14 +52,17 @@ func extractMessageContent(ctx context.Context, cd protocol.ContentData) string 
 
 // summarizeTitleAsync runs title summarization in a background goroutine.
 func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Session) {
-	if h.deps.Deps.ChatModel == nil {
+	if h.deps.Deps.ChatModel == nil && h.deps.Deps.ChatModelFactory == nil {
 		return
 	}
+	// Use dynamic config for title summarization when available.
+	chatModel := agent.ResolveChatModel(ctx, h.deps.Deps)
 	summarizer := agent.NewSessionTitleSummarizer(
-		h.deps.Deps.ChatModel,
+		chatModel,
 		h.deps.Deps.SessionRepo,
 		h.deps.Deps.MessageRepo,
-		h.deps.Deps.LLMConfig,
+		h.deps.Deps.ConfigProvider,
+		h.deps.Deps.LLMConfig.Provider,
 		h.deps.Deps.TokenCallbackHandler,
 	)
 	detachedCtx := context.WithoutCancel(ctx)
@@ -88,9 +90,9 @@ func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Sessio
 
 // SendMessage sends a message (auto-creates session + turn).
 func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequest) (*protocol.SendMessageResponse, error) {
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.sendMessage",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.send_message",
 		trace.WithAttributes(
-			attribute.String("client.session_id", req.ClientSessionId),
+			attribute.String("client.session.id", req.ClientSessionId),
 			attribute.String("client.id", req.ClientId),
 		),
 	)
@@ -99,16 +101,24 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		span.SetStatus(codes.Error, "missing user_id in context")
-		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 	deviceID, _ := contextx.GetDeviceID(ctx)
 	creator := usecase.UserCreator{UserID: userID, DeviceID: deviceID}
+
+	// Validate file attachments exist before creating the message.
+	// This prevents referencing non-existent files or files owned by other users.
+	if apiErr := h.validateFileAttachments(ctx, req.ContentData, userID, "SendMessage"); apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Code)
+		return nil, apiErr
+	}
 
 	content := extractMessageContent(ctx, req.ContentData)
 
 	if err := primitives.ValidateCreateMessageRequest(content); err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		return nil, &APIError{Code: "invalid_argument", Message: err.Error()}
+		span.SetStatus(codes.Error, "validation_error")
+		return nil, &APIError{Code: ErrorCodeInvalidArgument, Message: err.Error()}
 	}
 
 	sessionUUIDPtr, apiErr := parseUUIDPtr(req.ServerSessionId, "server_session_id")
@@ -137,7 +147,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	initialTitle := primitives.TruncateTitle(content, 50)
 	session, isNew, err := primitives.PrepareSession(ctx, h.deps.Deps, sessionUUIDPtr, req.ClientSessionId, creator, initialTitle)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
@@ -147,7 +157,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	}
 	if !isNew {
 		if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, session.ID, creator); err != nil {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "permission_denied")
 			return nil, h.ownershipError(ctx, err)
 		}
 	}
@@ -160,10 +170,12 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 			if err := primitives.CreateSession(txCtx, h.deps.Deps, session); err != nil {
 				return nil, fmt.Errorf("create session: %w", err)
 			}
+			// Record session creation metric
+			h.deps.Metrics.RecordSessionCreated(txCtx)
 		} else {
 			if err := primitives.TouchSession(txCtx, h.deps.Deps, session.ID); err != nil {
-				if errors.Is(err, repo.ErrSessionClosedOrNotFound) {
-					return nil, fmt.Errorf("session %s is closed: %w", session.ID, repo.ErrSessionClosed)
+				if errors.Is(err, primitives.ErrSessionClosedOrNotFound) {
+					return nil, fmt.Errorf("session %s is closed: %w", session.ID, primitives.ErrSessionClosed)
 				}
 				return nil, fmt.Errorf("touch session: %w", err)
 			}
@@ -211,7 +223,10 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		}
 		createdMessage = msg
 
-		if err := h.publishSubmitWork(txCtx, session.ID); err != nil {
+		// Record message sent metrics
+		h.deps.Metrics.RecordMessageSent(txCtx, string(protocol.MessageRoleUser))
+
+		if err := h.publishSubmitWork(txCtx, session.ID, userID.String()); err != nil {
 			return nil, err
 		}
 		if logger.IsDebugMode() {
@@ -234,7 +249,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[SendMessage] push failed after commit (data safe)", zap.Error(err))
 		} else {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			return nil, h.internalError(ctx, "send.error", "internal error", err)
 		}
@@ -266,11 +281,11 @@ func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string)
 	}
 	existing, err := h.deps.Deps.MessageRepo.FindByClientID(ctx, clientID)
 	if err != nil {
-		return &APIError{Code: "internal_error", Message: "idempotency check failed"}
+		return &APIError{Code: ErrorCodeInternalError, Message: "idempotency check failed"}
 	}
 	if existing != nil {
 		return &APIError{
-			Code:    "client_id_conflict",
+			Code:    ErrorCodeMessageClientIDConflict,
 			Message: fmt.Sprintf("client_id %s already used for message %s", clientID, existing.ID),
 		}
 	}
@@ -278,7 +293,7 @@ func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string)
 }
 
 // publishSubmitWork publishes a submit work item inside the transaction.
-func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID) error {
+func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, userID string) error {
 	if h.deps.Queue == nil {
 		return nil
 	}
@@ -287,6 +302,7 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID) 
 	payload, err := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: sessionID.String(),
+		UserID:    userID,
 		TraceID:   traceID,
 		SpanID:    spanID,
 	})

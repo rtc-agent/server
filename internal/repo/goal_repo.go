@@ -70,15 +70,8 @@ func (r *goalRepo) FindActive(ctx context.Context, sessionID uuid.UUID) (*model.
 }
 
 func (r *goalRepo) Update(ctx context.Context, id uuid.UUID, fields map[string]any) error {
-	autoFillCompletedAt(fields, goalTerminalStatuses)
-	result := DBFromContext(ctx, r.db).WithContext(ctx).Model(&model.Goal{}).Where("id = ?", id).Updates(fields)
-	if result.Error != nil {
-		return fmt.Errorf("update goal %s: %w", id, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("update goal %s: %w", id, ErrGoalNotFound)
-	}
-	return nil
+	return updateWithStateGuard(ctx, r.db, &model.Goal{}, id, fields, goalTerminalStatuses,
+		"goal", ErrGoalNotFound)
 }
 
 func (r *goalRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Goal, error) {

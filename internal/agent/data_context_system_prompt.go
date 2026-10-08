@@ -69,18 +69,8 @@ func (h *helpers) injectSystemAndAgentPrompt(
 
 	// 2. System prompt (always present — behavioral rules)
 	// System prompt provides universal behavioral guidelines.
-	systemPrompt := h.deps.SystemPrompt
-	if systemPrompt == "" {
-		built, err := BuildDefaultSystemPrompt()
-		if err != nil {
-			h.logger.Warn(ctx, "injectSystemAndAgentPrompt.build_system_prompt_failed", map[string]any{
-				"session_id": sid.String(),
-				"error":      err.Error(),
-			})
-		} else {
-			systemPrompt = built
-		}
-	}
+	// Read from ConfigProvider (user override > system default > yaml baseline).
+	systemPrompt := h.resolveSystemPrompt(ctx)
 	if systemPrompt != "" {
 		systemMsgs = append(systemMsgs, &turnagent.Message{
 			Role:    turnagent.RoleSystem,

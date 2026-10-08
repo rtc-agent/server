@@ -47,13 +47,21 @@ func (m *mockComponent) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
+// mustRegister is a test helper that registers a component and fails the test on error.
+func mustRegister(t *testing.T, mgr *lifecycle.Manager, name string, c lifecycle.Component) {
+	t.Helper()
+	if err := mgr.Register(name, c); err != nil {
+		t.Fatalf("Register(%q): %v", name, err)
+	}
+}
+
 func TestManagerStartStop(t *testing.T) {
 	m := lifecycle.NewManager()
 	c1 := newMockComponent()
 	c2 := newMockComponent()
 
-	m.Register("c1", c1)
-	m.Register("c2", c2)
+	mustRegister(t, m, "c1", c1)
+	mustRegister(t, m, "c2", c2)
 
 	ctx := context.Background()
 	if err := m.Start(ctx); err != nil {
@@ -96,7 +104,7 @@ func TestManagerStartTwiceFails(t *testing.T) {
 func TestManagerStopIdempotent(t *testing.T) {
 	m := lifecycle.NewManager()
 	c := newMockComponent()
-	m.Register("c", c)
+	mustRegister(t, m, "c", c)
 
 	ctx := context.Background()
 	if err := m.Start(ctx); err != nil {
@@ -133,9 +141,9 @@ func TestManagerStartRollback(t *testing.T) {
 		return errors.New("start failed")
 	}
 
-	m.Register("c1", c1)
-	m.Register("c2", c2)
-	m.Register("c3", c3)
+	mustRegister(t, m, "c1", c1)
+	mustRegister(t, m, "c2", c2)
+	mustRegister(t, m, "c3", c3)
 
 	ctx := context.Background()
 	err := m.Start(ctx)
@@ -163,8 +171,8 @@ func TestManagerStopContinuesOnError(t *testing.T) {
 		return errors.New("stop failed")
 	}
 
-	m.Register("c1", c1)
-	m.Register("c2", c2)
+	mustRegister(t, m, "c1", c1)
+	mustRegister(t, m, "c2", c2)
 
 	ctx := context.Background()
 	if err := m.Start(ctx); err != nil {
@@ -188,8 +196,8 @@ func TestManagerHealthCheck(t *testing.T) {
 		return errors.New("unhealthy")
 	}
 
-	m.Register("c1", c1)
-	m.Register("c2", c2)
+	mustRegister(t, m, "c1", c1)
+	mustRegister(t, m, "c2", c2)
 
 	ctx := context.Background()
 	err := m.HealthCheck(ctx)
@@ -203,8 +211,8 @@ func TestManagerHealthCheckAllHealthy(t *testing.T) {
 	c1 := newMockComponent()
 	c2 := newMockComponent()
 
-	m.Register("c1", c1)
-	m.Register("c2", c2)
+	mustRegister(t, m, "c1", c1)
+	mustRegister(t, m, "c2", c2)
 
 	ctx := context.Background()
 	if err := m.HealthCheck(ctx); err != nil {
@@ -306,7 +314,7 @@ func TestManagerStopTimeout(t *testing.T) {
 func TestManagerConcurrentStop(t *testing.T) {
 	m := lifecycle.NewManager()
 	c := newMockComponent()
-	m.Register("c", c)
+	mustRegister(t, m, "c", c)
 
 	ctx := context.Background()
 	if err := m.Start(ctx); err != nil {
@@ -366,7 +374,7 @@ func TestManagerShutdownCh(t *testing.T) {
 	}
 }
 
-func TestManagerRegisterAfterStartPanics(t *testing.T) {
+func TestManagerRegisterAfterStartReturnsError(t *testing.T) {
 	m := lifecycle.NewManager()
 	ctx := context.Background()
 
@@ -374,11 +382,8 @@ func TestManagerRegisterAfterStartPanics(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("Register after Start should panic")
-		}
-	}()
-
-	m.Register("late", newMockComponent())
+	err := m.Register("late", newMockComponent())
+	if err == nil {
+		t.Fatal("Register after Start should return error")
+	}
 }

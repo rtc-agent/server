@@ -59,10 +59,10 @@ func (t *getSubAgentMessageTool) Info(ctx context.Context) (*schema.ToolInfo, er
 }
 
 func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.getSubAgentMessage",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.get_sub_agent_message",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -81,7 +81,7 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 	if parseErr != nil {
 		return fmt.Sprintf("Error: invalid sub_session_id format: %s", parseErr.Error()), nil
 	}
-	span.SetAttributes(attribute.String("target_session_id", subSessionID.String()))
+	span.SetAttributes(attribute.String("session.target_id", subSessionID.String()))
 
 	// 2. Determine current root session ID.
 	rootSessionID := t.session.ID
@@ -165,7 +165,7 @@ func (t *getSubAgentMessageTool) InvokableRun(ctx context.Context, argumentsInJS
 		return "", fmt.Errorf("getSubAgentMessage: publish messages: %w", err)
 	}
 
-	span.SetAttributes(attribute.Bool("has_message", result.MessageID != nil))
+	span.SetAttributes(attribute.Bool("tool.has_message", result.MessageID != nil))
 	t.helpers.logger.Info(ctx, "getSubAgentMessage.completed", map[string]any{
 		"session_id":     t.session.ID.String(),
 		"target_session": subSessionID.String(),

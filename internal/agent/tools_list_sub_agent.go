@@ -46,10 +46,10 @@ type listSubAgentItem struct {
 }
 
 func (t *listSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.listSubAgent",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.list_sub_agent",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -59,7 +59,7 @@ func (t *listSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	if t.session.RootServerSessionID != uuid.Nil {
 		rootSessionID = t.session.RootServerSessionID
 	}
-	span.SetAttributes(attribute.String("root_session_id", rootSessionID.String()))
+	span.SetAttributes(attribute.String("session.root_id", rootSessionID.String()))
 
 	// 2. Query all active descendant sessions.
 	descendants, err := t.helpers.deps.SessionRepo.ListByRoot(ctx, rootSessionID, string(protocol.SessionStatusActive))

@@ -64,10 +64,10 @@ func (t *listLoopsTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.listLoops",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.list_loops",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -142,7 +142,7 @@ func (t *listLoopsTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		return "", fmt.Errorf("listLoops: publish messages: %w", err)
 	}
 
-	span.SetAttributes(attribute.Int("count", len(summaries)), attribute.Bool("has_more", hasMore))
+	span.SetAttributes(attribute.Int("count", len(summaries)), attribute.Bool("pagination.has_more", hasMore))
 	t.helpers.logger.Info(ctx, "listLoops.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"count":      len(summaries),

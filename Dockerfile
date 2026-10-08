@@ -31,6 +31,10 @@ RUN apk --no-cache add ca-certificates tzdata
 COPY --from=builder /app/rtc-agent .
 COPY --from=builder /app/etc ./etc
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh .
+RUN chmod +x docker-entrypoint.sh
+
 # Expose port
 EXPOSE 8888
 
@@ -38,5 +42,8 @@ EXPOSE 8888
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:8888/healthz || exit 1
 
-# Run
+# Entrypoint for automatic key generation
+ENTRYPOINT ["./docker-entrypoint.sh"]
+
+# Default command
 CMD ["./rtc-agent", "serve"]

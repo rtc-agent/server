@@ -7,6 +7,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/rtc-agent/server/internal/agent/command"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/repo"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"go.opentelemetry.io/otel/attribute"
@@ -104,9 +105,18 @@ func (g *GoalWorkflow) Tools(ctx command.Context) []tool.BaseTool {
 // because the registry holds its mutex while invoking hooks — doing so
 // would deadlock.
 func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
-	innerCtx, span := g.helpers.tracer.Start(ctx.Context, "goalWorkflow.onTurnComplete",
+	// Load session early to get userID for tracing.
+	var userID string
+	if g.helpers.deps.SessionRepo != nil {
+		if session, sessErr := g.helpers.deps.SessionRepo.GetByID(ctx.Context, ctx.SessionID); sessErr == nil {
+			userID = session.OwnerRefID
+		}
+	}
+
+	innerCtx, span := g.helpers.tracer.Start(ctx.Context, "goal_workflow.on_turn_complete",
 		trace.WithAttributes(
 			attribute.String("session.id", ctx.SessionID.String()),
+			attribute.String("user.id", userID),
 			attribute.String("turn.id", ctx.TurnID.String()),
 		),
 	)
@@ -119,7 +129,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 
 	goal, err := g.helpers.deps.GoalRepo.FindActive(ctx, ctx.SessionID)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		g.helpers.logger.Warn(ctx, "goalWorkflow.find_active_failed", map[string]any{
 			"session_id": ctx.SessionID.String(),
@@ -146,13 +156,14 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	if newTurns > goal.MaxTurns {
 		span.SetAttributes(attribute.String("goal.status", "exhausted"))
 		err = g.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
-			return g.helpers.deps.GoalRepo.Update(ctx, goal.ID, map[string]any{
+			txCtx := repo.WithTx(ctx.Context, tx)
+			return g.helpers.deps.GoalRepo.Update(txCtx, goal.ID, map[string]any{
 				"status":          model.GoalStatusExhausted,
 				"completed_turns": newTurns,
 			})
 		})
 		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			g.helpers.logger.Warn(ctx, "goalWorkflow.update_exhausted_failed", map[string]any{
 				"goal_id": goal.ID.String(),
@@ -171,12 +182,13 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	}
 
 	err = g.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
-		return g.helpers.deps.GoalRepo.Update(ctx, goal.ID, map[string]any{
+		txCtx := repo.WithTx(ctx.Context, tx)
+		return g.helpers.deps.GoalRepo.Update(txCtx, goal.ID, map[string]any{
 			"completed_turns": newTurns,
 		})
 	})
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		g.helpers.logger.Warn(ctx, "goalWorkflow.update_goal_failed", map[string]any{
 			"goal_id": goal.ID.String(),
@@ -194,7 +206,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	// Use log+degrade pattern: notification failure should not interrupt the main flow.
 	prompt := buildGoalTaskNotificationPrompt(goal)
 	if err := createNotificationMessage(ctx, g.helpers.deps, ctx.SessionID, prompt); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		g.helpers.logger.Warn(ctx, "goalWorkflow.create_notification_failed", map[string]any{
 			"goal_id": goal.ID.String(),
@@ -211,6 +223,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 		payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 			Kind:      turnagent.WorkKindSubmit,
 			SessionID: ctx.SessionID.String(),
+			UserID:    userID,
 			TraceID:   traceID,
 			SpanID:    spanID,
 		})
@@ -224,7 +237,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 			return nil // degrade: log but do not interrupt main flow
 		}
 		if _, err := g.helpers.queue.Publish(ctx, ctx.SessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			g.helpers.logger.Warn(ctx, "goalWorkflow.publish_failed", map[string]any{
 				"goal_id":    goal.ID.String(),
@@ -239,6 +252,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	g.helpers.logger.Info(ctx, "goalWorkflow.goal_extended", map[string]any{
 		"goal_id":         goal.ID.String(),
 		"session_id":      ctx.SessionID.String(),
+		"user_id":         userID,
 		"completed_turns": newTurns,
 		"max_turns":       goal.MaxTurns,
 	})

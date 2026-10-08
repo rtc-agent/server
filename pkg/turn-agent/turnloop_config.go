@@ -109,12 +109,13 @@ func (mgr *SessionTurnManager) genResume() func(
 		loop *adk.TurnLoop[TurnWorkItem, *schema.Message],
 		interrupted, unhandled, newItems []TurnWorkItem,
 	) (*adk.GenResumeResult[TurnWorkItem, *schema.Message], error) {
-		return mgr.genResumeImpl(interrupted, unhandled, newItems)
+		return mgr.genResumeImpl(ctx, interrupted, unhandled, newItems)
 	}
 }
 
 // genResumeImpl builds the resume input for a checkpoint recovery.
 func (mgr *SessionTurnManager) genResumeImpl(
+	ctx context.Context,
 	interrupted, unhandled, newItems []TurnWorkItem,
 ) (*adk.GenResumeResult[TurnWorkItem, *schema.Message], error) {
 	// Cancel the previous resume context to release its timer.
@@ -137,14 +138,16 @@ func (mgr *SessionTurnManager) genResumeImpl(
 	// IMPORTANT: No timeout is set here. The resume context becomes the RunCtx
 	// for the entire subsequent agent execution (including LLM streaming),
 	// which can last arbitrarily long for complex tasks. A fixed timeout would
-	// kill active streams mid-output — the user-visible symptom is "响应超时"
+	// kill active streams mid-output — the user-visible symptom is "Response Timeout"
 	// even though chunks are still flowing.
 	//
 	// Cancellation is still possible: the caller's turnCtx (from Process) is
 	// the parent of the TurnLoop's execution, and StopTurn / lock-loss / worker
 	// shutdown all cancel that context. The resumeCancelMu + doCleanup path
 	// handles timer goroutine lifecycle (see session_manager.go doCleanup Step 2b).
-	resumeCtx, cancel := context.WithCancel(context.Background())
+	//
+	// Use the incoming ctx as parent to preserve trace context propagation.
+	resumeCtx, cancel := context.WithCancel(ctx)
 	mgr.resumeCancel = cancel
 	mgr.resumeCancelMu.Unlock()
 
@@ -172,6 +175,35 @@ func (mgr *SessionTurnManager) genResumeImpl(
 	resumeCtx = WithSessionID(resumeCtx, mgr.sessionID)
 	if turnID != "" {
 		resumeCtx = WithTurnID(resumeCtx, turnID)
+	}
+
+	// Extract UserID from the first available work item and inject into context.
+	// This ensures file attachments and other user-scoped operations work correctly.
+	var userID string
+	for _, item := range newItems {
+		if item.UserID != "" {
+			userID = item.UserID
+			break
+		}
+	}
+	if userID == "" {
+		for _, item := range interrupted {
+			if item.UserID != "" {
+				userID = item.UserID
+				break
+			}
+		}
+	}
+	if userID == "" {
+		for _, item := range unhandled {
+			if item.UserID != "" {
+				userID = item.UserID
+				break
+			}
+		}
+	}
+	if userID != "" {
+		resumeCtx = WithUserID(resumeCtx, userID)
 	}
 
 	if len(mgr.cfg.Callbacks) > 0 {

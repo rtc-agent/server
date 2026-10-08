@@ -92,7 +92,7 @@ func (h *helpers) injectCommandPrompts(ctx context.Context, sessionID uuid.UUID,
 	// the user message — matching the position it would have when loaded from
 	// DB on subsequent turns (via global_offset ordering).
 	for _, newMsg := range newPromptMsgs {
-		converted, convErr := convertDBMessage(newMsg)
+		converted, convErr := h.convertDBMessage(ctx, newMsg)
 		if convErr != nil {
 			h.logger.Warn(ctx, "injectCommandPrompts.convert_new_prompt_failed", map[string]any{
 				"session_id": sessionID.String(),

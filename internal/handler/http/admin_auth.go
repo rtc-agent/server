@@ -1,0 +1,411 @@
+// Package httphandler provides HTTP handler implementations.
+package httphandler
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+
+	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/pkg/logger"
+)
+
+// AdminAuthHandler handles admin authentication endpoints.
+type AdminAuthHandler struct {
+	adminAuthUsecase        *usecase.AdminAuthUsecase
+	emailOTPUsecase         *usecase.EmailOTPUsecase // optional, nil if email not configured
+	jwtSigner               *auth.AdminJWTSigner
+	db                      *gorm.DB
+	roleRepo                roleLookup
+	adminUserRoleRepo       adminUserRoleLister
+	enforcer                *auth.CasbinEnforcer
+	permissionSystemEnabled bool
+	passwordEnabled         bool
+	cookieSecure            bool
+}
+
+// NewAdminAuthHandler creates a new AdminAuthHandler.
+func NewAdminAuthHandler(
+	adminAuthUsecase *usecase.AdminAuthUsecase,
+	jwtSigner *auth.AdminJWTSigner,
+	db *gorm.DB,
+) *AdminAuthHandler {
+	return &AdminAuthHandler{
+		adminAuthUsecase: adminAuthUsecase,
+		jwtSigner:        jwtSigner,
+		db:               db,
+	}
+}
+
+// SetPermissionDeps injects permission system dependencies into the handler.
+// This must be called before RegisterRoutes if the permission system is enabled.
+func (h *AdminAuthHandler) SetPermissionDeps(
+	roleRepo roleLookup,
+	adminUserRoleRepo adminUserRoleLister,
+	enforcer *auth.CasbinEnforcer,
+	permissionSystemEnabled bool,
+) {
+	h.roleRepo = roleRepo
+	h.adminUserRoleRepo = adminUserRoleRepo
+	h.enforcer = enforcer
+	h.permissionSystemEnabled = permissionSystemEnabled
+}
+
+// SetEmailOTPUsecase injects the email OTP usecase into the handler.
+// Call this after construction if email OTP login is configured.
+func (h *AdminAuthHandler) SetEmailOTPUsecase(uc *usecase.EmailOTPUsecase) {
+	h.emailOTPUsecase = uc
+}
+
+// SetPasswordEnabled sets whether password login is enabled.
+func (h *AdminAuthHandler) SetPasswordEnabled(enabled bool) {
+	h.passwordEnabled = enabled
+}
+
+// SetCookieSecure sets whether authentication cookies require the Secure flag (HTTPS only).
+// Enable this in production environments served over TLS.
+func (h *AdminAuthHandler) SetCookieSecure(secure bool) {
+	h.cookieSecure = secure
+}
+
+// RegisterRoutes registers admin auth routes to the Gin router.
+func (h *AdminAuthHandler) RegisterRoutes(r *gin.Engine) {
+	// Public routes (no JWT required)
+	r.POST("/api/auth/otp/send", h.SendOTP)
+	r.POST("/api/auth/login/otp", h.LoginWithOTP)
+
+	// Password login is conditionally registered based on configuration
+	if h.passwordEnabled {
+		r.POST("/api/auth/login", h.Login)
+	}
+
+	// Login config endpoint (public, no JWT required)
+	r.GET("/api/auth/config", h.GetLoginConfig)
+
+	// Refresh is public: the client needs to exchange a refresh_token for a new
+	// access_token even when the original access_token has expired.
+	r.POST("/api/auth/refresh", h.RefreshToken)
+	r.GET("/.well-known/jwks.json", h.JWKS)
+	r.GET("/health", h.Health)
+
+	// Protected routes (require JWT authentication)
+	protected := r.Group("/api/auth")
+	protected.Use(h.JWTAuthMiddleware())
+	{
+		protected.GET("/me", h.GetCurrentUser)
+		protected.POST("/logout", h.Logout)
+	}
+}
+
+// GetLoginConfig handles GET /api/auth/config
+// Returns the login configuration to the frontend (which login methods are enabled).
+func (h *AdminAuthHandler) GetLoginConfig(c *gin.Context) {
+	Success(c, gin.H{
+		"password_enabled": h.passwordEnabled,
+		"otp_enabled":      h.emailOTPUsecase != nil,
+	})
+}
+
+// maxAdminRequestBodySize is the maximum allowed size for admin auth request bodies.
+// Prevents malicious clients from sending oversized payloads that could exhaust memory.
+const maxAdminRequestBodySize = 1 << 20 // 1MB
+
+// sanitizeBindingError converts a Gin binding error into a safe, user-facing message.
+// Internal struct field names (e.g. "LoginRequest.Password") are intentionally omitted
+// to avoid leaking API implementation details to potential attackers.
+func sanitizeBindingError(err error) string {
+	msg := err.Error()
+	// JSON syntax errors are safe to surface (they describe the malformed input, not the schema).
+	if strings.Contains(msg, "json:") || strings.Contains(msg, "unmarshal") {
+		return "invalid JSON format"
+	}
+	// Validation errors (binding:"required,min=6,...") would expose field names; use a generic message.
+	return "request validation failed"
+}
+
+// Login handles POST /api/auth/login
+func (h *AdminAuthHandler) Login(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	var req LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Error(c, "invalid_request", sanitizeBindingError(err))
+		return
+	}
+
+	ctx := c.Request.Context()
+	clientIP := c.ClientIP()
+	result, err := h.adminAuthUsecase.Login(ctx, req.Email, req.Password, clientIP)
+	if err != nil {
+		if errors.Is(err, usecase.ErrInvalidCredentials) {
+			Error(c, "invalid_credentials", "Invalid email or password")
+			return
+		}
+		if errors.Is(err, usecase.ErrLoginLocked) {
+			Error(c, "login_locked", err.Error())
+			return
+		}
+		logger.Error(ctx, "admin_auth.login_failed",
+			zap.String("email", req.Email),
+			zap.String("client_ip", clientIP),
+			zap.Error(err))
+		Error(c, "server_error", "Internal server error")
+		return
+	}
+
+	// Login succeeded — issue unified response.
+	// Also sets the access_token cookie for iframe embedding scenarios (e.g., Grafana).
+	// SameSite=Lax balances CSRF protection with iframe usability.
+	// Secure flag is enabled in production HTTPS deployments to prevent cookie leakage over HTTP.
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("access_token", result.AccessToken, int(result.ExpiresIn), "/", "", h.cookieSecure, true)
+
+	Success(c, LoginResponse{
+		AccessToken:  result.AccessToken,
+		RefreshToken: result.RefreshToken,
+		ExpiresIn:    int(result.ExpiresIn),
+		TokenType:    "Bearer",
+		User: &UserResponse{
+			ID:        result.User.ID.String(),
+			Email:     result.User.Email,
+			Name:      result.User.Name,
+			AvatarURL: result.User.AvatarURL,
+		},
+	})
+}
+
+// GetCurrentUser handles GET /api/auth/me
+func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		Error(c, "unauthorized", "Admin not authenticated")
+		return
+	}
+
+	// Convert userID from string to uuid.UUID
+	userIDStr, ok := userID.(string)
+	if !ok {
+		logger.Error(c.Request.Context(), "admin_auth.get_current_user_invalid_id_type",
+			zap.Any("user_id_raw", userID))
+		Error(c, "unauthorized", "Invalid admin ID")
+		return
+	}
+
+	userUUID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		logger.Error(c.Request.Context(), "admin_auth.get_current_user_invalid_id_format",
+			zap.String("user_id", userIDStr))
+		Error(c, "unauthorized", "Invalid admin ID format")
+		return
+	}
+
+	ctx := c.Request.Context()
+	user, err := h.adminAuthUsecase.GetCurrentUser(ctx, userUUID)
+	if err != nil {
+		if errors.Is(err, usecase.ErrAdminUserNotFound) {
+			Error(c, "admin_user_not_found", "Admin user not found")
+			return
+		}
+		logger.Error(ctx, "admin_auth.get_current_user_failed",
+			zap.String("user_id", userUUID.String()),
+			zap.Error(err))
+		Error(c, "server_error", "Internal server error")
+		return
+	}
+
+	// If permission system is enabled and deps are injected, include roles and permissions
+	if h.permissionSystemEnabled && h.roleRepo != nil && h.enforcer != nil {
+		resp, err := GetCurrentUserWithRoles(ctx, user, h.adminUserRoleRepo, h.roleRepo, h.enforcer)
+		if err != nil {
+			logger.Error(ctx, "admin_auth.get_current_user_roles_failed",
+				zap.String("user_id", userUUID.String()),
+				zap.Error(err))
+			Error(c, "server_error", "Internal server error")
+			return
+		}
+		Success(c, resp)
+		return
+	}
+
+	// Permission system disabled: return admin user with default admin role.
+	// This ensures the frontend knows the admin user has full access.
+	Success(c, UserResponse{
+		ID:        user.ID.String(),
+		Email:     user.Email,
+		Name:      user.Name,
+		AvatarURL: user.AvatarURL,
+		Roles: []RoleInfo{
+			{
+				Name:        "admin",
+				DisplayName: "Admin",
+			},
+		},
+	})
+}
+
+// RefreshToken handles POST /api/auth/refresh
+func (h *AdminAuthHandler) RefreshToken(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	var req RefreshRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Error(c, "invalid_request", sanitizeBindingError(err))
+		return
+	}
+
+	ctx := c.Request.Context()
+	result, err := h.adminAuthUsecase.RefreshToken(ctx, req.RefreshToken)
+	if err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrInvalidRefreshToken):
+			Error(c, "invalid_grant", "Invalid refresh token")
+		case errors.Is(err, usecase.ErrRefreshTokenRevoked):
+			Error(c, "invalid_grant", "Refresh token revoked")
+		case errors.Is(err, usecase.ErrRefreshTokenExpired):
+			Error(c, "invalid_grant", "Refresh token expired")
+		default:
+			logger.Error(ctx, "admin_auth.refresh_token_failed", zap.Error(err))
+			Error(c, "server_error", "Internal server error")
+		}
+		return
+	}
+
+	// Update access_token cookie with new token.
+	// SameSite=Lax balances CSRF protection with iframe usability.
+	// Secure flag is enabled in production HTTPS deployments.
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("access_token", result.AccessToken, int(result.ExpiresIn), "/", "", h.cookieSecure, true)
+
+	Success(c, RefreshResponse{
+		AccessToken:  result.AccessToken,
+		RefreshToken: result.RefreshToken,
+		ExpiresIn:    int(result.ExpiresIn),
+		TokenType:    "Bearer",
+	})
+}
+
+// Logout handles POST /api/auth/logout
+func (h *AdminAuthHandler) Logout(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	var req LogoutRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Error(c, "invalid_request", sanitizeBindingError(err))
+		return
+	}
+
+	ctx := c.Request.Context()
+	if err := h.adminAuthUsecase.Logout(ctx, req.RefreshToken); err != nil {
+		logger.Error(ctx, "admin_auth.logout_failed", zap.Error(err))
+		Error(c, "server_error", "Internal server error")
+		return
+	}
+
+	// Clear access_token cookie by setting expiration in the past.
+	c.SetCookie("access_token", "", -1, "/", "", h.cookieSecure, true)
+
+	Success(c, gin.H{"status": "ok"})
+}
+
+// JWKS handles GET /.well-known/jwks.json
+func (h *AdminAuthHandler) JWKS(c *gin.Context) {
+	jwks, err := h.jwtSigner.GetJWKS()
+	if err != nil {
+		logger.Error(c.Request.Context(), "admin_auth.jwks_generation_failed", zap.Error(err))
+		Error(c, "server_error", "Failed to generate JWKS")
+		return
+	}
+
+	// Convert JWK set to JSON
+	jwksJSON, err := json.Marshal(jwks)
+	if err != nil {
+		logger.Error(c.Request.Context(), "admin_auth.jwks_serialization_failed", zap.Error(err))
+		Error(c, "server_error", "Failed to serialize JWKS")
+		return
+	}
+
+	c.Data(http.StatusOK, "application/json", jwksJSON)
+}
+
+// Health handles GET /health
+// Verifies database connectivity before reporting healthy status.
+func (h *AdminAuthHandler) Health(c *gin.Context) {
+	// Check database connectivity via a lightweight query.
+	sqlDB, err := h.db.DB()
+	if err != nil {
+		logger.Error(c.Request.Context(), "admin_auth.health_db_unavailable", zap.Error(err))
+		c.JSON(http.StatusServiceUnavailable, ResponseStructure{
+			Success:      false,
+			ErrorCode:    "database_unavailable",
+			ErrorMessage: "Database unavailable",
+		})
+		return
+	}
+	if err := sqlDB.Ping(); err != nil {
+		logger.Error(c.Request.Context(), "admin_auth.health_ping_failed", zap.Error(err))
+		c.JSON(http.StatusServiceUnavailable, ResponseStructure{
+			Success:      false,
+			ErrorCode:    "database_unavailable",
+			ErrorMessage: "Database unavailable",
+		})
+		return
+	}
+
+	Success(c, HealthResponse{
+		Status:    "ok",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// JWTAuthMiddleware is a Gin middleware for JWT authentication.
+// Reads token from Authorization header first; falls back to "access_token" cookie.
+func (h *AdminAuthHandler) JWTAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var tokenString string
+
+		// 1. Try Authorization header
+		authHeader := c.GetHeader("Authorization")
+		if authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+				tokenString = parts[1]
+			}
+		}
+
+		// 2. Fallback to cookie
+		if tokenString == "" {
+			if cookie, err := c.Cookie("access_token"); err == nil && cookie != "" {
+				tokenString = cookie
+			}
+		}
+
+		if tokenString == "" {
+			Error(c, "unauthorized", "Authentication required")
+			c.Abort()
+			return
+		}
+
+		claims, err := h.jwtSigner.ParseAccessToken(tokenString)
+		if err != nil {
+			// SECURITY: log at Info level to detect brute-force patterns without
+			// flooding logs with malformed token attempts. Do NOT log the token value.
+			logger.Info(c.Request.Context(), "admin_auth.jwt_rejected",
+				zap.String("error", err.Error()))
+			Error(c, "unauthorized", "Invalid or expired token")
+			c.Abort()
+			return
+		}
+
+		// Store user info in context for handlers
+		c.Set("user_id", claims.UserID.String())
+		c.Set("email", claims.Email)
+		c.Set("name", claims.Name)
+
+		c.Next()
+	}
+}

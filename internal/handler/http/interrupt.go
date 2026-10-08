@@ -2,25 +2,23 @@ package httphandler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/infra/auth"
-	"github.com/rtc-agent/server/internal/infra/cache"
-	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/infra/httputil"
 	"github.com/rtc-agent/server/internal/infra/middleware"
-	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
-
-	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
 // InterruptHandler handles interrupt answer submission from the frontend.
 //
-// It uses the SET+PUBLISH pattern to deliver answers to the waiting interrupt
+// It delegates to InterruptUsecase for business logic, which uses
+// the SET+PUBLISH pattern to deliver answers to the waiting interrupt
 // handler goroutine (in internal/worker/interrupt_handler.go):
 //   - SET with TTL stores the answer durably, so the subscriber can retrieve
 //     it via GET even if the pub/sub message is missed.
@@ -29,15 +27,14 @@ import (
 // The subscriber (handleInterrupt) does SUBSCRIBE then GET to catch answers
 // that arrived before the subscription was established.
 type InterruptHandler struct {
-	redis       redis.UniversalClient
-	workerCfg   config.WorkerConfig
-	sessionRepo repo.SessionRepo
+	interruptUC *usecase.InterruptUsecase
 	signer      *auth.JWTSigner
+	banChecker  middleware.UserBanChecker
 }
 
 // NewInterruptHandler creates an InterruptHandler.
-func NewInterruptHandler(redis redis.UniversalClient, workerCfg config.WorkerConfig, sessionRepo repo.SessionRepo, signer *auth.JWTSigner) *InterruptHandler {
-	return &InterruptHandler{redis: redis, workerCfg: workerCfg, sessionRepo: sessionRepo, signer: signer}
+func NewInterruptHandler(interruptUC *usecase.InterruptUsecase, signer *auth.JWTSigner, banChecker middleware.UserBanChecker) *InterruptHandler {
+	return &InterruptHandler{interruptUC: interruptUC, signer: signer, banChecker: banChecker}
 }
 
 // RegisterRoutes registers interrupt-related routes on the given ServeMux.
@@ -46,7 +43,7 @@ func NewInterruptHandler(redis redis.UniversalClient, workerCfg config.WorkerCon
 // When allowDevBypass is true (development only), requests may use X-User-ID /
 // X-Device-ID headers instead of a Bearer token.
 func (h *InterruptHandler) RegisterRoutes(mux *http.ServeMux, allowDevBypass bool) {
-	authMiddleware := middleware.JWTAuth(h.signer, allowDevBypass)
+	authMiddleware := middleware.JWTAuth(h.signer, allowDevBypass, h.banChecker)
 	handler := authMiddleware(http.HandlerFunc(h.SubmitAnswer))
 	mux.Handle("POST /api/sessions/{sessionID}/interrupts/{interruptID}/answer", handler)
 }
@@ -101,24 +98,6 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	session, err := h.sessionRepo.GetByID(ctx, sessionID)
-	if err != nil {
-		if repo.IsNotFound(err) {
-			httputil.WriteError(w, http.StatusNotFound, "interrupt.session_not_found", "session not found")
-		} else {
-			logger.Error(ctx, "[interrupt] failed to get session",
-				zap.String("session", sessionID.String()),
-				zap.Error(err))
-			httputil.WriteError(w, http.StatusInternalServerError, "interrupt.db_error", "failed to get session")
-		}
-		return
-	}
-
-	if session.OwnerRefID != userID.String() {
-		httputil.WriteError(w, http.StatusForbidden, "auth.forbidden", "not authorized for this session")
-		return
-	}
-
 	if logger.IsDebugMode() {
 		logger.Debug(ctx, "[interrupt.HTTP] entry",
 			zap.String("session", sessionID.String()),
@@ -126,31 +105,31 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 			zap.Int("answer_len", len(req.Answer)))
 	}
 
-	// Atomically SET + PUBLISH (Lua script ensures consistency):
-	// 1. SET answer with TTL (catches early arrivals before subscriber is ready)
-	// 2. PUBLISH to notify the waiting subscriber
-	answerKey := cache.InterruptAnswer(sessionID.String(), interruptID)
-	channel := cache.InterruptChannel(sessionID.String(), interruptID)
-	ttlSeconds := int(h.workerCfg.InterruptAnswerTTL.Seconds())
-
-	if err := cache.InterruptSetPublish.Run(ctx, h.redis,
-		[]string{answerKey, channel},
-		req.Answer, ttlSeconds,
-	).Err(); err != nil {
-		logger.Error(ctx, "[interrupt] SET+PUBLISH failed",
+	// Delegate to use case (handles ownership validation and SET+PUBLISH)
+	if err := h.interruptUC.SubmitAnswer(ctx, userID, sessionID, interruptID, req.Answer); err != nil {
+		if errors.Is(err, usecase.ErrInterruptSessionNotFound) {
+			httputil.WriteError(w, http.StatusNotFound, "interrupt.session_not_found", "session not found")
+			return
+		}
+		if errors.Is(err, usecase.ErrInterruptForbidden) {
+			httputil.WriteError(w, http.StatusForbidden, "auth.forbidden", "not authorized for this session")
+			return
+		}
+		if errors.Is(err, usecase.ErrInterruptStoreFailed) {
+			logger.Error(ctx, "[interrupt] SET+PUBLISH failed",
+				zap.String("session", sessionID.String()),
+				zap.String("interrupt", interruptID),
+				zap.Error(err))
+			httputil.WriteError(w, http.StatusInternalServerError, "interrupt.store_failed", "store answer failed, please retry later")
+			return
+		}
+		// Unexpected error
+		logger.Error(ctx, "[interrupt] unexpected error",
 			zap.String("session", sessionID.String()),
 			zap.String("interrupt", interruptID),
 			zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "interrupt.store_failed", "store answer failed, please retry later")
+		httputil.WriteError(w, http.StatusInternalServerError, "interrupt.internal_error", "internal error")
 		return
-	}
-
-	if logger.IsDebugMode() {
-		logger.Debug(ctx, "[interrupt.HTTP] SET+PUBLISH answer",
-			zap.String("session", sessionID.String()),
-			zap.String("interrupt", interruptID),
-			zap.String("key", answerKey),
-			zap.String("channel", channel))
 	}
 
 	httputil.WriteJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})

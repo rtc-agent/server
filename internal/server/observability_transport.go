@@ -59,8 +59,7 @@ type LLMResponseObserver interface {
 	//   - elapsed: wall-clock time from request start to response complete
 	//   - usage: token usage extracted from the response (may be empty if
 	//     the provider doesn't include usage or if parsing failed)
-	//   - stream: whether this was a streaming (SSE) response
-	Observe(req *http.Request, model string, statusCode int, elapsed time.Duration, usage TokenUsage, stream bool)
+	Observe(req *http.Request, model string, statusCode int, elapsed time.Duration, usage TokenUsage)
 }
 
 // observabilityTransport wraps an http.RoundTripper and provides:
@@ -207,7 +206,7 @@ func (t *observabilityTransport) RoundTrip(req *http.Request) (*http.Response, e
 
 		// Notify observer
 		if t.observer != nil {
-			t.observer.Observe(req, model, resp.StatusCode, elapsed, usage, false)
+			t.observer.Observe(req, model, resp.StatusCode, elapsed, usage)
 		}
 
 		// Payload logging: response
@@ -246,7 +245,7 @@ func (t *observabilityTransport) logError(event, url string, err error) {
 	if t.payloadLog {
 		l := t.payloadLogger()
 		if l != nil {
-			l.Error(event,
+			l.Error("LLM HTTP error",
 				zap.String("event", event),
 				zap.String("url", url),
 				zap.Error(err),
@@ -256,8 +255,8 @@ func (t *observabilityTransport) logError(event, url string, err error) {
 }
 
 // observabilityReadCloser wraps an io.ReadCloser for streaming LLM responses.
-// It observes each chunk (optionally logging payloads) and extracts token
-// usage from the accumulated stream on EOF.
+// It performs incremental token usage extraction without accumulating the
+// entire stream in memory, preventing memory exhaustion on long streams.
 type observabilityReadCloser struct {
 	rc         io.ReadCloser
 	url        string
@@ -268,16 +267,23 @@ type observabilityReadCloser struct {
 	startTime  time.Time
 	statusCode int
 	isStream   bool
-	buf        bytes.Buffer // accumulates the full response for token usage extraction & final log
+
+	// Incremental token extraction state (no unbounded buffer)
+	inputTokens  int    // extracted from message_start (Anthropic) or usage chunk (OpenAI)
+	outputTokens int    // extracted from message_delta (Anthropic) or usage chunk (OpenAI)
+	lineBuf      []byte // accumulates partial lines for SSE parsing
+	totalBytes   int64  // total bytes read (for logging)
 }
 
 func (orc *observabilityReadCloser) Read(p []byte) (int, error) {
 	n, err := orc.rc.Read(p)
 	if n > 0 {
-		// Accumulate for final token usage extraction and log
-		orc.buf.Write(p[:n])
+		orc.totalBytes += int64(n)
 
-		// Payload logging: log each chunk
+		// Incrementally parse SSE events to extract token usage
+		orc.extractTokensIncremental(p[:n])
+
+		// Payload logging: log each chunk (when enabled)
 		if orc.payloadLog {
 			l := pkglogger.LLMPayload()
 			if l != nil {
@@ -302,16 +308,23 @@ func (orc *observabilityReadCloser) Read(p []byte) (int, error) {
 		}
 	}
 	if errors.Is(err, io.EOF) {
-		// Extract token usage from the accumulated stream
-		usage := extractTokenUsage(orc.buf.Bytes())
+		// Process any remaining line buffer
+		orc.processLine(orc.lineBuf)
+		orc.lineBuf = nil
+
+		// Build usage from incrementally extracted tokens
+		usage := TokenUsage{
+			InputTokens:  orc.inputTokens,
+			OutputTokens: orc.outputTokens,
+		}
 
 		// Notify observer
 		if orc.observer != nil {
-			orc.observer.Observe(orc.req, orc.model, orc.statusCode, time.Since(orc.startTime), usage, orc.isStream)
+			orc.observer.Observe(orc.req, orc.model, orc.statusCode, time.Since(orc.startTime), usage)
 		}
 
-		// Payload logging: log the accumulated full response
-		if orc.payloadLog && orc.buf.Len() > 0 {
+		// Payload logging: log stream completion summary (not full body)
+		if orc.payloadLog {
 			l := pkglogger.LLMPayload()
 			if l != nil {
 				fields := []zap.Field{
@@ -319,8 +332,9 @@ func (orc *observabilityReadCloser) Read(p []byte) (int, error) {
 					zap.String("url", orc.url),
 					zap.Bool("stream", true),
 					zap.Bool("stream_complete", true),
-					zap.String("response_body", compactJSON(orc.buf.Bytes())),
-					zap.Int("total_bytes", orc.buf.Len()),
+					zap.Int64("total_bytes", orc.totalBytes),
+					zap.Int("input_tokens", orc.inputTokens),
+					zap.Int("output_tokens", orc.outputTokens),
 				}
 				// Add session ID from context if available
 				if sessionID := turnagent.SessionIDFromContext(orc.req.Context()); sessionID != "" {
@@ -331,6 +345,88 @@ func (orc *observabilityReadCloser) Read(p []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// extractTokensIncremental parses SSE data incrementally, extracting token
+// usage without accumulating the entire stream. It handles both Anthropic
+// and OpenAI streaming formats.
+func (orc *observabilityReadCloser) extractTokensIncremental(data []byte) {
+	// Append to any leftover partial line
+	if len(orc.lineBuf) > 0 {
+		data = append(orc.lineBuf, data...)
+		orc.lineBuf = nil
+	}
+
+	// Process complete lines
+	for len(data) > 0 {
+		// Find newline
+		idx := bytes.IndexByte(data, '\n')
+		if idx < 0 {
+			// Incomplete line, save for next read
+			orc.lineBuf = append(orc.lineBuf, data...)
+			return
+		}
+
+		line := data[:idx]
+		data = data[idx+1:]
+
+		orc.processLine(line)
+	}
+}
+
+// processLine processes a single SSE line and extracts token usage.
+func (orc *observabilityReadCloser) processLine(line []byte) {
+	line = bytes.TrimSpace(line)
+	if !bytes.HasPrefix(line, []byte("data:")) {
+		return
+	}
+
+	// Extract JSON data after "data:"
+	jsonData := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+	if len(jsonData) == 0 {
+		return
+	}
+
+	// Try Anthropic format: message_start contains input_tokens, message_delta contains output_tokens
+	var anthropicEvent struct {
+		Type    string `json:"type"`
+		Message struct {
+			Usage struct {
+				InputTokens int `json:"input_tokens"`
+			} `json:"usage"`
+		} `json:"message"`
+		Usage struct {
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(jsonData, &anthropicEvent); err == nil {
+		if anthropicEvent.Type == "message_start" && anthropicEvent.Message.Usage.InputTokens > 0 {
+			orc.inputTokens = anthropicEvent.Message.Usage.InputTokens
+		}
+		if anthropicEvent.Type == "message_delta" && anthropicEvent.Usage.OutputTokens > 0 {
+			orc.outputTokens = anthropicEvent.Usage.OutputTokens
+		}
+		// If we got Anthropic data, don't try OpenAI parsing
+		if anthropicEvent.Type != "" {
+			return
+		}
+	}
+
+	// Try OpenAI format: usage in final chunk
+	var openaiChunk struct {
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(jsonData, &openaiChunk); err == nil {
+		if openaiChunk.Usage.PromptTokens > 0 {
+			orc.inputTokens = openaiChunk.Usage.PromptTokens
+		}
+		if openaiChunk.Usage.CompletionTokens > 0 {
+			orc.outputTokens = openaiChunk.Usage.CompletionTokens
+		}
+	}
 }
 
 func (orc *observabilityReadCloser) Close() error {

@@ -5,12 +5,16 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 
 	"github.com/spf13/cobra"
@@ -57,6 +61,78 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("auto migrate: %w", err)
 	}
 
+	// Migrate admin-server tables
+	if err := db.AutoMigrate(
+		&model.AdminUser{},
+		&model.AdminRefreshToken{},
+		&model.AdminRole{},
+		&model.AdminUserRole{},
+		&model.AuditLog{},
+		&model.ServerConfig{},        // 动态配置表
+		&model.ServerConfigHistory{}, // 配置变更历史
+	); err != nil {
+		return fmt.Errorf("admin auto migrate: %w", err)
+	}
+
+	// ServerConfig needs special handling: migrate from composite PK to surrogate PK
+	if err := model.MigrateServerConfigTable(db); err != nil {
+		return fmt.Errorf("migrate server_configs table: %w", err)
+	}
+
+	// Create partial unique indexes for server_configs to enforce (key, user_id) uniqueness.
+	// Two indexes are needed because PostgreSQL NULL != NULL, so a single unique index
+	// would allow multiple NULL user_id rows for the same key.
+	// Index 1: Ensures at most one system config (user_id IS NULL) per key.
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS uniq_server_configs_key_system
+		ON server_configs(key)
+		WHERE user_id IS NULL
+	`).Error; err != nil {
+		return fmt.Errorf("create unique index for system configs: %w", err)
+	}
+	// Index 2: Ensures at most one user override per (key, user_id) combination.
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS uniq_server_configs_key_user
+		ON server_configs(key, user_id)
+		WHERE user_id IS NOT NULL
+	`).Error; err != nil {
+		return fmt.Errorf("create unique index for user configs: %w", err)
+	}
+
+	// Composite index for admin session listing and token aggregation stats.
+	if err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_sessions_owner_created
+		ON sessions(owner_ref_id, created_at)
+	`).Error; err != nil {
+		return fmt.Errorf("create index for sessions: %w", err)
+	}
+
+	// Bootstrap default roles and Casbin policies (idempotent).
+	// This ensures default roles exist even when only `migrate` is run without `serve`.
+	// If Casbin enforcer initialization fails (e.g., table not yet created), we skip
+	// bootstrap here — the serve command will retry on startup.
+	ctx := context.Background()
+	enforcer, err := auth.NewCasbinEnforcer(db)
+	if err != nil {
+		logger.Warn(ctx, "casbin_enforcer_init_failed_skipping_bootstrap", zap.Error(err))
+	} else {
+		roleRepo := repo.NewAdminRoleRepo(db)
+		if err := usecase.BootstrapAdmin(ctx, db, roleRepo, enforcer); err != nil {
+			logger.Warn(ctx, "bootstrap_admin_failed_will_retry_on_serve", zap.Error(err))
+		}
+	}
+
+	// Bootstrap dynamic configs from registry (idempotent).
+	// This ensures "out-of-box" experience: new deployments have all configs ready for editing.
+	configRepo := repo.NewServerConfigRepo(db)
+	auditLogRepo := repo.NewAuditLogRepo(db)
+	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
+	serverConfigUsecase := usecase.NewServerConfigUsecase(configRepo, auditLogRepo, oauth2UserRepo, db)
+	if err := serverConfigUsecase.BootstrapDynamicConfigs(ctx, uuid.Nil); err != nil {
+		logger.Warn(ctx, "bootstrap_dynamic_configs_failed", zap.Error(err))
+	}
+
+	// Run owner migration stages
 	if err := model.MigrateOwnerStages1And2(db); err != nil {
 		return fmt.Errorf("migrate owner stages 1+2: %w", err)
 	}

@@ -39,14 +39,16 @@ type NotificationCreator func(ctx context.Context, sessionID uuid.UUID, prompt s
 type Worker struct {
 	queue               *rtcqueue.Queue
 	loopRepo            repo.LoopRepo
+	sessionRepo         repo.SessionRepo
 	notificationCreator NotificationCreator
 }
 
 // NewWorker creates a loop worker.
-func NewWorker(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, notificationCreator NotificationCreator) *Worker {
+func NewWorker(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, sessionRepo repo.SessionRepo, notificationCreator NotificationCreator) *Worker {
 	return &Worker{
 		queue:               queue,
 		loopRepo:            loopRepo,
+		sessionRepo:         sessionRepo,
 		notificationCreator: notificationCreator,
 	}
 }
@@ -93,7 +95,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 
 	sessionUUID, err := uuid.Parse(payload.SessionID)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Worker] parse session ID",
 			zap.String("session_id", payload.SessionID),
@@ -102,7 +104,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	}
 	loopUUID, err := uuid.Parse(payload.LoopID)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Worker] parse loop ID",
 			zap.String("loop_id", payload.LoopID),
@@ -113,7 +115,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	// 1. Validate loop still exists and is active
 	loop, err := w.loopRepo.FindActive(ctx, sessionUUID)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Worker] find active loop",
 			zap.String("session_id", sessionUUID.String()),
@@ -144,7 +146,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	// 3. Create user-role notification message (async sub-agent pattern)
 	if w.notificationCreator != nil {
 		if err := w.notificationCreator(ctx, sessionUUID, prompt); err != nil {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			logger.Error(ctx, "[loop.Worker] create notification message",
 				zap.String("session_id", sessionUUID.String()),
@@ -156,14 +158,21 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 
 	// 4. Submit to rtc-queue for execution (only SessionID, consistent with Goal pattern)
 	// Pass trace_id to maintain trace context across the rtcqueue boundary.
+	// Load session to get userID (OwnerRefID).
+	var userID string
+	if session, sessErr := w.sessionRepo.GetByID(ctx, sessionUUID); sessErr == nil {
+		userID = session.OwnerRefID
+	}
+
 	workPayload, err := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: payload.SessionID,
+		UserID:    userID,
 		TraceID:   payload.TraceID,
 		SpanID:    payload.SpanID,
 	})
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Worker] marshal work payload",
 			zap.String("session_id", sessionUUID.String()),
@@ -173,7 +182,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 
 	_, err = w.queue.Publish(ctx, payload.SessionID, string(workPayload), rtcqueue.SubmitWorkPriority)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Worker] publish to rtc-queue",
 			zap.String("session_id", sessionUUID.String()),
@@ -185,6 +194,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	span.SetAttributes(attribute.Int("loop.turn", loop.CompletedTurns+1))
 	logger.Info(ctx, "[loop.Worker] task processed successfully",
 		zap.String("session_id", sessionUUID.String()),
+		zap.String("user_id", userID),
 		zap.String("loop_id", loop.ID.String()),
 		zap.Int("turn", loop.CompletedTurns+1),
 		zap.Int("max_turns", loop.MaxTurns))

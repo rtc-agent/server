@@ -19,12 +19,22 @@ import (
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/infra/contextx"
+	"github.com/rtc-agent/server/internal/infra/middleware"
+	"github.com/rtc-agent/server/internal/repo"
 	centrifugeplus "github.com/rtc-agent/server/pkg/centrifuge-plus"
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // rpcHandlerInstance is the global RPC handler instance, set by RegisterRPCHandler.
 // Access is protected by sync.RWMutex.
+//
+// NOTE: This is an intentional architectural decision to break the circular
+// dependency between svc and rpchandler packages. The svc package needs to
+// call RPC handlers from Centrifuge callbacks, but rpchandler imports svc
+// for ServiceContext. Using a global with an interface (RPCHandler) allows
+// us to avoid this circular import while maintaining type safety.
+// An alternative would be to pass the handler through ServiceContext, but
+// that would require Wire configuration changes and add complexity.
 var (
 	rpcHandlerMu       sync.RWMutex
 	rpcHandlerInstance RPCHandler
@@ -39,7 +49,7 @@ type RPCHandler interface {
 // AssembleDualBroker assembles the DualBroker core logic: create Redis shard,
 // build DualBroker, and configure event handlers. Shared between the Wire
 // path (provideDualBroker) and the non-Wire path (servicecontext.go).
-func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore centrifugeplus.HistoryStore, jwtSigner *auth.JWTSigner) (*centrifugeplus.DualBroker, error) {
+func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore centrifugeplus.HistoryStore, jwtSigner *auth.JWTSigner, oauth2UserRepo repo.OAuth2UserRepo) (*centrifugeplus.DualBroker, error) {
 	redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
 		Address: cfg.Redis.Addr,
 	})
@@ -66,7 +76,7 @@ func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore 
 		return nil, fmt.Errorf("create broker: %w", err)
 	}
 
-	if err := setupCentrifuge(node, broker, jwtSigner, cfg.Server.RPCTimeout); err != nil {
+	if err := setupCentrifuge(node, broker, jwtSigner, cfg.Server.RPCTimeout, oauth2UserRepo); err != nil {
 		return nil, fmt.Errorf("setup centrifuge: %w", err)
 	}
 
@@ -99,11 +109,15 @@ func parseClientInfo(info []byte) *clientInfo {
 // verification, channel subscription validation).
 func setupCentrifuge(
 	node *centrifuge.Node, broker *centrifugeplus.DualBroker,
-	signer *auth.JWTSigner, rpcTimeout time.Duration,
+	signer *auth.JWTSigner, rpcTimeout time.Duration, oauth2UserRepo repo.OAuth2UserRepo,
 ) error {
 	node.SetBroker(broker)
-	node.OnConnecting(createOnConnectingHandler(signer))
-	node.OnConnect(createOnConnectHandler(broker, rpcTimeout))
+
+	// Create metrics collector (promauto registers automatically).
+	metrics := newCentrifugeMetrics()
+
+	node.OnConnecting(createOnConnectingHandler(signer, metrics, oauth2UserRepo))
+	node.OnConnect(createOnConnectHandler(broker, rpcTimeout, metrics))
 
 	if err := node.Run(); err != nil {
 		return fmt.Errorf("run node: %w", err)
@@ -133,8 +147,10 @@ func (l *centrifugeLogger) Error(msg string, args ...any) {
 
 // createOnConnectingHandler returns the OnConnecting callback: JWT verification
 // -> extract identity -> write to Credentials.
-func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetrics, oauth2UserRepo repo.OAuth2UserRepo) func(stdcontext.Context, centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 	return func(ctx stdcontext.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		start := time.Now()
+
 		logger.Info(ctx, "[Centrifuge] OnConnecting started",
 			zap.String("token_length", fmt.Sprintf("%d", len(e.Token))),
 			zap.Bool("has_token", len(e.Token) > 0),
@@ -142,6 +158,7 @@ func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, 
 
 		claims, err := signer.ParseAccessToken(e.Token)
 		if err != nil {
+			metrics.recordConnecting("error", time.Since(start))
 			logger.Error(ctx, "[Centrifuge] JWT verification failed, rejecting connection",
 				zap.Error(err),
 				zap.String("token_preview", previewToken(e.Token)),
@@ -149,11 +166,46 @@ func createOnConnectingHandler(signer *auth.JWTSigner) func(stdcontext.Context, 
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 		}
 
+		// Check if user is banned (skip if repo not available, e.g. in tests)
+		if oauth2UserRepo != nil {
+			// Check cache first to reduce DB load on frequent reconnections
+			banned, cached := middleware.GetBanCache(ctx, claims.UserID)
+			if !cached {
+				var err error
+				banned, err = oauth2UserRepo.IsUserBanned(ctx, claims.UserID)
+				if err != nil {
+					metrics.recordConnecting("error", time.Since(start))
+					logger.Error(ctx, "[Centrifuge] Failed to check user ban status, rejecting connection",
+						zap.Error(err),
+						zap.String("user_id", claims.UserID.String()),
+					)
+					return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
+				}
+				middleware.SetBanCache(ctx, claims.UserID, banned)
+			}
+			if banned {
+				metrics.recordConnecting("banned", time.Since(start))
+				logger.Info(ctx, "[Centrifuge] User is banned, rejecting connection",
+					zap.String("user_id", claims.UserID.String()),
+				)
+				return centrifuge.ConnectReply{}, centrifuge.Disconnect{
+					Code:   4501,
+					Reason: "account banned",
+				}
+			}
+		}
+
+		metrics.recordConnecting("success", time.Since(start))
+
 		ci := &clientInfo{
 			UserID:   claims.UserID,
 			DeviceID: claims.DeviceID,
 		}
-		info, _ := json.Marshal(ci)
+		info, err := json.Marshal(ci)
+		if err != nil {
+			logger.Warn(ctx, "[Centrifuge] marshal client info failed", zap.Error(err))
+			info = []byte("{}")
+		}
 
 		logger.Info(ctx, "[Centrifuge] OnConnecting succeeded",
 			zap.String("user_id", claims.UserID.String()),
@@ -184,7 +236,7 @@ func previewToken(token string) string {
 
 // createOnConnectHandler returns the OnConnect callback: subscription
 // validation + History + RPC handling.
-func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.Duration) func(*centrifuge.Client) {
+func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.Duration, metrics *centrifugeMetrics) func(*centrifuge.Client) {
 	return func(client *centrifuge.Client) {
 		// Panic recovery to capture and log any unhandled errors.
 		defer func() {
@@ -237,10 +289,13 @@ func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.D
 			),
 		)
 
-		setupSubscribeHandler(client, broker, clientCtx)
+		// Record successful connection
+		metrics.recordConnected()
+
+		setupSubscribeHandler(client, broker, clientCtx, metrics)
 		setupHistoryHandler(client, clientCtx)
-		setupRPCHandler(client, userID, ci.DeviceID, rpcTimeout, clientCtx)
-		setupDisconnectHandler(client, userID, ci.DeviceID, clientSpan)
+		setupRPCHandler(client, userID, ci.DeviceID, rpcTimeout, clientCtx, metrics)
+		setupDisconnectHandler(client, userID, ci.DeviceID, clientSpan, clientCtx, metrics)
 
 		logger.Info(stdcontext.Background(), "[Centrifuge] client connected",
 			zap.String("client_id", client.ID()),
@@ -251,29 +306,40 @@ func createOnConnectHandler(broker *centrifugeplus.DualBroker, rpcTimeout time.D
 
 // setupDisconnectHandler registers the disconnect callback: ends the client span
 // and records slow disconnects as errors so they appear in Jaeger.
-func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, clientSpan trace.Span) {
+func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, clientSpan trace.Span, clientCtx stdcontext.Context, metrics *centrifugeMetrics) {
 	client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 		reason := e.Reason
 		code := e.Code
 
-		if reason == "slow" {
+		// Classify disconnect reason for metrics
+		var reasonLabel string
+		switch {
+		case reason == "slow":
+			reasonLabel = "slow"
 			clientSpan.RecordError(fmt.Errorf("client disconnected: slow (code %d)", code))
 			clientSpan.SetStatus(codes.Error, "slow disconnect")
 
-			logger.Error(stdcontext.Background(), "[Centrifuge] client disconnected: slow",
+			logger.Error(clientCtx, "[Centrifuge] client disconnected: slow",
 				zap.String("client_id", client.ID()),
 				zap.String("user_id", userID.String()),
 				zap.String("device_id", deviceID),
 				zap.Uint32("code", code),
 			)
-		} else {
-			logger.Info(stdcontext.Background(), "[Centrifuge] client disconnected",
-				zap.String("client_id", client.ID()),
-				zap.String("user_id", userID.String()),
-				zap.String("reason", reason),
-				zap.Uint32("code", code),
-			)
+		case code >= 400:
+			reasonLabel = "error"
+		default:
+			reasonLabel = "normal"
 		}
+
+		// Record disconnect metrics
+		metrics.recordDisconnected(reasonLabel)
+
+		logger.Info(clientCtx, "[Centrifuge] client disconnected",
+			zap.String("client_id", client.ID()),
+			zap.String("user_id", userID.String()),
+			zap.String("reason", reason),
+			zap.Uint32("code", code),
+		)
 
 		// End the long-lived client span.
 		clientSpan.End()
@@ -282,7 +348,7 @@ func setupDisconnectHandler(client *centrifuge.Client, userID uuid.UUID, deviceI
 
 // setupSubscribeHandler registers the channel subscription callback:
 // validates ownership, registers channel type, enables recovery.
-func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.DualBroker, clientCtx stdcontext.Context) {
+func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.DualBroker, clientCtx stdcontext.Context, metrics *centrifugeMetrics) {
 	client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 		// Create trace span for subscribe operation (as child of client span)
 		tracer := otel.Tracer("centrifuge")
@@ -303,10 +369,13 @@ func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.Dua
 				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
+			// Record user channel subscription
+			metrics.recordSubscription("user")
 		}
 
 		if channel.IsTopic(ch) {
 			broker.RegisterChannelType(ch, centrifugeplus.Topic)
+			metrics.recordSubscription("topic")
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
 					EnableRecovery: true,
@@ -316,6 +385,7 @@ func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.Dua
 		}
 		if channel.IsLive(ch) {
 			broker.RegisterChannelType(ch, centrifugeplus.Live)
+			metrics.recordSubscription("live")
 		}
 		cb(centrifuge.SubscribeReply{}, nil)
 	})
@@ -342,12 +412,14 @@ func setupHistoryHandler(client *centrifuge.Client, clientCtx stdcontext.Context
 
 // setupRPCHandler registers the RPC handler callback: injects identity
 // context and dispatches to the global RPCHandler.
-func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, rpcTimeout time.Duration, clientCtx stdcontext.Context) {
+func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID string, rpcTimeout time.Duration, clientCtx stdcontext.Context, metrics *centrifugeMetrics) {
 	client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
 		logger.Info(stdcontext.Background(), "[Centrifuge] RPC called",
 			zap.String("method", e.Method),
 			zap.String("client_id", client.ID()),
 		)
+
+		rpcStart := time.Now()
 
 		ctx, cancel := stdcontext.WithTimeout(clientCtx, rpcTimeout)
 		defer cancel()
@@ -370,6 +442,7 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 		rpcHandlerMu.RUnlock()
 
 		if handler == nil {
+			metrics.recordRPC(e.Method, "error", time.Since(rpcStart))
 			cb(centrifuge.RPCReply{}, &centrifuge.Error{
 				Code:    500,
 				Message: "RPC handler not registered",
@@ -378,21 +451,32 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 		}
 
 		resp, err := handler.HandleRPC(ctx, e.Method, e.Data)
+		rpcDuration := time.Since(rpcStart)
+
 		if err != nil {
 			// Only forward APIError (sanitized, safe errors); other errors
 			// return a generic message to prevent leaking internal details
 			// (database statements, connection info) to the client.
-			if apiErr, ok := extractAPIError(err); ok {
+			if errCode, errMessage, ok := extractAPIError(err); ok {
 				span.RecordError(err)
+				metrics.recordRPC(e.Method, "error", rpcDuration)
+				// Format error message as JSON to match HTTP error format:
+				// {"error": "code", "error_description": "message"}
+				// This ensures consistent error structure across WebSocket and HTTP.
+				errJSON, _ := json.Marshal(map[string]string{
+					"error":             errCode,
+					"error_description": errMessage,
+				})
 				cb(centrifuge.RPCReply{}, &centrifuge.Error{
 					Code:    500,
-					Message: apiErr,
+					Message: string(errJSON),
 				})
 			} else {
 				logger.Error(ctx, "RPC handler returned non-API error",
 					zap.String("method", e.Method),
 					zap.Error(err))
 				span.RecordError(err)
+				metrics.recordRPC(e.Method, "error", rpcDuration)
 				cb(centrifuge.RPCReply{}, &centrifuge.Error{
 					Code:    500,
 					Message: "internal error",
@@ -400,6 +484,7 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 			}
 			return
 		}
+		metrics.recordRPC(e.Method, "success", rpcDuration)
 		cb(centrifuge.RPCReply{Data: resp}, nil)
 	})
 }
@@ -407,17 +492,22 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 // extractAPIError attempts to extract a safe, client-visible error message
 // from an error. It checks whether the error implements a struct with
 // Code/Message fields.
-func extractAPIError(err error) (string, bool) {
+//
+// Returns (code, message, true) for APIError-compatible errors.
+// Returns ("", "", false) for non-API errors.
+func extractAPIError(err error) (code, message string, ok bool) {
 	// rpchandler.APIError has Code and Message fields.
 	// Use structural typing to avoid directly importing the rpchandler package.
 	type safeError interface {
 		Error() string
 		SafeMessage() string
+		ErrorCode() string
+		ErrorMessage() string
 	}
 	if se, ok := err.(safeError); ok {
-		return se.SafeMessage(), true
+		return se.ErrorCode(), se.ErrorMessage(), true
 	}
-	return "", false
+	return "", "", false
 }
 
 // RegisterRPCHandler registers the RPC handler.

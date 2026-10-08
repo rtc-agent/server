@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/centrifugal/centrifuge"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
+	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/infra/httputil"
-	"github.com/rtc-agent/server/internal/svc"
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -24,12 +26,18 @@ var readyzLimiter = rate.NewLimiter(rate.Every(time.Second/10), 10)
 
 // Handler is the HTTP request handler.
 type Handler struct {
-	svcCtx *svc.ServiceContext
+	db             *gorm.DB
+	redis          redis.UniversalClient
+	centrifugeNode *centrifuge.Node
 }
 
 // NewHandler creates a new HTTP handler.
-func NewHandler(svcCtx *svc.ServiceContext) *Handler {
-	return &Handler{svcCtx: svcCtx}
+func NewHandler(db *gorm.DB, redis redis.UniversalClient, centrifugeNode *centrifuge.Node) *Handler {
+	return &Handler{
+		db:             db,
+		redis:          redis,
+		centrifugeNode: centrifugeNode,
+	}
 }
 
 // Healthz is the liveness probe endpoint.
@@ -57,7 +65,7 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 	allReady := true
 
 	// Check database connectivity.
-	if err := h.svcCtx.DB.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
+	if err := h.db.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
 		checks["db"] = "error"
 		allReady = false
 		logger.Warn(ctx, "Readyz: DB check failed", zap.Error(err))
@@ -66,7 +74,7 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check Redis connectivity.
-	if err := h.svcCtx.Redis.Ping(ctx).Err(); err != nil {
+	if err := h.redis.Ping(ctx).Err(); err != nil {
 		checks["redis"] = "error"
 		allReady = false
 		logger.Warn(ctx, "Readyz: Redis check failed", zap.Error(err))
@@ -75,13 +83,13 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check Centrifuge node status.
-	if h.svcCtx.CentrifugeNode == nil {
+	if h.centrifugeNode == nil {
 		checks["centrifuge"] = "not configured"
 		allReady = false
 	} else {
 		// Centrifuge node has no direct Ping method; check if the node is
 		// running via Info(). If the node has shut down, Info() returns an error.
-		if _, err := h.svcCtx.CentrifugeNode.Info(); err != nil {
+		if _, err := h.centrifugeNode.Info(); err != nil {
 			checks["centrifuge"] = "error"
 			allReady = false
 			logger.Warn(ctx, "Readyz: Centrifuge check failed", zap.Error(err))

@@ -67,10 +67,10 @@ func (t *stopSubAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.stopSubAgent",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.stop_sub_agent",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -91,14 +91,14 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		span.SetStatus(codes.Error, "invalid_sub_session_id")
 		return fmt.Sprintf("Error: invalid sub_session_id format: %s", parseErr.Error()), nil
 	}
-	span.SetAttributes(attribute.String("target_session_id", subSessionID.String()))
+	span.SetAttributes(attribute.String("session.target_id", subSessionID.String()))
 
 	// 2. Determine current root session ID.
 	rootSessionID := t.session.ID
 	if t.session.RootServerSessionID != uuid.Nil {
 		rootSessionID = t.session.RootServerSessionID
 	}
-	span.SetAttributes(attribute.String("root_session_id", rootSessionID.String()))
+	span.SetAttributes(attribute.String("session.root_id", rootSessionID.String()))
 
 	// 3. Query target session.
 	targetSession, dbErr := t.helpers.deps.SessionRepo.GetByID(ctx, subSessionID)
@@ -161,6 +161,8 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 			if err := primitives.UpdateSessionStatus(txCtx, t.helpers.deps, s.ID, protocol.SessionStatusClosed); err != nil {
 				return nil, err
 			}
+			// Record session close metric (sub-agent stopped by parent)
+			t.helpers.metrics.RecordSessionClosed(txCtx, "stopped_by_parent")
 			// Delete session memories (physical delete; they have served their purpose).
 			if err := t.helpers.deps.MemoryRepo.DeleteByScope(txCtx, memory.ScopeSession, s.ID); err != nil {
 				t.helpers.logger.Warn(ctx, "stopSubAgent.delete_memories_failed", map[string]any{
@@ -214,7 +216,7 @@ func (t *stopSubAgentTool) InvokableRun(ctx context.Context, argumentsInJSON str
 		return "", fmt.Errorf("stopSubAgent: publish messages: %w", err)
 	}
 
-	span.SetAttributes(attribute.Int("total_stopped", len(stopped)))
+	span.SetAttributes(attribute.Int("tool.total_stopped", len(stopped)))
 	t.helpers.logger.Info(ctx, "stopSubAgent.completed", map[string]any{
 		"session_id":     t.session.ID.String(),
 		"target_session": subSessionID.String(),

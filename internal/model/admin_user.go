@@ -1,0 +1,40 @@
+// Package model defines the database models for the application.
+package model
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
+
+// AdminUser is the database model for an admin user.
+//
+// Authentication: Local password-based auth (PasswordHash is set).
+type AdminUser struct {
+	ID           uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
+	Email        string         `gorm:"size:255;not null;uniqueIndex" json:"email"`
+	Name         string         `gorm:"size:100" json:"name,omitempty"`
+	AvatarURL    string         `gorm:"size:500" json:"avatar_url,omitempty"`
+	PasswordHash string         `gorm:"size:255" json:"-"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// TableName specifies the database table name for AdminUser.
+func (AdminUser) TableName() string {
+	return "admin_users"
+}
+
+// BeforeCreate generates a UUID v7 identifier if one is not already set.
+func (u *AdminUser) BeforeCreate(tx *gorm.DB) error {
+	if u.ID == uuid.Nil {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return err
+		}
+		u.ID = id
+	}
+	return nil
+}

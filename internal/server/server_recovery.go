@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/infra/cache"
@@ -25,36 +27,59 @@ import (
 //     lookup failures. This matches the runtime scanner's recovery approach.
 //   - Performs ghost-work cleanup and session-lock release (runtime scanner does not).
 func (s *Server) recoverStaleTurns(ctx context.Context) {
-	staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurns(ctx, staleTurnStatuses)
-	if err != nil {
-		logger.Error(ctx, "[Server] recoverStaleTurns: find stale turns", zap.Error(err))
-		return
-	}
+	ctx, span := otel.Tracer("server.recovery").Start(ctx, "recoverStaleTurns")
+	defer span.End()
 
-	if len(staleTurns) == 0 {
-		return
-	}
+	// Process stale turns in batches to avoid loading too many into memory at once.
+	// After a prolonged outage, there could be thousands of stale turns.
+	const recoveryBatchSize = 500
+	var totalRecovered int
 
-	logger.Info(ctx, "[Server] recoverStaleTurns: found stale turns",
-		zap.Int("count", len(staleTurns)))
-
-	// sessionStatusCache avoids repeated DB queries for sessions with multiple
-	// stale turns. Key: sessionID string, Value: session status string.
-	sessionStatusCache := make(map[string]string)
-	sessionIDs := make(map[string]bool)
-
-	for _, turn := range staleTurns {
-		sessionID := turn.SessionID.String()
-
-		if s.handleClosedSessionTurn(ctx, turn, sessionID, sessionStatusCache) {
-			continue
+	for {
+		staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurnsWithLimit(ctx, staleTurnStatuses, recoveryBatchSize)
+		if err != nil {
+			logger.Error(ctx, "[Server] recoverStaleTurns: find stale turns", zap.Error(err))
+			return
 		}
 
-		sessionIDs[sessionID] = true
-		s.markAndPublishStaleTurn(ctx, turn, sessionID)
+		if len(staleTurns) == 0 {
+			break
+		}
+
+		logger.Info(ctx, "[Server] recoverStaleTurns: processing batch",
+			zap.Int("batch_size", len(staleTurns)),
+			zap.Int("total_so_far", totalRecovered))
+
+		// sessionStatusCache avoids repeated DB queries for sessions with multiple
+		// stale turns. Key: sessionID string, Value: session status string.
+		sessionStatusCache := make(map[string]string)
+		sessionIDs := make(map[string]bool)
+
+		for _, turn := range staleTurns {
+			sessionID := turn.SessionID.String()
+
+			if s.handleClosedSessionTurn(ctx, turn, sessionID, sessionStatusCache) {
+				continue
+			}
+
+			sessionIDs[sessionID] = true
+			s.markAndPublishStaleTurn(ctx, turn, sessionID)
+		}
+
+		s.cleanupGhostWorksAndLocks(ctx, sessionIDs)
+		totalRecovered += len(staleTurns)
+
+		// If we got fewer than batchSize, we've processed all stale turns.
+		if len(staleTurns) < recoveryBatchSize {
+			break
+		}
 	}
 
-	s.cleanupGhostWorksAndLocks(ctx, sessionIDs)
+	if totalRecovered > 0 {
+		span.SetAttributes(attribute.Int("total_recovered", totalRecovered))
+		logger.Info(ctx, "[Server] recoverStaleTurns: completed",
+			zap.Int("total_recovered", totalRecovered))
+	}
 }
 
 // handleClosedSessionTurn checks if the session for a stale turn is closed.
@@ -86,7 +111,7 @@ func (s *Server) handleClosedSessionTurn(ctx context.Context, turn *model.Turn, 
 		return false
 	}
 
-	logger.Info(ctx, "[Server] recoverStaleTurns: skip closed session",
+	logger.Debug(ctx, "[Server] recoverStaleTurns: skip closed session",
 		zap.String("turn_id", turn.ID.String()),
 		zap.String("session_id", sessionID))
 
@@ -118,7 +143,7 @@ func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, 
 	// If the turn is already interrupted, it's waiting for external input.
 	// Do NOT publish a submit — the application will resume it explicitly.
 	if turn.Status == string(model.TurnStatusInterrupted) {
-		logger.Info(ctx, "[Server] recoverStaleTurns: skip already-interrupted turn",
+		logger.Debug(ctx, "[Server] recoverStaleTurns: skip already-interrupted turn",
 			zap.String("turn_id", turn.ID.String()),
 			zap.String("session_id", sessionID))
 		return
@@ -135,17 +160,32 @@ func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, 
 		return
 	}
 
+	// Load session to get userID (OwnerRefID).
+	var userID string
+	if session, sessErr := s.svcCtx.SessionRepo.GetByID(ctx, turn.SessionID); sessErr == nil {
+		userID = session.OwnerRefID
+	}
+
 	// Use submit payload (not resume) — see function docstring for rationale.
 	// Priority matches ResumeWorkPriority (same as runtime scanner's submit recovery).
-	payload := string(turnagent.MarshalSubmitPayload(sessionID, 0))
+	payloadData, err := turnagent.MarshalSubmitPayload(sessionID, userID, 0)
+	if err != nil {
+		logger.Error(ctx, "[Server] recoverStaleTurns: marshal submit payload",
+			zap.String("turn_id", turn.ID.String()),
+			zap.Error(err))
+		return
+	}
+	payload := string(payloadData)
 	if _, err := s.queue.Publish(ctx, sessionID, payload, rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[Server] recoverStaleTurns: publish submit",
 			zap.String("turn_id", turn.ID.String()),
+			zap.String("user_id", userID),
 			zap.Error(err))
 	} else {
-		logger.Info(ctx, "[Server] recoverStaleTurns: published submit",
+		logger.Debug(ctx, "[Server] recoverStaleTurns: published submit",
 			zap.String("turn_id", turn.ID.String()),
-			zap.String("session_id", sessionID))
+			zap.String("session_id", sessionID),
+			zap.String("user_id", userID))
 	}
 }
 
@@ -165,9 +205,11 @@ func (s *Server) cleanupGhostWorksAndLocks(ctx context.Context, sessionIDs map[s
 	if err != nil {
 		logger.Warn(ctx, "[Server] recoverStaleTurns: batch requeue ghost works",
 			zap.Error(err))
-	} else {
+	} else if len(requeued) > 0 {
+		logger.Info(ctx, "[Server] recoverStaleTurns: requeued ghost works",
+			zap.Int("count", len(requeued)))
 		for sid, workID := range requeued {
-			logger.Info(ctx, "[Server] recoverStaleTurns: requeued ghost work",
+			logger.Debug(ctx, "[Server] recoverStaleTurns: requeued ghost work",
 				zap.String("session_id", sid),
 				zap.String("work_id", workID))
 		}
@@ -181,7 +223,7 @@ func (s *Server) cleanupGhostWorksAndLocks(ctx context.Context, sessionIDs map[s
 		// The runtime scanner (periodicRecoverStaleTurns) performs the same
 		// check via isWorkerAliveForSession.
 		if s.isWorkerAliveForSession(ctx, sessionID) {
-			logger.Info(ctx, "[Server] recoverStaleTurns: skip lock release — worker alive",
+			logger.Debug(ctx, "[Server] recoverStaleTurns: skip lock release — worker alive",
 				zap.String("session_id", sessionID))
 			continue
 		}
@@ -193,7 +235,7 @@ func (s *Server) cleanupGhostWorksAndLocks(ctx context.Context, sessionIDs map[s
 				zap.String("session_id", sessionID),
 				zap.Error(err))
 		} else {
-			logger.Info(ctx, "[Server] recoverStaleTurns: released session lock",
+			logger.Debug(ctx, "[Server] recoverStaleTurns: released session lock",
 				zap.String("session_id", sessionID))
 		}
 	}
@@ -248,6 +290,9 @@ func (s *Server) staleTurnScanner(ctx context.Context) {
 //   - Records Prometheus metrics and syncs session status after recovery.
 //   - Uses LIMIT 100 (startup uses no limit).
 func (s *Server) periodicRecoverStaleTurns(ctx context.Context) {
+	ctx, span := otel.Tracer("server.recovery").Start(ctx, "periodicRecoverStaleTurns")
+	defer span.End()
+
 	const (
 		runningThreshold     = 10 * time.Minute
 		pendingThreshold     = 2 * time.Minute
@@ -372,16 +417,32 @@ func (s *Server) publishRecoveryWorkItem(ctx context.Context, turn *model.Turn) 
 	if s.queue == nil {
 		return nil
 	}
-	payload := string(turnagent.MarshalSubmitPayload(turn.SessionID.String(), 0))
+
+	// Load session to get userID (OwnerRefID).
+	var userID string
+	if session, sessErr := s.svcCtx.SessionRepo.GetByID(ctx, turn.SessionID); sessErr == nil {
+		userID = session.OwnerRefID
+	}
+
+	payloadData, err := turnagent.MarshalSubmitPayload(turn.SessionID.String(), userID, 0)
+	if err != nil {
+		logger.Error(ctx, "[Server] publishRecoveryWorkItem: marshal submit payload",
+			zap.String("turn_id", turn.ID.String()),
+			zap.Error(err))
+		return err
+	}
+	payload := string(payloadData)
 	if _, err := s.queue.Publish(ctx, turn.SessionID.String(), payload, rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[Server] publishRecoveryWorkItem: publish failed",
 			zap.String("turn_id", turn.ID.String()),
+			zap.String("user_id", userID),
 			zap.Error(err))
 		return err
 	}
 	logger.Info(ctx, "[Server] publishRecoveryWorkItem: published",
 		zap.String("turn_id", turn.ID.String()),
-		zap.String("session_id", turn.SessionID.String()))
+		zap.String("session_id", turn.SessionID.String()),
+		zap.String("user_id", userID))
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -31,16 +32,22 @@ func init() {
 		"240.0.0.0/4",        // Reserved
 		"255.255.255.255/32", // Broadcast
 		// IPv6
-		"::1/128",    // IPv6 loopback
-		"fc00::/7",   // IPv6 unique local
-		"fe80::/10",  // IPv6 link-local
-		"::/128",     // IPv6 unspecified
+		"::1/128",   // IPv6 loopback
+		"fc00::/7",  // IPv6 unique local
+		"fe80::/10", // IPv6 link-local
+		"::/128",    // IPv6 unspecified
 	}
 	privateIPNetworks = make([]*net.IPNet, 0, len(cidrs))
 	for _, cidr := range cidrs {
 		_, network, err := net.ParseCIDR(cidr)
 		if err != nil {
-			panic(fmt.Sprintf("invalid CIDR in privateIPNetworks: %q: %v", cidr, err))
+			// CIDRs are hardcoded; parse failure indicates a programming error.
+			// Log and skip rather than panic to allow the application to start.
+			// NOTE: log.Printf is used here because the structured logger may not
+			// be initialized during init(). This path only fires on programmer error
+			// in hardcoded CIDRs, so standard log is acceptable.
+			log.Printf("[webfetch] WARNING: invalid CIDR %q skipped: %v", cidr, err)
+			continue
 		}
 		privateIPNetworks = append(privateIPNetworks, network)
 	}
@@ -132,7 +139,7 @@ func (s *SecurityChecker) checkSSRF(ctx context.Context, host string) error {
 	resolver := &net.Resolver{PreferGo: true}
 	addrs, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrDNSFailed, err)
+		return fmt.Errorf("%w: %w", ErrDNSFailed, err)
 	}
 	if len(addrs) == 0 {
 		return fmt.Errorf("%w: no IP addresses resolved for %q", ErrDNSFailed, host)
@@ -317,4 +324,3 @@ func (p *redirectPolicy) CheckRedirect(req *http.Request, via []*http.Request) e
 func stripWWW(host string) string {
 	return strings.TrimPrefix(strings.ToLower(host), "www.")
 }
-

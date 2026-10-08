@@ -33,6 +33,7 @@ linters:
     - revive         # General purpose linter
     - unconvert      # Remove unnecessary type conversions
     - unparam        # Unused function parameters
+    - depguard       # Architecture guard: enforce layered dependencies
 
   settings:
     govet:
@@ -59,6 +60,33 @@ linters:
       range-loops: true
       for-loops: false
 
+    # =============================================================================
+    # Architecture Guard: 分层架构守护规则
+    # 确保 Handler 不直接访问 Repo（数据访问层）
+    # Handler 可以访问 Agent/Loop（领域服务层）
+    # =============================================================================
+    depguard:
+      rules:
+        # 规则: Handler 层不能直接导入 Repo（数据访问层）
+        # Repo 应该通过 Usecase 或领域服务访问
+        # 测试文件除外（测试需要 mock repo 是正常需求）
+        handler-no-repo:
+          files:
+            - "**/internal/handler/**/*.go"
+            - "!**/*_test.go"  # 排除测试文件
+          deny:
+            - pkg: "github.com/rtc-agent/server/internal/repo"
+              desc: "Handler 层不能直接访问 Repo，请通过 Usecase 或领域服务层调用"
+        # Handler 层不能直接导入 Domain（领域模型层）
+        # Domain 类型应该通过 Usecase 层的返回值传递
+        handler-no-domain:
+          files:
+            - "**/internal/handler/**/*.go"
+            - "!**/*_test.go"  # 排除测试文件
+          deny:
+            - pkg: "github.com/rtc-agent/server/internal/domain"
+              desc: "Handler 层不能直接导入 Domain，领域类型应通过 Usecase 层传递"
+
   exclusions:
     rules:
       # Exclude some linters from running on test files
@@ -70,6 +98,11 @@ linters:
 
       # Exclude known linters from partially hard-vendored code
       - path: pkg/rtc-queue/
+        linters:
+          - dupl
+
+      # Refresh token repos have similar structure but operate on different models/tables
+      - path: internal/repo/(admin_)?refresh_token_repo\.go
         linters:
           - dupl
 

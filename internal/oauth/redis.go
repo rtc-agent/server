@@ -30,11 +30,11 @@ type RedisStore struct {
 }
 
 // NewRedisStore creates a new Redis-backed state store.
-func NewRedisStore(client redis.UniversalClient) *RedisStore {
+func NewRedisStore(client redis.UniversalClient) (*RedisStore, error) {
 	if client == nil {
-		panic("statestore: redis client is nil")
+		return nil, errors.New("statestore: redis client is nil")
 	}
-	return &RedisStore{client: client}
+	return &RedisStore{client: client}, nil
 }
 
 // Set stores a state value with the given TTL.

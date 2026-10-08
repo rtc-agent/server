@@ -20,7 +20,7 @@ import (
 // StopTurn stops a running Turn (cancels the LLM call).
 // Stops all active turns for the session (supports cross-node operation).
 func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (*protocol.StopTurnResponse, error) {
-	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.stopTurn",
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.stop_turn",
 		trace.WithAttributes(
 			attribute.String("session.id", req.SessionId),
 		),
@@ -30,8 +30,9 @@ func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		span.SetStatus(codes.Error, "missing user_id in context")
-		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 	creator := usecase.UserCreator{UserID: userID}
 
 	sessionUUID, apiErr := parseUUID(req.SessionId, "session_id")
@@ -47,7 +48,7 @@ func (h *Handler) StopTurn(ctx context.Context, req *protocol.StopTurnRequest) (
 		zap.String("session", req.SessionId))
 
 	if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, sessionUUID, creator); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		return nil, h.ownershipError(ctx, err)
 	}
 

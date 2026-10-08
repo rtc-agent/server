@@ -7,8 +7,8 @@ import (
 	"fmt"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -38,8 +38,9 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
 		span.SetStatus(codes.Error, "missing user_id in context")
-		return nil, &APIError{Code: "unauthorized", Message: "missing user_id in context"}
+		return nil, &APIError{Code: ErrorCodeUnauthorized, Message: "missing user_id in context"}
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 	creator := usecase.UserCreator{UserID: userID}
 
 	sessionUUID, apiErr := parseUUID(req.SessionId, "session_id")
@@ -57,14 +58,14 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	// 1. Verify session existence.
 	session, err := h.deps.SessionRepo.GetByID(ctx, sessionUUID)
 	if err != nil {
-		if repo.IsNotFound(err) {
+		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")
 			return nil, &APIError{
-				Code:    "session.not_found",
+				Code:    ErrorCodeSessionNotFound,
 				Message: fmt.Sprintf("session %s not found", req.SessionId),
 			}
 		}
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
@@ -73,7 +74,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
 		span.SetStatus(codes.Error, "permission_denied")
 		return nil, &APIError{
-			Code:    "permission_denied",
+			Code:    ErrorCodePermissionDenied,
 			Message: fmt.Sprintf("session %s does not belong to user", session.ID),
 		}
 	}
@@ -87,14 +88,14 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	// 4. Dedup: check if a compact task for this session is already in the queue.
 	hasPending, checkErr := h.deps.Queue.HasPendingWorkByKind(ctx, session.ID.String(), string(turnagent.WorkKindCompact))
 	if checkErr != nil {
-		span.SetStatus(codes.Error, checkErr.Error())
+		span.SetStatus(codes.Error, "compact.dedup_error")
 		span.RecordError(checkErr)
 		return nil, h.internalError(ctx, "compact.dedup_error", "internal error", checkErr)
 	}
 	if hasPending {
 		span.SetStatus(codes.Error, "compact.already_pending")
 		return nil, &APIError{
-			Code:    "compact.already_pending",
+			Code:    ErrorCodeCompactAlreadyPending,
 			Message: "a compact task is already pending or processing for this session",
 		}
 	}
@@ -105,18 +106,19 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:              turnagent.WorkKindCompact,
 		SessionID:         session.ID.String(),
+		UserID:            userID.String(),
 		CustomInstruction: req.CustomInstruction,
 		TraceID:           traceID,
 		SpanID:            spanID,
 	})
 	if marshalErr != nil {
-		span.SetStatus(codes.Error, marshalErr.Error())
+		span.SetStatus(codes.Error, "compact.marshal_error")
 		span.RecordError(marshalErr)
 		return nil, h.internalError(ctx, "compact.marshal_error", "internal error", marshalErr)
 	}
 
 	if _, err := h.deps.Queue.Publish(ctx, session.ID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		return nil, h.internalError(ctx, "compact.queue_error", "failed to enqueue compact task", err)
 	}

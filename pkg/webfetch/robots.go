@@ -63,7 +63,7 @@ func (r *RobotsChecker) IsAllowed(rawURL string, userAgent string) (bool, error)
 		if entry.allowAll {
 			return true, nil
 		}
-		return r.checkPath(entry, parsed.Path, userAgent), nil
+		return r.checkPath(entry, parsed.Path), nil
 	}
 
 	// Fetch robots.txt.
@@ -75,7 +75,7 @@ func (r *RobotsChecker) IsAllowed(rawURL string, userAgent string) (bool, error)
 		r.cacheEntry(host, &robotsEntry{allowAll: true, fetchedAt: time.Now()})
 		return true, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		// No robots.txt → allow all.
@@ -98,14 +98,13 @@ func (r *RobotsChecker) IsAllowed(rawURL string, userAgent string) (bool, error)
 	if entry.allowAll {
 		return true, nil
 	}
-	return r.checkPath(entry, parsed.Path, userAgent), nil
+	return r.checkPath(entry, parsed.Path), nil
 }
 
 // parseRobotsTxt parses robots.txt content and returns an entry.
 // This is a simplified parser that handles the most common directives.
 func (r *RobotsChecker) parseRobotsTxt(content, userAgent string) *robotsEntry {
 	lines := strings.Split(content, "\n")
-	var currentGroupUserAgents []string
 	var relevantRules []robotsRule
 	inRelevantGroup := false
 
@@ -133,7 +132,6 @@ func (r *RobotsChecker) parseRobotsTxt(content, userAgent string) *robotsEntry {
 			valueLower := strings.ToLower(value)
 			if valueLower == "*" || strings.Contains(userAgentLower, valueLower) {
 				inRelevantGroup = true
-				currentGroupUserAgents = append(currentGroupUserAgents, valueLower)
 			} else {
 				inRelevantGroup = false
 			}
@@ -159,13 +157,13 @@ func (r *RobotsChecker) parseRobotsTxt(content, userAgent string) *robotsEntry {
 }
 
 // checkPath checks if a path is allowed based on cached robots rules.
-func (r *RobotsChecker) checkPath(entry *robotsEntry, path, userAgent string) bool {
+func (r *RobotsChecker) checkPath(entry *robotsEntry, path string) bool {
 	if entry.allowAll {
 		return true
 	}
 	// Check exact match first, then prefix matches (longest match wins).
 	var bestMatch string
-	var bestMatchAllowed bool = true
+	var bestMatchAllowed = true
 	for rulePath, allowed := range entry.allowed {
 		if path == rulePath || strings.HasPrefix(path, rulePath) {
 			if len(rulePath) > len(bestMatch) {

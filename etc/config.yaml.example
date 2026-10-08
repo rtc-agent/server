@@ -1,0 +1,355 @@
+# RTC Agent Server Configuration
+#
+# Local development:  copy to config.yaml
+# Docker deployment:  use config.docker.yaml
+# Admin-server:       use admin.yaml / admin.docker.yaml
+
+# RTC Agent 本地开发配置模板
+# 复制此文件为 config.yaml 并修改: cp etc/config.yaml.example etc/config.yaml
+#
+# 配置优先级（从高到低）:
+#   1. 环境变量 (如 LLM__API_KEY)
+#   2. 此文件 (etc/config.yaml)
+#   3. 代码默认值
+#
+# 环境变量命名规则:
+#   - 大写字母 + 双下划线分隔层级（对应 YAML 配置的层级结构）
+#   - 示例: llm.api_key → LLM__API_KEY, database.dsn → DATABASE__DSN
+#   - 这种映射由 Viper 的 SetEnvKeyReplacer(".", "__") 实现
+#
+# 敏感字段（如 api_key、password）建议通过环境变量配置，不在 YAML 中写明文
+
+# ===========================================================================
+# Server 配置
+# ===========================================================================
+server:
+  host: "127.0.0.1"
+  port: 8888
+  env: "development"  # "development" 或 "production"
+  # shutdown_timeout: 10s       # 优雅关闭超时（等待 in-flight 请求完成），默认 10s
+  # rpc_timeout: 10s            # RPC handler 上下文超时，默认 10s
+  # client_queue_max_size: 52428800  # Centrifuge 客户端消息队列上限（字节），默认 50MB
+
+# ===========================================================================
+# 数据库配置
+# ===========================================================================
+database:
+  dsn: "postgres://localhost:5432/rtc_agent?sslmode=disable"
+  auto_migrate: true
+
+# ===========================================================================
+# Redis 配置
+# ===========================================================================
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+
+# ===========================================================================
+# 日志配置
+# ===========================================================================
+log:
+  level: "debug"  # debug, info, warn, error
+  llm_payload: true  # 是否记录 LLM 请求/响应详情到 logs/llm-payload.log（仅开发环境）
+  # server_log_file: ""  # 服务器日志文件路径（JSON 格式），用于 promtail 收集
+
+# ===========================================================================
+# 认证配置
+# ===========================================================================
+auth:
+  jwt_secret: "${AUTH__JWT_SECRET}"  # 通过环境变量配置，生产环境必须使用强随机值
+  access_token_ttl_seconds: 3600
+  # refresh_token_ttl: 720h        # refresh token 有效期，默认 30 天
+  # oauth2_state_ttl: 10m          # OAuth2 state 参数有效期，默认 10 分钟
+  # allowed_redirect_uris:         # OAuth2 redirect_uri 白名单（生产环境必须配置）
+  #   - "http://localhost:3000/callback"
+
+# ===========================================================================
+# Token Exchange 配置（RFC 8693）
+# 用于验证外部 JWT issuer（如 admin-server）签发的 JWT
+# ===========================================================================
+token_exchange:
+  # external_issuers:
+  #   - name: "admin-server"                    # issuer 名称
+  #     issuer: "https://admin.example.com"     # JWT 的 iss claim
+  #     jwks_uri: "https://admin.example.com/.well-known/jwks.json"  # JWKS 端点
+  #     allowed_algorithms: ["RS256", "ES256"]  # 允许的签名算法
+  #     cache_ttl: 3600                         # JWKS 公钥缓存时间（秒）
+  #     claims_mapping:                         # JWT claims 字段映射（可选）
+  #       sub: "sub"
+  #       email: "email"
+  #       name: "name"
+  #       avatar_url: "picture"
+
+# ===========================================================================
+# OAuth2 Providers (至少启用一个)
+# ===========================================================================
+providers:
+  # HTTP 超时（OAuth2 HTTP client 超时，默认 10s）
+  # http_timeout: 10s
+
+  mock:
+    enabled: true  # 仅开发环境使用
+    url: "http://localhost:10060"
+    client_id: "test-client"
+    client_secret: "${PROVIDERS__MOCK__CLIENT_SECRET}"
+
+  github:
+    enabled: false
+    client_id: "${PROVIDERS__GITHUB__CLIENT_ID}"
+    client_secret: "${PROVIDERS__GITHUB__CLIENT_SECRET}"
+    # scope: "read:user user:email"  # 请求的权限范围
+
+  google:
+    enabled: false
+    client_id: "${PROVIDERS__GOOGLE__CLIENT_ID}"
+    client_secret: "${PROVIDERS__GOOGLE__CLIENT_SECRET}"
+    # scope: "openid email profile"  # 请求的权限范围
+
+# ===========================================================================
+# CORS 配置
+# ===========================================================================
+cors:
+  allow_origins: ["http://localhost:3000", "http://localhost:5173"]
+  # 生产环境应配置具体域名，不使用 "*"
+
+# ===========================================================================
+# LLM 配置
+# ===========================================================================
+llm:
+  provider: "claude"  # claude, openai（openai 支持不完整，不推荐生产使用）
+  # api_key 通过环境变量 LLM__API_KEY 配置
+  # base_url: ""      # 自定义 API 端点（可选，用于代理或企业部署）
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 8192
+  # temperature: 1.0  # 采样温度（可选，0.0-2.0）
+  # timeout: 60s      # API 请求超时（可选）
+  # thinking_budget_tokens: 50000  # Claude thinking 模式 token 预算（可选）
+  # reasoning_effort: "medium"     # OpenAI reasoning 模型努力程度: low, medium, high
+  # retry_max_attempts: 3          # 模型调用失败最大重试次数，默认 0（不重试）
+  # retry_base_delay: 1s           # 重试基础延迟，默认 1s，指数退避
+
+  # 模型定价配置（可选，用于成本计算）
+  # 未配置时使用默认价格（Claude 3.5 Sonnet）
+  # pricing:
+  #   input_per_million: 3.0        # 正常 input token 价格（USD）
+  #   output_per_million: 15.0      # output token 价格（USD）
+  #   cached_read_per_million: 0.3  # cache read 价格（USD），通常为 input 的 10%
+  #   cached_write_per_million: 3.75 # cache write 价格（USD），通常为 input 的 125%
+  #   reasoning_per_million: 0.0    # reasoning token 价格（USD）
+
+# ===========================================================================
+# Worker 配置
+# ===========================================================================
+worker:
+  # worker_id: ""     # Worker 标识（可选，默认自动生成）
+  # host: ""          # Worker 主机名（可选）
+  # version: ""       # Worker 版本（可选）
+  # heartbeat_sec: 10          # 心跳间隔（秒），默认 10
+  # ttl_sec: 60                # Worker TTL（秒），默认 60
+  # idle_timeout: 5m           # 空闲超时，默认 5m
+  # stream_block: 500ms        # 流式阻塞时间，默认 500ms
+  # max_len_approx: 10000      # Redis Stream 近似最大长度，默认 10000
+  # background_concurrency: 5  # 后台任务并发数，默认 5
+  # system_prompt: ""          # Agent 系统提示词
+
+  context_tokens_limit: 180000        # 触发上下文压缩的 token 阈值，默认 25000
+  auto_compact_buffer_tokens: 20000   # 自动压缩缓冲 token 数，默认 13000
+  max_output_tokens_for_summary: 20000  # 压缩最大输出 token 数，默认 20000
+  # checkpoint_ttl: 24h              # eino checkpoint 在 Redis 中的 TTL，默认 24h
+  stream_chunk_ttl: "5m"             # 流式消息 chunk 在 Redis 中的 TTL，默认 5m
+  # interrupt_answer_ttl: 10m        # 中断回答在 Redis 中的 TTL，默认 10m
+  # orphan_trigger_ttl: 24h          # RTC 孤儿恢复去重标记 TTL，默认 24h
+  # lock_ttl_sec: 120                # rtc-queue session 锁 TTL（秒），默认 120
+  # cache_hit_rate_warn_threshold: 0.88  # 缓存命中率告警阈值，默认 0.88 (88%)
+  token_counter_mode: "heuristic"    # token 计数策略: heuristic（快速）或 tokenizer（精确）
+  # enable_strategic_cache_breakpoints: true  # 启用战略性缓存断点，默认 true
+
+# ===========================================================================
+# API 配置
+# ===========================================================================
+api:
+  query_default_limit: 50   # 分页查询默认页大小，默认 50
+  query_max_limit: 100      # 分页查询最大页大小，默认 100
+
+# ===========================================================================
+# Debug 端点（pprof + goroutines）
+# 生产环境务必禁用或配置认证
+# ===========================================================================
+debug:
+  enabled: false
+  # user: "admin"
+  # password: "${DEBUG__PASSWORD}"
+  # goroutine_leak_threshold: 1000  # goroutine 数量告警阈值，默认 1000
+  # show_raw_errors: false           # 是否在错误信息中显示 RawError，默认 false
+
+# ===========================================================================
+# Metrics 端点（Prometheus /metrics）
+# 生产环境建议配置认证
+# ===========================================================================
+metrics:
+  # user: "admin"
+  # password: "${METRICS__PASSWORD}"
+
+# ===========================================================================
+# OpenTelemetry 分布式追踪
+# ===========================================================================
+tracing:
+  enabled: false
+  # endpoint: "localhost:4317"  # OTLP 端点
+  # sample_rate: 1.0            # 采样率（0.0 - 1.0），默认 1.0（全采样）
+
+# ===========================================================================
+# Asynq 任务调度配置
+# ===========================================================================
+# asynq:
+#   redis_addr: "localhost:6379"    # Redis 地址，默认使用主 Redis
+#   redis_password: ""
+#   redis_db: 0
+#   concurrency: 10                 # Worker 并发数
+#   queue: "default"                # 队列名称
+#   recovery_interval: 30s          # 恢复扫描间隔
+#   stale_threshold: 5m             # 活跃循环停滞判定阈值，默认 5m
+#   retry_max: 3                    # 任务失败最大重试次数，默认 3
+#   retry_timeout: 30s              # 任务执行超时，默认 30s
+#   health_check_interval: 30s      # 健康检查间隔，默认 30s
+
+# ===========================================================================
+# Web Search 配置（可选）
+# ===========================================================================
+web_search:
+  enabled: false
+  # balancer_type: "round_robin"    # 负载均衡策略: round_robin 或 weighted
+  # global_timeout: 30s             # 单次搜索请求超时
+
+  # providers:
+  #   - name: "tavily"
+  #     type: "tavily"
+  #     weight: 100
+  #     enabled: true
+  #     api_key: "${TAVILY_API_KEY}"
+  #     max_results: 10
+  #     search_depth: "basic"       # basic 或 advanced
+  #     include_answer: false
+
+  # proxies:
+  #   - url: "socks5://localhost:7890"
+  #     type: "socks5"
+  #     region: "global"
+  #     priority: 10
+
+  # circuit_breaker:
+  #   failure_threshold: 50         # 失败百分比阈值（0-100）触发熔断
+  #   open_timeout: 60s             # 熔断打开后等待时间
+  #   half_open_max_requests: 3     # 半开状态最大探测请求数
+  #   window_size: 100              # 滑动窗口大小（请求数）
+  #   window_duration: 5m           # 滑动窗口时间维度
+
+  # rate_limiter:
+  #   rate: 10                      # 每秒允许请求数
+  #   burst: 20                     # 最大突发容量
+
+  # retry:
+  #   max_retries: 3                # 最大重试次数
+  #   retry_delay: 1s               # 初始重试延迟
+  #   backoff_factor: 2.0           # 指数退避乘数
+
+  # proxy_health_url: "https://www.google.com"  # 代理健康检查 URL
+  # proxy_check_interval: 30s                    # 代理健康检查间隔
+
+  # Redis 配置（可选，用于分布式熔断器和限流器）
+  # 如果不配置，分布式特性将禁用
+  # redis:
+  #   addr: "localhost:6379"
+  #   password: ""
+  #   db: 0
+
+# ===========================================================================
+# Web Fetch 配置（可选）
+# ===========================================================================
+web_fetch:
+  enabled: true
+  # max_concurrency: 20             # 全局最大并发抓取数
+  # max_domain_concurrency: 5       # 单域名最大并发抓取数
+  # cache_ttl: 30m                  # 缓存 TTL
+  # max_url_length: 2000            # 最大 URL 长度
+  # max_content_size: 10485760      # 最大内容大小（10MB）
+  # fetch_timeout: 60s              # 请求超时
+  # max_redirects: 10               # 最大重定向次数
+
+  # LLM 提取配置
+  # llm_extract_threshold: 50000    # 触发 LLM 提取的内容大小阈值
+  # max_llm_per_session: 50         # 每个 session 的 LLM 提取次数限制
+  # llm_max_tokens: 4096            # LLM 提取最大输出 token
+
+  # 速率限制
+  # rate_limit:
+  #   global_rps: 100               # 全局每秒请求数
+  #   global_burst: 200             # 全局突发容量
+  #   domain_rps: 10                # 单域名每秒请求数
+  #   domain_burst: 20              # 单域名突发容量
+
+  # Robots.txt 合规
+  # respect_robots_txt: true        # 是否遵守 robots.txt
+  # robots_cache_ttl: 24h           # robots.txt 缓存 TTL
+
+  # 安全配置
+  # pre_approved_domains:           # 预批准域名列表
+  #   - "github.com"
+  #   - "stackoverflow.com"
+  # blocked_domains: []             # 阻止的域名列表
+
+  # 代理池配置
+  # proxies:
+  #   - url: "socks5://localhost:7890"
+  #     type: "socks5"
+  #     region: "global"
+  #     priority: 10
+  # proxy_health_url: "https://www.google.com"
+  # proxy_check_interval: 30s
+
+  # user_agent: "RTCAgent-WebFetch/1.0"
+
+  # Redis 配置（可选，用于缓存和限流）
+  # 如果不配置，将使用全局 redis 配置
+  # redis:
+  #   addr: "localhost:6379"
+  #   password: ""
+  #   db: 0
+
+# ===========================================================================
+# OSS3 对象存储配置（可选 — 留空 storage.backend 禁用）
+# ===========================================================================
+storage:
+  backend: ""  # "minio" 启用, 留空禁用
+  # minio:
+  #   endpoint: "localhost:9000"          # MinIO 内网端点
+  #   public_url: "http://localhost:9000" # MinIO 公网 URL（用于生成 presigned URL）
+  #   access_key: "${MINIO_ACCESS_KEY}"
+  #   secret_key: "${MINIO_SECRET_KEY}"
+  #   bucket: "rtc-agent"
+  #   use_ssl: false
+  #   max_idle_conns: 1024
+  #   max_idle_conns_per_host: 100
+  #   idle_conn_timeout: 90s
+  # s3_endpoint:
+  #   host: "0.0.0.0"
+  #   port: 9000
+  #   allowed_origins: ["*"]
+  # quota:
+  #   max_file_size_bytes: 104857600     # 100MB
+  #   max_user_quota_bytes: 1073741824   # 1GB
+  #   max_concurrent_uploads: 10
+  #   pending_ttl: 5m
+  # rate_limit:
+  #   requests_per_minute: 60
+  # credential:
+  #   access_token_ttl: 1h
+  #   session_token_ttl: 1h
+  #   presigned_url_ttl: 1h
+  # cleanup:
+  #   interval: 1h
+  #   multipart_expiry: 24h
+  #   credential_expiry: 24h
+  # encryption:
+  #   session_token_key: "${OSS3_SESSION_TOKEN_KEY}"  # AES-256 密钥（32 字节 = 64 个十六进制字符）

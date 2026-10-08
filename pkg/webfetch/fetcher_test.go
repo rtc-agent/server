@@ -459,6 +459,9 @@ func mustParseURL(rawURL string) *url.URL {
 // ---------------------------------------------------------------------------
 
 func TestWebFetchManager_FetchRealURL(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real HTTP request in short mode")
+	}
 	// This test makes a real HTTP request to GitHub.
 	// It verifies the full pipeline: validate → SSRF → rate limit → HTTP → process.
 	cfg := DefaultWebFetchConfig()

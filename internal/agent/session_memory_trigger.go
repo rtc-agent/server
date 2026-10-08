@@ -15,8 +15,8 @@ import (
 // This is called from data_context.go after loading messages.
 func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID uuid.UUID, messages []*turnagent.Message) {
 	// Early return if ChatModel is not configured (LLM disabled)
-	if h.deps.ChatModel == nil {
-		h.logger.Info(ctx, "[triggerSessionMemoryExtraction] skip: ChatModel is nil (LLM not configured)", map[string]any{
+	if h.deps.ChatModel == nil && h.deps.ChatModelFactory == nil {
+		h.logger.Info(ctx, "[triggerSessionMemoryExtraction] skip: ChatModel and ChatModelFactory are nil (LLM not configured)", map[string]any{
 			"session_id": sessionID.String(),
 		})
 		return
@@ -46,14 +46,15 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 		schemaMessages = append(schemaMessages, schemaMsg)
 	}
 
-	// Create extractor
+	// Create extractor (use dynamic config when available).
+	chatModel := h.resolveChatModelForBackground(ctx)
 	extractor := NewSessionMemoryExtractor(
-		h.deps.ChatModel,
+		chatModel,
 		h.deps.MemoryRepo,
 		turnagent.CumulativeTokenCounter,
 		h.logger,
-		h.noThinkingOptions(),  // disable thinking to save tokens
-		h.tokenCallbackHandler, // track token consumption to Session.TotalTokens
+		h.noThinkingOptions(ctx), // disable thinking to save tokens
+		h.tokenCallbackHandler,   // track token consumption to Session.TotalTokens
 	)
 
 	// Load extraction state from session metadata.

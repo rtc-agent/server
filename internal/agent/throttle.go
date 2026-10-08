@@ -14,6 +14,7 @@ import (
 type Throttle struct {
 	minInterval time.Duration
 	mu          sync.Mutex
+	cond        *sync.Cond // signaled when all pending timers complete
 	lastCall    map[string]time.Time
 	pendingFn   map[string]func()
 	timers      map[string]*time.Timer
@@ -21,12 +22,14 @@ type Throttle struct {
 
 // NewThrottle creates a new Throttle.
 func NewThrottle(minInterval time.Duration) *Throttle {
-	return &Throttle{
+	t := &Throttle{
 		minInterval: minInterval,
 		lastCall:    make(map[string]time.Time),
 		pendingFn:   make(map[string]func()),
 		timers:      make(map[string]*time.Timer),
 	}
+	t.cond = sync.NewCond(&t.mu)
+	return t
 }
 
 // Do executes fn with throttle control.
@@ -74,9 +77,12 @@ func (t *Throttle) Do(key string, fn func()) {
 			delete(t.pendingFn, key)
 			t.mu.Unlock()
 			pendingFn()
-		} else {
-			t.mu.Unlock()
+			// Re-lock to signal completion.
+			t.mu.Lock()
 		}
+		// Signal waiters that a timer completed.
+		t.cond.Broadcast()
+		t.mu.Unlock()
 	})
 }
 
@@ -105,5 +111,15 @@ func (t *Throttle) Stop() {
 	// Clear lastCall to fully reset state.
 	for key := range t.lastCall {
 		delete(t.lastCall, key)
+	}
+}
+
+// WaitForPending blocks until all pending timers have completed.
+// This is primarily useful for testing to avoid time.Sleep.
+func (t *Throttle) WaitForPending() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for len(t.timers) > 0 {
+		t.cond.Wait()
 	}
 }

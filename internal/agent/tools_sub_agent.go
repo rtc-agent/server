@@ -92,11 +92,11 @@ func (t *subAgentTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.subAgent",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.sub_agent",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
-			attribute.Int("args_length", len(argumentsInJSON)),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
+			attribute.Int("tool.args_length", len(argumentsInJSON)),
 		),
 	)
 	defer span.End()
@@ -172,6 +172,9 @@ func (t *subAgentTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 				"sub_session_id": subSessionID.String(),
 				"error":          closeErr.Error(),
 			})
+		} else {
+			// Record session close metric (error cleanup)
+			t.helpers.metrics.RecordSessionClosed(ctx, "error")
 		}
 		return "", fmt.Errorf("subAgent: failed to start sub-agent (cleaned up orphan session): %w", err)
 	}
@@ -448,10 +451,10 @@ func (t *subAgentTool) logSubAgentCreated(ctx context.Context, subSessionID, par
 // publishSubAgentWork submits a work item to the sub session's queue.
 func (t *subAgentTool) publishSubAgentWork(ctx context.Context, subSessionID uuid.UUID) error {
 	// Extract trace context for cross-process propagation.
-	ctx, span := t.helpers.tracer.Start(ctx, "subAgent.publishWork",
+	ctx, span := t.helpers.tracer.Start(ctx, "sub_agent.publish_work",
 		trace.WithAttributes(
-			attribute.String("sub_session_id", subSessionID.String()),
-			attribute.String("parent_session_id", t.session.ID.String()),
+			attribute.String("sub_session.id", subSessionID.String()),
+			attribute.String("session.parent_id", t.session.ID.String()),
 		),
 	)
 	defer span.End()
@@ -460,6 +463,7 @@ func (t *subAgentTool) publishSubAgentWork(ctx context.Context, subSessionID uui
 	payload, err := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: subSessionID.String(),
+		UserID:    t.session.OwnerRefID,
 		TraceID:   traceID,
 		SpanID:    spanID,
 	})

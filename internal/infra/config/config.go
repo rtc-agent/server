@@ -1,30 +1,29 @@
 package config
 
 import (
-	"strings"
 	"time"
-
-	"github.com/spf13/viper"
 )
 
 // Config is the top-level application configuration, aggregating all sub-module configs.
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	Redis     RedisConfig     `mapstructure:"redis"`
-	Log       LogConfig       `mapstructure:"log"`
-	Auth      AuthConfig      `mapstructure:"auth"`
-	Providers ProvidersConfig `mapstructure:"providers"`
-	CORS      CORSConfig      `mapstructure:"cors"`
-	Worker    WorkerConfig    `mapstructure:"worker"`
-	LLM       LLMConfig       `mapstructure:"llm"`
-	API       APIConfig       `mapstructure:"api"`
-	Tracing   TracingConfig   `mapstructure:"tracing"`
-	Asynq     AsynqConfig     `mapstructure:"asynq"`
-	Metrics   MetricsConfig   `mapstructure:"metrics"`
-	Debug     DebugConfig     `mapstructure:"debug"`
-	WebSearch WebSearchConfig `mapstructure:"web_search"`
-	WebFetch  WebFetchConfig  `mapstructure:"web_fetch"`
+	Server        ServerConfig        `mapstructure:"server"`
+	Database      DatabaseConfig      `mapstructure:"database"`
+	Redis         RedisConfig         `mapstructure:"redis"`
+	Log           LogConfig           `mapstructure:"log"`
+	Auth          AuthConfig          `mapstructure:"auth"`
+	Providers     ProvidersConfig     `mapstructure:"providers"`
+	CORS          CORSConfig          `mapstructure:"cors"`
+	Worker        WorkerConfig        `mapstructure:"worker"`
+	LLM           LLMConfig           `mapstructure:"llm"`
+	API           APIConfig           `mapstructure:"api"`
+	Tracing       TracingConfig       `mapstructure:"tracing"`
+	Asynq         AsynqConfig         `mapstructure:"asynq"`
+	Metrics       MetricsConfig       `mapstructure:"metrics"`
+	Debug         DebugConfig         `mapstructure:"debug"`
+	WebSearch     WebSearchConfig     `mapstructure:"web_search"`
+	WebFetch      WebFetchConfig      `mapstructure:"web_fetch"`
+	Storage       StorageConfig       `mapstructure:"storage"`
+	TokenExchange TokenExchangeConfig `mapstructure:"token_exchange"`
 }
 
 // MetricsConfig holds Prometheus /metrics endpoint authentication configuration.
@@ -38,7 +37,7 @@ type MetricsConfig struct {
 // DebugConfig holds /debug/pprof and /debug/goroutines endpoint configuration.
 // These endpoints expose internal process state; authentication must be configured in production.
 type DebugConfig struct {
-	// Enabled controls whether debug endpoints are active. Defaults to true.
+	// Enabled controls whether debug endpoints are active. Defaults to false.
 	// Set to false to completely disable /debug/* routes.
 	Enabled bool `mapstructure:"enabled"`
 	// User is the basic auth username. Empty disables authentication (development only).
@@ -258,6 +257,10 @@ type WebFetchConfig struct {
 
 	// BlockedDomains is the list of blocked domains.
 	BlockedDomains []string `mapstructure:"blocked_domains"`
+
+	// Redis holds the dedicated Redis configuration for caching and rate limiting.
+	// When Addr is empty, the shared redis client is used.
+	Redis WebFetchRedisConfig `mapstructure:"redis"`
 }
 
 // WebFetchRateLimitConfig holds dual-layer rate limiting configuration for web fetch.
@@ -270,6 +273,19 @@ type WebFetchRateLimitConfig struct {
 	DomainRPS float64 `mapstructure:"domain_rps"`
 	// DomainBurst is the per-domain burst size.
 	DomainBurst int `mapstructure:"domain_burst"`
+}
+
+// WebFetchRedisConfig holds the dedicated Redis configuration for web fetch
+// caching and rate limiting.
+type WebFetchRedisConfig struct {
+	// Addr is the Redis address. Empty falls back to the shared redis client.
+	Addr string `mapstructure:"addr"`
+
+	// Password is the Redis password.
+	Password string `mapstructure:"password"`
+
+	// DB is the Redis database number.
+	DB int `mapstructure:"db"`
 }
 
 // AsynqConfig holds asynq task scheduling configuration.
@@ -321,12 +337,17 @@ type ServerConfig struct {
 	// RPCTimeout is the RPC handler context timeout.
 	// Default 10s.
 	RPCTimeout time.Duration `mapstructure:"rpc_timeout"`
+
+	// ClientQueueMaxSize is the maximum size of client's message queue in bytes.
+	// When exceeded, Centrifuge closes the client connection with DisconnectSlow.
+	// This limits RPC response size since replies go through the message queue.
+	// Default 52428800 (50MB).
+	ClientQueueMaxSize int `mapstructure:"client_queue_max_size"`
 }
 
-// DatabaseConfig holds database connection and migration configuration.
+// DatabaseConfig holds database connection configuration.
 type DatabaseConfig struct {
-	DSN         string `mapstructure:"dsn"`
-	AutoMigrate bool   `mapstructure:"auto_migrate"`
+	DSN string `mapstructure:"dsn"`
 }
 
 // LogConfig holds log level configuration.
@@ -471,9 +492,16 @@ type WorkerConfig struct {
 	EnableStrategicCacheBreakpoints bool `mapstructure:"enable_strategic_cache_breakpoints"`
 }
 
-// LLMConfig holds LLM model configuration (supports Claude and OpenAI protocols).
+// LLMConfig holds LLM model configuration.
+//
+// NOTE: Currently only Claude protocol is fully supported and tested.
+// TODO: OpenAI protocol support is incomplete and not recommended for production use.
+// The OpenAI adapter has not been thoroughly tested with our message format,
+// especially for multimodal content (images, files). Only use "claude" provider
+// in production until OpenAI support is fully validated.
 type LLMConfig struct {
-	// Provider is the model provider: "claude" or "openai".
+	// Provider is the model provider. Currently only "claude" is fully supported.
+	// "openai" is available but not recommended for production use.
 	Provider string `mapstructure:"provider"`
 
 	// APIKey is the API key.
@@ -556,157 +584,189 @@ type TracingConfig struct {
 	SampleRate float64 `mapstructure:"sample_rate"`
 }
 
-// Load loads configuration. Uses a local viper instance to avoid polluting global state; safe for parallel tests.
-//
-// Config merge strategy (when --config is not specified):
-//  1. Load etc/config.yaml as baseline
-//  2. If etc/config.local.yaml exists, merge and override baseline (only write differences)
-//  3. config.local.yaml should be in .gitignore, used for local personal configuration
-//
-// When --config is specified, only loads the specified file without merging.
-func Load(cfgFile string) (*Config, error) {
-	v := viper.New()
+// StorageConfig holds object storage (rtc-oss3) configuration.
+// When Backend is empty, OSS3 is completely disabled (S3 endpoint not started, STS API returns 501).
+type StorageConfig struct {
+	// Backend is the storage backend type: "minio" (reserved: "oss", "cos", "s3").
+	// Empty disables OSS3 functionality.
+	Backend string `mapstructure:"backend"`
 
-	if cfgFile != "" {
-		v.SetConfigFile(cfgFile)
-	} else {
-		v.AddConfigPath("etc")
-		v.SetConfigName("config")
-		v.SetConfigType("yaml")
-	}
+	// MinIO holds MinIO backend configuration.
+	MinIO MinIOConfig `mapstructure:"minio"`
 
-	v.AutomaticEnv()
-	// Environment variable mapping: DATABASE__DSN -> database.dsn, REDIS__ADDR -> redis.addr.
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
+	// S3Endpoint holds S3-compatible endpoint configuration.
+	S3Endpoint S3EndpointConfig `mapstructure:"s3_endpoint"`
 
-	// Defaults (must be set before ReadInConfig).
-	v.SetDefault("server.env", "production")
-	v.SetDefault("auth.access_token_ttl_seconds", 3600)
-	v.SetDefault("auth.refresh_token_ttl", 30*24*time.Hour)
-	v.SetDefault("auth.oauth2_state_ttl", 10*time.Minute)
-	v.SetDefault("auth.allowed_redirect_uris", []string{})
-	v.SetDefault("providers.mock.enabled", true)
-	v.SetDefault("providers.mock.url", "http://localhost:10060")
-	v.SetDefault("providers.mock.client_id", "test-client")
-	v.SetDefault("providers.mock.client_secret", "test-client-secret")
-	v.SetDefault("providers.github.enabled", false)
-	v.SetDefault("providers.github.client_id", "")
-	v.SetDefault("providers.github.client_secret", "")
-	v.SetDefault("providers.github.scope", "read:user user:email")
-	v.SetDefault("providers.google.enabled", false)
-	v.SetDefault("providers.google.client_id", "")
-	v.SetDefault("providers.google.client_secret", "")
-	v.SetDefault("providers.google.scope", "openid email profile")
-	v.SetDefault("providers.http_timeout", 10*time.Second)
-	v.SetDefault("cors.allow_origins", []string{})
-	v.SetDefault("server.shutdown_timeout", 10*time.Second)
-	v.SetDefault("debug.enabled", true)
-	v.SetDefault("debug.goroutine_leak_threshold", 1000)
-	v.SetDefault("server.rpc_timeout", 10*time.Second)
-	v.SetDefault("worker.heartbeat_sec", 10)
-	v.SetDefault("worker.ttl_sec", 60)
-	v.SetDefault("worker.idle_timeout", 5*time.Minute)
-	v.SetDefault("worker.stream_block", 500*time.Millisecond)
-	v.SetDefault("worker.max_len_approx", 10000)
-	v.SetDefault("worker.background_concurrency", 5)
-	v.SetDefault("worker.context_tokens_limit", 25000)
-	v.SetDefault("worker.auto_compact_buffer_tokens", 13000)
-	v.SetDefault("worker.max_output_tokens_for_summary", 20000)
-	v.SetDefault("worker.checkpoint_ttl", 24*time.Hour)
-	v.SetDefault("worker.stream_chunk_ttl", 5*time.Minute)
-	v.SetDefault("worker.interrupt_answer_ttl", 10*time.Minute)
-	v.SetDefault("worker.orphan_trigger_ttl", 24*time.Hour)
-	v.SetDefault("worker.lock_ttl_sec", 120)
-	v.SetDefault("worker.token_counter_mode", "heuristic")
-	v.SetDefault("worker.enable_strategic_cache_breakpoints", true)
-	v.SetDefault("llm.api_key", "")
-	v.SetDefault("llm.thinking_budget_tokens", 50000)
-	v.SetDefault("llm.reasoning_effort", "medium")
-	v.SetDefault("llm.retry_max_attempts", 0)
-	v.SetDefault("llm.retry_base_delay", 1*time.Second)
-	// Default pricing: Claude 3.5 Sonnet (USD per million tokens).
-	v.SetDefault("llm.pricing.input_per_million", 3.0)
-	v.SetDefault("llm.pricing.output_per_million", 15.0)
-	v.SetDefault("llm.pricing.cached_read_per_million", 0.3)
-	v.SetDefault("llm.pricing.cached_write_per_million", 3.75)
-	v.SetDefault("llm.pricing.reasoning_per_million", 0.0)
-	v.SetDefault("api.query_default_limit", 50)
-	v.SetDefault("api.query_max_limit", 100)
-	v.SetDefault("tracing.enabled", false)
-	v.SetDefault("tracing.endpoint", "localhost:4317")
-	v.SetDefault("tracing.sample_rate", 1.0)
-	v.SetDefault("log.llm_payload", false)
-	// asynq defaults
-	v.SetDefault("asynq.concurrency", 10)
-	v.SetDefault("asynq.queue", "loop")
-	v.SetDefault("asynq.recovery_interval", 1*time.Minute)
-	v.SetDefault("asynq.stale_threshold", 5*time.Minute)
-	v.SetDefault("asynq.retry_max", 3)
-	v.SetDefault("asynq.retry_timeout", 30*time.Second)
-	v.SetDefault("asynq.health_check_interval", 30*time.Second)
+	// Quota holds storage quota configuration.
+	Quota QuotaConfig `mapstructure:"quota"`
 
-	// web_search defaults
-	v.SetDefault("web_search.enabled", false)
-	v.SetDefault("web_search.balancer_type", "round_robin")
-	v.SetDefault("web_search.global_timeout", 30*time.Second)
-	v.SetDefault("web_search.proxy_health_url", "https://www.google.com")
-	v.SetDefault("web_search.proxy_check_interval", 30*time.Second)
-	v.SetDefault("web_search.circuit_breaker.failure_threshold", 50)
-	v.SetDefault("web_search.circuit_breaker.open_timeout", 60*time.Second)
-	v.SetDefault("web_search.circuit_breaker.half_open_max_requests", 3)
-	v.SetDefault("web_search.circuit_breaker.window_size", 100)
-	v.SetDefault("web_search.circuit_breaker.window_duration", 5*time.Minute)
-	v.SetDefault("web_search.rate_limiter.rate", 10)
-	v.SetDefault("web_search.rate_limiter.burst", 20)
-	v.SetDefault("web_search.retry.max_retries", 3)
-	v.SetDefault("web_search.retry.retry_delay", 1*time.Second)
-	v.SetDefault("web_search.retry.backoff_factor", 2.0)
+	// RateLimit holds S3 API rate limiting configuration.
+	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 
-	// web_fetch defaults
-	v.SetDefault("web_fetch.enabled", false)
-	v.SetDefault("web_fetch.max_concurrency", 20)
-	v.SetDefault("web_fetch.max_domain_concurrency", 5)
-	v.SetDefault("web_fetch.cache_ttl", 30*time.Minute)
-	v.SetDefault("web_fetch.max_url_length", 2000)
-	v.SetDefault("web_fetch.max_content_size", 10*1024*1024)
-	v.SetDefault("web_fetch.fetch_timeout", 60*time.Second)
-	v.SetDefault("web_fetch.max_redirects", 10)
-	v.SetDefault("web_fetch.llm_extract_threshold", 50000)
-	v.SetDefault("web_fetch.llm_max_tokens", 4096)
-	v.SetDefault("web_fetch.max_llm_per_session", 50)
-	v.SetDefault("web_fetch.rate_limit.global_rps", 20.0)
-	v.SetDefault("web_fetch.rate_limit.global_burst", 40)
-	v.SetDefault("web_fetch.rate_limit.domain_rps", 2.0)
-	v.SetDefault("web_fetch.rate_limit.domain_burst", 5)
-	v.SetDefault("web_fetch.robots_cache_ttl", 24*time.Hour)
-	v.SetDefault("web_fetch.user_agent", "RTCAgent-WebFetch/1.0")
-	v.SetDefault("web_fetch.respect_robots_txt", true)
+	// Credential holds temporary credential configuration.
+	Credential CredentialConfig `mapstructure:"credential"`
 
-	if err := v.ReadInConfig(); err != nil {
-		return nil, err
-	}
+	// Cleanup holds periodic cleanup task configuration.
+	Cleanup CleanupConfig `mapstructure:"cleanup"`
 
-	// When --config is not specified, auto-merge etc/config.local.yaml (if it exists).
-	if cfgFile == "" {
-		localV := viper.New()
-		localV.AddConfigPath("etc")
-		localV.SetConfigName("config.local")
-		localV.SetConfigType("yaml")
-		if err := localV.ReadInConfig(); err == nil {
-			for _, key := range localV.AllKeys() {
-				v.Set(key, localV.Get(key))
-			}
-		}
-	}
+	// Encryption holds SessionToken encryption configuration.
+	Encryption EncryptionConfig `mapstructure:"encryption"`
+}
 
-	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, err
-	}
+// IsEnabled returns true if a storage backend is configured.
+// When backend is empty, OSS3 is completely disabled:
+//   - S3 HTTP server is not started (no :9000 port)
+//   - STS API endpoints return 501 Not Implemented
+//   - Readyz "storage" field returns "not configured" (non-blocking)
+//   - Cleanup goroutine is not started
+func (c *StorageConfig) IsEnabled() bool {
+	return c.Backend != ""
+}
 
-	// Expand environment variable references in sensitive configuration fields (${VAR_NAME} form).
-	// Only applies to sensitive fields to prevent other config items from inadvertently using environment variables.
-	expandEnvVars(&cfg)
+// MinIOConfig holds MinIO backend connection configuration.
+type MinIOConfig struct {
+	// Endpoint is the MinIO server endpoint (e.g., "http://localhost:9000").
+	// Used for server-to-MinIO communication (internal network).
+	Endpoint string `mapstructure:"endpoint"`
 
-	return &cfg, nil
+	// PublicURL is the public-facing S3 endpoint URL (e.g., "http://localhost:29000").
+	// Used for generating presigned URLs that clients will access (public network).
+	// When empty, falls back to Endpoint.
+	PublicURL string `mapstructure:"public_url"`
+
+	// AccessKey is the MinIO access key (aligned with docker-compose MINIO_ROOT_USER).
+	AccessKey string `mapstructure:"access_key"`
+
+	// SecretKey is the MinIO secret key (aligned with docker-compose MINIO_ROOT_PASSWORD).
+	SecretKey string `mapstructure:"secret_key"`
+
+	// Bucket is the bucket name (default "rtc-agent").
+	Bucket string `mapstructure:"bucket"`
+
+	// Region is the S3 region for presigned URL generation (e.g., "us-east-1").
+	// Used by publicClient to avoid GetBucketLocation calls. Default "us-east-1".
+	Region string `mapstructure:"region"`
+
+	// UseSSL enables HTTPS for MinIO connection.
+	UseSSL bool `mapstructure:"use_ssl"`
+
+	// HTTP Transport tuning (R7 Review H1).
+	// MaxIdleConns is the total idle connections across all hosts. Default 1024.
+	MaxIdleConns int `mapstructure:"max_idle_conns"`
+
+	// MaxIdleConnsPerHost is the idle connections per MinIO endpoint. Default 100.
+	MaxIdleConnsPerHost int `mapstructure:"max_idle_conns_per_host"`
+
+	// IdleConnTimeout is the timeout for idle connections. Default 90s.
+	IdleConnTimeout time.Duration `mapstructure:"idle_conn_timeout"`
+
+	// Retry tuning (R7 Review H5).
+	// minio-go defaults: 10 retries with exponential backoff.
+	// Override to 3 retries to fail faster and avoid long tail latency.
+
+	// MaxRetries is the max retry attempts per request. Default 3.
+	MaxRetries int `mapstructure:"max_retries"`
+
+	// RetryTimeout is the total retry time budget. Default 30s.
+	RetryTimeout time.Duration `mapstructure:"retry_timeout"`
+}
+
+// S3EndpointConfig holds S3-compatible endpoint configuration.
+type S3EndpointConfig struct {
+	// Host is the listen address (e.g., "0.0.0.0").
+	Host string `mapstructure:"host"`
+
+	// Port is the S3 endpoint port (default 9000).
+	Port int `mapstructure:"port"`
+
+	// TLSCert is the TLS certificate path (PEM format). Optional.
+	// When both TLSCert and TLSKey are set, S3 endpoint uses HTTPS.
+	TLSCert string `mapstructure:"tls_cert"`
+
+	// TLSKey is the TLS private key path (PEM format). Optional.
+	TLSKey string `mapstructure:"tls_key"`
+
+	// AllowedOrigins is the CORS whitelist (default ["*"]).
+	AllowedOrigins []string `mapstructure:"allowed_origins"`
+
+	// Region is the S3 region for SigV4 signing (default "us-east-1").
+	Region string `mapstructure:"region"`
+}
+
+// QuotaConfig holds storage quota configuration.
+type QuotaConfig struct {
+	// MaxFileSizeBytes is the maximum single file size. Default 100MB.
+	MaxFileSizeBytes int64 `mapstructure:"max_file_size_bytes"`
+
+	// MaxUserQuotaBytes is the maximum total storage per user. Default 1GB.
+	MaxUserQuotaBytes int64 `mapstructure:"max_user_quota_bytes"`
+
+	// MaxConcurrentUploads is the maximum concurrent multipart uploads per user. Default 10.
+	MaxConcurrentUploads int `mapstructure:"max_concurrent_uploads"`
+
+	// PendingTTL is the two-phase reserve expiry duration. Default 5m.
+	PendingTTL time.Duration `mapstructure:"pending_ttl"`
+}
+
+// RateLimitConfig holds S3 API rate limiting configuration.
+type RateLimitConfig struct {
+	// RequestsPerMinute is the per-user S3 API rate limit. Default 60.
+	RequestsPerMinute int `mapstructure:"requests_per_minute"`
+}
+
+// CredentialConfig holds temporary credential configuration.
+type CredentialConfig struct {
+	// AccessTokenTTL is the access token validity duration. Default 1h.
+	AccessTokenTTL time.Duration `mapstructure:"access_token_ttl"`
+
+	// SessionTokenTTL is the session token validity duration. Default 1h.
+	SessionTokenTTL time.Duration `mapstructure:"session_token_ttl"`
+
+	// PresignedURLTTL is the presigned URL validity duration. Default 1h.
+	PresignedURLTTL time.Duration `mapstructure:"presigned_url_ttl"`
+}
+
+// CleanupConfig holds periodic cleanup task configuration.
+type CleanupConfig struct {
+	// Interval is the cleanup task execution interval. Default 1h.
+	Interval time.Duration `mapstructure:"interval"`
+
+	// MultipartExpiry is the incomplete multipart upload expiry duration. Default 24h.
+	MultipartExpiry time.Duration `mapstructure:"multipart_expiry"`
+
+	// CredentialExpiry is the expired credential cleanup threshold. Default 24h.
+	CredentialExpiry time.Duration `mapstructure:"credential_expiry"`
+
+	// Orphan holds orphan object cleanup configuration.
+	Orphan OrphanCleanupConfig `mapstructure:"orphan"`
+}
+
+// OrphanCleanupConfig holds MinIO orphan object cleanup configuration.
+// Orphan objects are MinIO objects with no corresponding DB record, typically
+// caused by DB failures after successful MinIO upload.
+type OrphanCleanupConfig struct {
+	// Enabled controls whether orphan cleanup is active. Default false.
+	// Orphan cleanup performs full-bucket scans and should be enabled only
+	// after verifying the reconciler does not interfere with normal operations.
+	Enabled bool `mapstructure:"enabled"`
+
+	// BatchSize is the number of MinIO objects scanned per batch.
+	// Larger batches reduce round-trips but increase memory usage. Default 500.
+	BatchSize int `mapstructure:"batch_size"`
+
+	// CooldownPeriod is the minimum age an object must have before it can be
+	// deleted. Objects newer than this are skipped to avoid deleting objects
+	// that are still being uploaded or committed. Default 1h.
+	CooldownPeriod time.Duration `mapstructure:"cooldown_period"`
+
+	// DryRun when true logs orphans without deleting them. Default true.
+	// Set to false only after verifying the reconciler identifies correct orphans.
+	DryRun bool `mapstructure:"dry_run"`
+}
+
+// EncryptionConfig holds SessionToken encryption configuration.
+type EncryptionConfig struct {
+	// SessionTokenKey is the AES-256 key (32 bytes) for SessionToken encryption.
+	// Injected via environment variable OSS3_SESSION_TOKEN_KEY.
+	SessionTokenKey string `mapstructure:"session_token_key"`
 }

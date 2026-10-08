@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/rtc-agent/server/internal/infra/config"
+	dbmetrics "github.com/rtc-agent/server/internal/infra/db"
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/infra/tracing"
 	"github.com/rtc-agent/server/pkg/logger"
 
@@ -43,6 +45,10 @@ func runServe(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Invalid config: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Populate dynamic config registry with yaml defaults so that
+	// config.GetRegistryEntry().YamlDefault reflects the actual yaml values.
+	config.PopulateYamlDefaults(cfg)
 
 	// Init logger
 	logger.Init(cfg.Log.Level, cfg.Log.ServerLogFile)
@@ -110,6 +116,11 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Fatal(context.Background(), "Failed to register GORM tracing plugin", zap.Error(err))
 	}
 
+	// Register GORM metrics plugin for Prometheus query metrics.
+	if err := db.Use(dbmetrics.NewMetricsPlugin()); err != nil {
+		logger.Fatal(context.Background(), "Failed to register GORM metrics plugin", zap.Error(err))
+	}
+
 	// Configure database connection pool.
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -132,6 +143,9 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Fatal(context.Background(), "Failed to connect Redis", zap.Error(err))
 	}
 	defer func() { _ = rdb.Close() }()
+
+	// Init ban cache (Redis-backed, shared across all instances)
+	middleware.InitBanCache(rdb, 30*time.Second)
 
 	// Init server (Wire-generated)
 	srv, err := InitializeServer(cfg, db, rdb)

@@ -89,7 +89,7 @@ func (d *DualBroker) Subscribe(channels ...string) error {
 		if err != nil {
 			return err
 		}
-		_, span := d.tracer.Start(context.Background(), "centrifugeplus.dualbroker.subscribe",
+		_, span := d.tracer.Start(context.Background(), "centrifuge_plus.dual_broker.subscribe",
 			trace.WithAttributes(
 				AttributeChannel.String(ch),
 				AttributeChannelType.String(ct.String()),
@@ -121,7 +121,7 @@ func (d *DualBroker) Unsubscribe(channels ...string) error {
 		if err != nil {
 			return err
 		}
-		_, span := d.tracer.Start(context.Background(), "centrifugeplus.dualbroker.unsubscribe",
+		_, span := d.tracer.Start(context.Background(), "centrifuge_plus.dual_broker.unsubscribe",
 			trace.WithAttributes(
 				AttributeChannel.String(ch),
 				AttributeChannelType.String(ct.String()),
@@ -164,7 +164,7 @@ func (d *DualBroker) PublishWithContext(ctx context.Context, ch string, data []b
 		err = getErr
 		return
 	}
-	ctx, span := d.tracer.Start(ctx, "centrifugeplus.dualbroker.publish",
+	ctx, span := d.tracer.Start(ctx, "centrifuge_plus.dual_broker.publish",
 		trace.WithAttributes(
 			AttributeChannel.String(ch),
 			AttributeChannelType.String(ct.String()),
@@ -202,7 +202,7 @@ func (d *DualBroker) PublishWithUserOffset(ctx context.Context, ch string, data 
 		err = getErr
 		return
 	}
-	ctx, span := d.tracer.Start(ctx, "centrifugeplus.dualbroker.publish_user_update",
+	ctx, span := d.tracer.Start(ctx, "centrifuge_plus.dual_broker.publish_user_update",
 		trace.WithAttributes(
 			AttributeChannel.String(ch),
 			AttributeChannelType.String(ct.String()),
@@ -232,7 +232,7 @@ func (d *DualBroker) PublishWithOffset(ctx context.Context, ch string, data []by
 // PublishEphemeral forces routing through liveBroker, pure PUB/SUB, no persistence to stream.
 // Used for transient events like typing: loss is acceptable, no offset or recovery needed.
 func (d *DualBroker) PublishEphemeral(ctx context.Context, ch string, data []byte, opts centrifuge.PublishOptions) error {
-	_, span := d.tracer.Start(ctx, "centrifugeplus.dualbroker.publish_ephemeral",
+	_, span := d.tracer.Start(ctx, "centrifuge_plus.dual_broker.publish_ephemeral",
 		trace.WithAttributes(
 			AttributeChannel.String(ch),
 		),
@@ -250,7 +250,7 @@ func (d *DualBroker) PublishJoin(ch string, info *centrifuge.ClientInfo) error {
 	if err != nil {
 		return err
 	}
-	_, span := d.tracer.Start(context.Background(), "centrifugeplus.dualbroker.publish_join",
+	_, span := d.tracer.Start(context.Background(), "centrifuge_plus.dual_broker.publish_join",
 		trace.WithAttributes(
 			AttributeChannel.String(ch),
 			AttributeChannelType.String(ct.String()),
@@ -276,7 +276,7 @@ func (d *DualBroker) PublishLeave(ch string, info *centrifuge.ClientInfo) error 
 	if err != nil {
 		return err
 	}
-	_, span := d.tracer.Start(context.Background(), "centrifugeplus.dualbroker.publish_leave",
+	_, span := d.tracer.Start(context.Background(), "centrifuge_plus.dual_broker.publish_leave",
 		trace.WithAttributes(
 			AttributeChannel.String(ch),
 			AttributeChannelType.String(ct.String()),
@@ -303,7 +303,7 @@ func (d *DualBroker) History(ch string, opts centrifuge.HistoryOptions) (pubs []
 		err = getErr
 		return
 	}
-	_, span := d.tracer.Start(context.Background(), "centrifugeplus.dualbroker.history",
+	_, span := d.tracer.Start(context.Background(), "centrifuge_plus.dual_broker.history",
 		trace.WithAttributes(
 			AttributeChannel.String(ch),
 			AttributeChannelType.String(ct.String()),
@@ -330,7 +330,7 @@ func (d *DualBroker) RemoveHistory(ch string) error {
 	if err != nil {
 		return err
 	}
-	_, span := d.tracer.Start(context.Background(), "centrifugeplus.dualbroker.remove_history",
+	_, span := d.tracer.Start(context.Background(), "centrifuge_plus.dual_broker.remove_history",
 		trace.WithAttributes(
 			AttributeChannel.String(ch),
 			AttributeChannelType.String(ct.String()),

@@ -12,6 +12,9 @@ var (
 	ErrInvalidType = errors.New("invalid memory type")
 	// ErrDuplicateLink indicates a duplicate memory link.
 	ErrDuplicateLink = errors.New("memory link already exists")
+	// ErrOptimisticLock indicates the update failed due to an optimistic lock conflict.
+	// The record was modified by another process between read and write.
+	ErrOptimisticLock = errors.New("optimistic lock conflict: record was modified by another process")
 
 	// ErrRequiredField indicates a required field is missing during validation.
 	ErrRequiredField = errors.New("required field missing")

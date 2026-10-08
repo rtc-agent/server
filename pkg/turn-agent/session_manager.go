@@ -323,7 +323,7 @@ func (mgr *SessionTurnManager) Cleanup(ctx context.Context) {
 func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 	defer close(mgr.done)
 
-	cleanupCtx, cleanupSpan := mgr.startSpanIfEnabled(ctx, "session_cleanup",
+	cleanupCtx, cleanupSpan := mgr.startSpanIfEnabled(ctx, "turn_agent.session_cleanup",
 		trace.WithAttributes(
 			attribute.String("session.id", mgr.sessionID),
 			attribute.String("turn.id", mgr.turnID),
@@ -425,7 +425,7 @@ func (mgr *SessionTurnManager) doCleanup(ctx context.Context) {
 // publishes a session:new notification to wake up idle workers.
 // Called after ReleaseSession so that the notified workers can claim the lock.
 func (mgr *SessionTurnManager) notifyPendingWork(ctx context.Context) {
-	notifyCtx, notifySpan := mgr.startSpanIfEnabled(ctx, "notify_pending_work",
+	notifyCtx, notifySpan := mgr.startSpanIfEnabled(ctx, "turn_agent.notify_pending_work",
 		trace.WithAttributes(
 			attribute.String("session.id", mgr.sessionID),
 		),

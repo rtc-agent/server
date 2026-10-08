@@ -121,7 +121,7 @@ func (b *TopicBroker) History(ch string, opts centrifuge.HistoryOptions) (pubs [
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	_, span := b.tracer.Start(ctx, "centrifugeplus.topicbroker.history",
+	_, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.history",
 		trace.WithAttributes(AttributeChannel.String(ch)),
 	)
 	defer func() {

@@ -27,9 +27,19 @@ func AutoMigrate(db *gorm.DB) error {
 		// Phase 2: unified Memory model
 		&memory.Memory{},
 		&memory.MemoryLink{},
+		// rtc-oss3: object storage models
+		&File{},
+		&MultipartUpload{},
+		&MultipartUploadPart{},
+		&TemporaryCredential{},
 	); err != nil {
 		return err
 	}
+
+	// Drop legacy composite unique index on files (user_id, key) if it exists.
+	// The unique constraint is now on (key) only — content-addressed storage
+	// guarantees key uniqueness per content hash. See oss3-phase3 review Task 4.
+	_ = db.Exec("DROP INDEX IF EXISTS idx_files_user_key").Error
 
 	// Add composite index on memory_links to optimise queries by from_id + relation.
 	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_memory_links_from_relation ON memory_links(from_id, relation)").Error; err != nil {
@@ -45,6 +55,20 @@ func AutoMigrate(db *gorm.DB) error {
 	// to_jsonb() converts a PostgreSQL array into a JSON array — direct cast text[]->jsonb is not allowed.
 	// Silently ignored if the column is already jsonb or doesn't exist.
 	_ = db.Exec("ALTER TABLE user_memories ALTER COLUMN tags TYPE jsonb USING to_jsonb(tags)").Error
+
+	// Composite indexes for query performance.
+	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_session_offset ON messages(session_id, global_offset)").Error; err != nil {
+		return fmt.Errorf("create index idx_messages_session_offset: %w", err)
+	}
+	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_kind, owner_ref_id)").Error; err != nil {
+		return fmt.Errorf("create index idx_sessions_owner: %w", err)
+	}
+	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_operator_time ON admin_audit_logs(operator_id, created_at)").Error; err != nil {
+		return fmt.Errorf("create index idx_admin_audit_logs_operator_time: %w", err)
+	}
+	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_resource_time ON admin_audit_logs(resource_type, created_at)").Error; err != nil {
+		return fmt.Errorf("create index idx_admin_audit_logs_resource_time: %w", err)
+	}
 
 	return nil
 }

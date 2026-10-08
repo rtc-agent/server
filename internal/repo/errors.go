@@ -5,7 +5,11 @@
 // in errors.go; callers can use errors.Is to determine error types.
 package repo
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/jackc/pgx/v5/pgconn"
+)
 
 // Sentinel errors for callers to check via errors.Is.
 var (
@@ -46,8 +50,27 @@ var (
 	// ScriptExecution
 	ErrScriptExecutionNotFound = errors.New("script execution not found")
 
+	// File (OSS3)
+	ErrFileNotFound = errors.New("file not found")
+
+	// MultipartUpload (OSS3)
+	ErrMultipartUploadNotFound = errors.New("multipart upload not found")
+
 	// Permission
 	ErrPermissionDenied = errors.New("permission denied")
+	ErrPermissionExists = errors.New("permission policy already exists")
+
+	// Role
+	ErrRoleNotFound           = errors.New("role not found")
+	ErrRoleNameExists         = errors.New("role name already exists")
+	ErrDuplicateName          = ErrRoleNameExists // alias for ErrRoleNameExists per spec
+	ErrCannotDeleteSystemRole = errors.New("cannot delete system role")
+	ErrCannotRemoveLastAdmin  = errors.New("cannot remove the last admin role assignment")
+	ErrCannotRemoveSelfAdmin  = errors.New("cannot remove your own admin role")
+	ErrRoleDisabled           = errors.New("role is disabled")
+
+	// Concurrency
+	ErrConflict = errors.New("optimistic lock conflict")
 )
 
 // IsNotFound checks whether the error is a "not found" variant.
@@ -62,5 +85,20 @@ func IsNotFound(err error) bool {
 		errors.Is(err, ErrRefreshTokenNotFound) ||
 		errors.Is(err, ErrGoalNotFound) ||
 		errors.Is(err, ErrLoopNotFound) ||
-		errors.Is(err, ErrScriptExecutionNotFound)
+		errors.Is(err, ErrScriptExecutionNotFound) ||
+		errors.Is(err, ErrFileNotFound) ||
+		errors.Is(err, ErrMultipartUploadNotFound) ||
+		errors.Is(err, ErrRoleNotFound)
+}
+
+// IsDuplicateKeyError checks whether the error is a PostgreSQL unique
+// constraint violation (code 23505).
+// Shared by user_repo, oauth2_user_repo, and other repos that need to
+// detect concurrent inserts on unique indexes.
+func IsDuplicateKeyError(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return false
 }

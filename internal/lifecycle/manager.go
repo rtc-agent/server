@@ -56,15 +56,16 @@ func NewManager() *Manager {
 }
 
 // Register registers a component. Must be called before Start.
-func (m *Manager) Register(name string, c Component) {
+func (m *Manager) Register(name string, c Component) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.started || m.stopped {
-		panic("lifecycle.Manager: cannot register after Start or Stop")
+		return fmt.Errorf("lifecycle.Manager: cannot register after Start or Stop")
 	}
 
 	m.components = append(m.components, namedComponent{name: name, c: c})
+	return nil
 }
 
 // Start starts all components in registration order.

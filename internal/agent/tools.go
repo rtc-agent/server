@@ -252,12 +252,12 @@ func (t *scriptTool) InvokableRun(ctx context.Context, argumentsInJSON string, o
 //   - r.manager.deps -> r.helpers.deps (the integration struct is helpers, not Manager)
 //   - Logger calls use h.logger.Info instead of logger.Debug/Info directly.
 func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumentsInJSON string, _ ...tool.Option) (string, error) {
-	ctx, span := r.helpers.tracer.Start(ctx, "rtcTool."+toolName,
+	ctx, span := r.helpers.tracer.Start(ctx, "rtc_tool."+toolName,
 		trace.WithAttributes(
-			attribute.String("session_id", r.session.ID.String()),
-			attribute.String("turn_id", r.turnID.String()),
-			attribute.String("tool_name", toolName),
-			attribute.Int("args_length", len(argumentsInJSON)),
+			attribute.String("session.id", r.session.ID.String()),
+			attribute.String("turn.id", r.turnID.String()),
+			attribute.String("tool.name", toolName),
+			attribute.Int("tool.args_length", len(argumentsInJSON)),
 		),
 	)
 	defer span.End()
@@ -280,11 +280,14 @@ func (r *rtcToolBase) InvokableRun(ctx context.Context, toolName string, argumen
 	}
 
 	// === First-call path ===
-	result, err := r.handleRtcFirstCall(ctx, toolName, argumentsInJSON)
-	// handleRtcFirstCall always returns an error (the interrupt), so record it unconditionally.
-	span.RecordError(err)
-	span.SetStatus(codes.Error, "first_call_interrupted")
-	return result, err
+	err := r.handleRtcFirstCall(ctx, toolName, argumentsInJSON)
+	// handleRtcFirstCall returns an interrupt (expected control flow, not an error)
+	span.AddEvent("first_call_interrupted", trace.WithAttributes(
+		attribute.String("tool.interrupt_type", "first_call"),
+		attribute.String("tool.name", toolName),
+	))
+	span.SetStatus(codes.Ok, "interrupted_for_user_input")
+	return "", err
 }
 
 // handleRtcResume handles the resume path for RTC tools: checks if the RTC
@@ -312,8 +315,10 @@ func (r *rtcToolBase) handleRtcResume(ctx context.Context, state rtcInterruptSta
 		if r.formatResult != nil {
 			toolOutput = r.formatResult(dbRtc)
 		} else {
-			// 方案 C：从 output message (TEXT 列) 读取工具结果，而不是从 rtcs.result (JSONB 列)
-			// 这确保 resume 路径和 loadMessages 路径使用完全相同的数据源，避免 PostgreSQL JSONB 规范化差异
+			// Option C: read tool result from the output message (TEXT column)
+			// instead of rtcs.result (JSONB column).
+			// This ensures resume and loadMessages paths use the exact same data
+			// source, avoiding PostgreSQL JSONB normalization differences.
 			if dbRtc.OutputMessageID != nil {
 				outputMsg, err := r.helpers.deps.MessageRepo.GetByID(ctx, *dbRtc.OutputMessageID)
 				if err == nil && outputMsg != nil {
@@ -321,15 +326,15 @@ func (r *rtcToolBase) handleRtcResume(ctx context.Context, state rtcInterruptSta
 					if parseErr == nil && toolCall.Output != nil {
 						toolOutput = *toolCall.Output
 					} else {
-						// Fallback: 解析失败，使用 rtcs.result
+						// Fallback: parse failed, use rtcs.result.
 						toolOutput = string(dbRtc.Result)
 					}
 				} else {
-					// Fallback: output message 不存在，使用 rtcs.result
+					// Fallback: output message does not exist, use rtcs.result.
 					toolOutput = string(dbRtc.Result)
 				}
 			} else {
-				// Fallback: OutputMessageID 不存在（旧数据），使用 rtcs.result
+				// Fallback: OutputMessageID absent (legacy data), use rtcs.result.
 				toolOutput = string(dbRtc.Result)
 			}
 
@@ -353,15 +358,15 @@ func (r *rtcToolBase) handleRtcResume(ctx context.Context, state rtcInterruptSta
 
 // handleRtcFirstCall handles the first-call path for RTC tools: creates the
 // RTC record, message, and triggers the interrupt.
-func (r *rtcToolBase) handleRtcFirstCall(ctx context.Context, toolName, argumentsInJSON string) (string, error) {
+func (r *rtcToolBase) handleRtcFirstCall(ctx context.Context, toolName, argumentsInJSON string) error {
 	callID := compose.GetToolCallID(ctx)
 	if callID == "" {
-		return "", fmt.Errorf("rtc: tool_call_id not set in context")
+		return fmt.Errorf("rtc: tool_call_id not set in context")
 	}
 
 	turnUUID := r.turnID
 	if turnUUID == uuid.Nil {
-		return "", fmt.Errorf("rtc: turn UUID is nil")
+		return fmt.Errorf("rtc: turn UUID is nil")
 	}
 
 	rtcID := uuid.Must(uuid.NewV7())
@@ -379,7 +384,7 @@ func (r *rtcToolBase) handleRtcFirstCall(ctx context.Context, toolName, argument
 
 	msgID, err := r.createRtcAndMessage(ctx, rtcID, clientID, turnUUID, toolName, argumentsInJSON, contentData)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	r.registerRtcBatch(ctx, rtcID, turnUUID)
@@ -397,7 +402,7 @@ func (r *rtcToolBase) handleRtcFirstCall(ctx context.Context, toolName, argument
 		MessageID: msgID.String(),
 		Args:      argumentsInJSON,
 	}
-	return "", tool.StatefulInterrupt(ctx, info, state)
+	return tool.StatefulInterrupt(ctx, info, state)
 }
 
 // createRtcAndMessage transactionally creates a Message and RTC record.
@@ -508,35 +513,6 @@ func (r *rtcToolBase) registerRtcBatch(ctx context.Context, rtcID, turnUUID uuid
 	}
 }
 
-// parseToolArgs safely parses JSON tool arguments.
-//
-// On failure it returns (false, friendlyMessage) instead of a Go error.
-// This is critical: returning an error from InvokableRun causes Eino's
-// ToolNode to wrap it as a NodeRunError and terminate the entire turn.
-// By returning a message, the LLM sees the parse failure and can retry
-// with correct arguments.
-//
-// The caller should check the bool: if false, return the string directly
-// from InvokableRun (with nil error).
-func parseToolArgs(ctx context.Context, h *helpers, toolName string, argumentsInJSON string, args any) (ok bool, errorMsg string) {
-	if err := json.Unmarshal([]byte(argumentsInJSON), args); err != nil {
-		// Truncate arguments for logging to avoid flooding logs with large payloads.
-		argPreview := argumentsInJSON
-		const maxPreviewLen = 200
-		if len(argPreview) > maxPreviewLen {
-			argPreview = argPreview[:maxPreviewLen] + "...(truncated)"
-		}
-		h.logger.Warn(ctx, "tool.parse_arguments_failed", map[string]any{
-			"tool_name":   toolName,
-			"error":       err.Error(),
-			"raw_length":  len(argumentsInJSON),
-			"raw_preview": argPreview,
-		})
-		return false, formatParseError(err.Error(), argPreview)
-	}
-	return true, ""
-}
-
 // parseToolArgsWithPersist safely parses JSON tool arguments and persists
 // parse errors to the database as toolcall_output messages.
 //
@@ -572,8 +548,9 @@ func parseToolArgsWithPersist(
 		})
 		errMsg := formatParseError(err.Error(), argPreview)
 
-		// 持久化错误消息到 DB，确保 checkpoint resume 时消息结构一致
-		// 这对 LLM 缓存命中至关重要
+		// Persist the error message to DB so that the message structure is
+		// consistent on checkpoint resume.
+		// This is critical for LLM cache hit rate.
 		if publishErr := publishToolMessages(ctx, publishToolMessagesInput{
 			Helpers:         h,
 			SessionID:       sessionID,

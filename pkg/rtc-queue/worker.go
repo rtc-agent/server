@@ -142,7 +142,7 @@ func (w *Worker) logError(ctx context.Context, msg string, keysAndValues ...any)
 // unrecoverable error occurs. Run subscribes to session:new and
 // dispatches work to OnWork callbacks. Call Stop for graceful shutdown.
 func (w *Worker) Run(ctx context.Context) error {
-	ctx, span := workerTracer().Start(ctx, "Worker.Run",
+	ctx, span := workerTracer().Start(ctx, "queue_worker.run",
 		trace.WithAttributes(
 			attribute.String("worker.id", w.cfg.WorkerID),
 			attribute.Int("worker.concurrency", w.cfg.Concurrency),
@@ -210,7 +210,7 @@ func (w *Worker) Run(ctx context.Context) error {
 // (whichever comes first). After Stop returns, the worker cannot be
 // restarted.
 func (w *Worker) Stop(ctx context.Context) error {
-	ctx, span := workerTracer().Start(ctx, "Worker.Stop",
+	ctx, span := workerTracer().Start(ctx, "queue_worker.stop",
 		trace.WithAttributes(
 			attribute.String("worker.id", w.cfg.WorkerID),
 		),
@@ -344,7 +344,7 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 
 // processSessionNormal handles the normal mode: claim one work, process it, release lock.
 func (w *Worker) processSessionNormal(ctx context.Context, sessionID string) {
-	ctx, span := workerTracer().Start(ctx, "Worker.processSessionNormal",
+	ctx, span := workerTracer().Start(ctx, "queue_worker.process_session_normal",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 		),
@@ -388,7 +388,7 @@ func (w *Worker) processSessionNormal(ctx context.Context, sessionID string) {
 // processSessionHoldLock handles the hold lock mode: claim work with credential,
 // process it, complete without releasing lock, continue until queue is empty.
 func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
-	ctx, span := workerTracer().Start(ctx, "Worker.processSessionHoldLock",
+	ctx, span := workerTracer().Start(ctx, "queue_worker.process_session_hold_lock",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
 		),
@@ -506,7 +506,7 @@ func (w *Worker) processWorkHoldLock(ctx context.Context, claim *ClaimResult) {
 
 // processWorkInternal is the shared implementation for both normal and hold-lock modes.
 func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, holdLock bool, credential string) {
-	ctx, span := workerTracer().Start(ctx, "Worker.processWorkInternal",
+	ctx, span := workerTracer().Start(ctx, "queue_worker.process_work_internal",
 		trace.WithAttributes(
 			attribute.String("work.id", claim.WorkID),
 			attribute.String("session.id", claim.SessionID),
@@ -542,6 +542,14 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 	// (e.g. turn-agent) can use it without re-claiming the lock.
 	work.Credential = credential
 
+	// Record wait duration (time from publish to claim)
+	if !work.ClaimedAt.IsZero() && !work.CreatedAt.IsZero() {
+		globalQueueMetrics.recordWaitDuration(work.ClaimedAt.Sub(work.CreatedAt))
+	}
+
+	// Record processing start time for duration calculation
+	processStart := time.Now()
+
 	w.log(ctx, "worker.loaded_work", map[string]any{
 		"work_id":    claim.WorkID,
 		"session_id": work.SessionID,
@@ -570,6 +578,9 @@ func (w *Worker) processWorkInternal(ctx context.Context, claim *ClaimResult, ho
 		"session_id": work.SessionID,
 	})
 	err = w.cfg.OnWork(workCtx, work, cancelCh)
+	// Record processing duration (time from claim/load to OnWork return)
+	globalQueueMetrics.recordProcessDuration(time.Since(processStart))
+
 	onworkFields := map[string]any{
 		"work_id":    work.ID,
 		"session_id": work.SessionID,

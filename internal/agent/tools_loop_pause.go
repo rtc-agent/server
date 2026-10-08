@@ -40,10 +40,10 @@ func (t *pauseLoopTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.pauseLoop",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.pause_loop",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -60,7 +60,7 @@ func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	}
 
 	if !loop.IsPausable() {
-		span.SetAttributes(attribute.String("current_status", string(loop.Status)))
+		span.SetAttributes(attribute.String("loop.current_status", string(loop.Status)))
 		span.SetStatus(codes.Error, "not_pausable")
 		return fmt.Sprintf("Error: loop is not in a pausable state (current status: %s)", loop.Status), nil
 	}
@@ -106,7 +106,7 @@ func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string
 		return "", fmt.Errorf("pauseLoop: publish messages: %w", err)
 	}
 
-	span.SetAttributes(attribute.String("loop_id", loop.ID.String()))
+	span.SetAttributes(attribute.String("loop.id", loop.ID.String()))
 	t.helpers.logger.Info(ctx, "pauseLoop.completed", map[string]any{
 		"session_id": t.session.ID.String(),
 		"loop_id":    loop.ID.String(),

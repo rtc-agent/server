@@ -17,7 +17,7 @@ type HybridCircuitBreaker struct {
 	local          *CircuitBreaker
 	remote         *DistributedCircuitBreaker
 	redisClient    *redis.Client
-	clientMu       sync.RWMutex // guards redisClient and remote.redisClient for safe resetClient
+	clientMu       sync.RWMutex // guards redisClient and remote.redisClient for safe concurrent access
 	redisHealthy   atomic.Bool
 	redisCheckStop chan struct{}
 	stopOnce       sync.Once

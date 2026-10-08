@@ -37,7 +37,7 @@ func TestThrottle_ThrottledExecution(t *testing.T) {
 	}
 
 	// Wait for timer to fire
-	time.Sleep(150 * time.Millisecond)
+	throttle.WaitForPending()
 	if called.Load() != 2 {
 		t.Errorf("after timer: called = %d, want 2", called.Load())
 	}
@@ -57,7 +57,7 @@ func TestThrottle_LastCallWins(t *testing.T) {
 	throttle.Do("key1", func() { result.Store("fourth") })
 
 	// Wait for timer
-	time.Sleep(150 * time.Millisecond)
+	throttle.WaitForPending()
 
 	if got := result.Load().(string); got != "fourth" {
 		t.Errorf("expected last throttled call to win, got %q, want %q", got, "fourth")
@@ -86,7 +86,7 @@ func TestThrottle_IndependentKeys(t *testing.T) {
 		t.Fatalf("throttled: A=%d B=%d, want 1, 1", countA.Load(), countB.Load())
 	}
 
-	time.Sleep(150 * time.Millisecond)
+	throttle.WaitForPending()
 
 	// Both should have executed their pending fn
 	if countA.Load() != 2 || countB.Load() != 2 {
@@ -116,7 +116,7 @@ func TestThrottle_ConcurrentSafety(t *testing.T) {
 	}
 
 	// Wait for all timers to settle
-	time.Sleep(200 * time.Millisecond)
+	throttle.WaitForPending()
 
 	// Should not have excessive executions (first + at most a few timer firings)
 	if count.Load() > 10 {
@@ -133,11 +133,15 @@ func TestThrottle_NoPendingAfterExecution(t *testing.T) {
 	// Throttled
 	throttle.Do("k", func() { count.Add(1) })
 
-	time.Sleep(100 * time.Millisecond)
+	throttle.WaitForPending()
 	// Timer fired, pending executed
 	if count.Load() != 2 {
 		t.Fatalf("after first cycle: count = %d, want 2", count.Load())
 	}
+
+	// Wait a bit to ensure the throttle interval has definitely passed
+	// (WaitForPending returns when timer fires, but we need lastCall to be old enough)
+	time.Sleep(60 * time.Millisecond)
 
 	// Now call again — should be immediate (interval has passed)
 	throttle.Do("k", func() { count.Add(1) })

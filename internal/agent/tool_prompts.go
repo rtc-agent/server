@@ -80,12 +80,6 @@ var pauseLoopDesc string
 //go:embed prompts/tools/resumeLoop.md
 var resumeLoopDesc string
 
-//go:embed prompts/tools/saveSessionMemory.md
-var saveSessionMemoryDesc string
-
-//go:embed prompts/tools/listSessionMemories.md
-var listSessionMemoriesDesc string
-
 //go:embed prompts/tools/saveMemory.md
 var saveMemoryDesc string
 

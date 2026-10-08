@@ -18,6 +18,8 @@ type DeviceRepo interface {
 	Upsert(ctx context.Context, device *model.Device) error
 	// FindByUserAndDeviceID looks up a device by user ID and device ID.
 	FindByUserAndDeviceID(ctx context.Context, userID uuid.UUID, deviceID string) (*model.Device, error)
+	// ListByUser returns all devices for a user.
+	ListByUser(ctx context.Context, userID uuid.UUID) ([]*model.Device, error)
 }
 
 type deviceRepo struct {
@@ -53,4 +55,15 @@ func (r *deviceRepo) FindByUserAndDeviceID(ctx context.Context, userID uuid.UUID
 		return nil, fmt.Errorf("find device %s/%s: %w", userID, deviceID, err)
 	}
 	return &device, nil
+}
+
+func (r *deviceRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]*model.Device, error) {
+	var devices []*model.Device
+	if err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("last_active_at DESC").
+		Find(&devices).Error; err != nil {
+		return nil, fmt.Errorf("list devices for user %s: %w", userID, err)
+	}
+	return devices, nil
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 	"github.com/cloudwego/eino/compose"
@@ -193,13 +194,13 @@ func (h *helpers) createTools(ctx context.Context, sessionID string, turnID stri
 		tools = append(tools, listMemoriesTool)
 	}
 
-	// Add Web Search tool (if configured)
-	if webSearchTool := h.createWebSearchTool(session, tid); webSearchTool != nil {
+	// Add Web Search tool (if configured and feature flag enabled)
+	if webSearchTool := h.createWebSearchTool(ctx, session, tid); webSearchTool != nil {
 		tools = append(tools, webSearchTool)
 	}
 
-	// Add Web Fetch tool (if configured)
-	if webFetchTool := h.createWebFetchTool(session, tid); webFetchTool != nil {
+	// Add Web Fetch tool (if configured and feature flag enabled)
+	if webFetchTool := h.createWebFetchTool(ctx, session, tid); webFetchTool != nil {
 		tools = append(tools, webFetchTool)
 	}
 
@@ -322,10 +323,9 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		"tool_count": len(tools),
 	})
 	// Resolve the effective system prompt.
-	// If worker.system_prompt is set in YAML config, it completely overrides
-	// the embedded default (backward-compatible). Otherwise, assemble from
-	// the section-based embedded prompts.
-	systemPrompt := h.deps.SystemPrompt
+	// Reads from ConfigProvider first (user override > system default > yaml baseline), maybe "";
+	// then falls back to the embedded default prompt.
+	systemPrompt := h.resolveSystemPrompt(ctx)
 	if systemPrompt == "" {
 		built, err := BuildDefaultSystemPrompt()
 		if err != nil {
@@ -335,11 +335,26 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 	}
 
 	// Validate required dependencies
-	if h.deps.ChatModel == nil {
-		return nil, fmt.Errorf("createAgent: ChatModel is nil (LLM not configured)")
+	if h.deps.ChatModel == nil && h.deps.ChatModelFactory == nil {
+		return nil, fmt.Errorf("createAgent: ChatModel and ChatModelFactory are both nil (LLM not configured)")
 	}
 	if systemPrompt == "" {
 		return nil, fmt.Errorf("createAgent: system prompt is empty after resolution")
+	}
+
+	// Resolve the effective ChatModel for this turn.
+	// When ChatModelFactory is available, resolve dynamic config overrides
+	// from the DB (system/user level) so that admin changes take effect
+	// without restarting the server.
+	chatModel, resolveErr := h.resolveChatModel(ctx)
+	if resolveErr != nil {
+		h.logger.Warn(ctx, "createAgent.dynamic_config_fallback", map[string]any{
+			"session_id": sessionID,
+			"error":      resolveErr.Error(),
+		})
+	}
+	if chatModel == nil {
+		chatModel = h.deps.ChatModel
 	}
 
 	// Inject sessionID into context for summarization middleware callbacks.
@@ -365,15 +380,26 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		return nil, fmt.Errorf("createAgent: unable to get session ID %q: %w", sessionID, err)
 	}
 
-	// Build retry config if configured
+	// Build retry config from dynamic ConfigProvider (falls back to static YAML config).
+	retryMaxAttempts := h.deps.LLMConfig.RetryMaxAttempts
+	retryBaseDelay := h.deps.LLMConfig.RetryBaseDelay
+	if h.deps.ConfigProvider != nil {
+		userID := userIDFromContext(ctx)
+		if v, err := h.deps.ConfigProvider.GetEffectiveInt(ctx, "llm.retry_max_attempts", userID); err == nil {
+			retryMaxAttempts = v
+		}
+		if v, err := h.deps.ConfigProvider.GetEffectiveDuration(ctx, "llm.retry_base_delay", userID); err == nil {
+			retryBaseDelay = v
+		}
+	}
 	var retryConfig *adk.ModelRetryConfig
-	if h.deps.LLMConfig.RetryMaxAttempts > 0 {
+	if retryMaxAttempts > 0 {
 		retryConfig = &adk.ModelRetryConfig{
-			MaxRetries: h.deps.LLMConfig.RetryMaxAttempts,
+			MaxRetries: retryMaxAttempts,
 		}
 		// Custom backoff function if base delay is configured
-		if h.deps.LLMConfig.RetryBaseDelay > 0 {
-			baseDelay := h.deps.LLMConfig.RetryBaseDelay
+		if retryBaseDelay > 0 {
+			baseDelay := retryBaseDelay
 			retryConfig.BackoffFunc = func(ctx context.Context, attempt int) time.Duration {
 				// Exponential backoff: baseDelay * 2^(attempt-1)
 				// attempt starts at 1 for the first retry.
@@ -411,7 +437,7 @@ func (h *helpers) createAgent(ctx context.Context, sessionID string, turnID stri
 		Name:             fmt.Sprintf("session-%s", sessionID),
 		Description:      "RTC Agent session handler",
 		Instruction:      instruction,
-		Model:            h.deps.ChatModel,
+		Model:            chatModel,
 		Handlers:         handlers,
 		ModelRetryConfig: retryConfig,
 		ToolsConfig: adk.ToolsConfig{
@@ -482,4 +508,85 @@ func (h *helpers) publishEvent(ctx context.Context, sessionID string, turnID str
 		})
 		return nil
 	}
+}
+
+// resolveChatModel builds a per-turn ChatModel from dynamic config when ChatModelFactory
+// is available. Falls back to the static ChatModel (h.deps.ChatModel) when:
+//   - ChatModelFactory is nil (factory not wired)
+//   - ServerConfigRepo is nil (dynamic config not available)
+//   - Any config resolution error occurs (logged as warning, not fatal)
+//
+// User-level overrides are applied when user_id is present in the context
+// (set via turnagent.WithUserID in the RPC handler).
+func (h *helpers) resolveChatModel(ctx context.Context) (einomodel.ToolCallingChatModel, error) {
+	if h.deps.ChatModelFactory == nil || h.deps.ServerConfigRepo == nil {
+		return nil, nil // no dynamic config; caller uses static ChatModel
+	}
+
+	// Resolve user_id from context (set by turn-agent turn context).
+	var userIDPtr *uuid.UUID
+	if uidStr := turnagent.UserIDFromContext(ctx); uidStr != "" {
+		if uid, err := uuid.Parse(uidStr); err == nil {
+			userIDPtr = &uid
+		}
+	}
+
+	overrides, err := resolveOverrides(ctx, h.deps.ServerConfigRepo, userIDPtr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve config overrides: %w", err)
+	}
+
+	chatModel, err := h.deps.ChatModelFactory.Create(overrides)
+	if err != nil {
+		return nil, fmt.Errorf("create dynamic chat model: %w", err)
+	}
+	return chatModel, nil
+}
+
+// resolveChatModelForBackground resolves a ChatModel for background LLM calls
+// (summarization, memory extraction) where no user context is available.
+// Exposed as a package-level helper so background goroutines can use it.
+func (h *helpers) resolveChatModelForBackground(ctx context.Context) einomodel.ToolCallingChatModel {
+	resolved, err := h.resolveChatModel(ctx)
+	if err != nil {
+		h.logger.Warn(ctx, "resolveChatModelForBackground.fallback", map[string]any{
+			"error": err.Error(),
+		})
+	}
+	if resolved != nil {
+		return resolved
+	}
+	return h.deps.ChatModel
+}
+
+// resolveSystemPrompt reads the effective system prompt from ConfigProvider.
+// Falls back to the static h.deps.SystemPrompt (YAML baseline), then to the
+// embedded default prompt. Returns the resolved prompt string.
+func (h *helpers) resolveSystemPrompt(ctx context.Context) string {
+	// Try ConfigProvider first (user override > system default > yaml baseline).
+	if h.deps != nil && h.deps.ConfigProvider != nil {
+		userID := userIDFromContext(ctx)
+		prompt, err := h.deps.ConfigProvider.GetEffectiveString(ctx, "worker.system_prompt", userID)
+		if err == nil && prompt != "" {
+			return prompt
+		}
+		if err != nil {
+			h.logger.Warn(ctx, "config.resolve_system_prompt_fallback", map[string]any{
+				"error": err.Error(),
+			})
+		}
+	}
+	// Fall back to static YAML config.
+	if h.deps.SystemPrompt != "" {
+		return h.deps.SystemPrompt
+	}
+	// Fall back to embedded default prompt.
+	built, err := BuildDefaultSystemPrompt()
+	if err != nil {
+		h.logger.Warn(ctx, "config.resolve_system_prompt.build_default_failed", map[string]any{
+			"error": err.Error(),
+		})
+		return ""
+	}
+	return built
 }

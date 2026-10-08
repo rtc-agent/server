@@ -4,6 +4,8 @@ bin/
 *.dll
 *.so
 *.dylib
+rtc-agent
+/server
 
 # Test binary
 *.test
@@ -40,3 +42,6 @@ etc/config.local.yaml
 # FRP (local dev only)
 docker-compose.frp.yml
 frpc.toml
+
+# Alertmanager configuration (contains sensitive info)
+etc/dev/alertmanager/alertmanager.yml

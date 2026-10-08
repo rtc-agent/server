@@ -126,9 +126,15 @@ func (r *rtcRepo) UpdateResult(ctx context.Context, id uuid.UUID, status protoco
 	} else {
 		updates["result"] = nil
 	}
+	// State guard: only allow updating RTCs in pending/sent/executing status.
+	// This prevents updating already completed/failed/timed-out RTCs.
 	dbResult := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.Rtc{}).
-		Where("id = ?", id).
+		Where("id = ? AND status IN ?", id, []string{
+			string(protocol.RtcStatusPending),
+			string(protocol.RtcStatusSent),
+			string(protocol.RtcStatusExecuting),
+		}).
 		Updates(updates)
 	if dbResult.Error != nil {
 		return fmt.Errorf("update rtc %s result: %w", id, dbResult.Error)

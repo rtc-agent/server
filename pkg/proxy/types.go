@@ -10,6 +10,7 @@ import (
 // ProxyType defines the type of proxy
 type ProxyType string
 
+// Supported proxy types.
 const (
 	ProxyTypeSOCKS5 ProxyType = "socks5"
 	ProxyTypeHTTP   ProxyType = "http"

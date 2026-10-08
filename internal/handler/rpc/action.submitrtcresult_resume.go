@@ -102,7 +102,7 @@ func (h *Handler) buildBatchResumeItems(ctx context.Context, rtc *model.Rtc, res
 }
 
 // resumeActiveTurn publishes a Resume work item for the active (interrupted) turn.
-func (h *Handler) resumeActiveTurn(ctx context.Context, rtc *model.Rtc, activeTurns []*model.Turn, batchResumeItems []turnagent.BatchResumeItem) {
+func (h *Handler) resumeActiveTurn(ctx context.Context, rtc *model.Rtc, activeTurns []*model.Turn, batchResumeItems []turnagent.BatchResumeItem, userID string) {
 	interruptID, interruptResult := h.resolveInterruptID(ctx, rtc, activeTurns)
 
 	// Dedup check: skip if a Resume work item is already pending.
@@ -130,6 +130,7 @@ func (h *Handler) resumeActiveTurn(ctx context.Context, rtc *model.Rtc, activeTu
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:             turnagent.WorkKindResume,
 		SessionID:        rtc.SessionID.String(),
+		UserID:           userID,
 		InterruptID:      interruptID,
 		InterruptResult:  interruptResult,
 		BatchResumeItems: batchResumeItems,
@@ -210,7 +211,7 @@ func (h *Handler) resolveInterruptID(ctx context.Context, rtc *model.Rtc, active
 }
 
 // publishOrphanSubmit publishes a Submit work item when no active turn exists.
-func (h *Handler) publishOrphanSubmit(ctx context.Context, rtc *model.Rtc) {
+func (h *Handler) publishOrphanSubmit(ctx context.Context, rtc *model.Rtc, userID string) {
 	orphanKey := cache.RtcOrphanTriggered(rtc.ID.String())
 	ok, setnxErr := h.deps.Deps.Redis.SetNX(ctx, orphanKey, "1", h.deps.Deps.WorkerConfig.OrphanTriggerTTL).Result()
 	if setnxErr != nil {
@@ -230,6 +231,7 @@ func (h *Handler) publishOrphanSubmit(ctx context.Context, rtc *model.Rtc) {
 	payload, marshalErr := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: rtc.SessionID.String(),
+		UserID:    userID,
 		TraceID:   traceID,
 		SpanID:    spanID,
 	})

@@ -29,7 +29,7 @@ const StreamIdleTimeout = 10 * time.Minute
 func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentName, role, toolName string, stream *schema.StreamReader[*schema.Message]) error {
 	defer stream.Close() // Single point of cleanup — prevents resource leaks if new exit paths are added.
 
-	streamCtx, streamSpan := mgr.startSpanIfEnabled(ctx, "consume_stream",
+	streamCtx, streamSpan := mgr.startSpanIfEnabled(ctx, "turn_agent.consume_stream",
 		trace.WithAttributes(
 			attribute.String("session.id", mgr.sessionID),
 			attribute.String("turn.id", turnID),

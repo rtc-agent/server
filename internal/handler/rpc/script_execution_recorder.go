@@ -64,10 +64,20 @@ func (r *scriptExecutionRecorder) submit(ctx context.Context, rtc *model.Rtc, re
 	}
 }
 
-// shutdown gracefully shuts down, waiting for all workers to finish.
+// shutdown gracefully shuts down, waiting for all workers to finish with a timeout.
 func (r *scriptExecutionRecorder) shutdown() {
 	close(r.quit)
-	r.wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// All workers finished.
+	case <-time.After(30 * time.Second):
+		logger.Warn(context.Background(), "[scriptExecutionRecorder] shutdown timeout, some workers may not have finished")
+	}
 }
 
 // worker is the recorder's work loop.
@@ -146,11 +156,11 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 	var logsList, warningsList, errorsList model.StringArray
 
 	if len(req.Result) > 0 {
-		// req.Result 是 json.RawMessage（[]byte），直接使用
+		// req.Result is json.RawMessage ([]byte) — use directly.
 		resultBytes := req.Result
 		resultSize = int64(len(resultBytes))
 
-		// 解析 JSON 以提取字段
+		// Parse JSON to extract fields.
 		var resultData map[string]interface{}
 		if err := json.Unmarshal(resultBytes, &resultData); err == nil {
 			if v, ok := resultData["duration_ms"]; ok {

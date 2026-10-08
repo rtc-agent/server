@@ -52,10 +52,10 @@ func (t *searchMemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	ctx, span := t.helpers.tracer.Start(ctx, "tool.searchMemory",
+	ctx, span := t.helpers.tracer.Start(ctx, "tool.search_memory",
 		trace.WithAttributes(
-			attribute.String("session_id", t.session.ID.String()),
-			attribute.String("turn_id", t.turnID.String()),
+			attribute.String("session.id", t.session.ID.String()),
+			attribute.String("turn.id", t.turnID.String()),
 		),
 	)
 	defer span.End()
@@ -101,7 +101,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 	results, err := t.searchMemories(ctx, args.Query, args.Category, args.Limit)
 	if err != nil {
 		span.RecordError(err)
-		span.SetAttributes(attribute.String("search_error", err.Error()))
+		span.SetAttributes(attribute.String("tool.search_error", err.Error()))
 		t.helpers.logger.Warn(ctx, "searchMemory.error", map[string]any{
 			"error": err.Error(),
 		})
@@ -111,7 +111,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 
 	var resultJSON string
 	if len(results) == 0 {
-		span.SetAttributes(attribute.Int("result_count", 0))
+		span.SetAttributes(attribute.Int("tool.result_count", 0))
 		resultJSON = formatNoSearchResults()
 	} else {
 		// Format output
@@ -130,7 +130,7 @@ func (t *searchMemoryTool) InvokableRun(ctx context.Context, argumentsInJSON str
 			}
 		}
 
-		span.SetAttributes(attribute.Int("result_count", len(results)))
+		span.SetAttributes(attribute.Int("tool.result_count", len(results)))
 		resultJSON = formatSearchResultsList(len(results), items)
 	}
 

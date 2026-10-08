@@ -36,9 +36,10 @@ type Provider struct {
 
 // authCodeData holds authorization code data.
 type authCodeData struct {
-	UserID    string
-	ExpiresAt time.Time
-	Used      bool
+	UserID      string
+	RedirectURI string // Bound redirect_uri per RFC 6749 Section 10.6
+	ExpiresAt   time.Time
+	Used        bool
 }
 
 // NewProvider creates a new Mock OAuth2 Provider.
@@ -138,12 +139,17 @@ func (p *Provider) handleAuthorizeConfirm(w http.ResponseWriter, r *http.Request
 	}
 
 	// Generate authorization code.
-	code := generateCode()
+	code, err := generateCode()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	p.mu.Lock()
 	p.codes[code] = &authCodeData{
-		UserID:    userID,
-		ExpiresAt: time.Now().Add(10 * time.Minute),
+		UserID:      userID,
+		RedirectURI: redirectURI,
+		ExpiresAt:   time.Now().Add(10 * time.Minute),
 	}
 	p.mu.Unlock()
 
@@ -194,21 +200,22 @@ func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "cannot parse request parameters")
 			return
 		}
-		p.processExchange(w, body.ClientID, body.ClientSecret, body.Code, body.Username, body.Email)
+		p.processExchange(w, body.ClientID, body.ClientSecret, body.Code, body.RedirectURI, body.Username, body.Email)
 		return
 	}
 
 	clientID := r.FormValue("client_id")
 	clientSecret := r.FormValue("client_secret")
 	code := r.FormValue("code")
+	redirectURI := r.FormValue("redirect_uri")
 	username := r.FormValue("username")
 	email := r.FormValue("email")
 
-	p.processExchange(w, clientID, clientSecret, code, username, email)
+	p.processExchange(w, clientID, clientSecret, code, redirectURI, username, email)
 }
 
 // processExchange handles authorization code exchange.
-func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret, code, username, email string) {
+func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret, code, redirectURI, username, email string) {
 	// Validate client credentials.
 	if clientID != p.config.ClientID || clientSecret != p.config.ClientSecret {
 		httputil.WriteError(w, http.StatusUnauthorized, "invalid_client", "invalid client credentials")
@@ -237,6 +244,12 @@ func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret
 		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "authorization code has expired")
 		return
 	}
+	// Validate redirect_uri matches the one bound to the authorization code (RFC 6749 Section 10.6).
+	// Only validate if both the code and the exchange request have a redirect_uri.
+	if codeData.RedirectURI != "" && redirectURI != "" && codeData.RedirectURI != redirectURI {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri does not match")
+		return
+	}
 	codeData.Used = true
 
 	// Build user info.
@@ -258,14 +271,12 @@ func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret
 }
 
 // generateCode generates a random authorization code.
-func generateCode() string {
+func generateCode() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// rand.Read failure means the system entropy source is exhausted;
-		// secure random numbers cannot be generated.
-		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
+		return "", fmt.Errorf("crypto/rand.Read: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 // isValidRedirectURI validates redirect_uri format to prevent open redirect

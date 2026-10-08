@@ -1,6 +1,7 @@
 package turnagent
 
 import (
+	"maps"
 	"strings"
 	"time"
 
@@ -165,6 +166,11 @@ type Message struct {
 	// Supports "5m" (5 minutes, default) or "1h" (1 hour).
 	// Only meaningful when CacheBreakpoint is true.
 	CacheTTL string
+
+	// MultiContent holds multimodal content parts (images, etc.)
+	// for user messages. Mapped to schema.Message.UserInputMultiContent
+	// by toEinoMessage.
+	MultiContent []schema.MessageInputPart
 }
 
 // ToolCall describes one tool invocation requested by the assistant.
@@ -204,7 +210,7 @@ func toEinoMessage(m *Message) *schema.Message {
 		ToolName:         m.ToolName,
 		ToolCallID:       m.ToolCallID,
 		Name:             m.Name,
-		Extra:            m.Extra,
+		Extra:            maps.Clone(m.Extra),
 	}
 	for _, tc := range m.ToolCalls {
 		em.ToolCalls = append(em.ToolCalls, schema.ToolCall{
@@ -267,14 +273,44 @@ func toEinoMessage(m *Message) *schema.Message {
 		em.Extra = newExtra
 	}
 
-	// 传递排序元数据到 Extra，供 MergeAssistantMiddleware 使用
-	// 这对确保合并后的消息表示与内存中的表示一致至关重要
-	// 注意：使用 RFC3339 字符串格式，避免 time.Time 序列化问题
+	// Propagate ordering metadata to Extra for MergeAssistantMiddleware.
+	// This is critical for ensuring the merged message representation matches
+	// the in-memory representation.
+	// Note: use RFC3339 string format to avoid time.Time serialization issues.
 	if !m.CreatedAt.IsZero() {
 		if em.Extra == nil {
 			em.Extra = make(map[string]any)
 		}
 		em.Extra["_rtc_created_at"] = m.CreatedAt.Format(time.RFC3339Nano)
+	}
+
+	// Multimodal content mapping.
+	// Important: if both Content and MultiContent are present, Content must be
+	// added to MultiContent as a Text part, otherwise the Claude adapter will
+	// silently drop Content (the eino-ext Claude adapter uses else-if logic
+	// and ignores Content when UserInputMultiContent is present).
+	//
+	// TODO: This design is fragile — em.Content and the first Text part of
+	// em.UserInputMultiContent contain the same text. This relies on a
+	// Claude-adapter-specific behavior (ignoring Content when
+	// UserInputMultiContent is present). Using a different adapter (e.g.,
+	// OpenAI) in the future could cause text duplication. A better approach
+	// would be to clear em.Content, but that requires verifying that the
+	// Claude adapter correctly falls back to Content when
+	// UserInputMultiContent is empty. The current approach is only used in
+	// environments where the Claude adapter has been thoroughly tested.
+	if len(m.MultiContent) > 0 {
+		var parts []schema.MessageInputPart
+		if m.Content != "" {
+			parts = append(parts, schema.MessageInputPart{
+				Type: schema.ChatMessagePartTypeText,
+				Text: m.Content,
+			})
+		}
+		parts = append(parts, m.MultiContent...)
+		em.UserInputMultiContent = parts
+		// Content keeps its original value (no effect on Claude adapter;
+		// maintains backward compatibility).
 	}
 
 	return em
@@ -313,7 +349,7 @@ func fromEinoMessage(m *schema.Message) *Message {
 		ToolName:         m.ToolName,
 		ToolCallID:       m.ToolCallID,
 		Name:             m.Name,
-		Extra:            m.Extra,
+		Extra:            maps.Clone(m.Extra),
 		CreatedAt:        time.Now(),
 	}
 	if m.ResponseMeta != nil {

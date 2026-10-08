@@ -27,9 +27,9 @@ type Impl struct {
 }
 
 // NewTaskScheduler creates a TaskScheduler backed by asynq.
-func NewTaskScheduler(redisAddr string) (usecase.TaskScheduler, error) {
-	client := hibikenasynq.NewClient(hibikenasynq.RedisClientOpt{Addr: redisAddr})
-	inspector := hibikenasynq.NewInspector(hibikenasynq.RedisClientOpt{Addr: redisAddr})
+func NewTaskScheduler(opt hibikenasynq.RedisClientOpt) (usecase.TaskScheduler, error) {
+	client := hibikenasynq.NewClient(opt)
+	inspector := hibikenasynq.NewInspector(opt)
 	return &Impl{client: client, inspector: inspector}, nil
 }
 

@@ -102,7 +102,7 @@ func (l *LoopWorkflow) Tools(ctx command.Context) []tool.BaseTool {
 // because the registry holds its mutex while invoking hooks — doing so
 // would deadlock.
 func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
-	innerCtx, span := l.helpers.tracer.Start(ctx.Context, "loopWorkflow.onTurnComplete",
+	innerCtx, span := l.helpers.tracer.Start(ctx.Context, "loop_workflow.on_turn_complete",
 		trace.WithAttributes(
 			attribute.String("session.id", ctx.SessionID.String()),
 			attribute.String("turn.id", ctx.TurnID.String()),
@@ -117,7 +117,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 
 	loop, err := l.helpers.deps.LoopRepo.FindActive(ctx, ctx.SessionID)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		l.helpers.logger.Warn(ctx, "loopWorkflow.find_active_failed", map[string]any{
 			"session_id": ctx.SessionID.String(),
@@ -152,7 +152,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 			})
 		})
 		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			l.helpers.logger.Warn(ctx, "loopWorkflow.update_exhausted_failed", map[string]any{
 				"loop_id": loop.ID.String(),
@@ -182,7 +182,7 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 		})
 	})
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		l.helpers.logger.Warn(ctx, "loopWorkflow.update_loop_failed", map[string]any{
 			"loop_id": loop.ID.String(),
@@ -244,7 +244,7 @@ type loopSchedulePayload struct {
 // (not the request context) because this goroutine outlives the request, but we preserve
 // trace values for observability. Errors are logged but not propagated.
 func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
-	ctx, span := l.helpers.tracer.Start(ctx, "loopWorkflow.scheduleNext",
+	ctx, span := l.helpers.tracer.Start(ctx, "loop_workflow.schedule_next",
 		trace.WithAttributes(
 			attribute.String("loop.id", loop.ID.String()),
 			attribute.String("session.id", loop.SessionID.String()),
@@ -290,7 +290,7 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 			})
 			return // Idempotent: task already scheduled
 		}
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		l.helpers.logger.Warn(ctx, "loopWorkflow.schedule_failed", map[string]any{
 			"loop_id":    loop.ID.String(),

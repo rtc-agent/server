@@ -1,14 +1,38 @@
 package centrifugeplus
 
 import (
-	"log"
-	"os"
+	"fmt"
 )
 
-// pkgLogger is a dedicated logger instance for this package. Using a private
-// *log.Logger avoids mutating the global log.SetOutput, which would affect
-// every component that uses the standard log package.
-var pkgLogger = log.New(os.Stderr, "[centrifuge-plus] ", log.LstdFlags)
+// LogFunc is the signature for logging functions injected from the application.
+type LogFunc func(msg string, fields ...any)
+
+// logFuncs holds the injected logging functions.
+// Defaults to no-op; call SetLogFuncs after logger.Init to enable logging.
+var logFuncs = struct {
+	Info  LogFunc
+	Warn  LogFunc
+	Error LogFunc
+}{
+	Info:  func(msg string, fields ...any) {},
+	Warn:  func(msg string, fields ...any) {},
+	Error: func(msg string, fields ...any) {},
+}
+
+// SetLogFuncs injects logging functions from the application's logger.
+// Call this after logger.Init so that centrifuge-plus logs are routed
+// through the application's smart caller resolution.
+func SetLogFuncs(info, warn, err LogFunc) {
+	if info != nil {
+		logFuncs.Info = info
+	}
+	if warn != nil {
+		logFuncs.Warn = warn
+	}
+	if err != nil {
+		logFuncs.Error = err
+	}
+}
 
 // Logger defines the logging interface used by AsynqBroker.
 type Logger interface {
@@ -20,13 +44,13 @@ type Logger interface {
 type defaultLogger struct{}
 
 func (defaultLogger) Info(msg string, args ...any) {
-	pkgLogger.Printf("INFO: "+msg, args...)
+	logFuncs.Info(fmt.Sprintf(msg, args...))
 }
 
 func (defaultLogger) Warn(msg string, args ...any) {
-	pkgLogger.Printf("WARNING: "+msg, args...)
+	logFuncs.Warn(fmt.Sprintf(msg, args...))
 }
 
 func (defaultLogger) Error(msg string, args ...any) {
-	pkgLogger.Printf("ERROR: "+msg, args...)
+	logFuncs.Error(fmt.Sprintf(msg, args...))
 }

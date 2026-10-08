@@ -1,0 +1,314 @@
+global:
+  resolve_timeout: 5m
+
+  # Email 全局配置
+  smtp_smarthost: 'smtp.example.com:587'
+  smtp_from: 'alertmanager@example.com'
+  smtp_auth_username: 'alertmanager@example.com'
+  smtp_auth_password: 'your-smtp-password'
+  smtp_require_tls: true
+
+  # Slack 全局配置
+  slack_api_url: 'https://hooks.slack.com/services/EXAMPLE/DO-NOT-USE/PLACEHOLDER'
+
+  # 企业微信全局配置
+  wechat_api_url: 'https://qyapi.weixin.qq.com/cgi-bin/'
+  wechat_api_secret: 'your-wechat-corp-secret'
+  wechat_api_corp_id: 'your-wechat-corp-id'
+
+# 路由树
+route:
+  group_by: ["alertname", "service", "severity"]
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: "default"
+
+  # 子路由示例：按严重级别或标签路由到不同接收器
+  routes:
+    # Critical 告警立即通知
+    - match:
+        severity: critical
+      receiver: "critical-alerts"
+      group_wait: 5s
+      repeat_interval: 5m
+
+    # 警告级别降级通知
+    - match:
+        severity: warning
+      receiver: "warning-alerts"
+      repeat_interval: 4h
+
+    # 特定服务的告警路由到专门团队
+    - match:
+        service: payment
+      receiver: "payment-team"
+
+    # 开发/测试环境告警静默
+    - match_re:
+        environment: ^(dev|staging)$
+      receiver: "dev-null"
+      continue: false
+
+# 接收器配置
+receivers:
+  # ===========================================================================
+  # 默认接收器 - 开发环境使用
+  # ===========================================================================
+  - name: "default"
+    # 开发环境：仅在 Grafana 和 Alertmanager UI 显示，不发送外部通知
+    # 生产环境请取消注释下方配置
+
+  # ===========================================================================
+  # Webhook 通用接收器
+  # ===========================================================================
+  - name: "webhook-receiver"
+    webhook_configs:
+      - url: 'http://your-webhook-endpoint.com/alerts'
+        send_resolved: true
+        http_config:
+          basic_auth:
+            username: 'webhook-user'
+            password: 'webhook-password'
+        # 自定义 HTTP headers
+          # headers:
+          #   X-Custom-Header: 'custom-value'
+
+  # ===========================================================================
+  # Slack 接收器
+  # ===========================================================================
+  - name: "slack-receiver"
+    slack_configs:
+      - channel: '#alerts'
+        send_resolved: true
+        # 可覆盖全局 API URL
+        # api_url: 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXX'
+        username: 'Alertmanager'
+        icon_emoji: ':warning:'
+        icon_url: 'https://avatars.slack-edge.com/2018/img/icons/favicon-32.png'
+        title: |
+          [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Labels.alertname }}
+          *Severity:* {{ .Labels.severity }}
+          *Service:* {{ .Labels.service }}
+          *Description:* {{ .Annotations.description }}
+          *Details:*
+            {{ range .Labels.SortedPairs }} • *{{ .Name }}:* `{{ .Value }}`
+            {{ end }}
+          {{ end }}
+        actions:
+          - type: button
+            text: '查看告警'
+            url: '{{ .ExternalURL }}/#/alerts?{{ .GroupLabels.SortedPairs | url_values }}'
+
+  # ===========================================================================
+  # Email 接收器
+  # ===========================================================================
+  - name: "email-receiver"
+    email_configs:
+      - to: 'oncall-team@example.com'
+        send_resolved: true
+        from: 'alertmanager@example.com'
+        smarthost: 'smtp.example.com:587'
+        auth_username: 'alertmanager@example.com'
+        auth_password: 'your-smtp-password'
+        require_tls: true
+        # Email 主题
+        headers:
+          Subject: '{{ template "email.default.subject" . }}'
+        # HTML 格式的 Email 正文
+        html: '{{ template "email.default.html" . }}'
+        # 纯文本格式的 Email 正文
+        # text: '{{ template "email.default.text" . }}'
+
+      # 可以配置多个收件人
+      - to: 'devops@example.com'
+        send_resolved: false
+
+  # ===========================================================================
+  # 钉钉接收器（通过 Webhook）
+  # ===========================================================================
+  - name: "dingtalk-receiver"
+    webhook_configs:
+      - url: 'https://oapi.dingtalk.com/robot/send?access_token=YOUR_ACCESS_TOKEN'
+        send_resolved: true
+        http_config:
+          # 钉钉签名密钥（如果启用了加签）
+          # 需要在发送前计算签名，建议通过中间件处理
+        # 注意：钉钉 webhook 需要特定的消息格式，通常需要一个转发服务
+        # 或者使用支持钉钉的告警中间件
+
+  # ===========================================================================
+  # 飞书接收器（通过 Webhook）
+  # ===========================================================================
+  - name: "feishu-receiver"
+    webhook_configs:
+      - url: 'https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_WEBHOOK_TOKEN'
+        send_resolved: true
+        http_config:
+          # 飞书签名校验（如果启用了签名）
+        # 注意：飞书 webhook 也需要特定的消息格式
+        # 建议使用告警中间件进行格式转换
+
+  # ===========================================================================
+  # 企业微信接收器
+  # ===========================================================================
+  - name: "wechat-receiver"
+    wechat_configs:
+      - corp_id: 'your-corp-id'
+        to_user: 'ZhangSan|LiSi'
+        to_party: '1|2'
+        agent_id: '1000002'
+        api_secret: 'your-api-secret'
+        send_resolved: true
+        # 消息类型：text | textcard
+        message_type: 'textcard'
+        title: '{{ .GroupLabels.alertname }}'
+        description: |
+          {{ range .Alerts }}
+          告警名称：{{ .Labels.alertname }}
+          严重程度：{{ .Labels.severity }}
+          服务名称：{{ .Labels.service }}
+          告警描述：{{ .Annotations.description }}
+          {{ end }}
+        url: '{{ .ExternalURL }}'
+
+  # ===========================================================================
+  # PagerDuty 接收器
+  # ===========================================================================
+  - name: "pagerduty-receiver"
+    pagerduty_configs:
+      - service_key: 'your-pagerduty-service-key'
+        # 或使用 routing_key（Events API v2）
+        # routing_key: 'your-pagerduty-routing-key'
+        send_resolved: true
+        # 事件严重性：critical | error | warning | info
+        severity: '{{ .Labels.severity }}'
+        description: '{{ .CommonLabels.alertname }}'
+        details:
+          firing: '{{ .Alerts.Firing | len }}'
+          resolved: '{{ .Alerts.Resolved | len }}'
+          external_url: '{{ .ExternalURL }}'
+
+  # ===========================================================================
+  # OpsGenie 接收器
+  # ===========================================================================
+  - name: "opsgenie-receiver"
+    opsgenie_configs:
+      - api_key: 'your-opsgenie-api-key'
+        send_resolved: true
+        # API 地址（US 或 EU）
+        api_url: 'https://api.opsgenie.com/'
+        message: '{{ .CommonLabels.alertname }}'
+        description: '{{ .CommonAnnotations.description }}'
+        priority: '{{ .Labels.severity }}'
+        tags: 'alertmanager,{{ .Labels.service }}'
+        details:
+          severity: '{{ .Labels.severity }}'
+          service: '{{ .Labels.service }}'
+
+  # ===========================================================================
+  # VictorOps (Splunk On-Call) 接收器
+  # ===========================================================================
+  - name: "victorops-receiver"
+    victorops_configs:
+      - api_key: 'your-victorops-api-key'
+        send_resolved: true
+        # API 端点
+        api_url: 'https://alert.victorops.com/integrations/services/'
+        routing_key: 'your-routing-key'
+        message_type: '{{ .Status }}'
+        entity_id: '{{ .GroupLabels.alertname }}'
+        state_message: |
+          {{ range .Alerts }}
+          Alert: {{ .Labels.alertname }}
+          Severity: {{ .Labels.severity }}
+          {{ end }}
+
+  # ===========================================================================
+  # Pushover 接收器（移动推送）
+  # ===========================================================================
+  - name: "pushover-receiver"
+    pushover_configs:
+      - token: 'your-pushover-app-token'
+        user_key: 'your-pushover-user-key'
+        send_resolved: true
+        title: '{{ .GroupLabels.alertname }}'
+        message: '{{ .CommonAnnotations.summary }}'
+        # 优先级：-2 to 2
+        priority: '{{ if eq .Status "firing" }}1{{ else }}0{{ end }}'
+        # 紧急优先级时的重试间隔和过期时间
+        retry: '30s'
+        expire: '1h'
+
+  # ===========================================================================
+  # Telegram 接收器
+  # ===========================================================================
+  - name: "telegram-receiver"
+    telegram_configs:
+      - bot_token: 'your-telegram-bot-token'
+        chat_id: 123456789
+        send_resolved: true
+        # 消息解析模式：HTML | Markdown | MarkdownV2
+        parse_mode: 'HTML'
+        message: |
+          <b>{{ .Status | toUpper }}</b>
+          <b>Alert:</b> {{ .CommonLabels.alertname }}
+          <b>Severity:</b> {{ .CommonLabels.severity }}
+          <b>Service:</b> {{ .CommonLabels.service }}
+          <b>Description:</b> {{ .CommonAnnotations.description }}
+
+  # ===========================================================================
+  # 严重级别专用接收器
+  # ===========================================================================
+  - name: "critical-alerts"
+    webhook_configs:
+      - url: 'http://internal-alert-router/critical'
+        send_resolved: true
+    slack_configs:
+      - channel: '#critical-alerts'
+        send_resolved: true
+        color: 'danger'
+        title: '🚨 Critical Alert'
+    email_configs:
+      - to: 'oncall-critical@example.com'
+        send_resolved: true
+
+  - name: "warning-alerts"
+    slack_configs:
+      - channel: '#warnings'
+        send_resolved: true
+        color: 'warning'
+        title: '⚠️ Warning Alert'
+
+  # ===========================================================================
+  # 团队专用接收器
+  # ===========================================================================
+  - name: "payment-team"
+    slack_configs:
+      - channel: '#payment-alerts'
+        send_resolved: true
+    email_configs:
+      - to: 'payment-team@example.com'
+        send_resolved: true
+
+  # ===========================================================================
+  # 静默接收器（用于开发/测试环境）
+  # ===========================================================================
+  - name: "dev-null"
+    # 不配置任何通知渠道，告警会被丢弃
+
+# 抑制规则
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    # 当 alertname 和 service 都相同时，抑制 warning
+    equal: ["alertname", "service"]
+
+# 可选：模板文件路径
+# templates:
+#   - '/etc/alertmanager/templates/*.tmpl'

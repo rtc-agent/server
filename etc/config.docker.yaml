@@ -5,7 +5,13 @@
 server:
   host: "0.0.0.0"
   port: 8888
+  # WARNING: This defaults to "development" for Docker convenience.
+  # For production deployments, MUST set SERVER__ENV=production via environment variable.
+  # Leaving this as "development" in production disables critical security checks.
   env: "development"
+  # shutdown_timeout: 10s       # 优雅关闭超时（等待 in-flight 请求完成）
+  # rpc_timeout: 10s            # RPC handler 上下文超时
+  # client_queue_max_size: 52428800  # Centrifuge 客户端消息队列上限（字节），默认 50MB
 
 database:
   dsn: "postgres://rtc_agent:rtc_agent@postgres:5432/rtc_agent?sslmode=disable"
@@ -21,15 +27,30 @@ log:
   llm_payload: true
 
 auth:
-  jwt_secret: "rtc-agent-dev-jwt-secret-change-me-in-production"
+  jwt_secret: "${AUTH__JWT_SECRET}"  # 通过环境变量 AUTH__JWT_SECRET 配置
   access_token_ttl_seconds: 3600
+
+# Token Exchange 配置（RFC 8693）
+# 用于验证外部 JWT issuer（如 admin-server）签发的 JWT
+token_exchange:
+  external_issuers:
+    - name: "admin-server"
+      issuer: "http://admin-server:8081"  # Docker 内部服务名
+      jwks_uri: "http://admin-server:8081/.well-known/jwks.json"
+      allowed_algorithms: ["RS256", "ES256"]
+      cache_ttl: 3600
+      claims_mapping:
+        sub: "sub"
+        email: "email"
+        name: "name"
+        avatar_url: "picture"
 
 providers:
   mock:
     enabled: false
     url: "http://192.168.31.60:20060"
     client_id: "test-client"
-    client_secret: "test-client-secret"
+    client_secret: "${PROVIDERS__MOCK__CLIENT_SECRET}"  # 通过环境变量 PROVIDERS__MOCK__CLIENT_SECRET 配置
 
 cors:
   allow_origins: ["*"]
@@ -44,6 +65,7 @@ llm:
   model: "qwen3.7-plus"
   base_url: "http://host.docker.internal:23000"
   max_tokens: 131072
+  thinking_budget_tokens: 100000
   retry_max_attempts: 10
   retry_base_delay: 1s
 
@@ -61,6 +83,8 @@ worker:
   context_tokens_limit: 600000
   auto_compact_buffer_tokens: 100000
   max_output_tokens_for_summary: 20000
+  stream_chunk_ttl: "30m"
+  token_counter_mode: "tokenizer"
 
 # OpenTelemetry 分布式追踪
 tracing:
@@ -120,7 +144,6 @@ web_fetch:
   max_concurrency: 20
   max_domain_concurrency: 5
   cache_ttl: 30m
-  cache_max_size: 1000
   max_url_length: 2000
   max_content_size: 10485760  # 10MB
   fetch_timeout: 60s
@@ -128,29 +151,22 @@ web_fetch:
 
   # LLM 提取配置
   llm_extract_threshold: 50000
-  llm_cache_ttl: 1h
   max_llm_per_session: 50
   llm_max_tokens: 4096
 
   # 速率限制
   rate_limit:
-    global_rate: 100
+    global_rps: 100
     global_burst: 200
-    domain_rate: 10
+    domain_rps: 10
     domain_burst: 20
 
   # Robots.txt 合规
   respect_robots_txt: true
   robots_cache_ttl: 24h
 
-  # 熔断器配置
-  circuit_breaker:
-    enabled: true
-    failure_threshold: 50
-    open_timeout: 30s
-    half_open_max_requests: 3
-    window_size: 20
-    window_duration: 1m
+  # 熔断器配置（注意：熔断器配置在 pkg/webfetch 内部实现，此处仅为参考）
+  # 实际熔断器配置请参考 pkg/webfetch/fetcher.go 中的默认值
 
   # 代理池配置
   proxies:
@@ -169,9 +185,6 @@ web_fetch:
     - "docs.python.org"
     - "pkg.go.dev"
   blocked_domains: []
-  allowed_schemes:
-    - "https"
-    - "http"
 
   # Redis 配置（用于缓存和速率限制）
   # 如果不配置，将使用全局 redis 配置
@@ -181,3 +194,52 @@ web_fetch:
     db: 0
 
   user_agent: "RTCAgent-WebFetch/1.0"
+
+# Debug 端点（pprof + goroutines）
+# 生产环境建议禁用或配置认证
+debug:
+  enabled: true  # Docker 开发环境默认启用
+  # user: "admin"
+  # password: "${DEBUG__PASSWORD}"
+  # goroutine_leak_threshold: 1000  # goroutine 数量告警阈值
+  # show_raw_errors: false           # 是否在错误信息中显示 RawError
+
+# Metrics 端点（Prometheus）
+metrics:
+  # user: "admin"
+  # password: "${METRICS__PASSWORD}"
+
+# Object Storage (rtc-oss3) — MinIO backend
+storage:
+  backend: "minio"
+  minio:
+    endpoint: "minio:9000"          # 内网地址（Server → MinIO）
+    public_url: "http://localhost:29000"  # 公网地址（Client → S3，用于生成 presigned URL）
+    access_key: "${MINIO_ACCESS_KEY}"  # 通过环境变量 MINIO_ACCESS_KEY 配置
+    secret_key: "${MINIO_SECRET_KEY}"  # 通过环境变量 MINIO_SECRET_KEY 配置
+    bucket: "rtc-agent"
+    use_ssl: false
+    max_idle_conns: 1024
+    max_idle_conns_per_host: 100
+    idle_conn_timeout: 90s
+  s3_endpoint:
+    host: "0.0.0.0"
+    port: 9000
+    allowed_origins: ["*"]
+  quota:
+    max_file_size_bytes: 104857600     # 100MB
+    max_user_quota_bytes: 1073741824   # 1GB
+    max_concurrent_uploads: 10
+    pending_ttl: 5m
+  rate_limit:
+    requests_per_minute: 60
+  credential:
+    access_token_ttl: 1h
+    session_token_ttl: 1h
+    presigned_url_ttl: 1h
+  cleanup:
+    interval: 1h
+    multipart_expiry: 24h
+    credential_expiry: 24h
+  encryption:
+    session_token_key: "${OSS3_SESSION_TOKEN_KEY}"  # 通过环境变量 OSS3_SESSION_TOKEN_KEY 配置（64个十六进制字符 = 32字节）
