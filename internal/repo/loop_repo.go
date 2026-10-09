@@ -88,11 +88,28 @@ func (r *loopRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, curso
 // FindStaleLoops returns active loops that lack an asynq task and have not
 // run recently (before staleThreshold). These are loops whose scheduled
 // task was lost (e.g., after server restart).
+//
+// Query conditions explained:
+//   - status = active: only consider loops that should be running
+//   - asynq_task_id IS NULL OR asynq_task_id = ”: no pending task in queue
+//     (asynq_task_id is cleared when worker starts processing, so an empty
+//     value indicates either no task was ever scheduled, or the task is
+//     currently being processed)
+//   - last_run_at IS NOT NULL AND last_run_at < staleThreshold: should have
+//     run but didn't (combined with empty asynq_task_id, this indicates a
+//     truly stale loop that needs recovery)
+//
+// Note: asynq_task_id is cleared at the start of HandleLoopTask, so a loop
+// being processed will temporarily match these conditions. The staleThreshold
+// check ensures we only recover loops that have been stuck for a while.
+// Safety limit of 100 loops to prevent overwhelming the recovery process.
 func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time) ([]*model.Loop, error) {
 	var loops []*model.Loop
+	const safetyLimit = 100
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("status = ? AND (asynq_task_id IS NULL OR asynq_task_id = '') AND last_run_at IS NOT NULL AND last_run_at < ?",
 			model.LoopStatusActive, staleThreshold).
+		Limit(safetyLimit).
 		Find(&loops).Error
 	if err != nil {
 		return nil, fmt.Errorf("find stale loops: %w", err)
@@ -101,11 +118,14 @@ func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time)
 }
 
 // FindExpiredLoops returns active loops whose expires_at has passed.
+// Safety limit of 100 loops to prevent overwhelming the cleanup process.
 func (r *loopRepo) FindExpiredLoops(ctx context.Context) ([]*model.Loop, error) {
 	var loops []*model.Loop
+	const safetyLimit = 100
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("status = ? AND expires_at IS NOT NULL AND expires_at < ?",
 			model.LoopStatusActive, time.Now()).
+		Limit(safetyLimit).
 		Find(&loops).Error
 	if err != nil {
 		return nil, fmt.Errorf("find expired loops: %w", err)

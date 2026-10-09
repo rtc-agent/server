@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
@@ -22,6 +23,7 @@ const (
 
 // AdminRoleUsecase handles admin role management operations.
 type AdminRoleUsecase struct {
+	db                *gorm.DB
 	adminRoleRepo     repo.AdminRoleRepo
 	adminUserRoleRepo repo.AdminUserRoleRepo
 	auditLogRepo      repo.AuditLogRepo
@@ -31,12 +33,14 @@ type AdminRoleUsecase struct {
 
 // NewAdminRoleUsecase creates a new AdminRoleUsecase.
 func NewAdminRoleUsecase(
+	db *gorm.DB,
 	adminRoleRepo repo.AdminRoleRepo,
 	adminUserRoleRepo repo.AdminUserRoleRepo,
 	auditLogRepo repo.AuditLogRepo,
 	enforcer *auth.CasbinEnforcer,
 ) *AdminRoleUsecase {
 	return &AdminRoleUsecase{
+		db:                db,
 		adminRoleRepo:     adminRoleRepo,
 		adminUserRoleRepo: adminUserRoleRepo,
 		auditLogRepo:      auditLogRepo,
@@ -130,9 +134,14 @@ func (uc *AdminRoleUsecase) UpdateRole(ctx context.Context, roleID uuid.UUID, in
 //
 // Per spec, this performs:
 //  1. System role protection (is_system=true cannot be deleted)
-//  2. Soft delete: set is_enabled=false
+//  2. Remove Casbin p policies (role permissions) and g policies (user-role groupings)
 //  3. Cascade delete: remove all admin_user_roles assignments for this role
-//  4. Remove Casbin p policies (role permissions) and g policies (user-role groupings)
+//  4. Soft delete: set is_enabled=false
+//
+// Database operations are wrapped in a transaction to ensure atomicity.
+// Casbin operations are performed before the transaction as they cannot be rolled back.
+// If Casbin operations succeed but DB transaction fails, the policy publisher will
+// notify other instances to re-sync policies (best-effort reconciliation).
 func (uc *AdminRoleUsecase) DeleteRole(ctx context.Context, roleID uuid.UUID, operatorID uuid.UUID, operatorIP string) error {
 	role, err := uc.adminRoleRepo.GetByID(ctx, roleID)
 	if err != nil {
@@ -145,6 +154,8 @@ func (uc *AdminRoleUsecase) DeleteRole(ctx context.Context, roleID uuid.UUID, op
 	}
 
 	// Step 1: Remove Casbin p policies (role permissions like "roleID resource action")
+	// Note: Casbin operations are not transactional, so we perform them first.
+	// If DB transaction fails later, the policy publisher will trigger re-sync.
 	if err := uc.enforcer.RemoveFilteredPolicy(ctx, 0, role.ID.String()); err != nil {
 		return fmt.Errorf("remove casbin p policies for role: %w", err)
 	}
@@ -154,17 +165,27 @@ func (uc *AdminRoleUsecase) DeleteRole(ctx context.Context, roleID uuid.UUID, op
 		return fmt.Errorf("remove casbin g policies for role: %w", err)
 	}
 
-	// Step 3: Cascade delete admin_user_roles assignments for this role
-	if err := uc.adminUserRoleRepo.DeleteByRoleID(ctx, roleID); err != nil {
-		return fmt.Errorf("cascade delete admin_user_roles for role: %w", err)
+	// Steps 3-4: Database operations wrapped in a transaction
+	err = uc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txCtx := repo.WithTx(ctx, tx)
+
+		// Step 3: Cascade delete admin_user_roles assignments for this role
+		if err := uc.adminUserRoleRepo.DeleteByRoleID(txCtx, roleID); err != nil {
+			return fmt.Errorf("cascade delete admin_user_roles for role: %w", err)
+		}
+
+		// Step 4: Soft delete the role (set is_enabled=false)
+		if err := uc.adminRoleRepo.SoftDelete(txCtx, roleID); err != nil {
+			return fmt.Errorf("soft delete role: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	// Step 4: Soft delete the role (set is_enabled=false)
-	if err := uc.adminRoleRepo.SoftDelete(ctx, roleID); err != nil {
-		return fmt.Errorf("soft delete role: %w", err)
-	}
-
-	// Publish policy change for multi-instance sync
+	// Publish policy change for multi-instance sync (best-effort, outside transaction)
 	if uc.policyPublisher != nil {
 		if err := uc.policyPublisher.PublishChange(ctx, "p", "remove_role_policies", [][]string{{role.ID.String()}}); err != nil {
 			logger.Warn(ctx, "role.publish_p_policy_change_failed", zap.Error(err))
@@ -174,7 +195,7 @@ func (uc *AdminRoleUsecase) DeleteRole(ctx context.Context, roleID uuid.UUID, op
 		}
 	}
 
-	// Audit log
+	// Audit log (best-effort, outside transaction)
 	if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
 		operatorID, operatorIP, "delete_role", "role", roleID,
 		map[string]any{"name": role.Name},

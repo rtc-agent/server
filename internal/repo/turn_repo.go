@@ -121,14 +121,17 @@ func (r *turnRepo) FindActiveBySession(ctx context.Context, sessionID uuid.UUID)
 // FindStaleTurns finds all turns in the given statuses. Used for crash recovery
 // on startup to detect turns that were left in a non-terminal state when the
 // server crashed or restarted.
+// Safety limit of 1000 turns to prevent overwhelming the recovery process.
 func (r *turnRepo) FindStaleTurns(ctx context.Context, statuses []string) ([]*model.Turn, error) {
 	if len(statuses) == 0 {
 		return nil, nil
 	}
 	var turns []*model.Turn
+	const safetyLimit = 1000
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("status IN ?", statuses).
 		Order("created_at ASC").
+		Limit(safetyLimit).
 		Find(&turns).Error
 	if err != nil {
 		return nil, fmt.Errorf("find stale turns: %w", err)

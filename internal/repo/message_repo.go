@@ -177,8 +177,13 @@ func (r *messageRepo) UpdateStreamingStatus(ctx context.Context, id uuid.UUID, s
 // It queries with ORDER BY global_offset DESC LIMIT N, then reverses the result
 // so the returned slice is in chronological order (oldest first).
 func (r *messageRepo) ListRecentBySession(ctx context.Context, sessionID uuid.UUID, limit int) ([]*model.Message, error) {
+	// Use sensible default and maximum limits to prevent excessive data loading
+	const defaultLimit = 50
+	const maxLimit = 200
 	if limit <= 0 {
-		limit = 50
+		limit = defaultLimit
+	} else if limit > maxLimit {
+		limit = maxLimit
 	}
 	var messages []*model.Message
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).

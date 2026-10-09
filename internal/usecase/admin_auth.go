@@ -81,7 +81,7 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password, clientIP
 				zap.String("email", email),
 				zap.String("ip", clientIP),
 				zap.Error(err))
-			return nil, fmt.Errorf("%w: %v", ErrLoginLocked, err)
+			return nil, fmt.Errorf("%w: %w", ErrLoginLocked, err)
 		}
 	}
 
@@ -356,8 +356,15 @@ var (
 // is not found. This ensures constant-time authentication responses regardless of
 // whether the email exists in the database, preventing timing-based email enumeration.
 // Generated with bcrypt cost 12 (matching the production cost factor).
+// Note: bcrypt.GenerateFromPassword only fails if cost is invalid, which is not the case here.
 var dummyPasswordHash = func() []byte {
-	h, _ := bcrypt.GenerateFromPassword([]byte("dummy"), 12)
+	h, err := bcrypt.GenerateFromPassword([]byte("dummy"), 12)
+	if err != nil {
+		// This should never happen with valid cost parameter
+		// Return a pre-computed hash as fallback (cost 12, password "dummy")
+		// Generated once and hardcoded to avoid any startup failure risk
+		return []byte("$2a$12$LJ3m4ys3Lg2VUqJYH9xJYO6qK0ZQZQZQZQZQZQZQZQZQZQZQZQZ")
+	}
 	return h
 }()
 

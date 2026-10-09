@@ -99,7 +99,12 @@ func (uc *AuthUsecase) FindOrCreateUser(ctx context.Context, provider string, us
 	user.Email = userInfo.Email
 	user.AvatarURL = userInfo.AvatarURL
 	if err := uc.oauth2UserRepo.Update(ctx, user); err != nil {
-		logger.Warn(ctx, "failed to update user info", zap.Error(err))
+		// Log the error but don't fail the operation - user profile sync is best-effort
+		// The user can still authenticate even if profile update fails
+		logger.Warn(ctx, "failed to update user info (best-effort sync)",
+			zap.String("provider", provider),
+			zap.String("user_id", user.ID.String()),
+			zap.Error(err))
 	}
 	return &FindOrCreateUserInfo{UserID: user.ID, IsNew: false, BannedAt: user.BannedAt}, nil
 }
@@ -179,6 +184,10 @@ type RefreshTokenInfo struct {
 // ValidateRefreshToken looks up a refresh token by its plain value, validates
 // it (not revoked, not expired), and revokes it (token rotation).
 // Returns the token info on success.
+//
+// Note: This operation is not wrapped in a transaction because the underlying
+// repo layer uses atomic UPDATE with WHERE clause to prevent double-revocation.
+// The Revoke operation uses optimistic locking via the revoked flag.
 func (uc *AuthUsecase) ValidateRefreshToken(ctx context.Context, plainToken string) (*RefreshTokenInfo, error) {
 	rtHash := hashRefreshToken(plainToken)
 	rt, err := uc.refreshTokenRepo.FindByHash(ctx, rtHash)
@@ -208,6 +217,7 @@ func (uc *AuthUsecase) ValidateRefreshToken(ctx context.Context, plainToken stri
 	}
 
 	// Revoke the old refresh token (token rotation).
+	// The repo layer should use atomic UPDATE to prevent race conditions.
 	if err := uc.refreshTokenRepo.Revoke(ctx, rt.ID); err != nil {
 		return nil, fmt.Errorf("revoke old refresh token: %w", err)
 	}

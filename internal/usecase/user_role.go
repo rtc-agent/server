@@ -60,42 +60,69 @@ type AssignRolesInput struct {
 // validateRolesForAssignment validates that all role IDs exist and are enabled.
 // Returns the validated role objects and their UUIDs.
 func (uc *AdminUserRoleUsecase) validateRolesForAssignment(ctx context.Context, roleIDStrs []string) ([]*model.AdminRole, []uuid.UUID, error) {
-	roles := make([]*model.AdminRole, 0, len(roleIDStrs))
 	roleIDs := make([]uuid.UUID, 0, len(roleIDStrs))
 
+	// Parse all role IDs first
 	for _, roleIDStr := range roleIDStrs {
 		roleID, err := uuid.Parse(roleIDStr)
 		if err != nil {
 			return nil, nil, fmt.Errorf("invalid role ID format: %s", roleIDStr)
 		}
+		roleIDs = append(roleIDs, roleID)
+	}
 
-		role, err := uc.adminRoleRepo.GetByID(ctx, roleID)
-		if err != nil {
-			if repo.IsNotFound(err) {
-				return nil, nil, fmt.Errorf("%w: %s", repo.ErrRoleNotFound, roleIDStr)
-			}
-			return nil, nil, fmt.Errorf("get role: %w", err)
+	// Batch-fetch all roles in a single query to avoid N+1
+	roles, err := uc.adminRoleRepo.GetByIDs(ctx, roleIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("batch get roles: %w", err)
+	}
+
+	// Build a map for quick lookup and validate
+	roleMap := make(map[uuid.UUID]*model.AdminRole, len(roles))
+	for _, role := range roles {
+		roleMap[role.ID] = role
+	}
+
+	// Validate all roles exist and are enabled
+	validatedRoles := make([]*model.AdminRole, 0, len(roleIDs))
+	for _, roleID := range roleIDs {
+		role, exists := roleMap[roleID]
+		if !exists {
+			return nil, nil, fmt.Errorf("%w: %s", repo.ErrRoleNotFound, roleID.String())
 		}
 		if !role.IsEnabled {
 			return nil, nil, fmt.Errorf("%w: %s", repo.ErrRoleDisabled, role.Name)
 		}
-		roles = append(roles, role)
-		roleIDs = append(roleIDs, roleID)
+		validatedRoles = append(validatedRoles, role)
 	}
-	return roles, roleIDs, nil
+
+	return validatedRoles, roleIDs, nil
 }
 
 // filterNewRoles filters out roles that are already assigned to the admin user.
+// Optimized: batch query existing assignments instead of N+1 individual checks.
 func (uc *AdminUserRoleUsecase) filterNewRoles(ctx context.Context, userID uuid.UUID, roles []*model.AdminRole, roleIDs []uuid.UUID) ([]*model.AdminRole, []uuid.UUID, error) {
+	if len(roleIDs) == 0 {
+		return nil, nil, nil
+	}
+
+	// Batch query existing assignments for this user
+	existingAssignments, err := uc.adminUserRoleRepo.ListByUserID(ctx, userID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list existing role assignments: %w", err)
+	}
+
+	// Build set of existing role IDs for O(1) lookup
+	existingRoleIDs := make(map[uuid.UUID]struct{}, len(existingAssignments))
+	for _, assignment := range existingAssignments {
+		existingRoleIDs[assignment.RoleID] = struct{}{}
+	}
+
+	// Filter out already assigned roles
 	newRoles := make([]*model.AdminRole, 0, len(roles))
 	newRoleIDs := make([]uuid.UUID, 0, len(roleIDs))
-
 	for i, role := range roles {
-		exists, err := uc.adminUserRoleRepo.Exists(ctx, userID, role.ID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("check role assignment: %w", err)
-		}
-		if !exists {
+		if _, exists := existingRoleIDs[role.ID]; !exists {
 			newRoles = append(newRoles, role)
 			newRoleIDs = append(newRoleIDs, roleIDs[i])
 		}

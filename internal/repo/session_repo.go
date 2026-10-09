@@ -46,7 +46,7 @@ type SessionRepo interface {
 	// session is cancelled, all active sub-agents must be cancelled too.
 	FindActiveByParent(ctx context.Context, parentSessionID uuid.UUID) ([]*model.Session, error)
 	// AtomicAddTokenUsage atomically increments the session's token usage counters.
-	AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UUID, delta TokenUsageDelta) error
+	AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UUID, delta model.TokenUsageDelta) error
 	// AtomicUpdateEWMA atomically updates the session's token estimate EWMA value.
 	AtomicUpdateEWMA(ctx context.Context, sessionID uuid.UUID, ewma float64) error
 	// ListForAdmin returns a paginated list of sessions with admin filters.
@@ -55,27 +55,6 @@ type SessionRepo interface {
 	AggregateTokenStats(ctx context.Context, userID string, days int) ([]*DailyTokenStat, error)
 	// ListTopByTokens returns the top sessions by total token usage for a user.
 	ListTopByTokens(ctx context.Context, userID string, limit int) ([]*model.Session, error)
-}
-
-// TokenUsageDelta represents incremental token usage changes.
-type TokenUsageDelta struct {
-	InputDelta       int64
-	OutputDelta      int64
-	TotalDelta       int64
-	CachedReadDelta  int64
-	CachedWriteDelta int64
-	ReasoningDelta   int64
-	CostMicrosDelta  int64
-
-	// SetEWMA, if > 0, atomically sets token_estimate_ewma to this value.
-	// Used by TokenEstimator to persist the EWMA after each LLM call.
-	SetEWMA float64
-
-	// SetCurrentContextTokens, if > 0, atomically sets current_context_tokens.
-	// Used by token_callback to update the current context size after each
-	// LLM call, and by persistCompressedMessages / compact to write the
-	// accurate post-compaction token count.
-	SetCurrentContextTokens int64
 }
 
 // SessionAdminFilter holds filter criteria for admin session listing.
@@ -147,8 +126,13 @@ func (r *sessionRepo) GetByUser(ctx context.Context, userID uuid.UUID, cursor *s
 	if cursor != nil {
 		q = q.Where("id < ?", *cursor)
 	}
+	// Use sensible default and maximum limits to prevent excessive data loading
+	const defaultLimit = 20
+	const maxLimit = 100
 	if limit <= 0 {
-		limit = 20
+		limit = defaultLimit
+	} else if limit > maxLimit {
+		limit = maxLimit
 	}
 	if err := q.Limit(limit).Find(&sessions).Error; err != nil {
 		return nil, fmt.Errorf("get sessions by user %s: %w", userID, err)
@@ -272,7 +256,7 @@ func (r *sessionRepo) FindActiveByParent(ctx context.Context, parentSessionID uu
 	return sessions, nil
 }
 
-func (r *sessionRepo) AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UUID, delta TokenUsageDelta) error {
+func (r *sessionRepo) AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UUID, delta model.TokenUsageDelta) error {
 	updates := map[string]any{
 		"total_input_tokens":        gorm.Expr("total_input_tokens + ?", delta.InputDelta),
 		"total_output_tokens":       gorm.Expr("total_output_tokens + ?", delta.OutputDelta),

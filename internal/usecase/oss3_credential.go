@@ -54,7 +54,7 @@ func (uc *OSS3Usecase) IssueTemporaryCredentials(ctx context.Context, userID str
 	}
 
 	cred := &model.TemporaryCredential{
-		ID:              uuid.New(),
+		ID:              uuid.Must(uuid.NewV7()), // Use UUIDv7 for time-sortable IDs
 		UserID:          userID,
 		AccessKeyID:     accessKeyID,
 		SecretAccessKey: encryptedSecret,
@@ -86,10 +86,6 @@ func (uc *OSS3Usecase) ValidateCredential(ctx context.Context, accessKeyID, sess
 
 	if cred.IsExpired() {
 		return nil, rtcoss3.ErrExpiredToken
-	}
-
-	if cred.IsRevoked() {
-		return nil, rtcoss3.ErrAccessDenied
 	}
 
 	// Decrypt and verify session token

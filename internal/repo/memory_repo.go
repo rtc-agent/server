@@ -210,13 +210,19 @@ func (r *memoryRepo) Update(ctx context.Context, id uuid.UUID, fields map[string
 		return fmt.Errorf("update memory %s: %w", id, result.Error)
 	}
 	if result.RowsAffected == 0 {
-		// Check if the record exists to distinguish between "not found" and "lock conflict".
+		// Distinguish between "not found" and "optimistic lock conflict"
+		// First check if the record exists at all
 		var existing memory.Memory
 		err := DBFromContext(ctx, r.db).WithContext(ctx).First(&existing, "id = ?", id).Error
 		if err != nil {
-			return memory.ErrNotFound
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return memory.ErrNotFound
+			}
+			return fmt.Errorf("check memory existence: %w", err)
 		}
-		// Record exists but was not updated — optimistic lock conflict.
+		// Record exists but was not updated - this is an optimistic lock conflict
+		// The updated_at in DB doesn't match the expected value, meaning another
+		// writer has modified this record since we read it
 		return memory.ErrOptimisticLock
 	}
 	return nil

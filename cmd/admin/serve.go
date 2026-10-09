@@ -290,7 +290,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	// Init usecases
 	adminAuthUsecase := usecase.NewAdminAuthUsecase(db, adminUserRepo, refreshTokenRepo, jwtSigner)
 	adminAuthUsecase.SetLoginProtection(loginProtection)
-	adminRoleUsecase := usecase.NewAdminRoleUsecase(adminRoleRepo, adminUserRoleRepo, auditLogRepo, enforcer)
+	adminRoleUsecase := usecase.NewAdminRoleUsecase(db, adminRoleRepo, adminUserRoleRepo, auditLogRepo, enforcer)
 	permissionUsecase := usecase.NewPermissionUsecase(adminRoleRepo, enforcer, auditLogRepo)
 	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(db, adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer, auditLogRepo)
 	adminUserUsecase := usecase.NewAdminUserUsecase(db, adminUserRepo, adminUserRoleRepo, adminRoleRepo, enforcer)
@@ -506,6 +506,15 @@ func setupRouter(deps routerDeps) *gin.Engine {
 
 	// Logger middleware
 	router.Use(gin.Logger())
+
+	// Security headers middleware
+	router.Use(func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("X-XSS-Protection", "1; mode=block")
+		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+		c.Next()
+	})
 
 	// Rate limiting middleware (P0 #2) — applied globally
 	router.Use(httphandler.AdminRateLimitMiddleware(deps.middleware.rateLimiter))
