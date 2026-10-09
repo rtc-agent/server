@@ -42,12 +42,13 @@ func AutoMigrate(db *gorm.DB) error {
 	_ = db.Exec("DROP INDEX IF EXISTS idx_files_user_key").Error
 
 	// Add composite index on memory_links to optimise queries by from_id + relation.
-	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_memory_links_from_relation ON memory_links(from_id, relation)").Error; err != nil {
+	// CONCURRENTLY avoids table lock during index creation.
+	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_memory_links_from_relation ON memory_links(from_id, relation)").Error; err != nil {
 		return fmt.Errorf("create index idx_memory_links_from_relation: %w", err)
 	}
 
 	// Add unique constraint on memory_links to prevent duplicate links.
-	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_memory_links_from_to ON memory_links(from_id, to_id)").Error; err != nil {
+	if err := db.Exec("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uniq_memory_links_from_to ON memory_links(from_id, to_id)").Error; err != nil {
 		return fmt.Errorf("create index uniq_memory_links_from_to: %w", err)
 	}
 
@@ -57,16 +58,17 @@ func AutoMigrate(db *gorm.DB) error {
 	_ = db.Exec("ALTER TABLE user_memories ALTER COLUMN tags TYPE jsonb USING to_jsonb(tags)").Error
 
 	// Composite indexes for query performance.
-	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_session_offset ON messages(session_id, global_offset)").Error; err != nil {
+	// CONCURRENTLY avoids table lock during index creation on large tables.
+	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_messages_session_offset ON messages(session_id, global_offset)").Error; err != nil {
 		return fmt.Errorf("create index idx_messages_session_offset: %w", err)
 	}
-	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_kind, owner_ref_id)").Error; err != nil {
+	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sessions_owner ON sessions(owner_kind, owner_ref_id)").Error; err != nil {
 		return fmt.Errorf("create index idx_sessions_owner: %w", err)
 	}
-	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_operator_time ON admin_audit_logs(operator_id, created_at)").Error; err != nil {
+	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_admin_audit_logs_operator_time ON admin_audit_logs(operator_id, created_at)").Error; err != nil {
 		return fmt.Errorf("create index idx_admin_audit_logs_operator_time: %w", err)
 	}
-	if err := db.Exec("CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_resource_time ON admin_audit_logs(resource_type, created_at)").Error; err != nil {
+	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_admin_audit_logs_resource_time ON admin_audit_logs(resource_type, created_at)").Error; err != nil {
 		return fmt.Errorf("create index idx_admin_audit_logs_resource_time: %w", err)
 	}
 

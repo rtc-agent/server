@@ -53,8 +53,9 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Ensure pgvector extension is created (pgvector/pgvector:pg17 image has it installed, but it must be explicitly enabled).
+	// This is a hard error because subsequent migrations may depend on vector types.
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
-		logger.Warn(context.Background(), "Failed to create pgvector extension (vector search may not work)", zap.Error(err))
+		return fmt.Errorf("create pgvector extension: %w (hint: install pgvector or use pgvector/pgvector Docker image)", err)
 	}
 
 	if err := model.AutoMigrate(db); err != nil {
@@ -83,8 +84,9 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	// Two indexes are needed because PostgreSQL NULL != NULL, so a single unique index
 	// would allow multiple NULL user_id rows for the same key.
 	// Index 1: Ensures at most one system config (user_id IS NULL) per key.
+	// CONCURRENTLY avoids table lock during index creation.
 	if err := db.Exec(`
-		CREATE UNIQUE INDEX IF NOT EXISTS uniq_server_configs_key_system
+		CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uniq_server_configs_key_system
 		ON server_configs(key)
 		WHERE user_id IS NULL
 	`).Error; err != nil {
@@ -92,7 +94,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	}
 	// Index 2: Ensures at most one user override per (key, user_id) combination.
 	if err := db.Exec(`
-		CREATE UNIQUE INDEX IF NOT EXISTS uniq_server_configs_key_user
+		CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uniq_server_configs_key_user
 		ON server_configs(key, user_id)
 		WHERE user_id IS NOT NULL
 	`).Error; err != nil {
@@ -101,7 +103,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 
 	// Composite index for admin session listing and token aggregation stats.
 	if err := db.Exec(`
-		CREATE INDEX IF NOT EXISTS idx_sessions_owner_created
+		CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sessions_owner_created
 		ON sessions(owner_ref_id, created_at)
 	`).Error; err != nil {
 		return fmt.Errorf("create index for sessions: %w", err)

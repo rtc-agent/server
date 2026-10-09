@@ -73,7 +73,11 @@ func (q *Queue) Publish(ctx context.Context, sessionID, data string, priority in
 
 	span.SetAttributes(attribute.String("work.id", workID))
 
-	if err := publishScript.Run(ctx, q.rdb, []string{workKey, queueKey},
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	publishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if err := publishScript.Run(publishCtx, q.rdb, []string{workKey, queueKey},
 		workID, sessionID, data, priority, now, now,
 		ChannelSessionNew, sessionID,
 	).Err(); err != nil {
@@ -104,7 +108,12 @@ func (q *Queue) Claim(ctx context.Context, sessionID, workerID string) (*ClaimRe
 	}
 
 	now := time.Now().Unix()
-	res, err := claimScript.Run(ctx, q.rdb, []string{
+
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	res, err := claimScript.Run(claimCtx, q.rdb, []string{
 		keyLock(sessionID),
 		keyQueue(sessionID),
 		keyActive(sessionID),
@@ -172,7 +181,12 @@ func (q *Queue) ClaimWithCredential(ctx context.Context, sessionID, workerID, cr
 	}
 
 	now := time.Now().Unix()
-	res, err := claimWithCredentialScript.Run(ctx, q.rdb, []string{
+
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	res, err := claimWithCredentialScript.Run(claimCtx, q.rdb, []string{
 		keyLock(sessionID),
 		keyQueue(sessionID),
 		keyActive(sessionID),
@@ -256,7 +270,11 @@ func (q *Queue) Complete(ctx context.Context, workID string) error {
 	)
 	defer span.End()
 
-	n, err := completeScript.Run(ctx, q.rdb, []string{keyWork(workID)},
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	completeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	n, err := completeScript.Run(completeCtx, q.rdb, []string{keyWork(workID)},
 		time.Now().Unix(),
 		ChannelSessionNew,
 	).Int()
@@ -301,7 +319,11 @@ func (q *Queue) CompleteWork(ctx context.Context, workID string) error {
 	}
 	span.SetAttributes(attribute.String("session.id", work.SessionID))
 
-	n, err := completeWorkScript.Run(ctx, q.rdb, []string{
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	completeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	n, err := completeWorkScript.Run(completeCtx, q.rdb, []string{
 		keyWork(workID),
 		keyActive(work.SessionID),
 	}, time.Now().Unix()).Int()
@@ -343,16 +365,20 @@ func (q *Queue) Cancel(ctx context.Context, workID, reason string) error {
 		Reason:    reason,
 		Timestamp: time.Now().Unix(),
 	}
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		return fmt.Errorf("rtcqueue: marshal cancel: %w", err)
-	}
+		payload, err := json.Marshal(msg)
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			return fmt.Errorf("rtcqueue: marshal cancel: %w", err)
+		}
 
-	n, err := cancelScript.Run(ctx, q.rdb, []string{keyWork(workID)},
-		msg.Timestamp,
-		string(payload),
-	).Int()
+		// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+		cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		n, err := cancelScript.Run(cancelCtx, q.rdb, []string{keyWork(workID)},
+			msg.Timestamp,
+			string(payload),
+		).Int()
 	if err != nil {
 		globalQueueMetrics.recordCancel("error")
 		span.SetStatus(codes.Error, err.Error())
@@ -396,9 +422,13 @@ func (q *Queue) CancelSession(ctx context.Context, sessionID, reason string) err
 
 	now := time.Now().Unix()
 
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
 	// 1. Atomically remove all pending work items from the session queue and
 	// mark them as cancelled.
-	_, err := cancelSessionScript.Run(ctx, q.rdb, []string{keyQueue(sessionID)},
+	_, err := cancelSessionScript.Run(cancelCtx, q.rdb, []string{keyQueue(sessionID)},
 		now,
 	).Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
@@ -411,7 +441,7 @@ func (q *Queue) CancelSession(ctx context.Context, sessionID, reason string) err
 	// a cancel notification, and releases both the lock and the pointer —
 	// all atomically. If no work is active the script returns nil and we
 	// are done.
-	_, err = cancelSessionActiveScript.Run(ctx, q.rdb, []string{
+	_, err = cancelSessionActiveScript.Run(cancelCtx, q.rdb, []string{
 		keyLock(sessionID),
 		keyActive(sessionID),
 		ChannelSessionCancel(sessionID),
@@ -441,7 +471,11 @@ func (q *Queue) RenewLock(ctx context.Context, sessionID, workerID string) (bool
 	)
 	defer span.End()
 
-	n, err := renewLockScript.Run(ctx, q.rdb, []string{keyLock(sessionID)},
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	renewCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	n, err := renewLockScript.Run(renewCtx, q.rdb, []string{keyLock(sessionID)},
 		workerID, DefaultLockTTLSeconds,
 	).Int()
 	if errors.Is(err, redis.Nil) {
@@ -468,7 +502,11 @@ func (q *Queue) RenewLockWithCredential(ctx context.Context, sessionID, workerID
 	)
 	defer span.End()
 
-	n, err := renewLockWithCredentialScript.Run(ctx, q.rdb, []string{keyLock(sessionID)},
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	renewCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	n, err := renewLockWithCredentialScript.Run(renewCtx, q.rdb, []string{keyLock(sessionID)},
 		workerID, credential, DefaultLockTTLSeconds,
 	).Int()
 	if errors.Is(err, redis.Nil) {
@@ -518,7 +556,12 @@ func (q *Queue) CompleteWorkAndClaimNext(ctx context.Context, currentWorkID, wor
 	span.SetAttributes(attribute.String("session.id", currentWork.SessionID))
 
 	now := time.Now().Unix()
-	res, err := completeWorkAndClaimNextScript.Run(ctx, q.rdb, []string{
+
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	completeClaimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	res, err := completeWorkAndClaimNextScript.Run(completeClaimCtx, q.rdb, []string{
 		keyWork(currentWorkID),
 		keyLock(currentWork.SessionID),
 		keyQueue(currentWork.SessionID),
@@ -579,7 +622,11 @@ func (q *Queue) ReleaseSession(ctx context.Context, sessionID, workerID, credent
 	)
 	defer span.End()
 
-	result, err := releaseSessionWithCredentialScript.Run(ctx, q.rdb, []string{
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	releaseCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	result, err := releaseSessionWithCredentialScript.Run(releaseCtx, q.rdb, []string{
 		keyLock(sessionID),
 		keyActive(sessionID),
 	}, workerID, credential).Int()
@@ -609,7 +656,11 @@ func (q *Queue) ForceReleaseSession(ctx context.Context, sessionID string) error
 	)
 	defer span.End()
 
-	err := q.rdb.Del(ctx, keyLock(sessionID), keyActive(sessionID)).Err()
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	forceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	err := q.rdb.Del(forceCtx, keyLock(sessionID), keyActive(sessionID)).Err()
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 	}
@@ -634,7 +685,11 @@ func (q *Queue) HasPendingWorkByKind(ctx context.Context, sessionID string, kind
 	)
 	defer span.End()
 
-	n, err := hasPendingWorkByKindScript.Run(ctx, q.rdb, []string{
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	n, err := hasPendingWorkByKindScript.Run(checkCtx, q.rdb, []string{
 		keyQueue(sessionID),
 		keyActive(sessionID),
 	}, kind).Int()

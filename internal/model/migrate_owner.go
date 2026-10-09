@@ -1,6 +1,10 @@
 package model
 
-import "gorm.io/gorm"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 // MigrateOwnerStages1And2 adds new columns and backfills from legacy user_id.
 // Called by cmd/migrate.go in T2.
@@ -56,21 +60,46 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 	if hasUserID {
 		// Backfill sessions: owner_ref_id IS NULL means not yet backfilled
 		// (owner_kind may already have a default set by AutoMigrate).
-		if err := db.Exec(`
-			UPDATE sessions
-			SET owner_kind = 'user', owner_ref_id = user_id::text
-			WHERE owner_ref_id IS NULL
-		`).Error; err != nil {
-			return err
+		// Use batched updates to avoid long locks and WAL bloat on large tables.
+		const batchSize = 1000
+		for {
+			result := db.Exec(`
+				UPDATE sessions
+				SET owner_kind = 'user', owner_ref_id = user_id::text
+				WHERE owner_ref_id IS NULL
+				AND id IN (SELECT id FROM sessions WHERE owner_ref_id IS NULL LIMIT ?)
+			`, batchSize)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
+
 		// Backfill messages: creator_ref_id IS NULL means not yet backfilled.
-		if err := db.Exec(`
-			UPDATE messages
-			SET creator_kind = 'user', creator_ref_id = s.owner_ref_id
-			FROM sessions s
-			WHERE messages.session_id = s.id AND messages.creator_ref_id IS NULL
-		`).Error; err != nil {
-			return err
+		// Use batched updates to avoid long locks and WAL bloat on large tables.
+		for {
+			result := db.Exec(`
+				UPDATE messages
+				SET creator_kind = 'user', creator_ref_id = s.owner_ref_id
+				FROM sessions s
+				WHERE messages.session_id = s.id AND messages.creator_ref_id IS NULL
+				AND messages.id IN (
+					SELECT m.id FROM messages m
+					JOIN sessions s2 ON m.session_id = s2.id
+					WHERE m.creator_ref_id IS NULL
+					LIMIT ?
+				)
+			`, batchSize)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	return nil
