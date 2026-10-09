@@ -208,9 +208,10 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 		return
 	}
 
-	// Calculate delay based on actual next run time instead of always using full interval.
-	// If the loop has missed its scheduled execution, execute immediately (delay = 0).
-	// Otherwise, wait until the next scheduled run time.
+	// Calculate delay based on actual next run time with exponential backoff.
+	// If the loop has missed its scheduled execution, use exponential backoff
+	// based on recovery_attempts to prevent overwhelming the system with
+	// repeated failures. Otherwise, wait until the next scheduled run time.
 	var delay time.Duration
 	if loop.LastRunAt.IsZero() {
 		// Never run before, use full interval
@@ -218,7 +219,15 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 	} else {
 		nextRunTime := loop.LastRunAt.Add(time.Duration(loop.IntervalSeconds) * time.Second)
 		if nextRunTime.Before(time.Now()) {
-			delay = 0 // Already missed, execute immediately
+			// Already missed - apply exponential backoff based on recovery attempts.
+			// This prevents a consistently failing loop from overwhelming the system.
+			baseDelay := time.Duration(loop.IntervalSeconds) * time.Second
+			backoff := baseDelay * time.Duration(1<<uint(loop.RecoveryAttempts))
+			maxBackoff := 1 * time.Hour // Cap at 1 hour to prevent excessive delays
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			delay = backoff
 		} else {
 			delay = time.Until(nextRunTime)
 		}

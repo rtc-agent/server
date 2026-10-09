@@ -61,6 +61,25 @@ func (l *Loop) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// Validate checks that the Loop configuration is valid.
+// Call this before creating a Loop to prevent invalid configurations that
+// could cause performance issues or unexpected behavior.
+func (l *Loop) Validate() error {
+	if l.IntervalSeconds <= 0 {
+		return fmt.Errorf("interval_seconds must be positive, got %d", l.IntervalSeconds)
+	}
+	if l.MaxTurns <= 0 {
+		return fmt.Errorf("max_turns must be positive, got %d", l.MaxTurns)
+	}
+	if l.IntervalSeconds > 86400*30 { // 30 days
+		return fmt.Errorf("interval_seconds too large (max 30 days), got %d", l.IntervalSeconds)
+	}
+	if l.MaxTurns > 10000 {
+		return fmt.Errorf("max_turns too large (max 10000), got %d", l.MaxTurns)
+	}
+	return nil
+}
+
 // IsTerminal reports whether the loop is in a terminal state.
 func (l *Loop) IsTerminal() bool {
 	return l.Status == LoopStatusCompleted ||

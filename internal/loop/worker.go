@@ -133,17 +133,14 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 		return fmt.Errorf("parse loop ID: %w", err)
 	}
 
-	// Clear asynq_task_id to indicate this task is being processed.
-	// This is critical for recovery logic: if a task crashes after this point,
-	// recovery will see empty asynq_task_id + stale last_run_at and re-schedule.
-	if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{"asynq_task_id": ""}); err != nil {
-		// Log but continue - recovery will handle stale state
-		logger.Warn(ctx, "[loop.Worker] clear asynq_task_id failed",
-			zap.String("loop_id", loopUUID.String()),
-			zap.Error(err))
-	}
-
 	// 1. Validate loop still exists and is active
+	//
+	// NOTE: We intentionally do NOT clear asynq_task_id here. Using loop.ID as the task ID
+	// (set in scheduleNextLoop) provides idempotency: if this task crashes and Recovery
+	// re-enqueues it, asynq will reject the duplicate with ErrTaskIDConflict.
+	//
+	// Clearing asynq_task_id would break this guarantee: Recovery would see an empty task_id
+	// and incorrectly assume the task was lost, leading to duplicate execution.
 	loop, err := w.loopRepo.FindActive(ctx, sessionUUID)
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
@@ -219,13 +216,29 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 		return fmt.Errorf("publish to rtc-queue: %w", err)
 	}
 
+	// Reset recovery_attempts on successful processing.
+	// This prevents a loop from being incorrectly marked as exhausted after
+	// experiencing transient failures that required recovery.
+	if loop.RecoveryAttempts > 0 {
+		if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{
+			"recovery_attempts": 0,
+		}); err != nil {
+			// Non-fatal: log but continue. The loop will still function correctly,
+			// but recovery_attempts may accumulate over time.
+			logger.Warn(ctx, "[loop.Worker] reset recovery_attempts failed",
+				zap.String("loop_id", loopUUID.String()),
+				zap.Error(err))
+		}
+	}
+
 	span.SetAttributes(attribute.Int("loop.turn", loop.CompletedTurns+1))
 	logger.Info(ctx, "[loop.Worker] task processed successfully",
 		zap.String("session_id", sessionUUID.String()),
 		zap.String("user_id", userID),
 		zap.String("loop_id", loop.ID.String()),
 		zap.Int("turn", loop.CompletedTurns+1),
-		zap.Int("max_turns", loop.MaxTurns))
+		zap.Int("max_turns", loop.MaxTurns),
+		zap.Int("recovery_attempts", loop.RecoveryAttempts))
 
 	return nil
 }

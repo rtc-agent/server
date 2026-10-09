@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	hibikenasynq "github.com/hibiken/asynq"
 	"github.com/rtc-agent/server/internal/agent/command"
+	"github.com/rtc-agent/server/internal/dbutil"
 	looppkg "github.com/rtc-agent/server/internal/loop"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"go.opentelemetry.io/otel/attribute"
@@ -88,8 +89,8 @@ func (l *LoopWorkflow) Tools(ctx command.Context) []tool.BaseTool {
 }
 
 // OnTurnComplete runs the loop execution loop:
-//  1. Find active loop for the session
-//  2. Increment completed_turns
+//  1. Find active loop for the session (with row lock to prevent race)
+//  2. Increment completed_turns atomically within transaction
 //  3. If max_turns exceeded → mark exhausted (no re-schedule)
 //  4. Else → persist count and schedule next delayed task via TaskScheduler
 //
@@ -101,6 +102,11 @@ func (l *LoopWorkflow) Tools(ctx command.Context) []tool.BaseTool {
 // IMPORTANT: this hook must NOT call registry methods (Deactivate, etc.)
 // because the registry holds its mutex while invoking hooks — doing so
 // would deadlock.
+//
+// CONCURRENCY: Uses SELECT FOR UPDATE to prevent race conditions when two
+// turns complete nearly simultaneously. Without the lock, both could read
+// the same completed_turns value, increment it, and both schedule the next
+// task — causing duplicate execution.
 func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 	innerCtx, span := l.helpers.tracer.Start(ctx.Context, "loop_workflow.on_turn_complete",
 		trace.WithAttributes(
@@ -115,51 +121,81 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 		return nil
 	}
 
-	loop, err := l.helpers.deps.LoopRepo.FindActive(ctx, ctx.SessionID)
-	if err != nil {
-		span.SetStatus(codes.Error, "internal_error")
-		span.RecordError(err)
-		l.helpers.logger.Warn(ctx, "loopWorkflow.find_active_failed", map[string]any{
-			"session_id": ctx.SessionID.String(),
-			"error":      err.Error(),
-		})
-		return nil // degrade
-	}
-	if loop == nil {
-		// No active loop: either we're in the confirmation phase before
-		// createLoop was called, or the loop was just completed/cancelled
-		// by the LLM during this turn. Nothing to do — command stays
-		// activated but inert.
-		span.SetAttributes(attribute.Bool("loop.active", false))
-		return nil
-	}
-	span.SetAttributes(
-		attribute.String("loop.id", loop.ID.String()),
-		attribute.Int("loop.max_turns", loop.MaxTurns),
-	)
+	// Use a transaction with SELECT FOR UPDATE to prevent race conditions.
+	// Two concurrent turn completions could otherwise read the same completed_turns
+	// value, both increment it, and both schedule the next task.
+	var loop *model.Loop
+	var newTurns int
+	err := l.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
+		txCtx := dbutil.WithTx(ctx, tx)
 
-	newTurns := loop.CompletedTurns + 1
-	span.SetAttributes(attribute.Int("loop.completed_turns", newTurns))
+		// Lock the row to prevent concurrent updates.
+		// SELECT FOR UPDATE ensures that if two transactions try to lock the same
+		// row, one will wait for the other to complete.
+		var lockedLoop model.Loop
+		result := tx.WithContext(txCtx).
+			Where("session_id = ? AND status = ?", ctx.SessionID, model.LoopStatusActive).
+			Order("created_at DESC").
+			First(&lockedLoop)
 
-	if newTurns > loop.MaxTurns {
-		span.SetAttributes(attribute.String("loop.status", "exhausted"))
-		err = l.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
-			// Inject transaction into context so LoopRepo.Update uses it
-			txCtx := repo.WithTx(ctx, tx)
+		if result.Error != nil {
+			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				// No active loop: either we're in the confirmation phase before
+				// createLoop was called, or the loop was just completed/cancelled
+				// by the LLM during this turn. Nothing to do — command stays
+				// activated but inert.
+				span.SetAttributes(attribute.Bool("loop.active", false))
+				return nil
+			}
+			return fmt.Errorf("find active loop for update: %w", result.Error)
+		}
+
+		loop = &lockedLoop
+		newTurns = loop.CompletedTurns + 1
+		span.SetAttributes(
+			attribute.String("loop.id", loop.ID.String()),
+			attribute.Int("loop.max_turns", loop.MaxTurns),
+			attribute.Int("loop.completed_turns", newTurns),
+		)
+
+		if newTurns > loop.MaxTurns {
+			span.SetAttributes(attribute.String("loop.status", "exhausted"))
 			return l.helpers.deps.LoopRepo.Update(txCtx, loop.ID, map[string]any{
 				"status":          model.LoopStatusExhausted,
 				"completed_turns": newTurns,
 			})
-		})
-		if err != nil {
-			span.SetStatus(codes.Error, "internal_error")
-			span.RecordError(err)
-			l.helpers.logger.Warn(ctx, "loopWorkflow.update_exhausted_failed", map[string]any{
-				"loop_id": loop.ID.String(),
-				"error":   err.Error(),
-			})
-			return err
 		}
+
+		// Update completed turns.
+		// Note: asynq_task_id is no longer maintained since we use loop.ID as the task ID
+		// for idempotent scheduling. This simplifies state management and avoids race conditions.
+		return l.helpers.deps.LoopRepo.Update(txCtx, loop.ID, map[string]any{
+			"completed_turns": newTurns,
+			"last_run_at":     time.Now(),
+		})
+	})
+
+	if err != nil {
+		if loop == nil {
+			// Transaction returned nil (no active loop found) — not an error.
+			return nil
+		}
+		span.SetStatus(codes.Error, "internal_error")
+		span.RecordError(err)
+		l.helpers.logger.Warn(ctx, "loopWorkflow.transaction_failed", map[string]any{
+			"loop_id":    loop.ID.String(),
+			"session_id": ctx.SessionID.String(),
+			"error":      err.Error(),
+		})
+		return err
+	}
+
+	if loop == nil {
+		// No active loop found — nothing to do.
+		return nil
+	}
+
+	if newTurns > loop.MaxTurns {
 		l.helpers.logger.Info(ctx, "loopWorkflow.loop_exhausted", map[string]any{
 			"loop_id":         loop.ID.String(),
 			"session_id":      ctx.SessionID.String(),
@@ -168,27 +204,6 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 		})
 		// No re-schedule — loop has ended.
 		return nil
-	}
-
-	// Update completed turns.
-	// Note: asynq_task_id is no longer maintained since we use loop.ID as the task ID
-	// for idempotent scheduling. This simplifies state management and avoids race conditions.
-	err = l.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
-		// Inject transaction into context so LoopRepo.Update uses it
-		txCtx := repo.WithTx(ctx, tx)
-		return l.helpers.deps.LoopRepo.Update(txCtx, loop.ID, map[string]any{
-			"completed_turns": newTurns,
-			"last_run_at":     time.Now(),
-		})
-	})
-	if err != nil {
-		span.SetStatus(codes.Error, "internal_error")
-		span.RecordError(err)
-		l.helpers.logger.Warn(ctx, "loopWorkflow.update_loop_failed", map[string]any{
-			"loop_id": loop.ID.String(),
-			"error":   err.Error(),
-		})
-		return err
 	}
 
 	// Schedule next delayed task via TaskScheduler (fire-and-forget).
@@ -243,6 +258,15 @@ type loopSchedulePayload struct {
 // the turn completion. The caller passes a context derived from context.WithoutCancel(ctx)
 // (not the request context) because this goroutine outlives the request, but we preserve
 // trace values for observability. Errors are logged but not propagated.
+//
+// asynq_task_id lifecycle (for recovery logic):
+// - Set to taskID after successful scheduling (in scheduleNextLoop)
+// - Cleared when worker starts processing (in HandleLoopTask)
+// - Recovery checks: if empty AND past due → stale, needs re-scheduling
+//
+// Note: Current implementation uses loop.ID as task ID for idempotency,
+// so asynq_task_id always equals loop.ID when a task is scheduled.
+// This simplifies state management and avoids race conditions.
 func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 	ctx, span := l.helpers.tracer.Start(ctx, "loop_workflow.schedule_next",
 		trace.WithAttributes(
@@ -284,7 +308,7 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 		// Check if task already exists (idempotent)
 		if errors.Is(err, hibikenasynq.ErrTaskIDConflict) {
 			span.SetAttributes(attribute.String("task.idempotent", "true"))
-			l.helpers.logger.Debug(ctx, "loopWorkflow.task_already_exists", map[string]any{
+			l.helpers.logger.Info(ctx, "loopWorkflow.task_already_exists", map[string]any{
 				"loop_id": loop.ID.String(),
 				"task_id": taskID,
 			})
