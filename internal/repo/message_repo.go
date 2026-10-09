@@ -31,9 +31,10 @@ type MessageRepo interface {
 	// Unlike ListBySession which returns the oldest messages (ASC + LIMIT from start),
 	// this returns the newest messages (DESC + LIMIT, then reversed to ASC).
 	ListRecentBySession(ctx context.Context, sessionID uuid.UUID, limit int) ([]*model.Message, error)
-	// ListBySessionBeforeOffset returns the most recent `limit` messages with global_offset <= maxOffset,
-	// ordered by global_offset ASC (oldest first).
-	ListBySessionBeforeOffset(ctx context.Context, sessionID uuid.UUID, maxOffset uint32, limit int) ([]*model.Message, error)
+	// ListBySessionBeforeOffset returns the most recent `limit` messages with
+	// minOffset <= global_offset <= maxOffset, ordered by global_offset ASC.
+	// Pass minOffset=0 to omit the lower bound.
+	ListBySessionBeforeOffset(ctx context.Context, sessionID uuid.UUID, minOffset uint32, maxOffset uint32, limit int) ([]*model.Message, error)
 	// GetNextGlobalOffset returns the next available global offset for a session.
 	GetNextGlobalOffset(ctx context.Context, sessionID uuid.UUID) (uint32, error)
 	// UpdateStreamingStatus updates the streaming status and content of a message.
@@ -118,10 +119,11 @@ func (r *messageRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, cu
 	if cursor != nil {
 		q = q.Where("global_offset > ?", *cursor)
 	}
-	if limit <= 0 {
-		limit = 50
+	// limit <= 0 means no limit (load all matching messages).
+	if limit > 0 {
+		q = q.Limit(limit)
 	}
-	if err := q.Limit(limit).Find(&messages).Error; err != nil {
+	if err := q.Find(&messages).Error; err != nil {
 		return nil, fmt.Errorf("list messages by session %s: %w", sessionID, err)
 	}
 	return messages, nil
@@ -206,18 +208,22 @@ func (r *messageRepo) DeleteByIDs(ctx context.Context, ids []uuid.UUID) error {
 	return nil
 }
 
-// ListBySessionBeforeOffset returns the most recent `limit` messages with global_offset <= maxOffset.
-// Results are ordered by global_offset ASC (oldest first).
-func (r *messageRepo) ListBySessionBeforeOffset(ctx context.Context, sessionID uuid.UUID, maxOffset uint32, limit int) ([]*model.Message, error) {
-	if limit <= 0 {
-		limit = 50
-	}
+// ListBySessionBeforeOffset returns the most recent `limit` messages with
+// minOffset <= global_offset <= maxOffset, ordered by global_offset ASC.
+// Pass minOffset=0 to omit the lower bound.
+func (r *messageRepo) ListBySessionBeforeOffset(ctx context.Context, sessionID uuid.UUID, minOffset uint32, maxOffset uint32, limit int) ([]*model.Message, error) {
 	// Query newest N rows in DESC order, then reverse to ASC.
 	var messages []*model.Message
-	if err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Where("session_id = ? AND global_offset <= ?", sessionID, maxOffset).
-		Order("global_offset DESC").
-		Limit(limit).
+	q := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("session_id = ? AND global_offset <= ?", sessionID, maxOffset)
+	if minOffset > 0 {
+		q = q.Where("global_offset >= ?", minOffset)
+	}
+	// limit <= 0 means no limit (load all matching messages).
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	if err := q.Order("global_offset DESC").
 		Find(&messages).Error; err != nil {
 		return nil, fmt.Errorf("list messages before offset %d for session %s: %w", maxOffset, sessionID, err)
 	}

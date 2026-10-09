@@ -249,5 +249,16 @@ func (h *helpers) forceCompressContext(ctx context.Context, msgs []*schema.Messa
 		return nil, fmt.Errorf("force compress: summarize: %w", err)
 	}
 
-	return buildCompressedResult(msgs, retentionIndex, summary), nil
+	result := buildCompressedResult(msgs, retentionIndex, summary)
+
+	// Normalize compressed messages through the same pipeline as loadMessages.
+	// This ensures system messages are leading, tool pairing is valid, and
+	// consecutive same-role messages are merged.
+	sessionID := extractSessionIDFromContext(ctx)
+	result, err = h.normalizeSchemaMessagesForLLM(ctx, sessionID, result)
+	if err != nil {
+		return nil, fmt.Errorf("force compress: normalize: %w", err)
+	}
+
+	return result, nil
 }

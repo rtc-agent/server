@@ -191,7 +191,9 @@ func BuildTurnUpdatedUpdates(session *model.Session, turnID uuid.UUID) []updates
 }
 
 // BuildForkSessionUpdates builds the UpdatePublishItem list for ForkSession.
-// Emits a session creation plus a batch of message creation updates.
+// Each message gets its own UpdatePublishItem so that the downstream save()
+// creates one user_updates row per message, keeping history pagination
+// fine-grained for the frontend.
 // nil newSession returns nil (cannot route).
 func BuildForkSessionUpdates(
 	newSession *model.Session,
@@ -200,19 +202,25 @@ func BuildForkSessionUpdates(
 	if newSession == nil || isSystemSession(newSession) {
 		return nil
 	}
-	items := []protocol.UpdateItem{
-		{Entity: protocol.EntitySession, Action: protocol.ActionCreated, EntityId: newSession.ID.String()},
-	}
-	// Append a created update for every message.
+	ch := channel.UserTopic(newSession.OwnerRefID)
+	result := make([]updates.UpdatePublishItem, 0, 1+len(messages))
+
+	// Session creation as its own update.
+	result = append(result, updates.UpdatePublishItem{
+		Channel: ch,
+		Items: []protocol.UpdateItem{
+			{Entity: protocol.EntitySession, Action: protocol.ActionCreated, EntityId: newSession.ID.String()},
+		},
+	})
+
+	// One update per message — keeps user_updates rows fine-grained.
 	for _, msg := range messages {
-		items = append(items, protocol.UpdateItem{
-			Entity:   protocol.EntityMessage,
-			Action:   protocol.ActionCreated,
-			EntityId: msg.ID.String(),
+		result = append(result, updates.UpdatePublishItem{
+			Channel: ch,
+			Items: []protocol.UpdateItem{
+				{Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: msg.ID.String()},
+			},
 		})
 	}
-	return []updates.UpdatePublishItem{{
-		Channel: channel.UserTopic(newSession.OwnerRefID),
-		Items:   items,
-	}}
+	return result
 }

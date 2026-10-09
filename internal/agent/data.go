@@ -540,6 +540,7 @@ func (h *helpers) resolveChatModel(ctx context.Context) (einomodel.ToolCallingCh
 	if err != nil {
 		return nil, fmt.Errorf("create dynamic chat model: %w", err)
 	}
+
 	return chatModel, nil
 }
 

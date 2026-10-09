@@ -80,7 +80,16 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 
 		bgCtx := context.WithoutCancel(ctx)
 		// Add timeout to prevent extraction operations from hanging and causing goroutine leaks.
-		bgCtx, bgTimeoutCancel := context.WithTimeout(bgCtx, 60*time.Second)
+		//
+		// Timeout increased from 60s to 10 minutes to accommodate large sessions:
+		// - 100+ messages with 100K+ tokens require significant processing time
+		// - Memory extraction involves LLM calls which can be slow under high load
+		// - Extraction runs in background (WithoutCancel), so it doesn't block user requests
+		//
+		// Trade-off: Longer timeout increases risk of goroutine leaks if extraction hangs,
+		// but 10 minutes is a reasonable balance for production workloads.
+		// Monitor "session_memory_extraction_duration" metric to tune this value.
+		bgCtx, bgTimeoutCancel := context.WithTimeout(bgCtx, 10*time.Minute)
 		defer bgTimeoutCancel()
 		extracted, newState, err := extractor.ExtractIfNeeded(bgCtx, sessionID, schemaMessages, state)
 		if err != nil {

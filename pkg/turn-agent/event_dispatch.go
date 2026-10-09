@@ -82,6 +82,7 @@ func (mgr *SessionTurnManager) prepareAgent(
 		"session_id": mgr.sessionID,
 		"turn_id":    turnID,
 		"tools":      len(tools),
+		"agent_type": fmt.Sprintf("%T", agent),
 	})
 	return agent, nil
 }

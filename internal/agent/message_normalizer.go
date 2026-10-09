@@ -107,6 +107,35 @@ func (h *helpers) normalizeMessagesForLLM(
 }
 
 // -----------------------------------------------------------------------------
+// Schema-level normalization (for compression path)
+// -----------------------------------------------------------------------------
+
+// normalizeSchemaMessagesForLLM normalizes a schema.Message slice for LLM
+// consumption. Used by compressContext and forceCompressContext to ensure
+// compressed messages satisfy the same structural invariants as loadMessages
+// output, without duplicating the normalization logic.
+//
+// Converts to turnagent.Message, delegates to normalizeMessagesForLLM (the
+// single source of truth for message ordering), then converts back. The
+// conversion overhead is negligible (O(n) shallow copies, n < 200) compared
+// to the LLM call cost.
+func (h *helpers) normalizeSchemaMessagesForLLM(
+	ctx context.Context,
+	sessionID uuid.UUID,
+	msgs []*schema.Message,
+) ([]*schema.Message, error) {
+	if len(msgs) == 0 {
+		return msgs, nil
+	}
+	taMsgs := turnagent.MessagesFromEino(msgs)
+	normalized, err := h.normalizeMessagesForLLM(ctx, sessionID, taMsgs)
+	if err != nil {
+		return nil, err
+	}
+	return turnagent.MessagesToEino(normalized), nil
+}
+
+// -----------------------------------------------------------------------------
 // System message extraction
 // -----------------------------------------------------------------------------
 

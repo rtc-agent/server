@@ -3,7 +3,7 @@ package turnagent
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
+	// "runtime/debug" // DISABLED: only used by commented-out renewal goroutine
 	"sync"
 	"sync/atomic"
 	"time"
@@ -197,7 +197,10 @@ func (mgr *SessionTurnManager) LastMessage() *Message {
 // Run starts the TurnLoop and lock renewal goroutine.
 // This is non-blocking; the loop runs in a goroutine managed by eino.
 func (mgr *SessionTurnManager) Run(ctx context.Context) {
-	renewCtx, cancel := context.WithCancel(ctx)
+	// renewCtx is no longer used (renewal goroutine disabled), but we still create
+	// the cancel function and store it in mgr.renewCancel for cleanup to call.
+	// This ensures consistency with the existing cleanup logic.
+	_, cancel := context.WithCancel(ctx)
 	mgr.renewCancelMu.Lock()
 	mgr.renewCancel = cancel
 	mgr.renewCancelMu.Unlock()
@@ -207,25 +210,45 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 	// This must be set BEFORE Run because Run is blocking.
 	mgr.loop.Stop(adk.UntilIdleFor(100 * time.Millisecond))
 
-	// Start lock renewal goroutine.
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				mgr.log(context.Background(), LogLevelError, "session_manager.run_lock_renewal_panic", map[string]any{
-					"session_id": mgr.sessionID,
-					"panic":      fmt.Sprintf("%v", r),
-					"stack":      string(debug.Stack()),
-				})
-				// Treat panic as lock loss to prevent split-brain: the lock TTL
-				// will expire while we can no longer renew it. Without this, the
-				// turn loop would continue running without lock-loss detection,
-				// potentially conflicting with a new worker that claims the session.
-				mgr.lockLost.Store(true)
-				mgr.loop.Stop(adk.WithSkipCheckpoint())
-			}
-		}()
-		mgr.runLockRenewal(renewCtx)
-	}()
+	// DISABLED: SessionTurnManager's lock renewal goroutine.
+	//
+	// The Worker already has its own lock renewal goroutine (see worker_cancel_lock.go:startLockRenewal)
+	// that renews the same session lock every 30 seconds and calls workCancel() when lock is lost.
+	// Having two independent renewal goroutines checking the same lock creates:
+	//   1. Redundant work (both goroutines doing identical renewal operations)
+	//   2. Potential race conditions (one detects lock loss, the other doesn't)
+	//   3. Inconsistent actions (Worker calls workCancel(), SessionTurnManager calls loop.Stop())
+	//
+	// The Worker's renewal is sufficient because:
+	//   - It's tightly coupled with the work lifecycle (starts before OnWork, stops after completion)
+	//   - workCancel() cancels the work context, which should propagate to all dependent operations
+	//   - It handles transient Redis errors with retry logic (DefaultMaxConsecutiveRenewFailures = 3)
+	//
+	// If the agent doesn't respond to context cancellation (e.g., stuck in retry loop), the
+	// turn loop will eventually exit when the agent completes or fails. The Worker's renewal
+	// will detect lock loss and prevent further processing.
+	//
+	// Original code (commented out for reference):
+	//
+	// // Start lock renewal goroutine.
+	// go func() {
+	// 	defer func() {
+	// 		if r := recover(); r != nil {
+	// 			mgr.log(context.Background(), LogLevelError, "session_manager.run_lock_renewal_panic", map[string]any{
+	// 				"session_id": mgr.sessionID,
+	// 				"panic":      fmt.Sprintf("%v", r),
+	// 				"stack":      string(debug.Stack()),
+	// 			})
+	// 			// Treat panic as lock loss to prevent split-brain: the lock TTL
+	// 			// will expire while we can no longer renew it. Without this, the
+	// 			// turn loop would continue running without lock-loss detection,
+	// 			// potentially conflicting with a new worker that claims the session.
+	// 			mgr.lockLost.Store(true)
+	// 			mgr.loop.Stop(adk.WithSkipCheckpoint())
+	// 		}
+	// 	}()
+	// 	mgr.runLockRenewal(renewCtx)
+	// }()
 
 	// Monitor goroutine: when the loop exits, automatically run cleanup.
 	// This ensures cleanup happens even if nobody calls Wait().

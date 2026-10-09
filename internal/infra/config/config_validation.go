@@ -77,6 +77,13 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	// Validate cross-config constraints: max_output_tokens_for_summary should not exceed llm.max_tokens.
+	if c.Worker.MaxOutputTokensForSummary > 0 && c.LLM.MaxTokens > 0 &&
+		c.Worker.MaxOutputTokensForSummary > c.LLM.MaxTokens {
+		return fmt.Errorf("worker.max_output_tokens_for_summary (%d) should be <= llm.max_tokens (%d)",
+			c.Worker.MaxOutputTokensForSummary, c.LLM.MaxTokens)
+	}
+
 	// Validate asynq configuration.
 	if err := c.Asynq.Validate(); err != nil {
 		return err

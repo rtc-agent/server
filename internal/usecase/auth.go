@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/repo"
@@ -113,11 +114,16 @@ type UpsertDeviceInput struct {
 
 // UpsertDevice finds or updates device information.
 func (uc *AuthUsecase) UpsertDevice(ctx context.Context, input *UpsertDeviceInput) error {
+	// DeviceID is critical for device identification - reject if too long.
+	if len([]rune(input.DeviceID)) > 100 {
+		return fmt.Errorf("device_id exceeds maximum length of 100 characters")
+	}
+
 	device := &model.Device{
 		UserID:       input.UserID,
 		DeviceID:     input.DeviceID,
-		Name:         input.Name,
-		UserAgent:    input.UserAgent,
+		Name:         stringutil.TruncateByRune(input.Name, 100),
+		UserAgent:    stringutil.TruncateByRune(input.UserAgent, 500),
 		LastActiveAt: time.Now(),
 	}
 	return uc.deviceRepo.Upsert(ctx, device)

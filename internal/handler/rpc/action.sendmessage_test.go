@@ -74,7 +74,7 @@ func (m *mockMessageRepo) ListRecentBySession(_ context.Context, _ uuid.UUID, _ 
 	return nil, nil
 }
 
-func (m *mockMessageRepo) ListBySessionBeforeOffset(_ context.Context, _ uuid.UUID, _ uint32, _ int) ([]*model.Message, error) {
+func (m *mockMessageRepo) ListBySessionBeforeOffset(_ context.Context, _ uuid.UUID, _ uint32, _ uint32, _ int) ([]*model.Message, error) {
 	return nil, nil
 }
 

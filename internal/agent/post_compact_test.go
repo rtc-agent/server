@@ -258,12 +258,14 @@ func TestAppendPostCompactAttachments(t *testing.T) {
 	if got[0].Content != "summary" {
 		t.Errorf("first message should be preserved summary, got %q", got[0].Content)
 	}
-	// Attachment is inserted after the summary but before retained messages.
-	if !strings.Contains(got[1].Content, "<system-reminder>") {
-		t.Errorf("second message should be attachment, got %q", got[1].Content)
+	// Attachment is appended at end; normalizeSchemaMessagesForLLM (called by
+	// compressContext after this function) will move it to the front via
+	// extractSystemMessages.
+	if got[1].Content != "continuing" {
+		t.Errorf("second message should be preserved retained message, got %q", got[1].Content)
 	}
-	if got[2].Content != "continuing" {
-		t.Errorf("third message should be preserved retained message, got %q", got[2].Content)
+	if !strings.Contains(got[2].Content, "<system-reminder>") {
+		t.Errorf("third message should be appended attachment, got %q", got[2].Content)
 	}
 }
 
@@ -278,9 +280,9 @@ func TestAppendPostCompactAttachments_NoAttachments(t *testing.T) {
 }
 
 func TestAppendPostCompactAttachments_InsertAfterSystemMessages(t *testing.T) {
-	// Verify that attachments are inserted after system messages but before
-	// retained conversation messages, maintaining the Claude API invariant
-	// that system messages appear at the start.
+	// Verify that attachments are appended at the end. The ordering invariant
+	// (system messages leading) is enforced by normalizeSchemaMessagesForLLM,
+	// which runs after appendPostCompactAttachments in compressContext.
 	compressed := []*schema.Message{
 		{Role: schema.User, Content: "summary"},
 		{Role: schema.System, Content: "system-attachment-1"},
@@ -297,15 +299,24 @@ func TestAppendPostCompactAttachments_InsertAfterSystemMessages(t *testing.T) {
 	if len(got) != 6 {
 		t.Fatalf("expected 6 messages (5 compressed + 1 attachment), got %d", len(got))
 	}
-	// Attachment should be at index 3 (after summary + 2 system messages).
-	if !strings.Contains(got[3].Content, "<system-reminder>") {
-		t.Errorf("fourth message should be attachment, got %q", got[3].Content)
+	// Original messages preserved in order.
+	if got[0].Content != "summary" {
+		t.Errorf("first message should be summary, got %q", got[0].Content)
 	}
-	// Retained messages should follow.
-	if got[4].Content != "retained-user-msg" {
-		t.Errorf("fifth message should be retained user message, got %q", got[4].Content)
+	if got[1].Content != "system-attachment-1" {
+		t.Errorf("second message should be system-attachment-1, got %q", got[1].Content)
 	}
-	if got[5].Content != "retAssistant-msg" {
-		t.Errorf("sixth message should be retained assistant message, got %q", got[5].Content)
+	if got[2].Content != "system-attachment-2" {
+		t.Errorf("third message should be system-attachment-2, got %q", got[2].Content)
+	}
+	if got[3].Content != "retained-user-msg" {
+		t.Errorf("fourth message should be retained user message, got %q", got[3].Content)
+	}
+	if got[4].Content != "retAssistant-msg" {
+		t.Errorf("fifth message should be retained assistant message, got %q", got[4].Content)
+	}
+	// Attachment appended at end; normalization will move it to front.
+	if !strings.Contains(got[5].Content, "<system-reminder>") {
+		t.Errorf("sixth message should be appended attachment, got %q", got[5].Content)
 	}
 }

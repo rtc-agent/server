@@ -196,18 +196,17 @@ func formatPostCompactAttachment(path, content string) string {
 	return sb.String()
 }
 
-// appendPostCompactAttachments is a convenience used by compressContext to
-// insert post-compact attachments after the leading system messages but before
-// the retained conversation messages.
+// appendPostCompactAttachments appends post-compact file recovery attachments
+// to the compressed message list.
 //
 // The compressed message list has the structure:
 //
 //	[summaryMsg, systemMsgs_from_discarded, retainedMsgs...]
 //
-// Post-compact attachments (system-reminder messages) must be inserted right
-// after the system messages from the discarded portion, not at the end, to
-// maintain the Claude API invariant that system messages appear at the start
-// of the message array (before any user/assistant messages).
+// Post-compact attachments (system-reminder messages) are simply appended.
+// The caller (compressContext) runs normalizeSchemaMessagesForLLM afterward,
+// which moves all system messages (including these attachments) to the front
+// via extractSystemMessages — maintaining the Claude API invariant.
 func appendPostCompactAttachments(
 	ctx context.Context,
 	h *helpers,
@@ -219,26 +218,12 @@ func appendPostCompactAttachments(
 		return compressed
 	}
 
-	// Find the insertion point: after the summary and all leading system messages.
-	// The compressed list structure is: [summaryMsg (user), systemMsgs..., retainedMsgs...]
-	// We want to insert after all system messages but before any user/assistant messages.
-	insertIdx := 0
-	for insertIdx < len(compressed) {
-		msg := compressed[insertIdx]
-		// Skip the first message (summary, user role) and any system messages.
-		if insertIdx == 0 || msg.Role == schema.System {
-			insertIdx++
-			continue
-		}
-		// Found the first non-system message after the summary.
-		break
-	}
-
-	// Insert attachments at the calculated position.
+	// Append at end; normalizeSchemaMessagesForLLM (called by compressContext
+	// after this function) will move system-role attachments to the front via
+	// extractSystemMessages. No need for complex insertion-point logic here.
 	out := make([]*schema.Message, 0, len(compressed)+len(attachments))
-	out = append(out, compressed[:insertIdx]...)
+	out = append(out, compressed...)
 	out = append(out, attachments...)
-	out = append(out, compressed[insertIdx:]...)
 
 	// Read log_llm_payload dynamically from ConfigProvider when available.
 	shouldLog := h.enableLLMLogging
@@ -252,7 +237,6 @@ func appendPostCompactAttachments(
 		h.logger.Info(ctx, "postCompact.attachments", map[string]any{
 			"session_id":       sessionID.String(),
 			"attachment_count": len(attachments),
-			"insert_position":  insertIdx,
 		})
 	}
 	return out

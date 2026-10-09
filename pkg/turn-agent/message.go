@@ -368,6 +368,20 @@ func fromEinoMessage(m *schema.Message) *Message {
 	return msg
 }
 
+// MessagesFromEino converts eino's schema.Message slice to pkg Message slice.
+// Exported for use by the internal agent layer (e.g., compressContext normalization).
+// Preserves order; nil input returns nil output.
+func MessagesFromEino(msgs []*schema.Message) []*Message {
+	if msgs == nil {
+		return nil
+	}
+	out := make([]*Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = fromEinoMessage(m)
+	}
+	return out
+}
+
 // normalizeToolArguments normalizes empty or null JSON tool arguments to "{}".
 // This ensures consistency between LLM responses, DB storage, and API requests,
 // preventing both cache invalidation and 400 errors from the API.

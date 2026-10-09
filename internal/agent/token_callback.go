@@ -103,7 +103,7 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 			// if the stream stalls.
 			OnEndWithStreamOutput: func(ctx context.Context, info *callbacks.RunInfo, output *schema.StreamReader[*model.CallbackOutput]) context.Context {
 				startTime := startTimeFromContext(ctx)
-				bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
+				bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
 				go func() {
 					defer cancel()
 					// Defensive recover: drainStreamAndReport has its own recover
@@ -426,7 +426,7 @@ func mergeTokenUsageMax(dst *model.TokenUsage, src *model.TokenUsage) {
 // Per-read timeout: unlike consumeStream (which uses RecvWithTimeout for the
 // main LLM stream), this function calls output.Recv() without a per-read
 // timeout. This is acceptable because:
-//  1. The caller (OnEndWithStreamOutput) wraps ctx with a 60s overall timeout,
+//  1. The caller (OnEndWithStreamOutput) wraps ctx with a 10-minute overall timeout,
 //     bounding the goroutine's lifetime.
 //  2. The StreamReader.Recv() is channel-based and returns promptly when the
 //     LLM call completes (stream Close triggers io.EOF on the channel).

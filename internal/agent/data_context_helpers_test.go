@@ -50,8 +50,9 @@ func TestBuildMessagesFromSummaryItems(t *testing.T) {
 		if len(msgs) != 1 {
 			t.Fatalf("expected 1 message, got %d", len(msgs))
 		}
-		if msgs[0].Role != "system" {
-			t.Errorf("role = %q, want %q", msgs[0].Role, "system")
+		// buildMessagesFromSummaryItems always sets Role to user.
+		if msgs[0].Role != "user" {
+			t.Errorf("role = %q, want %q", msgs[0].Role, "user")
 		}
 		if msgs[0].Content != "summary text" {
 			t.Errorf("content = %q, want %q", msgs[0].Content, "summary text")
