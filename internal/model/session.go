@@ -28,6 +28,10 @@ const (
 	SubAgentModeAsync = "async"
 )
 
+// DefaultTokenEstimateEWMA is the initial EWMA value before the first LLM call.
+// Represents the estimated token growth rate (2000 tokens per round).
+const DefaultTokenEstimateEWMA = 2000
+
 // Session is the session model.
 type Session struct {
 	ID          uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`
@@ -45,7 +49,7 @@ type Session struct {
 	RootClientSessionID     string    `gorm:"size:255;index" json:"root_client_session_id,omitempty"`       // root session's client ID
 	RootServerSessionID     uuid.UUID `gorm:"type:uuid;index" json:"root_server_session_id,omitempty"`      // root session's server ID
 	SubAgentParentMessageID uuid.UUID `gorm:"type:uuid;index" json:"sub_agent_parent_message_id,omitempty"` // sub_agent_invocation message ID in the parent session
-	SubAgentMode            string    `gorm:"size:20;default:''" json:"sub_agent_mode,omitempty"`           // sub-agent invocation mode: "sync" (default) or "async"
+	SubAgentMode            string    `gorm:"size:20;default:''" json:"sub_agent_mode,omitempty"`           // sub-agent invocation mode: SubAgentModeSync (default) or SubAgentModeAsync
 
 	// ========================================================================
 	// Cumulative token usage (session-level)
@@ -92,7 +96,7 @@ type Session struct {
 	// estimate the next round's token increment.
 	// Incrementally updated after each LLM call: ewma = alpha * old + (1-alpha) * roundDelta.
 	// Adjusted after compaction by compression ratio: new_ewma = old_ewma * (tokensAfter / tokensBefore).
-	// Default 2000 (initial growth rate estimate before the first call).
+	// Default DefaultTokenEstimateEWMA (initial growth rate estimate before the first call).
 	TokenEstimateEWMA float64 `gorm:"default:2000" json:"token_estimate_ewma"`
 
 	// ========================================================================
@@ -131,6 +135,28 @@ type Session struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 	ClosedAt  *time.Time `json:"closed_at,omitempty"`
 	DeletedAt *time.Time `gorm:"index" json:"-"`
+}
+
+// TokenUsageDelta represents incremental token usage changes.
+// Used by SessionRepo.AtomicAddTokenUsage to atomically update session token counters.
+type TokenUsageDelta struct {
+	InputDelta       int64
+	OutputDelta      int64
+	TotalDelta       int64
+	CachedReadDelta  int64
+	CachedWriteDelta int64
+	ReasoningDelta   int64
+	CostMicrosDelta  int64
+
+	// SetEWMA, if > 0, atomically sets token_estimate_ewma to this value.
+	// Used by TokenEstimator to persist the EWMA after each LLM call.
+	SetEWMA float64
+
+	// SetCurrentContextTokens, if > 0, atomically sets current_context_tokens.
+	// Used by token_callback to update the current context size after each
+	// LLM call, and by persistCompressedMessages / compact to write the
+	// accurate post-compaction token count.
+	SetCurrentContextTokens int64
 }
 
 // BeforeCreate generates a UUID v7 identifier if one is not already set.

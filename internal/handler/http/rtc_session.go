@@ -41,6 +41,29 @@ func (h *RtcSessionHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.GET("/rtc-users/sessions/:id/messages", h.ListMessages)
 }
 
+// SessionResponse is the structured response for session data.
+type SessionResponse struct {
+	ID                    string `json:"id"`
+	ClientID              string `json:"client_id"`
+	Title                 string `json:"title"`
+	Status                string `json:"status"`
+	CreatedAt             string `json:"created_at"`
+	UpdatedAt             string `json:"updated_at"`
+	TotalInputTokens      int64  `json:"total_input_tokens"`
+	TotalOutputTokens     int64  `json:"total_output_tokens"`
+	TotalTokens           int64  `json:"total_tokens"`
+	TotalCachedReadTokens int64  `json:"total_cached_read_tokens"`
+	TotalCostMicros       int64  `json:"total_cost_micros"`
+}
+
+// ListSessionsResponse is the paginated response for session list.
+type ListSessionsResponse struct {
+	Items    []SessionResponse `json:"items"`
+	Total    int64             `json:"total"`
+	Page     int               `json:"page"`
+	PageSize int               `json:"page_size"`
+}
+
 // ListSessions returns a paginated list of sessions for a user.
 func (h *RtcSessionHandler) ListSessions(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -91,28 +114,28 @@ func (h *RtcSessionHandler) ListSessions(c *gin.Context) {
 		return
 	}
 
-	items := make([]gin.H, 0, len(result.Sessions))
+	items := make([]SessionResponse, 0, len(result.Sessions))
 	for _, s := range result.Sessions {
-		items = append(items, gin.H{
-			"id":                       s.ID,
-			"client_id":                s.ClientID,
-			"title":                    s.Title,
-			"status":                   s.Status,
-			"created_at":               s.CreatedAt,
-			"updated_at":               s.UpdatedAt,
-			"total_input_tokens":       s.TotalInputTokens,
-			"total_output_tokens":      s.TotalOutputTokens,
-			"total_tokens":             s.TotalTokens,
-			"total_cached_read_tokens": s.TotalCachedReadTokens,
-			"total_cost_micros":        s.TotalCostMicros,
+		items = append(items, SessionResponse{
+			ID:                    s.ID.String(),
+			ClientID:              s.ClientID,
+			Title:                 s.Title,
+			Status:                s.Status,
+			CreatedAt:             s.CreatedAt.Format(TimeFormatRFC3339),
+			UpdatedAt:             s.UpdatedAt.Format(TimeFormatRFC3339),
+			TotalInputTokens:      s.TotalInputTokens,
+			TotalOutputTokens:     s.TotalOutputTokens,
+			TotalTokens:           s.TotalTokens,
+			TotalCachedReadTokens: s.TotalCachedReadTokens,
+			TotalCostMicros:       s.TotalCostMicros,
 		})
 	}
 
-	Success(c, gin.H{
-		"items":     items,
-		"total":     result.Total,
-		"page":      result.Page,
-		"page_size": result.PageSize,
+	Success(c, ListSessionsResponse{
+		Items:    items,
+		Total:    result.Total,
+		Page:     result.Page,
+		PageSize: result.PageSize,
 	})
 }
 
@@ -142,6 +165,27 @@ func (h *RtcSessionHandler) GetSessionStats(c *gin.Context) {
 		"summary":      result.Summary,
 		"top_sessions": result.TopSessions,
 	})
+}
+
+// MessageResponse is the structured response for message data.
+type MessageResponse struct {
+	ID           string `json:"id"`
+	SessionID    string `json:"session_id"`
+	Role         string `json:"role"`
+	Content      string `json:"content"`
+	CreatedAt    string `json:"created_at"`
+	GlobalOffset uint32 `json:"global_offset"`
+	InputTokens  *int   `json:"input_tokens"`
+	OutputTokens *int   `json:"output_tokens"`
+	TotalTokens  *int   `json:"total_tokens"`
+}
+
+// ListMessagesResponse is the paginated response for message list.
+type ListMessagesResponse struct {
+	Items    []MessageResponse `json:"items"`
+	Total    int64             `json:"total"`
+	Page     int               `json:"page"`
+	PageSize int               `json:"page_size"`
 }
 
 // ListMessages returns a paginated list of messages for a session.
@@ -192,26 +236,26 @@ func (h *RtcSessionHandler) ListMessages(c *gin.Context) {
 		return
 	}
 
-	items := make([]gin.H, 0, len(result.Messages))
+	items := make([]MessageResponse, 0, len(result.Messages))
 	for _, m := range result.Messages {
-		items = append(items, gin.H{
-			"id":            m.ID,
-			"session_id":    m.SessionID,
-			"role":          m.Role,
-			"content":       m.Content,
-			"created_at":    m.CreatedAt,
-			"global_offset": m.GlobalOffset,
-			"input_tokens":  m.InputTokens,
-			"output_tokens": m.OutputTokens,
-			"total_tokens":  m.TotalTokens,
+		items = append(items, MessageResponse{
+			ID:           m.ID.String(),
+			SessionID:    m.SessionID.String(),
+			Role:         m.Role,
+			Content:      m.Content,
+			CreatedAt:    m.CreatedAt.Format(TimeFormatRFC3339),
+			GlobalOffset: m.GlobalOffset,
+			InputTokens:  m.InputTokens,
+			OutputTokens: m.OutputTokens,
+			TotalTokens:  m.TotalTokens,
 		})
 	}
 
-	Success(c, gin.H{
-		"items":     items,
-		"total":     result.Total,
-		"page":      result.Page,
-		"page_size": result.PageSize,
+	Success(c, ListMessagesResponse{
+		Items:    items,
+		Total:    result.Total,
+		Page:     result.Page,
+		PageSize: result.PageSize,
 	})
 }
 

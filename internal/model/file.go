@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,7 +30,11 @@ func (File) TableName() string {
 // BeforeCreate sets default values before creating a File record.
 func (f *File) BeforeCreate(tx *gorm.DB) error {
 	if f.ID == uuid.Nil {
-		f.ID = uuid.New()
+		id, err := uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("generate file ID: %w", err)
+		}
+		f.ID = id
 	}
 	if f.Bucket == "" {
 		f.Bucket = "rtc-agent"

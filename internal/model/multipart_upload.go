@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,13 +29,24 @@ func (MultipartUpload) TableName() string {
 	return "multipart_uploads"
 }
 
+// Multipart upload status constants.
+const (
+	StatusUploading = "uploading"
+	StatusCompleted = "completed"
+	StatusAborted   = "aborted"
+)
+
 // BeforeCreate sets default values before creating a MultipartUpload record.
 func (m *MultipartUpload) BeforeCreate(tx *gorm.DB) error {
 	if m.ID == uuid.Nil {
-		m.ID = uuid.New()
+		id, err := uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("generate multipart upload ID: %w", err)
+		}
+		m.ID = id
 	}
 	if m.Status == "" {
-		m.Status = "uploading"
+		m.Status = StatusUploading
 	}
 	if m.CreatedAt.IsZero() {
 		m.CreatedAt = time.Now()
@@ -60,7 +72,11 @@ func (MultipartUploadPart) TableName() string {
 // BeforeCreate sets default values before creating a MultipartUploadPart record.
 func (p *MultipartUploadPart) BeforeCreate(tx *gorm.DB) error {
 	if p.ID == uuid.Nil {
-		p.ID = uuid.New()
+		id, err := uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("generate multipart upload part ID: %w", err)
+		}
+		p.ID = id
 	}
 	if p.CreatedAt.IsZero() {
 		p.CreatedAt = time.Now()

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,12 +19,12 @@ type ScriptExecution struct {
 
 	// Script-specific fields
 	Title      string `gorm:"size:100;not null" json:"title"`        // LLM-generated execution description
-	Action     string `gorm:"size:20;not null" json:"action"`        // save/run/eval
+	Action     string `gorm:"size:20;not null" json:"action"`        // ScriptAction* constants
 	ScriptName string `gorm:"size:255" json:"script_name,omitempty"` // script name (present for save/run)
 	CodeHash   string `gorm:"size:64" json:"code_hash,omitempty"`    // SHA-256 hash of the code
 
 	// Execution result
-	Status       string `gorm:"size:20;not null" json:"status"` // success/failed/timeout
+	Status       string `gorm:"size:20;not null" json:"status"` // ScriptStatus* constants
 	DurationMs   int64  `json:"duration_ms,omitempty"`          // execution duration reported by frontend
 	ResultSize   int64  `json:"result_size,omitempty"`          // result JSON size in bytes
 	CodeSize     int64  `json:"code_size,omitempty"`            // code size in bytes
@@ -39,12 +40,26 @@ type ScriptExecution struct {
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
+// Script action constants.
+const (
+	ScriptActionSave = "save"
+	ScriptActionRun  = "run"
+	ScriptActionEval = "eval"
+)
+
+// Script execution status constants.
+const (
+	ScriptStatusSuccess = "success"
+	ScriptStatusFailed  = "failed"
+	ScriptStatusTimeout = "timeout"
+)
+
 // BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (s *ScriptExecution) BeforeCreate(tx *gorm.DB) error {
 	if s.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate script execution ID: %w", err)
 		}
 		s.ID = id
 	}

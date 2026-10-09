@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,7 +42,7 @@ func (g *Goal) BeforeCreate(tx *gorm.DB) error {
 	if g.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate goal ID: %w", err)
 		}
 		g.ID = id
 	}

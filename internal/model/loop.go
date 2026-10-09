@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,19 +33,20 @@ const (
 // Mutually exclusive with Goal: a session cannot have an active goal and an
 // active loop simultaneously.
 type Loop struct {
-	ID              uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
-	SessionID       uuid.UUID  `gorm:"type:uuid;not null;index" json:"session_id"`
-	Prompt          string     `gorm:"type:text;not null" json:"prompt"`
-	IntervalSeconds int        `gorm:"not null" json:"interval_seconds"`
-	MaxTurns        int        `gorm:"not null;default:10" json:"max_turns"`
-	CompletedTurns  int        `gorm:"not null;default:0" json:"completed_turns"`
-	Status          LoopStatus `gorm:"size:20;not null;default:'active';index" json:"status"`
-	AsynqTaskID     string     `gorm:"size:255" json:"asynq_task_id,omitempty"`
-	LastReason      *string    `gorm:"type:text" json:"last_reason,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	LastRunAt       *time.Time `json:"last_run_at,omitempty"`
-	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
-	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	ID               uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	SessionID        uuid.UUID  `gorm:"type:uuid;not null;index" json:"session_id"`
+	Prompt           string     `gorm:"type:text;not null" json:"prompt"`
+	IntervalSeconds  int        `gorm:"not null" json:"interval_seconds"`
+	MaxTurns         int        `gorm:"not null;default:10" json:"max_turns"`
+	CompletedTurns   int        `gorm:"not null;default:0" json:"completed_turns"`
+	RecoveryAttempts int        `gorm:"not null;default:0" json:"recovery_attempts"`
+	Status           LoopStatus `gorm:"size:20;not null;default:'active';index" json:"status"`
+	AsynqTaskID      string     `gorm:"size:255" json:"asynq_task_id,omitempty"`
+	LastReason       *string    `gorm:"type:text" json:"last_reason,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	LastRunAt        *time.Time `json:"last_run_at,omitempty"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
 }
 
 // BeforeCreate generates a UUID v7 identifier if one is not already set.
@@ -52,7 +54,7 @@ func (l *Loop) BeforeCreate(tx *gorm.DB) error {
 	if l.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate loop ID: %w", err)
 		}
 		l.ID = id
 	}
