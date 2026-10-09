@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	hibikenasynq "github.com/hibiken/asynq"
@@ -18,7 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -38,13 +39,13 @@ type NotificationCreator func(ctx context.Context, sessionID uuid.UUID, prompt s
 // Worker processes loop asynq tasks.
 type Worker struct {
 	queue               *rtcqueue.Queue
-	loopRepo            repo.LoopRepo
-	sessionRepo         repo.SessionRepo
+	loopRepo            usecase.LoopRepo
+	sessionRepo         usecase.SessionRepo
 	notificationCreator NotificationCreator
 }
 
 // NewWorker creates a loop worker.
-func NewWorker(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, sessionRepo repo.SessionRepo, notificationCreator NotificationCreator) *Worker {
+func NewWorker(queue *rtcqueue.Queue, loopRepo usecase.LoopRepo, sessionRepo usecase.SessionRepo, notificationCreator NotificationCreator) *Worker {
 	return &Worker{
 		queue:               queue,
 		loopRepo:            loopRepo,
@@ -52,6 +53,13 @@ func NewWorker(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, sessionRepo repo.S
 		notificationCreator: notificationCreator,
 	}
 }
+
+// loopTaskTimeout is the overall timeout for processing a loop task.
+// This prevents infinite blocking if downstream services hang.
+// The timeout covers: payload parsing, loop validation, notification creation,
+// and publishing to rtc-queue. It does NOT cover actual LLM execution (which
+// happens in a separate worker triggered by the published work item).
+const loopTaskTimeout = 30 * time.Second
 
 // HandleLoopTask processes loop:execute tasks.
 //
@@ -65,7 +73,19 @@ func NewWorker(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, sessionRepo repo.S
 //     the last user message in conversation history)
 //  4. Publish WorkKindSubmit to trigger a new turn
 //  5. The LLM sees the notification as the most recent instruction
+//
+// asynq_task_id lifecycle (for recovery logic):
+// - Set to taskID after successful scheduling (in scheduleNextLoop)
+// - Cleared when worker starts processing (in HandleLoopTask)
+// - Recovery checks: if empty AND past due → stale, needs re-scheduling
+//
+// Error handling: On failure, logs detailed context for debugging and traceability.
+// Failed tasks are archived by asynq and can be inspected via asynqmon or manually retried.
 func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error {
+	// Set overall timeout to prevent infinite blocking if downstream services hang.
+	ctx, cancel := context.WithTimeout(ctx, loopTaskTimeout)
+	defer cancel()
+
 	var payload struct {
 		SessionID string `json:"session_id"`
 		LoopID    string `json:"loop_id"`
@@ -75,7 +95,8 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
 		logger.Error(ctx, "[loop.Worker] unmarshal payload",
-			zap.Error(err))
+			zap.Error(err),
+			zap.String("raw_payload", string(t.Payload())))
 		return fmt.Errorf("unmarshal payload: %w", err)
 	}
 
@@ -112,14 +133,22 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 		return fmt.Errorf("parse loop ID: %w", err)
 	}
 
+	// Clear asynq_task_id to indicate this task is being processed.
+	// This is critical for recovery logic: if a task crashes after this point,
+	// recovery will see empty asynq_task_id + stale last_run_at and re-schedule.
+	if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{"asynq_task_id": ""}); err != nil {
+		// Log but continue - recovery will handle stale state
+		logger.Warn(ctx, "[loop.Worker] clear asynq_task_id failed",
+			zap.String("loop_id", loopUUID.String()),
+			zap.Error(err))
+	}
+
 	// 1. Validate loop still exists and is active
 	loop, err := w.loopRepo.FindActive(ctx, sessionUUID)
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
-		logger.Error(ctx, "[loop.Worker] find active loop",
-			zap.String("session_id", sessionUUID.String()),
-			zap.Error(err))
+		logTaskFailure(ctx, "find active loop", payload.SessionID, payload.LoopID, err)
 		return fmt.Errorf("find active loop: %w", err)
 	}
 	if loop == nil {
@@ -148,10 +177,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 		if err := w.notificationCreator(ctx, sessionUUID, prompt); err != nil {
 			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
-			logger.Error(ctx, "[loop.Worker] create notification message",
-				zap.String("session_id", sessionUUID.String()),
-				zap.String("loop_id", loop.ID.String()),
-				zap.Error(err))
+			logTaskFailure(ctx, "create notification message", payload.SessionID, payload.LoopID, err)
 			return fmt.Errorf("create notification message: %w", err)
 		}
 	}
@@ -160,7 +186,14 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	// Pass trace_id to maintain trace context across the rtcqueue boundary.
 	// Load session to get userID (OwnerRefID).
 	var userID string
-	if session, sessErr := w.sessionRepo.GetByID(ctx, sessionUUID); sessErr == nil {
+	if session, sessErr := w.sessionRepo.GetByID(ctx, sessionUUID); sessErr != nil {
+		// Log the error but continue - userID is optional for the work payload.
+		// The worker can still process the task without userID, but observability
+		// is reduced. This is a non-fatal error.
+		logger.Warn(ctx, "[loop.Worker] get session for userID failed",
+			zap.String("session_id", sessionUUID.String()),
+			zap.Error(sessErr))
+	} else if session != nil {
 		userID = session.OwnerRefID
 	}
 
@@ -174,9 +207,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
-		logger.Error(ctx, "[loop.Worker] marshal work payload",
-			zap.String("session_id", sessionUUID.String()),
-			zap.Error(err))
+		logTaskFailure(ctx, "marshal work payload", payload.SessionID, payload.LoopID, err)
 		return fmt.Errorf("marshal work payload: %w", err)
 	}
 
@@ -184,10 +215,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
-		logger.Error(ctx, "[loop.Worker] publish to rtc-queue",
-			zap.String("session_id", sessionUUID.String()),
-			zap.String("loop_id", loop.ID.String()),
-			zap.Error(err))
+		logTaskFailure(ctx, "publish to rtc-queue", payload.SessionID, payload.LoopID, err)
 		return fmt.Errorf("publish to rtc-queue: %w", err)
 	}
 
@@ -200,6 +228,18 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 		zap.Int("max_turns", loop.MaxTurns))
 
 	return nil
+}
+
+// logTaskFailure logs a task failure with comprehensive context for debugging.
+// This ensures failed tasks are traceable even after asynq archives them.
+func logTaskFailure(ctx context.Context, errMsg string, sessionID, loopID string, err error) {
+	logger.Error(ctx, "loop.worker.task_failed",
+		zap.String("error_message", errMsg),
+		zap.String("session_id", sessionID),
+		zap.String("loop_id", loopID),
+		zap.Error(err),
+		zap.Time("timestamp", time.Now()),
+		zap.String("task_type", LoopTaskType))
 }
 
 // buildLoopTaskPrompt constructs the notification text for a loop task trigger.

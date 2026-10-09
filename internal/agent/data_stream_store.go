@@ -8,6 +8,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/rtc-agent/server/internal/infra/cache"
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // =============================================================================
@@ -45,6 +47,16 @@ type StreamStore struct {
 	chunkTTL time.Duration
 }
 
+// streamStoreRedisTimeout is the timeout for Redis operations in StreamStore.
+// Stream operations are latency-sensitive (part of the streaming path), so
+// the timeout is shorter than checkpoint operations.
+const streamStoreRedisTimeout = 5 * time.Second
+
+// maxStreamChunks is the maximum number of chunks to read from Redis in a
+// single GetAllChunks call. This prevents blocking Redis with very large lists.
+// If a message exceeds this limit, the result is truncated and a warning is logged.
+const maxStreamChunks = 10000
+
 // AppendChunk atomically appends a chunk to the Redis list and refreshes
 // the TTL using the AppendChunk Lua script from cache.
 // This replaces the previous non-atomic RPush + Expire two-command sequence.
@@ -55,7 +67,7 @@ type StreamStore struct {
 func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error) {
 	key := cache.MessageStream(messageID)
 	ttlSeconds := int(s.chunkTTL / time.Second)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), streamStoreRedisTimeout)
 	defer cancel()
 	result, err := cache.AppendChunk.Run(
 		ctx, s.rdb,
@@ -69,21 +81,37 @@ func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error)
 }
 
 // GetAllChunks reads all buffered chunks for the given message from Redis.
+// If the number of chunks exceeds the maximum limit (maxStreamChunks), it
+// truncates the result and logs a warning to prevent blocking Redis with
+// very large lists.
 func (s *StreamStore) GetAllChunks(messageID string) ([]string, error) {
 	key := cache.MessageStream(messageID)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), streamStoreRedisTimeout)
 	defer cancel()
-	chunks, err := s.rdb.LRange(ctx, key, 0, -1).Result()
+
+	chunks, err := s.rdb.LRange(ctx, key, 0, int64(maxStreamChunks)-1).Result()
 	if err != nil {
 		return nil, fmt.Errorf("get all chunks: %w", err)
 	}
+
+	// Check if there are more chunks beyond the limit
+	if len(chunks) == maxStreamChunks {
+		remaining, _ := s.rdb.LLen(ctx, key).Result()
+		if remaining > int64(maxStreamChunks) {
+			logger.Warn(ctx, "stream chunks truncated",
+				zap.String("message_id", messageID),
+				zap.Int64("total", remaining),
+				zap.Int("returned", maxStreamChunks))
+		}
+	}
+
 	return chunks, nil
 }
 
 // DeleteChunks removes all buffered chunks for the given message from Redis.
 func (s *StreamStore) DeleteChunks(messageID string) error {
 	key := cache.MessageStream(messageID)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), streamStoreRedisTimeout)
 	defer cancel()
 	if err := s.rdb.Del(ctx, key).Err(); err != nil {
 		return fmt.Errorf("delete chunks: %w", err)

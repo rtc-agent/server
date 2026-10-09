@@ -22,6 +22,10 @@ import (
 // finalizeStreamMessage in stream_message.go.
 //
 // tokenUsage is written to the message record when provided (may be nil).
+//
+// The finalized parameter tracks whether the message has been finalized.
+// On successful finalization, *finalized is set to true. Callers should
+// pass a pointer to their state tracking variable (e.g., &state.markdownFinalized).
 func (h *helpers) finalizeStreamMessage(
 	ctx context.Context,
 	sessionID uuid.UUID,
@@ -30,6 +34,7 @@ func (h *helpers) finalizeStreamMessage(
 	buildContent func(string) (protocol.ContentData, error),
 	kind string,
 	tokenUsage *turnagent.TokenUsage,
+	finalized *bool,
 ) error {
 	if *msgID == uuid.Nil {
 		return nil
@@ -38,7 +43,7 @@ func (h *helpers) finalizeStreamMessage(
 	// Use a synthetic empty chunk with a FinishReason to trigger the
 	// finalization path in appendStreamChunk.
 	return h.appendStreamChunk(ctx, sessionID, turnID, "", "stream_finalize",
-		msgID, new(bool), buildContent, kind, tokenUsage, nil)
+		msgID, finalized, buildContent, kind, tokenUsage, nil)
 }
 
 // createAndPublishMessage creates a message record and publishes a

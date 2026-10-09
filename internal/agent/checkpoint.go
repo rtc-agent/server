@@ -30,6 +30,13 @@ type redisCheckpointStore struct {
 	ttl   time.Duration
 }
 
+// checkpointRedisTimeout is the timeout for Redis operations in checkpoint store.
+// This timeout prevents indefinite blocking if Redis is unresponsive while
+// ensuring checkpoint operations have sufficient time to complete.
+// Checkpoint operations are critical for session recovery and must succeed
+// even if the parent context is cancelled.
+const checkpointRedisTimeout = 10 * time.Second
+
 // newRedisCheckpointStore creates a redisCheckpointStore with the given TTL.
 // A TTL of 0 means no expiration (not recommended for production use).
 //
@@ -49,10 +56,9 @@ func newRedisCheckpointStore(rdb redis.UniversalClient, ttl time.Duration) *redi
 // checkpoint persistence is not affected by session or request context cancellation.
 // A checkpoint save must survive even if the parent context is cancelled —
 // otherwise the turn's state is lost and cannot be resumed.
-// The 10s timeout prevents indefinite blocking if Redis is unresponsive.
 func (s *redisCheckpointStore) Set(ctx context.Context, id string, data []byte) error {
 	key := cache.Checkpoint(id)
-	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	bgCtx, cancel := context.WithTimeout(context.Background(), checkpointRedisTimeout)
 	defer cancel()
 	if err := s.redis.Set(bgCtx, key, data, s.ttl).Err(); err != nil {
 		return fmt.Errorf("checkpoint set: id=%s key=%s: %w", id, key, err)
@@ -68,10 +74,9 @@ func (s *redisCheckpointStore) Set(ctx context.Context, id string, data []byte) 
 //
 // Uses context.Background() (with a timeout) for the same reason as Set:
 // checkpoint reads must not be affected by context cancellation.
-// The 10s timeout prevents indefinite blocking if Redis is unresponsive.
 func (s *redisCheckpointStore) Get(ctx context.Context, id string) ([]byte, bool, error) {
 	key := cache.Checkpoint(id)
-	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	bgCtx, cancel := context.WithTimeout(context.Background(), checkpointRedisTimeout)
 	defer cancel()
 	data, err := s.redis.Get(bgCtx, key).Result()
 	if errors.Is(err, redis.Nil) {
@@ -92,10 +97,9 @@ func (s *redisCheckpointStore) Get(ctx context.Context, id string) ([]byte, bool
 //
 // Uses context.Background() (with a timeout) for consistency with Set/Get —
 // checkpoint deletion must not be affected by context cancellation.
-// The 10s timeout prevents indefinite blocking if Redis is unresponsive.
 func (s *redisCheckpointStore) Delete(ctx context.Context, id string) error {
 	key := cache.Checkpoint(id)
-	bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	bgCtx, cancel := context.WithTimeout(context.Background(), checkpointRedisTimeout)
 	defer cancel()
 	if err := s.redis.Del(bgCtx, key).Err(); err != nil {
 		return fmt.Errorf("checkpoint delete: id=%s key=%s: %w", id, key, err)

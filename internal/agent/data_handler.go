@@ -61,7 +61,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 			// it so it is not left in "streaming" status permanently. Without this,
 			// the user sees a stuck loading spinner alongside the error message.
 			if state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
-				if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil); finErr != nil {
+				if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil, &state.markdownFinalized); finErr != nil {
 					h.logger.Warn(ctx, "handleStreamChunk.fallback_finalize_markdown_failed", map[string]any{
 						"session_id": sessionID.String(),
 						"turn_id":    turnID.String(),
@@ -82,7 +82,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 			// Best-effort finalization: close the markdown message so the user doesn't
 			// see a stuck loading spinner alongside the error message from FailTurn.
 			if state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
-				if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil); finErr != nil {
+				if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil, &state.markdownFinalized); finErr != nil {
 					h.logger.Warn(ctx, "handleStreamChunk.fallback_finalize_markdown_failed", map[string]any{
 						"session_id": sessionID.String(),
 						"turn_id":    turnID.String(),
@@ -103,7 +103,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 		// so the user doesn't see a stuck loading spinner alongside the error.
 		// This mirrors the thinking-append failure pattern at lines 71-78.
 		if state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
-			if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil); finErr != nil {
+			if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil, &state.markdownFinalized); finErr != nil {
 				h.logger.Warn(ctx, "handleStreamChunk.fallback_finalize_markdown_failed", map[string]any{
 					"session_id": sessionID.String(),
 					"turn_id":    turnID.String(),
@@ -112,7 +112,7 @@ func (h *helpers) handleStreamChunk(ctx context.Context, sessionID uuid.UUID, tu
 			}
 		}
 		if state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
-			if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); finErr != nil {
+			if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil, &state.thinkingFinalized); finErr != nil {
 				h.logger.Warn(ctx, "handleStreamChunk.fallback_finalize_thinking_failed", map[string]any{
 					"session_id": sessionID.String(),
 					"turn_id":    turnID.String(),
@@ -135,10 +135,11 @@ func (h *helpers) finalizePendingStreamMessages(ctx context.Context, sessionID u
 	// finalize the thinking message (thinking and content are mutually
 	// exclusive phases).
 	if event.Content != "" && state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
-		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); err != nil {
+		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil, &state.thinkingFinalized); err != nil {
 			return err
 		}
-		state.thinkingFinalized = true
+		// Note: finalizeStreamMessage sets *finalized = true on success,
+		// so state.thinkingFinalized is already updated.
 	}
 
 	// Finalize markdown if FinishReason is set.
@@ -150,19 +151,28 @@ func (h *helpers) finalizePendingStreamMessages(ctx context.Context, sessionID u
 	// the thinking message and routes token usage to it instead.
 	if event.FinishReason != "" && state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
 		if event.Content == "" {
-			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", event.TokenUsage); err != nil {
+			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", event.TokenUsage, &state.markdownFinalized); err != nil {
 				return err
 			}
+			// Note: finalizeStreamMessage sets *finalized = true on success.
 		}
-		state.markdownFinalized = true
+		// For the case where event.Content != "", the finalization happens
+		// in appendStreamChunk via FinishReason, so state.markdownFinalized
+		// is set there. We only need to set it here for the empty-content case.
+		if event.Content == "" {
+			state.markdownFinalized = true
+		}
 	}
 	if event.FinishReason != "" && state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
 		if event.ReasoningContent == "" {
-			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); err != nil {
+			if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil, &state.thinkingFinalized); err != nil {
 				return err
 			}
+			// Note: finalizeStreamMessage sets *finalized = true on success.
 		}
-		state.thinkingFinalized = true
+		if event.ReasoningContent == "" {
+			state.thinkingFinalized = true
+		}
 	}
 
 	return nil
@@ -240,18 +250,20 @@ func (h *helpers) handleStreamEnd(ctx context.Context, sessionID uuid.UUID, turn
 		if tokenTargetKind == "thinking" {
 			thinkingTokenUsage = event.TokenUsage
 		}
-		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", thinkingTokenUsage); err != nil {
+		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", thinkingTokenUsage, &state.thinkingFinalized); err != nil {
 			return err
 		}
-		state.thinkingFinalized = true
+		// Note: finalizeStreamMessage sets *finalized = true on success,
+		// so state.thinkingFinalized is already updated.
 	}
 
 	// Finalize markdown if pending.
 	if state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
-		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", event.TokenUsage); err != nil {
+		if err := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", event.TokenUsage, &state.markdownFinalized); err != nil {
 			return err
 		}
-		state.markdownFinalized = true
+		// Note: finalizeStreamMessage sets *finalized = true on success,
+		// so state.markdownFinalized is already updated.
 	}
 
 	// If the token target was already finalized (by handleStreamChunk via FinishReason),
@@ -415,7 +427,7 @@ func (h *helpers) handleEventError(ctx context.Context, sessionID uuid.UUID, tur
 	// causing the frontend to show a stuck loading spinner.
 	state := h.streamState.getOrCreate(turnID.String())
 	if state.markdownMsgID != uuid.Nil && !state.markdownFinalized {
-		if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil); finErr != nil {
+		if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.markdownMsgID, primitives.MarkdownContentData, "markdown", nil, &state.markdownFinalized); finErr != nil {
 			h.logger.Warn(ctx, "handleEventError.fallback_finalize_markdown_failed", map[string]any{
 				"session_id": sessionID.String(),
 				"turn_id":    turnID.String(),
@@ -424,7 +436,7 @@ func (h *helpers) handleEventError(ctx context.Context, sessionID uuid.UUID, tur
 		}
 	}
 	if state.thinkingMsgID != uuid.Nil && !state.thinkingFinalized {
-		if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil); finErr != nil {
+		if finErr := h.finalizeStreamMessage(ctx, sessionID, turnID, &state.thinkingMsgID, primitives.ThinkingContentData, "thinking", nil, &state.thinkingFinalized); finErr != nil {
 			h.logger.Warn(ctx, "handleEventError.fallback_finalize_thinking_failed", map[string]any{
 				"session_id": sessionID.String(),
 				"turn_id":    turnID.String(),

@@ -13,15 +13,15 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/taskscheduler"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // RecoveryDeps holds the dependencies for the Loop Recovery goroutine.
 type RecoveryDeps struct {
-	LoopRepo       repo.LoopRepo
+	LoopRepo       usecase.LoopRepo
 	Client         *hibikenasynq.Client
 	Inspector      *hibikenasynq.Inspector
 	Interval       time.Duration
@@ -148,6 +148,18 @@ func recoverStale(ctx context.Context, deps RecoveryDeps) {
 	}
 }
 
+// maxRecoveryAttempts is the maximum number of times a loop can be re-enqueued
+// before being marked as exhausted. Prevents infinite recovery loops when a
+// loop consistently fails due to fundamental errors.
+const maxRecoveryAttempts = 5
+
+// defaultRetryMax is the default maximum number of retries for asynq tasks.
+const defaultRetryMax = 3
+
+// recoveryEnqueueTimeout is the timeout for enqueuing a recovery task to asynq.
+// This prevents infinite blocking if Redis is unresponsive during recovery.
+const recoveryEnqueueTimeout = 10 * time.Second
+
 // reenqueueLoop re-enqueues a single stale loop.
 func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 	ctx, span := recoveryTracer().Start(ctx, "loopRecovery.reenqueue",
@@ -157,6 +169,21 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 		),
 	)
 	defer span.End()
+
+	// Check if max recovery attempts has been reached
+	if loop.RecoveryAttempts >= maxRecoveryAttempts {
+		logger.Error(ctx, "[loop.Recovery] max recovery attempts reached",
+			zap.String("loop_id", loop.ID.String()),
+			zap.Int("attempts", loop.RecoveryAttempts))
+		if err := deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
+			"status": model.LoopStatusExhausted,
+		}); err != nil {
+			logger.Error(ctx, "[loop.Recovery] mark loop as exhausted failed",
+				zap.String("loop_id", loop.ID.String()),
+				zap.Error(err))
+		}
+		return
+	}
 
 	// Extract trace context for cross-process propagation.
 	traceID, spanID := turnagent.ExtractTraceFromCtx(ctx)
@@ -181,15 +208,34 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 		return
 	}
 
-	delay := time.Duration(loop.IntervalSeconds) * time.Second
+	// Calculate delay based on actual next run time instead of always using full interval.
+	// If the loop has missed its scheduled execution, execute immediately (delay = 0).
+	// Otherwise, wait until the next scheduled run time.
+	var delay time.Duration
+	if loop.LastRunAt.IsZero() {
+		// Never run before, use full interval
+		delay = time.Duration(loop.IntervalSeconds) * time.Second
+	} else {
+		nextRunTime := loop.LastRunAt.Add(time.Duration(loop.IntervalSeconds) * time.Second)
+		if nextRunTime.Before(time.Now()) {
+			delay = 0 // Already missed, execute immediately
+		} else {
+			delay = time.Until(nextRunTime)
+		}
+	}
+
 	task := hibikenasynq.NewTask(LoopTaskType, payload)
 
 	retryMax := deps.RetryMax
 	if retryMax < 0 {
-		retryMax = 3
+		retryMax = defaultRetryMax
 	}
 
-	info, err := deps.Client.EnqueueContext(ctx, task,
+	// Set timeout for Redis operation to prevent infinite blocking.
+	opCtx, cancel := context.WithTimeout(ctx, recoveryEnqueueTimeout)
+	defer cancel()
+
+	info, err := deps.Client.EnqueueContext(opCtx, task,
 		hibikenasynq.ProcessIn(delay),
 		hibikenasynq.Queue(taskscheduler.LoopQueue),
 		hibikenasynq.MaxRetry(retryMax),
@@ -205,9 +251,10 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 
 	span.SetAttributes(attribute.String("task.id", info.ID))
 
-	// Update the loop with the new task ID
+	// Update the loop with the new task ID and increment recovery attempts
 	if err := deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
-		"asynq_task_id": info.ID,
+		"asynq_task_id":     info.ID,
+		"recovery_attempts": loop.RecoveryAttempts + 1,
 	}); err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
