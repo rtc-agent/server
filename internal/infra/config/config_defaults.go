@@ -295,8 +295,11 @@ func setStorageDefaults(v *viper.Viper) {
 	v.SetDefault("storage.rate_limit.requests_per_minute", 60)
 
 	// Credential defaults
+	// Security: Reduced session token TTL from 1 hour to 15 minutes to minimize
+	// the risk window if a token is compromised. Clients should implement token
+	// refresh logic to obtain new credentials before expiry.
 	v.SetDefault("storage.credential.access_token_ttl", 1*time.Hour)
-	v.SetDefault("storage.credential.session_token_ttl", 1*time.Hour)
+	v.SetDefault("storage.credential.session_token_ttl", 15*time.Minute)
 	v.SetDefault("storage.credential.presigned_url_ttl", 1*time.Hour)
 
 	// Cleanup defaults
@@ -307,7 +310,10 @@ func setStorageDefaults(v *viper.Viper) {
 	// Orphan cleanup defaults (conservative: disabled, dry-run)
 	v.SetDefault("storage.cleanup.orphan.enabled", false)
 	v.SetDefault("storage.cleanup.orphan.batch_size", 500)
-	v.SetDefault("storage.cleanup.orphan.cooldown_period", 1*time.Hour)
+	// Security: Increased cooldown from 1 hour to 24 hours to prevent deleting
+	// files that are still being uploaded. Large files (>100GB) may take several
+	// hours to upload via multipart. The 24h cooldown provides a safe margin.
+	v.SetDefault("storage.cleanup.orphan.cooldown_period", 24*time.Hour)
 	v.SetDefault("storage.cleanup.orphan.dry_run", true)
 
 	// Encryption defaults

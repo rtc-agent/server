@@ -135,6 +135,30 @@ func (uc *OSS3Usecase) hasPendingQuotaReservations(ctx context.Context, userID s
 	return iter.Next(ctx), nil
 }
 
+// getPendingQuotaTotal calculates the total amount of pending quota reservations for a user.
+// Uses the pending aggregation ZSET (OSS3QuotaPendingAgg) which stores all pending reservations
+// with their amounts as scores. Returns the sum of all pending amounts.
+//
+// This is used during quota reconciliation to account for in-flight uploads.
+// The correct Redis quota value should be: dbSum + pendingTotal.
+func (uc *OSS3Usecase) getPendingQuotaTotal(ctx context.Context, userID string) (int64, error) {
+	aggKey := cache.OSS3QuotaPendingAgg(userID)
+
+	// Use ZRANGEBYSCORE to get all members with their scores.
+	// The ZSET stores requestID as member and amount as score.
+	// We sum all scores to get the total pending amount.
+	members, err := uc.redis.ZRangeWithScores(ctx, aggKey, 0, -1).Result()
+	if err != nil {
+		return 0, fmt.Errorf("get pending quota total for user %s: %w", userID, err)
+	}
+
+	var total int64
+	for _, m := range members {
+		total += int64(m.Score)
+	}
+	return total, nil
+}
+
 // ReconcileQuota compares DB file sums against Redis quota counters and adjusts
 // any drift. This is the Layer 2 defense against quota counter drift caused by
 // commit failures that survive Layer 1 retries.
@@ -189,20 +213,17 @@ func (uc *OSS3Usecase) ReconcileQuota(ctx context.Context) (*ReconcileResult, er
 			dbSum := page[userID]
 			result.UsersChecked++
 
-			// Check for pending reservations before adjusting quota.
-			// Pending reservations indicate in-flight uploads; adjusting now could
-			// cause double-counting or lost reservations.
-			hasPending, err := uc.hasPendingQuotaReservations(ctx, userID)
+			// Get pending reservations total for this user.
+			// Pending reservations represent in-flight uploads that have reserved quota
+			// but not yet committed. The correct Redis quota value should be:
+			//   redisVal == dbSum + pendingTotal
+			// This allows reconciliation to proceed even when uploads are active,
+			// while still detecting drift caused by commit failures.
+			pendingTotal, err := uc.getPendingQuotaTotal(ctx, userID)
 			if err != nil {
-				logger.Warn(ctx, "reconcile: failed to check pending reservations, skipping user",
+				logger.Warn(ctx, "reconcile: failed to get pending quota total, skipping user",
 					zap.String("user_id", userID),
 					zap.Error(err))
-				continue
-			}
-			if hasPending {
-				logger.Debug(ctx, "reconcile: user has pending reservations, skipping adjustment",
-					zap.String("user_id", userID),
-					zap.Int64("db_sum", dbSum))
 				continue
 			}
 
@@ -214,8 +235,11 @@ func (uc *OSS3Usecase) ReconcileQuota(ctx context.Context) (*ReconcileResult, er
 				continue
 			}
 
-			if redisVal != dbSum {
-				drift := dbSum - redisVal
+			// Expected Redis value: DB sum + pending reservations.
+			// Drift is the difference between actual Redis value and expected value.
+			expectedRedisVal := dbSum + pendingTotal
+			if redisVal != expectedRedisVal {
+				drift := expectedRedisVal - redisVal
 				absDrift := drift
 				if absDrift < 0 {
 					absDrift = -absDrift
@@ -223,11 +247,13 @@ func (uc *OSS3Usecase) ReconcileQuota(ctx context.Context) (*ReconcileResult, er
 				result.TotalDriftBytes += absDrift
 				result.UsersAdjusted++
 
-				if setErr := uc.setRedisQuota(ctx, userID, dbSum); setErr != nil {
+				if setErr := uc.setRedisQuota(ctx, userID, expectedRedisVal); setErr != nil {
 					logger.Error(ctx, "reconcile: failed to adjust redis quota",
 						zap.String("user_id", userID),
 						zap.Int64("db_sum", dbSum),
-						zap.Int64("redis_val", redisVal),
+						zap.Int64("pending_total", pendingTotal),
+						zap.Int64("expected_redis_val", expectedRedisVal),
+						zap.Int64("actual_redis_val", redisVal),
 						zap.Int64("drift", drift),
 						zap.Error(setErr))
 					continue
@@ -236,7 +262,9 @@ func (uc *OSS3Usecase) ReconcileQuota(ctx context.Context) (*ReconcileResult, er
 				logger.Info(ctx, "reconcile: quota adjusted",
 					zap.String("user_id", userID),
 					zap.Int64("db_sum", dbSum),
-					zap.Int64("redis_val", redisVal),
+					zap.Int64("pending_total", pendingTotal),
+					zap.Int64("expected_redis_val", expectedRedisVal),
+					zap.Int64("actual_redis_val", redisVal),
 					zap.Int64("drift", drift))
 			}
 		}

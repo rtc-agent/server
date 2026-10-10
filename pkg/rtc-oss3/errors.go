@@ -104,6 +104,14 @@ func WriteS3Error(w http.ResponseWriter, s3err *S3Error, resource, requestID str
 	}
 }
 
+// Multipart upload constants.
+const (
+	// MinPartSize is the minimum allowed size for a single part in a multipart upload.
+	// Per S3 specification, all parts except the last must be at least 5MB.
+	// See: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+	MinPartSize = 5 * 1024 * 1024 // 5MB
+)
+
 // Standard S3 errors.
 var (
 	ErrAccessDenied         = &S3Error{"AccessDenied", "Access Denied", http.StatusForbidden}
