@@ -167,8 +167,9 @@ func (l *LoopWorkflow) OnTurnComplete(ctx command.Context) error {
 		}
 
 		// Update completed turns.
-		// Note: asynq_task_id is no longer maintained since we use loop.ID as the task ID
-		// for idempotent scheduling. This simplifies state management and avoids race conditions.
+		// Note: asynq_task_id is not maintained here because we use loop.ID as the task ID
+		// for idempotent scheduling (set in scheduleNextLoop via TaskID option).
+		// This simplifies state management and avoids race conditions.
 		return l.helpers.deps.LoopRepo.Update(txCtx, loop.ID, map[string]any{
 			"completed_turns": newTurns,
 			"last_run_at":     time.Now(),
@@ -259,14 +260,9 @@ type loopSchedulePayload struct {
 // (not the request context) because this goroutine outlives the request, but we preserve
 // trace values for observability. Errors are logged but not propagated.
 //
-// asynq_task_id lifecycle (for recovery logic):
-// - Set to taskID after successful scheduling (in scheduleNextLoop)
-// - Cleared when worker starts processing (in HandleLoopTask)
-// - Recovery checks: if empty AND past due → stale, needs re-scheduling
-//
-// Note: Current implementation uses loop.ID as task ID for idempotency,
-// so asynq_task_id always equals loop.ID when a task is scheduled.
-// This simplifies state management and avoids race conditions.
+// Idempotency: Uses loop.ID as the asynq task ID. If a task with this ID already exists
+// (pending or processing), asynq returns ErrTaskIDConflict, making repeated scheduling safe.
+// This eliminates the need to maintain a separate asynq_task_id field in the database.
 func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 	ctx, span := l.helpers.tracer.Start(ctx, "loop_workflow.schedule_next",
 		trace.WithAttributes(
@@ -328,7 +324,8 @@ func (l *LoopWorkflow) scheduleNextLoop(ctx context.Context, loop *model.Loop) {
 		attribute.String("task.delay", delay.String()),
 	)
 
-	// Note: No need to update loop.asynq_task_id since it always equals loop.ID
+	// Note: No need to update loop.asynq_task_id since we use loop.ID as the task ID.
+	// The task ID is implicit and always equals loop.ID when scheduled.
 	// This simplifies state management and avoids race conditions.
 
 	l.helpers.logger.Info(ctx, "loopWorkflow.scheduled_next", map[string]any{

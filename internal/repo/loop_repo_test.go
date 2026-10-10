@@ -454,7 +454,7 @@ func TestLoopRepo_FindStaleLoops_FindsStale(t *testing.T) {
 	loop := newTestLoop(t, sessionID)
 	require.NoError(t, repo.Create(ctx, loop))
 
-	// Set last_run_at to the past and clear asynq_task_id
+	// Set last_run_at to the past (stale)
 	staleTime := time.Now().Add(-2 * time.Hour)
 	require.NoError(t, repo.Update(ctx, loop.ID, map[string]any{
 		"last_run_at": staleTime,
@@ -510,29 +510,6 @@ func TestLoopRepo_FindStaleLoops_ExcludesNonActive(t *testing.T) {
 	results, err := repo.FindStaleLoops(ctx, staleThreshold)
 	require.NoError(t, err)
 	assert.Empty(t, results, "paused loops should not be considered stale")
-}
-
-func TestLoopRepo_FindStaleLoops_ExcludesWithAsynqTaskID(t *testing.T) {
-	t.Parallel()
-	db := setupLoopTestDB(t)
-	repo := NewLoopRepo(db)
-	ctx := context.Background()
-
-	sessionID := uuid.New()
-	loop := newTestLoop(t, sessionID)
-	require.NoError(t, repo.Create(ctx, loop))
-
-	// Set stale last_run_at but with asynq_task_id set
-	staleTime := time.Now().Add(-2 * time.Hour)
-	require.NoError(t, repo.Update(ctx, loop.ID, map[string]any{
-		"last_run_at":   staleTime,
-		"asynq_task_id": "some-task-id",
-	}))
-
-	staleThreshold := time.Now().Add(-1 * time.Hour)
-	results, err := repo.FindStaleLoops(ctx, staleThreshold)
-	require.NoError(t, err)
-	assert.Empty(t, results, "loops with asynq_task_id should not be stale")
 }
 
 func TestLoopRepo_FindStaleLoops_ExcludesNilLastRunAt(t *testing.T) {

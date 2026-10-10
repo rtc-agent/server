@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	hibikenasynq "github.com/hibiken/asynq"
@@ -244,12 +245,26 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 	opCtx, cancel := context.WithTimeout(ctx, recoveryEnqueueTimeout)
 	defer cancel()
 
+	// Use loop ID as task ID for idempotency (same as scheduleNextLoop).
+	// If multiple recovery instances try to reenqueue the same stale loop,
+	// only one will succeed; others will get ErrTaskIDConflict (handled below).
 	info, err := deps.Client.EnqueueContext(opCtx, task,
 		hibikenasynq.ProcessIn(delay),
 		hibikenasynq.Queue(taskscheduler.LoopQueue),
 		hibikenasynq.MaxRetry(retryMax),
+		hibikenasynq.TaskID(loop.ID.String()),
 	)
 	if err != nil {
+		// In multi-instance deployment, multiple recovery goroutines may attempt
+		// to reenqueue the same stale loop. ErrTaskIDConflict is expected and safe -
+		// log as Info and return gracefully (not as an error).
+		if errors.Is(err, hibikenasynq.ErrTaskIDConflict) {
+			span.SetAttributes(attribute.String("task.idempotent", "true"))
+			logger.Info(ctx, "[loop.Recovery] task already exists (idempotent)",
+				zap.String("loop_id", loop.ID.String()),
+				zap.Error(err))
+			return
+		}
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		logger.Error(ctx, "[loop.Recovery] reenqueue failed",
@@ -260,14 +275,17 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 
 	span.SetAttributes(attribute.String("task.id", info.ID))
 
-	// Update the loop with the new task ID and increment recovery attempts
+	// Note: asynq_task_id is not updated here because we use loop.ID as the task ID
+	// for idempotent scheduling (set in scheduleNextLoop and reenqueueLoop via TaskID option).
+	// This simplifies state management and avoids race conditions.
+	//
+	// Only increment recovery_attempts to track how many times this loop has been re-enqueued.
 	if err := deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
-		"asynq_task_id":     info.ID,
 		"recovery_attempts": loop.RecoveryAttempts + 1,
 	}); err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
-		logger.Error(ctx, "[loop.Recovery] update task_id failed",
+		logger.Error(ctx, "[loop.Recovery] update recovery_attempts failed",
 			zap.String("loop_id", loop.ID.String()),
 			zap.Error(err))
 		return

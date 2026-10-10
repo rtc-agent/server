@@ -136,7 +136,8 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 		return "", fmt.Errorf("createLoop: transaction failed: %w", err)
 	}
 
-	// Note: asynq_task_id will be set by OnTurnComplete after the first turn completes
+	// Note: The first loop task is scheduled by OnTurnComplete after the first turn completes.
+	// We use loop.ID as the asynq task ID for idempotent scheduling (no separate asynq_task_id field needed).
 
 	// 7. Build formatted message for LLM context (also persisted for cache consistency).
 	// The event stream receives this formatted text, not raw JSON.

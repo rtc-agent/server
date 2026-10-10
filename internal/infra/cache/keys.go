@@ -237,6 +237,12 @@ const (
 	// Value: holder UUID; TTL: 10 seconds (covers fetch duration).
 	// Prevents multiple instances from simultaneously refreshing the same issuer's JWKS.
 	PrefixJWKSLock = "jwks:lock:"
+
+	// PrefixLoopLock is the distributed lock prefix for loop task execution.
+	// Full key: loop:lock:{loop_id}
+	// Value: holder UUID; TTL: loopTaskTimeout + buffer (covers task processing duration).
+	// Prevents multiple workers from concurrently processing the same loop task (TOCTOU race).
+	PrefixLoopLock = "loop:lock:"
 )
 
 // ========== Constructor functions ==========
@@ -438,4 +444,12 @@ func JWKSKey(issuer, kid string) string {
 // JWKSLockKey returns the Redis key for the JWKS refresh distributed lock.
 func JWKSLockKey(issuer string) string {
 	return PrefixJWKSLock + issuer
+}
+
+// ========== Loop task execution ==========
+
+// LoopLockKey returns the Redis key for the loop task execution distributed lock.
+// Prevents TOCTOU race when multiple workers process the same loop task concurrently.
+func LoopLockKey(loopID string) string {
+	return PrefixLoopLock + loopID
 }

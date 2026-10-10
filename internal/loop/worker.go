@@ -12,12 +12,14 @@ import (
 
 	"github.com/google/uuid"
 	hibikenasynq "github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -42,15 +44,17 @@ type Worker struct {
 	loopRepo            usecase.LoopRepo
 	sessionRepo         usecase.SessionRepo
 	notificationCreator NotificationCreator
+	redis               redis.UniversalClient
 }
 
 // NewWorker creates a loop worker.
-func NewWorker(queue *rtcqueue.Queue, loopRepo usecase.LoopRepo, sessionRepo usecase.SessionRepo, notificationCreator NotificationCreator) *Worker {
+func NewWorker(queue *rtcqueue.Queue, loopRepo usecase.LoopRepo, sessionRepo usecase.SessionRepo, notificationCreator NotificationCreator, redisClient redis.UniversalClient) *Worker {
 	return &Worker{
 		queue:               queue,
 		loopRepo:            loopRepo,
 		sessionRepo:         sessionRepo,
 		notificationCreator: notificationCreator,
+		redis:               redisClient,
 	}
 }
 
@@ -66,18 +70,19 @@ const loopTaskTimeout = 30 * time.Second
 // Idempotency: safe to call multiple times. If the loop no longer exists,
 // is not active, or the ID doesn't match, returns nil without side effects.
 //
-// Following the async sub-agent pattern:
-//  1. Validate loop is still active
-//  2. Build the loop task prompt
-//  3. Create a user-role notification message in the session (so it becomes
-//     the last user message in conversation history)
-//  4. Publish WorkKindSubmit to trigger a new turn
-//  5. The LLM sees the notification as the most recent instruction
+// Concurrency safety: Uses a Redis distributed lock (keyed by loop.ID) to prevent
+// TOCTOU race conditions where multiple workers read the same loop state and both
+// pass the idempotency check. The lock ensures only one worker processes the task at a time.
 //
-// asynq_task_id lifecycle (for recovery logic):
-// - Set to taskID after successful scheduling (in scheduleNextLoop)
-// - Cleared when worker starts processing (in HandleLoopTask)
-// - Recovery checks: if empty AND past due → stale, needs re-scheduling
+// Following the async sub-agent pattern:
+//  1. Acquire distributed lock (prevents concurrent execution)
+//  2. Validate loop is still active
+//  3. Check idempotency (secondary safeguard after lock)
+//  4. Build the loop task prompt
+//  5. Create a user-role notification message in the session (so it becomes
+//     the last user message in conversation history)
+//  6. Publish WorkKindSubmit to trigger a new turn
+//  7. The LLM sees the notification as the most recent instruction
 //
 // Error handling: On failure, logs detailed context for debugging and traceability.
 // Failed tasks are archived by asynq and can be inspected via asynqmon or manually retried.
@@ -97,7 +102,8 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 		logger.Error(ctx, "[loop.Worker] unmarshal payload",
 			zap.Error(err),
 			zap.String("raw_payload", string(t.Payload())))
-		return fmt.Errorf("unmarshal payload: %w", err)
+		// Malformed payload will never succeed - log and discard (don't retry).
+		return nil
 	}
 
 	// Restore trace context from payload (if available).
@@ -121,7 +127,8 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 		logger.Error(ctx, "[loop.Worker] parse session ID",
 			zap.String("session_id", payload.SessionID),
 			zap.Error(err))
-		return fmt.Errorf("parse session ID: %w", err)
+		// Invalid UUID will never succeed - log and discard (don't retry).
+		return nil
 	}
 	loopUUID, err := uuid.Parse(payload.LoopID)
 	if err != nil {
@@ -130,17 +137,61 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 		logger.Error(ctx, "[loop.Worker] parse loop ID",
 			zap.String("loop_id", payload.LoopID),
 			zap.Error(err))
-		return fmt.Errorf("parse loop ID: %w", err)
+		// Invalid UUID will never succeed - log and discard (don't retry).
+		return nil
 	}
+
+	// Acquire distributed lock to prevent TOCTOU race condition.
+	// Multiple workers may read the same loop state simultaneously and both pass
+	// the idempotency check. The lock ensures only one worker processes the task at a time.
+	// Lock TTL = loopTaskTimeout + buffer to cover the entire processing duration.
+	lockKey := cache.LoopLockKey(loopUUID.String())
+	holderUUID := uuid.Must(uuid.NewV7()).String()
+	lockTTL := loopTaskTimeout + 10*time.Second // buffer for lock overhead
+
+	acquired, err := w.redis.SetNX(ctx, lockKey, holderUUID, lockTTL).Result()
+	if err != nil {
+		span.SetStatus(codes.Error, "internal_error")
+		span.RecordError(err)
+		logger.Error(ctx, "[loop.Worker] acquire distributed lock failed",
+			zap.String("loop_id", loopUUID.String()),
+			zap.Error(err))
+		// Redis failure: return error to trigger asynq retry.
+		return fmt.Errorf("acquire lock: %w", err)
+	}
+	if !acquired {
+		// Another worker is already processing this loop task.
+		// This is expected in multi-instance deployment - log and return nil (no retry).
+		span.SetAttributes(attribute.String("outcome", "lock_not_acquired"))
+		logger.Debug(ctx, "[loop.Worker] another worker is processing this loop, skipping",
+			zap.String("loop_id", loopUUID.String()))
+		return nil
+	}
+
+	// Release the lock when done (only if we successfully acquired it).
+	// Use a Lua script to ensure we only delete our own lock, never another worker's.
+	defer func() {
+		releaseLua := `
+local holder = ARGV[1]
+local current = redis.call('GET', KEYS[1])
+if current ~= holder then
+    return 0
+end
+return redis.call('DEL', KEYS[1])
+`
+		if err := w.redis.Eval(ctx, releaseLua, []string{lockKey}, holderUUID).Err(); err != nil {
+			logger.Warn(ctx, "[loop.Worker] release distributed lock failed",
+				zap.String("loop_id", loopUUID.String()),
+				zap.Error(err))
+		}
+	}()
 
 	// 1. Validate loop still exists and is active
 	//
-	// NOTE: We intentionally do NOT clear asynq_task_id here. Using loop.ID as the task ID
-	// (set in scheduleNextLoop) provides idempotency: if this task crashes and Recovery
-	// re-enqueues it, asynq will reject the duplicate with ErrTaskIDConflict.
-	//
-	// Clearing asynq_task_id would break this guarantee: Recovery would see an empty task_id
-	// and incorrectly assume the task was lost, leading to duplicate execution.
+	// Note: We use loop.ID as the asynq task ID (set in scheduleNextLoop via TaskID option).
+	// This provides idempotency: if this task crashes and Recovery re-enqueues it, asynq
+	// will reject the duplicate with ErrTaskIDConflict. The asynq_task_id field in the
+	// database is no longer maintained since it always equals loop.ID when scheduled.
 	loop, err := w.loopRepo.FindActive(ctx, sessionUUID)
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
@@ -164,6 +215,38 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 			zap.String("expected_loop_id", loopUUID.String()),
 			zap.String("active_loop_id", loop.ID.String()))
 		return nil
+	}
+
+	// Idempotency check: prevent duplicate processing if this turn was already handled.
+	// If LastRunAt is within the current interval, this turn has likely been processed.
+	// This protects against duplicate notification creation and work publishing when
+	// the same asynq task is executed multiple times (e.g., after crash recovery or asynq retry).
+	//
+	// Note: With the distributed lock above, this check is now a secondary safeguard.
+	// The lock prevents concurrent execution; this check handles edge cases like
+	// manual retries or lock expiration during long-running tasks.
+	if loop.LastRunAt != nil && time.Since(*loop.LastRunAt) < time.Duration(loop.IntervalSeconds)*time.Second {
+		span.SetAttributes(attribute.String("outcome", "already_processed"))
+		logger.Debug(ctx, "[loop.Worker] turn already processed, skipping",
+			zap.String("session_id", sessionUUID.String()),
+			zap.String("loop_id", loopUUID.String()),
+			zap.Time("last_run_at", *loop.LastRunAt),
+			zap.Int("interval_seconds", loop.IntervalSeconds))
+		return nil
+	}
+
+	// Update LastRunAt atomically to mark this turn as being processed.
+	// This provides idempotency for concurrent/duplicate task execution.
+	// If two workers try to process the same task, only one will succeed in updating
+	// LastRunAt first; the other will see a recent LastRunAt and skip.
+	now := time.Now()
+	if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{
+		"last_run_at": now,
+	}); err != nil {
+		span.SetStatus(codes.Error, "internal_error")
+		span.RecordError(err)
+		logTaskFailure(ctx, "update last_run_at", payload.SessionID, payload.LoopID, err)
+		return fmt.Errorf("update last_run_at: %w", err)
 	}
 
 	// 2. Build the loop task prompt

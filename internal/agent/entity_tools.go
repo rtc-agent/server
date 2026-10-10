@@ -62,9 +62,8 @@ func checkGoalLoopMutualExclusion(
 // ---------------------------------------------------------------------------
 
 // cancelLoopAsynqTask cancels the scheduled asynq task for a loop (if
-// TaskScheduler is available and the loop has a task ID). On success it
-// adds `"asynq_task_id": ""` to updateFields so the caller can pass it
-// directly to the repository Update call.
+// TaskScheduler is available). Since we use loop.ID as the task ID for
+// idempotent scheduling, we always know the task ID.
 //
 // If cancellation fails, the error is logged but not returned — the
 // caller should continue with the status update regardless.
@@ -75,17 +74,20 @@ func cancelLoopAsynqTask(
 	loop *model.Loop,
 	updateFields map[string]any,
 ) {
-	if deps.TaskScheduler == nil || loop.AsynqTaskID == "" {
+	if deps.TaskScheduler == nil {
 		return
 	}
-	if cancelErr := deps.TaskScheduler.Cancel(ctx, loop.AsynqTaskID); cancelErr != nil {
+	// Use loop.ID as task ID (consistent with scheduleNextLoop and reenqueueLoop).
+	taskID := loop.ID.String()
+	if cancelErr := deps.TaskScheduler.Cancel(ctx, taskID); cancelErr != nil {
 		logger.Warn(ctx, "cancelLoopAsynqTask.failed", map[string]any{
 			"loop_id": loop.ID.String(),
-			"task_id": loop.AsynqTaskID,
+			"task_id": taskID,
 			"error":   cancelErr.Error(),
 			"message": "asynq task cancel failed; task may still execute even though loop is cancelled",
 		})
 		// Continue — status update proceeds even if task cancellation fails.
 	}
-	updateFields["asynq_task_id"] = ""
+	// Note: No need to update asynq_task_id since we use loop.ID as the task ID.
+	// The task ID is implicit and doesn't need to be cleared.
 }
