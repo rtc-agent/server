@@ -91,8 +91,9 @@ func (r *loopRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, curso
 //
 // Query conditions explained:
 //   - status = active: only consider loops that should be running
-//   - last_run_at IS NOT NULL AND last_run_at < staleThreshold: should have
-//     run but didn't (indicates a truly stale loop that needs recovery)
+//   - last_run_at IS NOT NULL: loop has run at least once
+//   - last_run_at + interval_seconds + stale_threshold < now(): the loop should have
+//     run again by now (considering its interval) but hasn't, indicating it's truly stale
 //
 // Note: We no longer check asynq_task_id because we use loop.ID as the task ID
 // for idempotent scheduling. The task ID is always set and doesn't indicate
@@ -102,8 +103,11 @@ func (r *loopRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, curso
 func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time) ([]*model.Loop, error) {
 	var loops []*model.Loop
 	const safetyLimit = 100
+	// Calculate the cutoff time: last_run_at + interval_seconds should be before staleThreshold
+	// This ensures we don't mark a loop as stale if it's still within its normal execution interval
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Where("status = ? AND last_run_at IS NOT NULL AND last_run_at < ?",
+		Where("status = ? AND last_run_at IS NOT NULL AND "+
+			"last_run_at + (interval_seconds * interval '1 second') < ?",
 			model.LoopStatusActive, staleThreshold).
 		Limit(safetyLimit).
 		Find(&loops).Error

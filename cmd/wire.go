@@ -930,6 +930,7 @@ func provideRecoveryCancel(
 	cfg *config.Config,
 	loopRepo repo.LoopRepo,
 	scheduler usecase.TaskScheduler,
+	rdb *redis.Client,
 ) context.CancelFunc {
 	// Recovery needs direct access to asynq client/inspector.
 	// Extract them from the concrete scheduler type.
@@ -959,13 +960,16 @@ func provideRecoveryCancel(
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go loop.RunRecovery(ctx, loop.RecoveryDeps{
-		LoopRepo:       loopRepo,
-		Client:         cp.Client(),
-		Inspector:      cp.Inspector(),
-		Interval:       interval,
-		StaleThreshold: staleThreshold,
-		RetryMax:       retryMax,
+	logger.SafeGo("loop.recovery", func() {
+		loop.RunRecovery(ctx, loop.RecoveryDeps{
+			LoopRepo:       loopRepo,
+			Client:         cp.Client(),
+			Inspector:      cp.Inspector(),
+			Redis:          rdb,
+			Interval:       interval,
+			StaleThreshold: staleThreshold,
+			RetryMax:       retryMax,
+		})
 	})
 	return cancel
 }

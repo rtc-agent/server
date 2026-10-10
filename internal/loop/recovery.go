@@ -7,6 +7,7 @@ import (
 	"time"
 
 	hibikenasynq "github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -25,6 +26,7 @@ type RecoveryDeps struct {
 	LoopRepo       usecase.LoopRepo
 	Client         *hibikenasynq.Client
 	Inspector      *hibikenasynq.Inspector
+	Redis          *redis.Client
 	Interval       time.Duration
 	StaleThreshold time.Duration
 	RetryMax       int
@@ -35,10 +37,16 @@ func recoveryTracer() trace.Tracer {
 	return otel.GetTracerProvider().Tracer("loop.recovery")
 }
 
+// recoveryLockKey is the Redis key for the recovery goroutine distributed lock.
+// Prevents multiple instances from running recovery scans concurrently.
+const recoveryLockKey = "loop:recovery:lock"
+
 // RunRecovery starts the loop recovery goroutine.
 // It periodically scans for stale and expired loops, re-enqueuing as needed.
 //
 // The goroutine exits when ctx is cancelled.
+// In multi-instance deployments, a distributed lock ensures only one instance
+// runs the recovery scan at a time.
 func RunRecovery(ctx context.Context, deps RecoveryDeps) {
 	ticker := time.NewTicker(deps.Interval)
 	defer ticker.Stop()
@@ -53,6 +61,34 @@ func RunRecovery(ctx context.Context, deps RecoveryDeps) {
 			logger.Info(ctx, "[loop.Recovery] stopped")
 			return
 		case <-ticker.C:
+			// Acquire distributed lock to prevent multiple instances from
+			// running recovery scans concurrently. Lock TTL is slightly less
+			// than the interval to ensure it expires before the next scan.
+			lockTTL := deps.Interval - 1*time.Second
+			if lockTTL <= 0 {
+				lockTTL = 30 * time.Second
+			}
+
+			lockAcquired, err := deps.Redis.SetNX(ctx, recoveryLockKey, "1", lockTTL).Result()
+			if err != nil {
+				logger.Error(ctx, "[loop.Recovery] acquire distributed lock failed",
+					zap.Error(err))
+				continue
+			}
+			if !lockAcquired {
+				// Another instance is running recovery, skip this cycle
+				logger.Debug(ctx, "[loop.Recovery] skipping scan (another instance holds lock)")
+				continue
+			}
+
+			// Ensure lock is released after scan completes
+			defer func() {
+				if err := deps.Redis.Del(ctx, recoveryLockKey).Err(); err != nil {
+					logger.Error(ctx, "[loop.Recovery] release distributed lock failed",
+						zap.Error(err))
+				}
+			}()
+
 			scanAndRecover(ctx, deps)
 		}
 	}
@@ -88,13 +124,13 @@ func recoverExpired(ctx context.Context, deps RecoveryDeps) {
 
 	for _, loop := range expired {
 		// Cancel asynq task if present (best effort — task may already be gone)
-		if loop.AsynqTaskID != "" {
-			if err := deps.Inspector.DeleteTask(taskscheduler.LoopQueue, loop.AsynqTaskID); err != nil {
-				logger.Debug(ctx, "[loop.Recovery] delete asynq task failed (best effort)",
-					zap.String("loop_id", loop.ID.String()),
-					zap.String("task_id", loop.AsynqTaskID),
-					zap.Error(err))
-			}
+		// Use loop.ID as task ID since we use it for idempotent scheduling
+		taskID := loop.ID.String()
+		if err := deps.Inspector.DeleteTask(taskscheduler.LoopQueue, taskID); err != nil {
+			logger.Debug(ctx, "[loop.Recovery] delete asynq task failed (best effort)",
+				zap.String("loop_id", loop.ID.String()),
+				zap.String("task_id", taskID),
+				zap.Error(err))
 		}
 
 		// Mark as cancelled
@@ -223,10 +259,20 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 			// Already missed - apply exponential backoff based on recovery attempts.
 			// This prevents a consistently failing loop from overwhelming the system.
 			baseDelay := time.Duration(loop.IntervalSeconds) * time.Second
-			backoff := baseDelay * time.Duration(1<<uint(loop.RecoveryAttempts))
 			maxBackoff := 1 * time.Hour // Cap at 1 hour to prevent excessive delays
-			if backoff > maxBackoff {
+
+			// Check for potential overflow before calculating backoff.
+			// If shift amount is too large (>= 20), the multiplication would overflow
+			// or exceed maxBackoff anyway, so use maxBackoff directly.
+			const maxSafeShift = 20
+			var backoff time.Duration
+			if loop.RecoveryAttempts >= maxSafeShift {
 				backoff = maxBackoff
+			} else {
+				backoff = baseDelay * time.Duration(1<<uint(loop.RecoveryAttempts))
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
 			}
 			delay = backoff
 		} else {

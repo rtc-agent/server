@@ -63,11 +63,13 @@ func cancelActiveLoop(ctx context.Context, loopRepo usecase.LoopRepo, inspector 
 	span.SetAttributes(attribute.String("loop.id", loop.ID.String()))
 
 	// Cancel asynq task (best-effort — task may already be completed or gone)
-	if loop.AsynqTaskID != "" && inspector != nil {
-		if err := inspector.DeleteTask(taskscheduler.LoopQueue, loop.AsynqTaskID); err != nil {
+	// Use loop.ID as task ID since we use it for idempotent scheduling
+	if inspector != nil {
+		taskID := loop.ID.String()
+		if err := inspector.DeleteTask(taskscheduler.LoopQueue, taskID); err != nil {
 			logger.Debug(ctx, "[loop.Cleanup] delete asynq task failed (best effort)",
 				zap.String("loop_id", loop.ID.String()),
-				zap.String("task_id", loop.AsynqTaskID),
+				zap.String("task_id", taskID),
 				zap.Error(err))
 		}
 	}
