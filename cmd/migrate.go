@@ -56,7 +56,26 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	// Production DBAs often set statement_timeout (e.g., 30s) to prevent long-running queries,
 	// but CREATE INDEX CONCURRENTLY on large tables can legitimately take longer.
 	// Setting it to 0 (unlimited) ensures migration completes without artificial timeout.
-	// This only affects the current session/connection.
+	//
+	// IMPORTANT: GORM uses connection pooling, and SET statement_timeout only affects the current
+	// connection. To ensure all migrations run on the same connection with the timeout disabled,
+	// we temporarily set MaxOpenConns to 1 (single connection mode) during migration.
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("get underlying sql.DB: %w", err)
+	}
+
+	// Store original MaxOpenConns to restore later
+	originalMaxOpenConns := sqlDB.Stats().MaxOpenConnections
+
+	// Force single connection mode to ensure statement_timeout applies to all migrations
+	sqlDB.SetMaxOpenConns(1)
+	defer func() {
+		// Restore original MaxOpenConns after migration completes
+		sqlDB.SetMaxOpenConns(originalMaxOpenConns)
+	}()
+
+	// Now set statement_timeout = 0 on the single connection
 	if err := db.Exec("SET statement_timeout = 0").Error; err != nil {
 		logger.Warn(context.Background(), "migrate.set_statement_timeout_failed", zap.Error(err))
 	}

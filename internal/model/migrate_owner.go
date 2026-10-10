@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -139,23 +140,151 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 	return nil
 }
 
-// Stage 3: set NOT NULL constraints.
+// Stage 3: set NOT NULL constraints using PostgreSQL's NOT VALID constraint pattern.
+// This approach minimizes lock contention on large tables by:
+//  1. Adding CHECK constraints with NOT VALID (doesn't scan existing rows)
+//  2. Validating constraints separately (can run concurrently with other operations)
+//  3. Converting to NOT NULL after validation (fast, as PostgreSQL trusts the validated constraint)
 func finalizeOwnerAndCreatorNotNull(db *gorm.DB) error {
+	ctx := context.Background()
+
+	// Step 1: Add CHECK constraints with NOT VALID for sessions table
+	// NOT VALID means PostgreSQL won't scan existing rows to verify the constraint
+	logger.Info(ctx, "owner.migration.stage3.step1_add_not_valid_constraints")
+
+	if err := db.Exec(`
+		ALTER TABLE sessions
+		ADD CONSTRAINT chk_sessions_owner_kind_not_null
+		CHECK (owner_kind IS NOT NULL) NOT VALID
+	`).Error; err != nil {
+		// Check if constraint already exists (idempotency)
+		if !isConstraintExistsError(err) {
+			return fmt.Errorf("add sessions owner_kind NOT VALID constraint: %w", err)
+		}
+		logger.Info(ctx, "owner.migration.stage3.constraint_already_exists", zap.String("table", "sessions"), zap.String("constraint", "chk_sessions_owner_kind_not_null"))
+	}
+
+	if err := db.Exec(`
+		ALTER TABLE sessions
+		ADD CONSTRAINT chk_sessions_owner_ref_id_not_null
+		CHECK (owner_ref_id IS NOT NULL) NOT VALID
+	`).Error; err != nil {
+		if !isConstraintExistsError(err) {
+			return fmt.Errorf("add sessions owner_ref_id NOT VALID constraint: %w", err)
+		}
+		logger.Info(ctx, "owner.migration.stage3.constraint_already_exists", zap.String("table", "sessions"), zap.String("constraint", "chk_sessions_owner_ref_id_not_null"))
+	}
+
+	// Step 2: Add CHECK constraints with NOT VALID for messages table
+	if err := db.Exec(`
+		ALTER TABLE messages
+		ADD CONSTRAINT chk_messages_creator_kind_not_null
+		CHECK (creator_kind IS NOT NULL) NOT VALID
+	`).Error; err != nil {
+		if !isConstraintExistsError(err) {
+			return fmt.Errorf("add messages creator_kind NOT VALID constraint: %w", err)
+		}
+		logger.Info(ctx, "owner.migration.stage3.constraint_already_exists", zap.String("table", "messages"), zap.String("constraint", "chk_messages_creator_kind_not_null"))
+	}
+
+	if err := db.Exec(`
+		ALTER TABLE messages
+		ADD CONSTRAINT chk_messages_creator_ref_id_not_null
+		CHECK (creator_ref_id IS NOT NULL) NOT VALID
+	`).Error; err != nil {
+		if !isConstraintExistsError(err) {
+			return fmt.Errorf("add messages creator_ref_id NOT VALID constraint: %w", err)
+		}
+		logger.Info(ctx, "owner.migration.stage3.constraint_already_exists", zap.String("table", "messages"), zap.String("constraint", "chk_messages_creator_ref_id_not_null"))
+	}
+
+	// Step 3: Validate constraints (can run concurrently with other operations)
+	// VALIDATE CONSTRAINT acquires a SHARE UPDATE EXCLUSIVE lock, which doesn't block reads/writes
+	logger.Info(ctx, "owner.migration.stage3.step2_validate_constraints")
+
+	if err := db.Exec(`VALIDATE CONSTRAINT chk_sessions_owner_kind_not_null ON sessions`).Error; err != nil {
+		return fmt.Errorf("validate sessions owner_kind constraint: %w", err)
+	}
+
+	if err := db.Exec(`VALIDATE CONSTRAINT chk_sessions_owner_ref_id_not_null ON sessions`).Error; err != nil {
+		return fmt.Errorf("validate sessions owner_ref_id constraint: %w", err)
+	}
+
+	if err := db.Exec(`VALIDATE CONSTRAINT chk_messages_creator_kind_not_null ON messages`).Error; err != nil {
+		return fmt.Errorf("validate messages creator_kind constraint: %w", err)
+	}
+
+	if err := db.Exec(`VALIDATE CONSTRAINT chk_messages_creator_ref_id_not_null ON messages`).Error; err != nil {
+		return fmt.Errorf("validate messages creator_ref_id constraint: %w", err)
+	}
+
+	// Step 4: Convert CHECK constraints to NOT NULL columns
+	// After validation, PostgreSQL knows all rows satisfy the constraint, so this is fast
+	// and only requires a brief ACCESS EXCLUSIVE lock
+	logger.Info(ctx, "owner.migration.stage3.step3_convert_to_not_null")
+
 	if err := db.Exec(`
 		ALTER TABLE sessions
 		ALTER COLUMN owner_kind SET NOT NULL,
 		ALTER COLUMN owner_ref_id SET NOT NULL
 	`).Error; err != nil {
-		return err
+		return fmt.Errorf("set sessions columns NOT NULL: %w", err)
 	}
+
 	if err := db.Exec(`
 		ALTER TABLE messages
 		ALTER COLUMN creator_kind SET NOT NULL,
 		ALTER COLUMN creator_ref_id SET NOT NULL
 	`).Error; err != nil {
-		return err
+		return fmt.Errorf("set messages columns NOT NULL: %w", err)
 	}
+
+	// Step 5: Drop CHECK constraints (no longer needed after converting to NOT NULL)
+	logger.Info(ctx, "owner.migration.stage3.step4_drop_check_constraints")
+
+	if err := db.Exec(`
+		ALTER TABLE sessions
+		DROP CONSTRAINT IF EXISTS chk_sessions_owner_kind_not_null,
+		DROP CONSTRAINT IF EXISTS chk_sessions_owner_ref_id_not_null
+	`).Error; err != nil {
+		return fmt.Errorf("drop sessions check constraints: %w", err)
+	}
+
+	if err := db.Exec(`
+		ALTER TABLE messages
+		DROP CONSTRAINT IF EXISTS chk_messages_creator_kind_not_null,
+		DROP CONSTRAINT IF EXISTS chk_messages_creator_ref_id_not_null
+	`).Error; err != nil {
+		return fmt.Errorf("drop messages check constraints: %w", err)
+	}
+
+	logger.Info(ctx, "owner.migration.stage3.completed")
 	return nil
+}
+
+// isConstraintExistsError checks if the error is due to a constraint already existing.
+// PostgreSQL error code 42710 is "duplicate_object" (constraint already exists).
+func isConstraintExistsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for PostgreSQL error code 42710 (duplicate_object)
+	return err.Error() != "" && (containsString(err.Error(), "42710") || containsString(err.Error(), "already exists"))
+}
+
+// containsString checks if s contains substr (simple helper to avoid importing strings package).
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsSubstring(s, substr)))
+}
+
+// containsSubstring is a simple substring search.
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 // Stage 4: drop legacy columns (only user_id; device_id is kept for protocol compatibility).
