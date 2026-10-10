@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/rtc-agent/server/pkg/protocol"
 )
@@ -158,16 +159,22 @@ func ParseContentDataToolCall(data any) (protocol.ToolCall, error) {
 
 	// id
 	if v, ok := raw["id"]; ok {
-		_ = json.Unmarshal(v, &tc.Id)
+		if err := json.Unmarshal(v, &tc.Id); err != nil {
+			slog.Warn("ParseContentDataToolCall: failed to unmarshal id", "raw", string(v), "error", err)
+		}
 	}
 	// tool_name
 	if v, ok := raw["tool_name"]; ok {
-		_ = json.Unmarshal(v, &tc.ToolName)
+		if err := json.Unmarshal(v, &tc.ToolName); err != nil {
+			slog.Warn("ParseContentDataToolCall: failed to unmarshal tool_name", "raw", string(v), "error", err)
+		}
 	}
 	// status
 	if v, ok := raw["status"]; ok && len(v) > 0 && string(v) != "null" {
 		var s string
-		_ = json.Unmarshal(v, &s)
+		if err := json.Unmarshal(v, &s); err != nil {
+			slog.Warn("ParseContentDataToolCall: failed to unmarshal status", "raw", string(v), "error", err)
+		}
 		tc.Status = &s
 	}
 
@@ -176,7 +183,9 @@ func ParseContentDataToolCall(data any) (protocol.ToolCall, error) {
 		trimmed := trimJSONNull(v)
 		if len(trimmed) > 0 && trimmed[0] == '"' {
 			// Old format: JSON string → use as-is (it's already a JSON string).
-			_ = json.Unmarshal(trimmed, &tc.Input)
+			if err := json.Unmarshal(trimmed, &tc.Input); err != nil {
+				slog.Warn("ParseContentDataToolCall: failed to unmarshal input string", "raw", string(trimmed), "error", err)
+			}
 		} else {
 			// New format: JSON object → marshal to string for protocol.ToolCall.
 			tc.Input = string(trimmed)
@@ -188,7 +197,9 @@ func ParseContentDataToolCall(data any) (protocol.ToolCall, error) {
 		trimmed := trimJSONNull(v)
 		if len(trimmed) > 0 && trimmed[0] == '"' {
 			var s string
-			_ = json.Unmarshal(trimmed, &s)
+			if err := json.Unmarshal(trimmed, &s); err != nil {
+				slog.Warn("ParseContentDataToolCall: failed to unmarshal output string", "raw", string(trimmed), "error", err)
+			}
 			tc.Output = &s
 		} else if len(trimmed) > 0 && string(trimmed) != "null" {
 			s := string(trimmed)
@@ -298,7 +309,11 @@ func toolCallToStorage(tc protocol.ToolCall) (ToolCallData, error) {
 		var inputObj any
 		if err := json.Unmarshal([]byte(tc.Input), &inputObj); err != nil {
 			// Not valid JSON — store as a plain string.
-			s.Input, _ = json.Marshal(tc.Input)
+			marshaled, mErr := json.Marshal(tc.Input)
+			if mErr != nil {
+				slog.Error("toolCallToStorage: failed to marshal input string", "error", mErr)
+			}
+			s.Input = json.RawMessage(marshaled)
 		} else {
 			var err error
 			s.Input, err = json.Marshal(inputObj)
@@ -315,7 +330,11 @@ func toolCallToStorage(tc protocol.ToolCall) (ToolCallData, error) {
 			s.Output = json.RawMessage(*tc.Output)
 		} else {
 			// Fallback: not valid JSON — store as string.
-			s.Output, _ = json.Marshal(*tc.Output)
+			marshaled, mErr := json.Marshal(*tc.Output)
+			if mErr != nil {
+				slog.Error("toolCallToStorage: failed to marshal output string", "error", mErr)
+			}
+			s.Output = json.RawMessage(marshaled)
 		}
 	}
 

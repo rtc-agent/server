@@ -34,14 +34,14 @@ func extractMessageContent(ctx context.Context, cd protocol.ContentData) string 
 	case protocol.ContentTypeText:
 		s, err := primitives.ContentDataString(cd.Data)
 		if err != nil {
-			logger.Warn(ctx, "[SendMessage] ContentDataString failed", zap.Error(err))
+			logger.Error(ctx, "[SendMessage] ContentDataString failed", zap.Error(err))
 			return ""
 		}
 		return s
 	case protocol.ContentTypeUserMessage:
 		umc, err := primitives.ParseUserMessageContent(cd.Data)
 		if err != nil {
-			logger.Warn(ctx, "[SendMessage] ParseUserMessageContent failed", zap.Error(err))
+			logger.Error(ctx, "[SendMessage] ParseUserMessageContent failed", zap.Error(err))
 			return ""
 		}
 		return umc.Text

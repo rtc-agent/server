@@ -84,8 +84,11 @@ func Init(level string, serverLogFile ...string) {
 	if debugEnv == "true" || debugEnv == "1" || debugEnv == "yes" {
 		debugMode.Store(true)
 
-		// Create logs directory (ignore error -- directory may already exist).
-		_ = os.MkdirAll("logs", 0o755)
+		// Create logs directory. If it fails, log to stderr but continue —
+		// stdout logging remains functional, so the server can still operate.
+		if err := os.MkdirAll("logs", 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "logger: failed to create logs directory: %v\n", err)
+		}
 
 		// Human-readable console encoder.
 		consoleEncoderConfig := encoderConfig
@@ -119,7 +122,9 @@ func Init(level string, serverLogFile ...string) {
 		// Ensure directory exists (LastIndex returns -1 when path has no separator, skip MkdirAll).
 		if idx := strings.LastIndex(logPath, "/"); idx > 0 {
 			if dir := logPath[:idx]; dir != "" {
-				_ = os.MkdirAll(dir, 0o755)
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					fmt.Fprintf(os.Stderr, "logger: failed to create server log directory %q: %v\n", dir, err)
+				}
 			}
 		}
 		// Lumberjack rotating writer: 100MB/file, keep 3 old files, max 7 days, gzip compression.
