@@ -197,9 +197,23 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 					Reason: "account banned",
 				}
 			}
+			// NOTE: Ban cache invalidation on admin ban/unban is handled by
+			// usecase.RtcUserUsecase (middleware.SetBanCache / InvalidateBanCache)
+			// combined with Redis Pub/Sub broadcast via model.BanChannel. The
+			// svc.BanWatcher subscribes to this channel on every node and
+			// invalidates the local cache + disconnects active sessions, so
+			// subsequent reconnections see the updated state immediately
+			// without waiting for TTL expiry. No action required here.
 		}
 
 		metrics.recordConnecting("success", time.Since(start))
+
+		// NOTE: DeviceID is extracted from JWT claims and stored in clientInfo,
+		// but is not currently used for connection binding validation.
+		// TODO(device-binding): Consider validating DeviceID at critical operations
+		// (e.g. RPC calls, subscription to sensitive channels) to ensure the
+		// connecting device matches the expected device for this user. This
+		// prevents token-replay attacks from different devices.
 
 		ci := &clientInfo{
 			UserID:   claims.UserID,
@@ -227,15 +241,17 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 }
 
 // truncateForLog truncates a string to the first 20 characters for logging
-// (avoids recording full sensitive or verbose data).
+// (avoids recording full sensitive or verbose data). Uses []rune to ensure
+// UTF-8 safety (byte-level slicing could break multi-byte characters).
 func truncateForLog(s string) string {
 	if len(s) == 0 {
 		return "<empty>"
 	}
-	if len(s) <= 20 {
+	runes := []rune(s)
+	if len(runes) <= 20 {
 		return s
 	}
-	return s[:20] + "..."
+	return string(runes[:20]) + "..."
 }
 
 // createOnConnectHandler returns the OnConnect callback: subscription

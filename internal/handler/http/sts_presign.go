@@ -151,6 +151,16 @@ func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.
 		}
 	}
 
+	// P1-5 fix: TODO - Presigned GET URLs can be used unlimited times within their validity period.
+	// Consider adding download count tracking for sensitive or high-value files:
+	// - Option 1: Single-use GET URLs (invalidate after first use via Redis flag)
+	// - Option 2: Download count limit (e.g., max 100 downloads per URL)
+	// - Option 3: Time-based rate limiting (e.g., max 10 downloads per hour)
+	// This is not critical for now because:
+	// 1. Presigned URLs expire (default 15min, max 7 days)
+	// 2. Files are content-addressed (MD5 in key), so unauthorized sharing is less risky
+	// 3. The user's own quota is not affected by downloads (only uploads)
+	// However, for compliance or DRM requirements, download tracking may be needed.
 	url, expiresAt, fields, err := h.oss3UC.GeneratePresignedURL(r.Context(), userID.String(), req.Operation, req.Key, expiresIn, req.ContentType)
 	if err != nil {
 		// Check if it's a permission/validation error
@@ -159,7 +169,11 @@ func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.
 			return
 		}
 		if errors.Is(err, usecase.ErrMissingContentType) || errors.Is(err, usecase.ErrUnsupportedContentType) {
-			writePresignError(w, r, http.StatusBadRequest, "presign.invalid_content_type", err.Error())
+			// Use a fixed user-friendly message instead of exposing err.Error(),
+			// which may leak internal implementation details (e.g. allowed MIME types list,
+			// S3 policy structure). Pre-validation in GeneratePresignedURL catches most
+			// cases; this branch handles race conditions with policy updates.
+			writePresignError(w, r, http.StatusBadRequest, "presign.invalid_content_type", "invalid or unsupported content_type")
 			return
 		}
 		logger.Error(r.Context(), "failed to generate presigned URL",

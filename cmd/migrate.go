@@ -27,8 +27,16 @@ var migrateCmd = &cobra.Command{
 	RunE:  runMigrate,
 }
 
+// skipExtensions controls whether CREATE EXTENSION statements are executed.
+// When true, DBAs are expected to have pre-created required extensions
+// (e.g. pgvector) manually. Useful in locked-down environments where the
+// migration user lacks superuser privileges.
+var skipExtensions bool
+
 func init() {
 	rootCmd.AddCommand(migrateCmd)
+	migrateCmd.Flags().BoolVar(&skipExtensions, "skip-extensions", false,
+		"skip CREATE EXTENSION statements (DBA must pre-create extensions like pgvector)")
 }
 
 func runMigrate(cmd *cobra.Command, args []string) error {
@@ -86,13 +94,17 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	// Note: CREATE EXTENSION requires superuser privileges or the CREATEROLE attribute.
 	// If this fails with "permission denied", ensure the database user has the necessary
 	// privileges, or have a DBA create the extension manually before running migrations.
-	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
-		return fmt.Errorf("create pgvector extension: %w\n"+
-			"HINT: This operation requires database superuser privileges.\n"+
-			"Options:\n"+
-			"  1. Use a superuser account for migration (recommended for initial setup)\n"+
-			"  2. Have a DBA create the extension manually: CREATE EXTENSION IF NOT EXISTS vector;\n"+
-			"  3. Use pgvector/pgvector Docker image which has the extension pre-installed", err)
+	if skipExtensions {
+		logger.Info(context.Background(), "migrate.skip_extensions",
+			zap.String("reason", "skipping CREATE EXTENSION as requested via --skip-extensions flag; DBA must pre-create required extensions"))
+	} else if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
+		return fmt.Errorf("failed to create pgvector extension.\n\n"+
+			"This extension requires database superuser privileges.\n\n"+
+			"Solutions:\n"+
+			"  1. Run migration with a superuser account (recommended for initial setup).\n"+
+			"  2. Have a DBA execute: CREATE EXTENSION IF NOT EXISTS vector;\n"+
+			"  3. Or skip extension creation if it already exists: --skip-extensions\n\n"+
+			"Original error: %v", err)
 	}
 
 	if err := model.AutoMigrate(db); err != nil {
