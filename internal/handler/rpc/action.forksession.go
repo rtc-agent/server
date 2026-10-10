@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
@@ -31,7 +31,7 @@ import (
 // are filtered out and a fresh prompt message is prepended, preventing stale
 // scenario content from persisting in the forked session.
 func buildForkMessages(
-	oldMessages []*model.Message,
+	oldMessages []*converter.Message,
 	creator usecase.UserCreator,
 	newContent protocol.ContentData,
 	newClientMsgID string,
@@ -43,7 +43,7 @@ func buildForkMessages(
 
 	// Filter out old prompt messages that would conflict with the new one.
 	// When forking with new scenarios, the old "scenarios" prompt is stale.
-	var filteredMessages []*model.Message
+	var filteredMessages []*converter.Message
 	for _, oldMsg := range oldMessages {
 		if needsNewPrompt {
 			contentData, parseErr := primitives.ParseContentData(oldMsg.Content)
@@ -199,7 +199,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	newSession := buildForkSessionModel(oldSession, req.NewClientSessionId, creator, deviceID)
 	messagesToCreate := buildForkMessages(oldMessages, creator, req.ContentData, req.NewClientMessageId, oldMessageID, ctx)
 
-	var createdMessages []*model.Message
+	var createdMessages []*converter.Message
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		if err := primitives.CreateSession(txCtx, h.deps.Deps, newSession); err != nil {
 			return nil, h.internalError(txCtx, ErrorCodeForkCreateSession, "failed to create session", err)
@@ -249,7 +249,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 }
 
 // validateForkSource checks that the old session exists and belongs to the user.
-func (h *Handler) validateForkSource(ctx context.Context, oldSessionID uuid.UUID, creator usecase.UserCreator) (*model.Session, error) {
+func (h *Handler) validateForkSource(ctx context.Context, oldSessionID uuid.UUID, creator usecase.UserCreator) (*converter.Session, error) {
 	oldSession, err := h.deps.Deps.RtcSessionUsecase.GetSession(ctx, oldSessionID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
@@ -264,9 +264,9 @@ func (h *Handler) validateForkSource(ctx context.Context, oldSessionID uuid.UUID
 }
 
 // buildForkSessionModel creates the new session model for a fork operation.
-func buildForkSessionModel(old *model.Session, clientID string, creator usecase.UserCreator, deviceID string) *model.Session {
+func buildForkSessionModel(old *converter.Session, clientID string, creator usecase.UserCreator, deviceID string) *converter.Session {
 	now := time.Now()
-	return &model.Session{
+	return &converter.Session{
 		ID:                  uuid.Must(uuid.NewV7()),
 		ClientID:            clientID,
 		OwnerKind:           string(creator.Kind()),

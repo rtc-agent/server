@@ -9,8 +9,8 @@ import (
 
 	"github.com/cenkalti/backoff/v5"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/internal/infra/cache"
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
@@ -21,7 +21,7 @@ import (
 // tryCollectBatchResume attempts to collect batch resume items via Redis.
 // Returns (items, true) if the batch is still in progress (caller should return),
 // or (items, false) if the caller should continue with normal resume logic.
-func (h *Handler) tryCollectBatchResume(ctx context.Context, rtc *model.Rtc) ([]turnagent.BatchResumeItem, bool) {
+func (h *Handler) tryCollectBatchResume(ctx context.Context, rtc *converter.Rtc) ([]turnagent.BatchResumeItem, bool) {
 	if h.deps.Deps.Redis == nil {
 		return nil, false
 	}
@@ -68,7 +68,7 @@ func (h *Handler) tryCollectBatchResume(ctx context.Context, rtc *model.Rtc) ([]
 
 // buildBatchResumeItems reads batch results and interrupt map from Redis,
 // then cleans up all batch-related keys.
-func (h *Handler) buildBatchResumeItems(ctx context.Context, rtc *model.Rtc, resultsKey, interruptMapKey, batchKey string) []turnagent.BatchResumeItem {
+func (h *Handler) buildBatchResumeItems(ctx context.Context, rtc *converter.Rtc, resultsKey, interruptMapKey, batchKey string) []turnagent.BatchResumeItem {
 	results, resultsErr := h.deps.Deps.Redis.HGetAll(ctx, resultsKey).Result()
 	if resultsErr != nil {
 		logger.Warn(ctx, "[resumeTurnAfterRtc] batch results read failed (degrading to single resume)",
@@ -102,7 +102,7 @@ func (h *Handler) buildBatchResumeItems(ctx context.Context, rtc *model.Rtc, res
 }
 
 // resumeActiveTurn publishes a Resume work item for the active (interrupted) turn.
-func (h *Handler) resumeActiveTurn(ctx context.Context, rtc *model.Rtc, activeTurns []*model.Turn, batchResumeItems []turnagent.BatchResumeItem, userID string) {
+func (h *Handler) resumeActiveTurn(ctx context.Context, rtc *converter.Rtc, activeTurns []*converter.Turn, batchResumeItems []turnagent.BatchResumeItem, userID string) {
 	interruptID, interruptResult := h.resolveInterruptID(ctx, rtc, activeTurns)
 
 	// Dedup check: skip if a Resume work item is already pending.
@@ -161,7 +161,7 @@ func (h *Handler) resumeActiveTurn(ctx context.Context, rtc *model.Rtc, activeTu
 
 // resolveInterruptID finds the interrupted turn's InterruptID, retrying with
 // exponential backoff if the turn is still in "running" state.
-func (h *Handler) resolveInterruptID(ctx context.Context, rtc *model.Rtc, activeTurns []*model.Turn) (string, *string) {
+func (h *Handler) resolveInterruptID(ctx context.Context, rtc *converter.Rtc, activeTurns []*converter.Turn) (string, *string) {
 	// First pass: look for an already-interrupted turn.
 	for _, t := range activeTurns {
 		if protocol.TurnStatus(t.Status) == protocol.TurnStatusInterrupted {
@@ -211,7 +211,7 @@ func (h *Handler) resolveInterruptID(ctx context.Context, rtc *model.Rtc, active
 }
 
 // publishOrphanSubmit publishes a Submit work item when no active turn exists.
-func (h *Handler) publishOrphanSubmit(ctx context.Context, rtc *model.Rtc, userID string) {
+func (h *Handler) publishOrphanSubmit(ctx context.Context, rtc *converter.Rtc, userID string) {
 	orphanKey := cache.RtcOrphanTriggered(rtc.ID.String())
 	ok, setnxErr := h.deps.Deps.Redis.SetNX(ctx, orphanKey, "1", h.deps.Deps.WorkerConfig.OrphanTriggerTTL).Result()
 	if setnxErr != nil {

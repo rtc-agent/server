@@ -11,8 +11,8 @@ import (
 
 	"github.com/cenkalti/backoff/v5"
 	"github.com/rtc-agent/server/internal/agent"
+	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
@@ -59,7 +59,7 @@ func extractMessageContent(ctx context.Context, cd protocol.ContentData) string 
 }
 
 // summarizeTitleAsync runs title summarization in a background goroutine.
-func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Session) {
+func (h *Handler) summarizeTitleAsync(ctx context.Context, session *converter.Session) {
 	if h.deps.Deps.ChatModel == nil && h.deps.Deps.ChatModelFactory == nil {
 		return
 	}
@@ -240,7 +240,7 @@ func (h *Handler) validateSendMessageRequest(ctx context.Context, req *protocol.
 }
 
 // prepareSession prepares the session for message creation.
-func (h *Handler) prepareSession(ctx context.Context, req *protocol.SendMessageRequest, sessionUUIDPtr *uuid.UUID, creator usecase.UserCreator, span trace.Span) (*model.Session, bool, error) {
+func (h *Handler) prepareSession(ctx context.Context, req *protocol.SendMessageRequest, sessionUUIDPtr *uuid.UUID, creator usecase.UserCreator, span trace.Span) (*converter.Session, bool, error) {
 	content := extractMessageContent(ctx, req.ContentData)
 	initialTitle := primitives.TruncateTitle(content, 50)
 	session, isNew, err := primitives.PrepareSession(ctx, h.deps.Deps, sessionUUIDPtr, req.ClientSessionId, creator, initialTitle)
@@ -266,18 +266,15 @@ func (h *Handler) prepareSession(ctx context.Context, req *protocol.SendMessageR
 }
 
 // createMessageAndPublishWork creates the message and publishes work to the queue.
-func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol.SendMessageRequest, session *model.Session, isNew bool, creator usecase.UserCreator, userID string, workID string, span trace.Span) (*model.Message, []*protocol.Update, error) {
-	var createdMessage *model.Message
+func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol.SendMessageRequest, session *converter.Session, isNew bool, creator usecase.UserCreator, userID string, workID string, span trace.Span) (*converter.Message, []*protocol.Update, error) {
+	var createdMessage *converter.Message
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		if err := h.touchOrCreateSession(txCtx, session, isNew); err != nil {
 			return nil, err
 		}
 
 		// Create prompt message if needed (before user message to ensure correct global_offset).
-		promptMsg, err := h.createPromptMessageIfNeeded(txCtx, ctx, req, session.ID)
-		if err != nil {
-			return nil, err
-		}
+		promptMsg := h.createPromptMessageIfNeeded(txCtx, ctx, req, session.ID)
 
 		// Create message WITHOUT a turnID — the turn is created by turn-agent
 		// when the worker processes the work item published below.
@@ -348,7 +345,7 @@ func (e *ErrPushAfterCommitSyncRequired) Unwrap() error {
 }
 
 // touchOrCreateSession touches or creates the session within the transaction.
-func (h *Handler) touchOrCreateSession(txCtx context.Context, session *model.Session, isNew bool) error {
+func (h *Handler) touchOrCreateSession(txCtx context.Context, session *converter.Session, isNew bool) error {
 	if isNew {
 		if err := primitives.CreateSession(txCtx, h.deps.Deps, session); err != nil {
 			return h.internalError(txCtx, ErrorCodeSendCreateSession, "failed to create session", err)
@@ -367,20 +364,21 @@ func (h *Handler) touchOrCreateSession(txCtx context.Context, session *model.Ses
 }
 
 // createPromptMessageIfNeeded creates a prompt message if the content requires it.
-func (h *Handler) createPromptMessageIfNeeded(txCtx context.Context, ctx context.Context, req *protocol.SendMessageRequest, sessionID uuid.UUID) (*model.Message, error) {
+// Returns nil if no prompt message is needed or if creation fails (degrades gracefully).
+func (h *Handler) createPromptMessageIfNeeded(txCtx context.Context, ctx context.Context, req *protocol.SendMessageRequest, sessionID uuid.UUID) *converter.Message {
 	if !needsPromptMessage(req.ContentData) {
-		return nil, nil
+		return nil
 	}
 
 	promptContent, buildErr := buildPromptContent(req.ContentData)
 	if buildErr != nil {
 		logger.Warn(ctx, "rpc.send_message.build_prompt_failed", zap.Error(buildErr))
 		// Degrade gracefully: continue without prompt message.
-		return nil, nil
+		return nil
 	}
 
 	if promptContent.Type != protocol.ContentTypePrompt {
-		return nil, nil
+		return nil
 	}
 
 	systemCreator := usecase.SystemCreator{}
@@ -398,13 +396,13 @@ func (h *Handler) createPromptMessageIfNeeded(txCtx context.Context, ctx context
 		// message is supplementary. Log the failure and continue without it so
 		// that a transient DB error does not abort the whole SendMessage flow.
 		logger.Warn(ctx, "rpc.send_message.create_prompt_failed", zap.Error(createErr))
-		return nil, nil
+		return nil
 	}
 
 	logger.Info(ctx, "rpc.send_message.prompt_message_created",
 		zap.String("prompt_msg_id", promptMsg.ID.String()))
 
-	return promptMsg, nil
+	return promptMsg
 }
 
 // checkClientIdIdempotency checks if a client_id was already used.

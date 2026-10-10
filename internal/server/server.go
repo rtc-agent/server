@@ -357,7 +357,18 @@ func (s *Server) Stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Server.ShutdownTimeout)
 	defer cancel()
 
-	// Stop rtc-queue Worker.
+	// 1. Close HTTP Server first to stop accepting new connections.
+	// This prevents new requests from arriving while we shut down internal services.
+	if s.httpServer != nil {
+		if err := s.httpServer.Shutdown(ctx); err != nil {
+			logger.Error(ctx, "[Server] HTTP server shutdown error", zap.Error(err))
+		}
+		if logger.IsDebugMode() {
+			logger.Debug(ctx, "[Server] HTTP server stopped")
+		}
+	}
+
+	// 2. Stop rtc-queue Worker.
 	if logger.IsDebugMode() {
 		logger.Debug(ctx, "[Server] stopping rtc-queue Worker...")
 	}
@@ -371,7 +382,7 @@ func (s *Server) Stop() {
 		logger.Debug(ctx, "[Server] rtc-queue Worker stopped")
 	}
 
-	// Stop asynq server
+	// 3. Stop asynq server
 	if s.asynqServer != nil {
 		s.asynqServer.Stop()
 		if logger.IsDebugMode() {
@@ -379,31 +390,27 @@ func (s *Server) Stop() {
 		}
 	}
 
-	// Stop all background worker goroutines
+	// 4. Stop all background worker goroutines
 	s.stopBackgroundWorkers(ctx)
 
-	// Stop BanWatcher
+	// 5. Stop BanWatcher
 	if s.banWatcher != nil {
 		if err := s.banWatcher.Close(); err != nil {
 			logger.Error(ctx, "[Server] ban watcher close error", zap.Error(err))
 		}
 	}
 
-	// Close RPC Handler (stops recorder worker).
+	// 6. Close RPC Handler (stops recorder worker).
 	if s.rpcHandler != nil {
 		s.rpcHandler.Close()
 	}
 
+	// 7. Stop Centrifuge and Broker
 	if err := s.svcCtx.CentrifugeNode.Shutdown(ctx); err != nil {
 		logger.Error(ctx, "centrifuge node shutdown failed", zap.Error(err))
 	}
 	if err := s.svcCtx.Broker.Close(ctx); err != nil {
 		logger.Error(ctx, "broker close failed", zap.Error(err))
-	}
-
-	// Close main HTTP Server
-	if err := s.httpServer.Shutdown(ctx); err != nil {
-		logger.Error(ctx, "Server shutdown error", zap.Error(err))
 	}
 }
 

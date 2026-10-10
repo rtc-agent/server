@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -119,8 +120,11 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Fatal(context.Background(), "Failed to initialize server", zap.Error(err))
 	}
 	logger.SafeGo("http-server", func() {
-		if err := srv.Start(); err != nil {
+		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
 			logger.Error(context.Background(), "Server failed", zap.Error(err))
+			// Clean up background services (queue-worker, asynq-worker, etc.)
+			// that were started before ListenAndServe() failed.
+			srv.Stop()
 			// Signal the main goroutine to exit.
 			// Using signal.Notify + kill self preserves the deferred cleanup
 			// (logger.Sync, rdb.Close) that logger.Fatal would bypass.
@@ -160,11 +164,31 @@ func initTracing(cfg *config.Config) func(context.Context) error {
 		return nil
 	}
 
+	// Resolve service version: config > environment variable > "unknown"
+	serviceVersion := cfg.Tracing.ServiceVersion
+	if serviceVersion == "" {
+		serviceVersion = os.Getenv("SERVICE_VERSION")
+		if serviceVersion == "" {
+			serviceVersion = "unknown"
+		}
+	}
+
+	// Resolve environment: config > server.env > "development"
+	environment := cfg.Tracing.Environment
+	if environment == "" {
+		environment = cfg.Server.Env
+		if environment == "" {
+			environment = "development"
+		}
+	}
+
 	shutdownTracing, err := tracing.Init(tracing.Config{
-		ServiceName: "rtc-agent",
-		Endpoint:    cfg.Tracing.Endpoint,
-		Insecure:    true, // use unencrypted connection for dev environment
-		SampleRate:  cfg.Tracing.SampleRate,
+		ServiceName:    "rtc-agent",
+		ServiceVersion: serviceVersion,
+		Environment:    environment,
+		Endpoint:       cfg.Tracing.Endpoint,
+		Insecure:       cfg.Tracing.Insecure,
+		SampleRate:     cfg.Tracing.SampleRate,
 	})
 	if err != nil {
 		logger.Fatal(context.Background(), "Failed to initialize tracing", zap.Error(err))
@@ -173,6 +197,9 @@ func initTracing(cfg *config.Config) func(context.Context) error {
 	logger.Debug(context.Background(), "Tracing configuration",
 		zap.String("endpoint", cfg.Tracing.Endpoint),
 		zap.Float64("sample_rate", cfg.Tracing.SampleRate),
+		zap.Bool("insecure", cfg.Tracing.Insecure),
+		zap.String("service_version", serviceVersion),
+		zap.String("environment", environment),
 	)
 	return shutdownTracing
 }

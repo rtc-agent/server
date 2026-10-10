@@ -141,7 +141,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	usecases := initUsecases(ctx, db, cfg, rdb, repos, enforcer)
 
 	// Init handlers
-	handlers := initHandlers(cfg, usecases, repos, enforcer, jwtSigner, db)
+	handlers := initHandlers(cfg, usecases, jwtSigner, db)
 
 	// Setup router
 	router := setupRouter(routerDeps{
@@ -200,6 +200,11 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error(ctx, "admin.server_forced_shutdown", zap.Error(err))
+	}
+
+	// Clean up EmailOTPUsecase resources (stops MemoryOTPStore cleanup goroutine if present)
+	if usecases.emailOTPUsecase != nil {
+		usecases.emailOTPUsecase.Close()
 	}
 
 	logger.Info(ctx, "admin.server_exited")
@@ -277,6 +282,7 @@ type usecases struct {
 	rtcUserUsecase       *usecase.RtcUserUsecase
 	rtcSessionUsecase    *usecase.RtcSessionUsecase
 	serverConfigUsecase  *usecase.ServerConfigUsecase
+	auditLogUsecase      *usecase.AuditLogUsecase
 	loginProtection      usecase.LoginProtectionInterface
 	emailOTPUsecase      *usecase.EmailOTPUsecase
 }
@@ -318,6 +324,7 @@ func initUsecases(ctx context.Context, db *gorm.DB, cfg *config.AdminConfig, rdb
 	rtcUserUsecase := usecase.NewRtcUserUsecase(db, repos.oauth2UserRepo, repos.mainRefreshTokenRepo, repos.auditLogRepo, repos.deviceRepo)
 	rtcSessionUsecase := usecase.NewRtcSessionUsecase(repos.sessionRepo, repos.messageRepo, repos.turnRepo)
 	serverConfigUsecase := usecase.NewServerConfigUsecase(repos.configRepo, repos.auditLogRepo, repos.oauth2UserRepo, db)
+	auditLogUsecase := usecase.NewAuditLogUsecase(repos.auditLogRepo)
 
 	// Set up config publisher for multi-instance cache synchronization
 	if rdb != nil {
@@ -346,6 +353,7 @@ func initUsecases(ctx context.Context, db *gorm.DB, cfg *config.AdminConfig, rdb
 		rtcUserUsecase:       rtcUserUsecase,
 		rtcSessionUsecase:    rtcSessionUsecase,
 		serverConfigUsecase:  serverConfigUsecase,
+		auditLogUsecase:      auditLogUsecase,
 		loginProtection:      loginProtection,
 		emailOTPUsecase:      emailOTPUsecase,
 	}
@@ -434,12 +442,12 @@ func initEmailOTPUsecase(ctx context.Context, cfg *config.AdminConfig, rdb *redi
 }
 
 // initHandlers initializes all HTTP handlers.
-func initHandlers(cfg *config.AdminConfig, usecases usecases, repos repositories, enforcer *auth.CasbinEnforcer, jwtSigner *auth.AdminJWTSigner, db *gorm.DB) handlerDeps {
-	adminAuthHandler := httphandler.NewAdminAuthHandler(usecases.adminAuthUsecase, jwtSigner, db)
+func initHandlers(cfg *config.AdminConfig, usecases usecases, jwtSigner *auth.AdminJWTSigner, db *gorm.DB) handlerDeps {
+	adminAuthHandler := httphandler.NewAdminAuthHandler(usecases.adminAuthUsecase, usecases.adminUserUsecase, jwtSigner, db)
 	adminRoleHandler := httphandler.NewAdminRoleHandler(usecases.adminRoleUsecase)
 	permissionHandler := httphandler.NewPermissionHandler(usecases.permissionUsecase)
-	adminUserRoleHandler := httphandler.NewAdminUserRoleHandler(usecases.adminUserRoleUsecase, repos.adminUserRepo, repos.adminRoleRepo, repos.adminUserRoleRepo, enforcer)
-	auditLogHandler := httphandler.NewAuditLogHandler(repos.auditLogRepo)
+	adminUserRoleHandler := httphandler.NewAdminUserRoleHandler(usecases.adminUserRoleUsecase)
+	auditLogHandler := httphandler.NewAuditLogHandler(usecases.auditLogUsecase)
 	adminUserHandler := httphandler.NewAdminUserHandler(usecases.adminUserUsecase)
 	rtcUserHandler := httphandler.NewRtcUserHandler(usecases.rtcUserUsecase)
 	rtcSessionHandler := httphandler.NewRtcSessionHandler(usecases.rtcSessionUsecase)
@@ -450,8 +458,8 @@ func initHandlers(cfg *config.AdminConfig, usecases usecases, repos repositories
 	jaegerProxyHandler := httphandler.NewJaegerProxyHandler(cfg.JaegerURL)
 	pyroscopeProxyHandler := httphandler.NewPyroscopeProxyHandler(cfg.PyroscopeURL)
 
-	// Wire permission system deps to auth handler
-	adminAuthHandler.SetPermissionDeps(repos.adminRoleRepo, repos.adminUserRoleRepo, enforcer, cfg.Features.PermissionSystem)
+	// Set permission system enabled flag on auth handler
+	adminAuthHandler.SetPermissionSystemEnabled(cfg.Features.PermissionSystem)
 
 	// Wire email OTP usecase to auth handler (if configured)
 	if usecases.emailOTPUsecase != nil {

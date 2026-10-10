@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent"
+	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/updates"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
@@ -151,7 +151,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 
 // checkIdempotentSubmit handles the idempotency check for RTCs already in a terminal state.
 // Returns (response, true) if the request was handled idempotently, or (nil, false) to continue.
-func (h *Handler) checkIdempotentSubmit(ctx context.Context, rtc *model.Rtc, req *protocol.SubmitRtcResultRequest) (*protocol.SubmitRtcResultResponse, bool) {
+func (h *Handler) checkIdempotentSubmit(ctx context.Context, rtc *converter.Rtc, req *protocol.SubmitRtcResultRequest) (*protocol.SubmitRtcResultResponse, bool) {
 	switch protocol.RtcStatus(rtc.Status) {
 	case protocol.RtcStatusCompleted, protocol.RtcStatusFailed,
 		protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
@@ -165,7 +165,7 @@ func (h *Handler) checkIdempotentSubmit(ctx context.Context, rtc *model.Rtc, req
 			}, true
 		}
 		ups := []protocol.Update{{
-			DataList: new([]interface{}{model.ToProtocolRtc(rtc)}),
+			DataList: new([]interface{}{converter.ToProtocolRtc(rtc)}),
 			Id:       uuid.Must(uuid.NewV7()).String(),
 			Items: []protocol.UpdateItem{{
 				Action:   protocol.ActionUpdated,
@@ -184,8 +184,8 @@ func (h *Handler) checkIdempotentSubmit(ctx context.Context, rtc *model.Rtc, req
 
 // updateRtcAndCreateOutput performs the transactional update: marks the RTC result,
 // creates the toolcall_output message, and builds update items for event publishing.
-func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc, rtcUUID uuid.UUID, targetStatus protocol.RtcStatus, resultJSON *string, reqError *string, session *model.Session) ([]updates.UpdatePublishItem, error) {
-	if err := primitives.UpdateRtcResult(txCtx, h.deps.Deps, rtcUUID, targetStatus, resultJSON, model.DerefStr(reqError)); err != nil {
+func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *converter.Rtc, rtcUUID uuid.UUID, targetStatus protocol.RtcStatus, resultJSON *string, reqError *string, session *converter.Session) ([]updates.UpdatePublishItem, error) {
+	if err := primitives.UpdateRtcResult(txCtx, h.deps.Deps, rtcUUID, targetStatus, resultJSON, converter.DerefStr(reqError)); err != nil {
 		return nil, h.internalError(txCtx, ErrorCodeSubmitUpdateRtcResult, "failed to update rtc result", err)
 	}
 
@@ -210,9 +210,9 @@ func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc
 		// Previously, DB stored raw JSON while ReAct resume returned formatted text,
 		// causing tool_result content inconsistency and cache invalidation.
 		if rtc.ToolName == "askUser" {
-			tempRtc := &model.Rtc{
+			tempRtc := &converter.Rtc{
 				ToolName: rtc.ToolName,
-				Result:   model.JSONBString(*resultJSON),
+				Result:   converter.JSONBString(*resultJSON),
 				Status:   string(targetStatus),
 			}
 			toolOutput = agent.FormatAskUserResult(tempRtc)
@@ -285,7 +285,7 @@ func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc
 // context may be cancelled when the RPC returns, but the resume/submit
 // operations (DB queries, Redis SetNX, Queue.Publish) must complete
 // independently since they are fire-and-forget.
-func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc, userID string) {
+func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *converter.Rtc, userID string) {
 	// Detach from the RPC handler's context. The RTC result is already
 	// persisted; the resume is fire-and-forget and must not be aborted
 	// by the RPC context timeout/cancellation.

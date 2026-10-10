@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -30,7 +30,7 @@ type scriptExecutionRecorder struct {
 // scriptRecordTask is the task unit passed through the recorder channel.
 type scriptRecordTask struct {
 	ctx context.Context // created with context.WithoutCancel, independent of RPC handler
-	rtc *model.Rtc
+	rtc *converter.Rtc
 	req *protocol.SubmitRtcResultRequest
 }
 
@@ -46,14 +46,16 @@ func newScriptExecutionRecorder(deps *Dependencies, workerCount, bufferSize int)
 	// Start a fixed number of workers.
 	for i := 0; i < workerCount; i++ {
 		r.wg.Add(1)
-		go r.worker(i)
+		logger.SafeGo("script_execution_recorder.worker", func() {
+			r.worker()
+		})
 	}
 
 	return r
 }
 
 // submit submits an asynchronous recording task. Non-blocking; drops the task if the channel is full.
-func (r *scriptExecutionRecorder) submit(ctx context.Context, rtc *model.Rtc, req *protocol.SubmitRtcResultRequest) {
+func (r *scriptExecutionRecorder) submit(ctx context.Context, rtc *converter.Rtc, req *protocol.SubmitRtcResultRequest) {
 	select {
 	case r.tasks <- scriptRecordTask{ctx: ctx, rtc: rtc, req: req}:
 		// Successfully submitted.
@@ -68,10 +70,11 @@ func (r *scriptExecutionRecorder) submit(ctx context.Context, rtc *model.Rtc, re
 func (r *scriptExecutionRecorder) shutdown() {
 	close(r.quit)
 	done := make(chan struct{})
-	go func() {
+	logger.SafeGo("script_execution_recorder.shutdown_wait", func() {
+		// Ensure done is closed even if Wait panics, so shutdown does not hang.
+		defer close(done)
 		r.wg.Wait()
-		close(done)
-	}()
+	})
 	select {
 	case <-done:
 		// All workers finished.
@@ -82,17 +85,8 @@ func (r *scriptExecutionRecorder) shutdown() {
 
 // worker is the recorder's work loop.
 // It consumes tasks from the tasks channel; on quit signal, drains remaining tasks before exiting.
-func (r *scriptExecutionRecorder) worker(id int) {
+func (r *scriptExecutionRecorder) worker() {
 	defer r.wg.Done()
-	defer func() {
-		if rv := recover(); rv != nil {
-			logger.Error(context.Background(), "[scriptExecutionRecorder] worker goroutine panic",
-				zap.Int("worker_id", id),
-				zap.Any("panic", rv),
-				zap.String("stack", string(debug.Stack())),
-			)
-		}
-	}()
 
 	for {
 		select {
@@ -153,7 +147,7 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 	// 2. Extract frontend-reported execution metadata from req.Result.
 	var durationMs int64
 	var resultSize int64
-	var logsList, warningsList, errorsList model.StringArray
+	var logsList, warningsList, errorsList converter.StringArray
 
 	if len(req.Result) > 0 {
 		// req.Result is json.RawMessage ([]byte) — use directly.
@@ -209,7 +203,7 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 
 	// 6. Build the ScriptExecution record.
 	now := time.Now()
-	exec := &model.ScriptExecution{
+	exec := &converter.ScriptExecution{
 		RtcID:        rtc.ID,
 		SessionID:    rtc.SessionID,
 		TurnID:       rtc.TurnID,
@@ -222,7 +216,7 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 		DurationMs:   durationMs,
 		ResultSize:   resultSize,
 		CodeSize:     codeSize,
-		ErrorMessage: model.DerefStr(req.Error),
+		ErrorMessage: converter.DerefStr(req.Error),
 		Logs:         logsList,
 		Warnings:     warningsList,
 		Errors:       errorsList,
@@ -265,13 +259,13 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 	}
 }
 
-// extractStringSlice safely extracts a model.StringArray from an interface{}.
+// extractStringSlice safely extracts a converter.StringArray from an interface{}.
 // After JSON deserialization, a string slice is typically []interface{},
 // but it may also be []string (when constructed directly).
-func extractStringSlice(v interface{}) model.StringArray {
+func extractStringSlice(v interface{}) converter.StringArray {
 	switch s := v.(type) {
 	case []interface{}:
-		result := make(model.StringArray, 0, len(s))
+		result := make(converter.StringArray, 0, len(s))
 		for _, item := range s {
 			if str, ok := item.(string); ok {
 				result = append(result, str)
@@ -279,7 +273,7 @@ func extractStringSlice(v interface{}) model.StringArray {
 		}
 		return result
 	case []string:
-		return model.StringArray(s)
+		return converter.StringArray(s)
 	default:
 		return nil
 	}

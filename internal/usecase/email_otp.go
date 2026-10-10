@@ -64,6 +64,14 @@ func NewEmailOTPUsecase(
 	}
 }
 
+// Close releases resources held by the EmailOTPUsecase.
+// If the underlying OTP store implements io.Closer, it will be closed.
+func (uc *EmailOTPUsecase) Close() {
+	if closer, ok := uc.store.(interface{ Close() }); ok {
+		closer.Close()
+	}
+}
+
 // SendOTP generates and sends a verification code to the given email.
 // Returns error if email is not registered, rate limited, or send fails.
 func (uc *EmailOTPUsecase) SendOTP(ctx context.Context, emailAddr, clientIP string) error {

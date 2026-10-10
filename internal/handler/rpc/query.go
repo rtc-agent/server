@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -40,7 +40,7 @@ func parseUUIDPtr(id *protocol.UUID, fieldName string) (*uuid.UUID, *APIError) {
 
 // loadOwnedSession loads a session and verifies ownership by the current user.
 // The returned session is guaranteed non-nil; on failure, a wrapped APIError is returned.
-func (h *Handler) loadOwnedSession(ctx context.Context, sessionID uuid.UUID, userID uuid.UUID) (*model.Session, error) {
+func (h *Handler) loadOwnedSession(ctx context.Context, sessionID uuid.UUID, userID uuid.UUID) (*converter.Session, error) {
 	session, err := h.deps.Deps.RtcSessionUsecase.GetSession(ctx, sessionID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
