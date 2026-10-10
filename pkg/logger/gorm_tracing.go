@@ -19,6 +19,11 @@ type TracingPlugin struct {
 	dbInstance string // database name for db.instance span attribute
 }
 
+// maxSQLLogLength is the maximum length of SQL statement to record in traces.
+// SQL longer than this will be truncated to avoid performance overhead from sanitization.
+// For very large batch INSERT statements, regex-based sanitization can be expensive.
+const maxSQLLogLength = 10000
+
 // NewTracingPlugin creates a new GORM tracing plugin.
 func NewTracingPlugin() *TracingPlugin {
 	return &TracingPlugin{
@@ -133,9 +138,15 @@ func (cb *tracingCallbacks) after(db *gorm.DB) {
 	}
 	defer span.End()
 
-	// Record SQL (sanitized to prevent sensitive data leakage)
+	// Record SQL (sanitized to prevent sensitive data leakage).
+	// For very long SQL statements (e.g., batch INSERT), truncate first to avoid
+	// performance overhead from regex-based sanitization.
 	if db.Statement.SQL.String() != "" {
-		span.SetAttributes(attribute.String("db.statement", sanitizeSQL(db.Statement.SQL.String())))
+		sqlStr := db.Statement.SQL.String()
+		if len(sqlStr) > maxSQLLogLength {
+			sqlStr = sqlStr[:500] + "...(truncated)"
+		}
+		span.SetAttributes(attribute.String("db.statement", sanitizeSQL(sqlStr)))
 	}
 
 	// Record affected rows

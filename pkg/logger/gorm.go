@@ -49,6 +49,12 @@ func NewGormLogger(ignoreRecordNotFound bool, slowThreshold time.Duration) *Gorm
 	}
 }
 
+// shouldIgnoreError checks if the error should be ignored (e.g., ErrRecordNotFound).
+// This consolidates the ignore logic to avoid duplication across Error() and Trace() methods.
+func (l *GormLogger) shouldIgnoreError(err error) bool {
+	return l.ignoreRecordNotFound && errors.Is(err, gorm.ErrRecordNotFound)
+}
+
 // LogMode implements gormlogger.Interface.
 func (l *GormLogger) LogMode(level gormlogger.LogLevel) gormlogger.Interface {
 	// Return a new logger instance (GORM requires immutability).
@@ -73,9 +79,9 @@ func (l *GormLogger) Warn(ctx context.Context, msg string, data ...interface{}) 
 
 // Error implements gormlogger.Interface.
 func (l *GormLogger) Error(ctx context.Context, msg string, data ...interface{}) {
-	// Check if this is ErrRecordNotFound and should be ignored.
-	if l.ignoreRecordNotFound && len(data) > 0 {
-		if err, ok := data[0].(error); ok && errors.Is(err, gorm.ErrRecordNotFound) {
+	// Check if this error should be ignored (e.g., ErrRecordNotFound).
+	if len(data) > 0 {
+		if err, ok := data[0].(error); ok && l.shouldIgnoreError(err) {
 			// Ignore ErrRecordNotFound, suppress log output.
 			return
 		}
@@ -109,8 +115,8 @@ func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (stri
 
 	// Choose log level based on error and duration.
 	if err != nil {
-		// Check if this is ErrRecordNotFound and should be ignored.
-		if l.ignoreRecordNotFound && errors.Is(err, gorm.ErrRecordNotFound) {
+		// Check if this error should be ignored (e.g., ErrRecordNotFound).
+		if l.shouldIgnoreError(err) {
 			// Ignore ErrRecordNotFound, suppress log output.
 			return
 		}

@@ -60,11 +60,12 @@ var (
 		},
 	)
 
-	websocketConnectionsTotal = promauto.NewCounter(
+	websocketConnectionsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "rtc_websocket_connections_total",
 			Help: "Total number of WebSocket connection attempts.",
 		},
+		[]string{"status"}, // "success" or "failed"
 	)
 )
 
@@ -94,7 +95,7 @@ func HTTPMetrics() func(http.Handler) http.Handler {
 			// Skip WebSocket upgrade requests (long-lived connections, should not be counted in HTTP metrics).
 			// However, we still record the connection attempt for observability.
 			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-				websocketConnectionsTotal.Inc()
+				websocketConnectionsTotal.WithLabelValues("success").Inc()
 				next.ServeHTTP(w, r)
 				return
 			}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -86,7 +87,11 @@ func Init(level string, serverLogFile ...string) {
 
 		// Create logs directory. If it fails, log to stderr but continue —
 		// stdout logging remains functional, so the server can still operate.
-		if err := os.MkdirAll("logs", 0o755); err != nil {
+		logDir := os.Getenv("LOG_DIR")
+		if logDir == "" {
+			logDir = "logs"
+		}
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "logger: failed to create logs directory: %v\n", err)
 		}
 
@@ -97,8 +102,9 @@ func Init(level string, serverLogFile ...string) {
 		consoleEncoder := zapcore.NewConsoleEncoder(consoleEncoderConfig)
 
 		// Lumberjack rotating writer: 100MB/file, keep 3 old files, max 7 days, gzip compression.
+		debugLogPath := filepath.Join(logDir, "debug.log")
 		debugLJ := &lumberjack.Logger{
-			Filename:   "logs/debug.log",
+			Filename:   debugLogPath,
 			MaxSize:    100, // MB
 			MaxBackups: 3,
 			MaxAge:     7, // days
@@ -228,7 +234,12 @@ func isLoggerFrame(f runtime.Frame) bool {
 	fn := f.Function
 	if idx := strings.LastIndex(fn, "."); idx >= 0 {
 		receiver := fn[:idx]
-		if strings.Contains(receiver, "Logger") {
+		// Match common logger adapter patterns
+		if strings.Contains(receiver, "Logger") ||
+			strings.Contains(receiver, "centrifuge") ||
+			strings.Contains(receiver, "worker") ||
+			strings.Contains(receiver, "app") ||
+			strings.Contains(receiver, "default") {
 			return true
 		}
 	}

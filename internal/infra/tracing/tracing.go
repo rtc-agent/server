@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -17,11 +18,18 @@ import (
 type Config struct {
 	// ServiceName is the name of the service.
 	ServiceName string
+	// ServiceVersion is the version of the service (e.g., "1.0.0").
+	// Optional but recommended for multi-version deployments and canary releases.
+	ServiceVersion string
+	// Environment is the deployment environment (e.g., "production", "staging", "development").
+	// Optional but helps distinguish traces from different environments.
+	Environment string
 	// Endpoint is the OTLP endpoint (e.g., "localhost:4317").
 	Endpoint string
 	// Insecure indicates whether to use an unencrypted connection (development only).
 	Insecure bool
 	// SampleRate is the trace sampling rate (0.0 - 1.0).
+	// Recommended values: 0.1-0.3 for production, 1.0 for development.
 	SampleRate float64
 }
 
@@ -44,11 +52,17 @@ func Init(cfg Config) (func(context.Context) error, error) {
 	}
 
 	// Create resource (identifies the service).
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName(cfg.ServiceName),
-		),
-	)
+	// Include service name, version, and environment for better trace context.
+	attrs := []attribute.KeyValue{
+		semconv.ServiceName(cfg.ServiceName),
+	}
+	if cfg.ServiceVersion != "" {
+		attrs = append(attrs, semconv.ServiceVersion(cfg.ServiceVersion))
+	}
+	if cfg.Environment != "" {
+		attrs = append(attrs, semconv.DeploymentEnvironment(cfg.Environment))
+	}
+	res, err := resource.New(ctx, resource.WithAttributes(attrs...))
 	if err != nil {
 		return nil, fmt.Errorf("create resource: %w", err)
 	}
