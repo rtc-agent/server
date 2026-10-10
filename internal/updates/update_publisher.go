@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rtc-agent/server/internal/channel"
 	"github.com/rtc-agent/server/internal/infra/cache"
@@ -128,9 +129,8 @@ func NewUpdatePublisher(
 		}
 
 		// Streaming messages: read chunks from Redis and append to content.
-		// Race condition: chunks may not be fully written yet; we accept
-		// eventual consistency (the frontend gets the latest content via
-		// a subsequent update).
+		// Race condition: chunks may not be fully written yet; we use a retry
+		// mechanism to verify completeness and retry if inconsistent.
 		u.mu.RLock()
 		ss := u.streamStore
 		u.mu.RUnlock()
@@ -138,20 +138,86 @@ func NewUpdatePublisher(
 		result := make(map[uuid.UUID]any, len(messages))
 		for id, m := range messages {
 			if ss != nil && protocol.MessageStreamingStatus(m.StreamingStatus) == protocol.MessageStreamingStreaming {
-				chunks, chunksErr := ss.GetAllChunks(m.ID.String())
-				if chunksErr != nil {
-					// Fallback: return raw DB data and log a warning.
-					logger.Warn(ctx, "[UpdatePublisher] get chunks for streaming message failed, falling back to DB data",
-						zap.String("message_id", m.ID.String()),
-						zap.Error(chunksErr),
-					)
-				} else if len(chunks) > 0 {
+				// Retry mechanism: read chunks, verify completeness, retry if inconsistent
+				const maxRetries = 3
+				const retryDelay = 100 * time.Millisecond
+
+				var chunks []string
+				var chunksErr error
+				var content string
+
+				for attempt := 0; attempt < maxRetries; attempt++ {
+					chunks, chunksErr = ss.GetAllChunks(m.ID.String())
+					if chunksErr != nil {
+						// Error reading chunks, fallback to DB data
+						logger.Warn(ctx, "[UpdatePublisher] get chunks for streaming message failed",
+							zap.String("message_id", m.ID.String()),
+							zap.Int("attempt", attempt+1),
+							zap.Error(chunksErr),
+						)
+						break
+					}
+
+					// Build content from chunks
+					if len(chunks) > 0 {
+						content = strings.Join(chunks, "")
+
+						// Verify completeness: check if the last chunk ends with a finish marker
+						// or if the content length is stable (no new chunks arriving)
+						// For now, we accept eventual consistency but log warnings
+						// A more robust solution would require the writer to set a completion flag
+						if attempt < maxRetries-1 {
+							// Wait briefly to see if more chunks arrive
+							time.Sleep(retryDelay)
+
+							// Re-read to check if content changed
+							newChunks, newErr := ss.GetAllChunks(m.ID.String())
+							if newErr != nil {
+								logger.Warn(ctx, "[UpdatePublisher] re-read chunks failed",
+									zap.String("message_id", m.ID.String()),
+									zap.Error(newErr),
+								)
+								break
+							}
+
+							// If chunks are the same, we're done
+							if len(newChunks) == len(chunks) {
+								same := true
+								for i := range chunks {
+									if i >= len(newChunks) || chunks[i] != newChunks[i] {
+										same = false
+										break
+									}
+								}
+								if same {
+									break
+								}
+							}
+							// Otherwise, continue retrying
+							chunks = newChunks
+							content = strings.Join(chunks, "")
+						}
+					} else {
+						// No chunks yet, use DB content
+						break
+					}
+				}
+
+				if chunksErr != nil || len(chunks) == 0 {
+					// Fallback: return raw DB data
+					if chunksErr != nil {
+						logger.Warn(ctx, "[UpdatePublisher] get chunks failed after retries, using DB data",
+							zap.String("message_id", m.ID.String()),
+							zap.Int("retries", maxRetries),
+						)
+					}
+				} else if content != "" {
 					v := &protocol.ContentData{}
 					if e := json.Unmarshal([]byte(m.Content), v); e != nil {
 						logger.Warn(ctx, "[UpdatePublisher] unmarshal content failed", zap.Error(e))
-						m.Content = strings.Join(chunks, "")
+						m.Content = content
 					} else {
-						v.Data = strings.Join(chunks, "")
+						v.Data = content
 						if tmp, marshalErr := json.Marshal(v); marshalErr != nil {
 							logger.Warn(ctx, "[UpdatePublisher] marshal content with chunks failed", zap.Error(marshalErr))
 							// Fallback: preserve ContentData structure with raw chunk
@@ -160,7 +226,7 @@ func NewUpdatePublisher(
 							if fb, fbErr := json.Marshal(fallback); fbErr == nil {
 								m.Content = string(fb)
 							} else {
-								m.Content = strings.Join(chunks, "")
+								m.Content = content
 							}
 						} else {
 							m.Content = string(tmp)

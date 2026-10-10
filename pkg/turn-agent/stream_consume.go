@@ -13,16 +13,15 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// StreamIdleTimeout is the maximum duration a stream can remain idle
-// (no data received) before it is considered stalled and closed.
-// This prevents turns from getting stuck indefinitely when the LLM
-// stream stops mid-response.
-//
-// Note: This is a per-receive timeout, not a total turn timeout.
-// Increased from 3 to 10 minutes to accommodate long-form content
-// generation where the LLM may have extended thinking periods between
-// chunks, even when the stream is actively producing output overall.
-const StreamIdleTimeout = 10 * time.Minute
+// StreamFirstByteTimeout is the maximum time to wait for the first chunk.
+// This is typically shorter because if the LLM doesn't start responding
+// within 30 seconds, it's likely stuck or there's a connection issue.
+const StreamFirstByteTimeout = 30 * time.Second
+
+// StreamIdleTimeout is the maximum time between consecutive chunks.
+// This is longer (3 minutes) to accommodate LLM thinking time and
+// slow token generation, especially for complex reasoning tasks.
+const StreamIdleTimeout = 3 * time.Minute
 
 // consumeStream drives a stream reader to completion.
 // The stream is always closed when the function returns, regardless of the exit path.
@@ -58,13 +57,21 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 	chunkCount := 0
 
 	for {
-		res, timedOut := RecvWithTimeout(streamCtx, stream.Recv, StreamIdleTimeout)
+		// Use different timeouts for first chunk vs subsequent chunks:
+		// - First chunk: shorter timeout (30s) - if LLM doesn't start quickly, likely stuck
+		// - Subsequent chunks: longer timeout (3min) - accommodate thinking/reasoning time
+		timeout := StreamIdleTimeout
+		if chunkCount == 0 {
+			timeout = StreamFirstByteTimeout
+		}
+
+		res, timedOut := RecvWithTimeout(streamCtx, stream.Recv, timeout)
 
 		if timedOut {
 			streamSpan.RecordError(&StreamIdleTimeoutError{
 				SessionID: mgr.sessionID,
 				TurnID:    turnID,
-				Timeout:   StreamIdleTimeout,
+				Timeout:   timeout,
 				AgentName: agentName,
 				Role:      role,
 				ToolName:  toolName,
@@ -76,7 +83,7 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 			mgr.log(streamCtx, LogLevelError, "stream.idle_timeout", map[string]any{
 				"session_id":  mgr.sessionID,
 				"turn_id":     turnID,
-				"timeout":     StreamIdleTimeout.String(),
+				"timeout":     timeout.String(),
 				"agent_name":  agentName,
 				"role":        role,
 				"tool_name":   toolName,
@@ -85,7 +92,7 @@ func (mgr *SessionTurnManager) consumeStream(ctx context.Context, turnID, agentN
 			return &StreamIdleTimeoutError{
 				SessionID: mgr.sessionID,
 				TurnID:    turnID,
-				Timeout:   StreamIdleTimeout,
+				Timeout:   timeout,
 				AgentName: agentName,
 				Role:      role,
 				ToolName:  toolName,

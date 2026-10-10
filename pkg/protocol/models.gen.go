@@ -1192,6 +1192,13 @@ type SendMessageResult struct {
 	// SessionId protocol 内 UUID 类型，JSON 线上为字符串
 	SessionId UUID `json:"session_id"`
 
+	// SyncRequired Indicates that the client should perform a sync operation to ensure
+	// data consistency. This is set to true when the server successfully
+	// committed the message but failed to push the update to the real-time
+	// channel (ErrPushAfterCommit). The client should fetch the latest
+	// state via a sync request to ensure it has the most recent data.
+	SyncRequired *bool `json:"sync_required,omitempty"`
+
 	// TurnId protocol 内 UUID 类型，JSON 线上为字符串
 	TurnId UUID `json:"turn_id"`
 }

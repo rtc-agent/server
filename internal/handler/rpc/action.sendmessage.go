@@ -142,6 +142,22 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	// Create message and publish work
 	createdMessage, pushUpdates, err := h.createMessageAndPublishWork(ctx, req, session, isNew, creator, userID.String(), workID, span)
 	if err != nil {
+		// Check if this is a sync-required error (push failed after commit)
+		var syncRequiredErr *ErrPushAfterCommitSyncRequired
+		if errors.As(err, &syncRequiredErr) {
+			// Data was committed successfully, but push failed
+			// Return success with sync_required flag set
+			syncRequired := true
+			return &protocol.SendMessageResponse{
+				Result: protocol.SendMessageResult{
+					SessionId:    session.ID.String(),
+					TurnId:       "",
+					MessageId:    createdMessage.ID.String(),
+					SyncRequired: &syncRequired,
+				},
+				Updates: updates.DerefUpdates(pushUpdates),
+			}, nil
+		}
 		return nil, err
 	}
 
@@ -189,6 +205,16 @@ func (h *Handler) validateSendMessageRequest(ctx context.Context, req *protocol.
 		return "", &APIError{Code: ErrorCodeInvalidArgument, Message: "Message content validation failed"}
 	}
 
+	// Validate agent_prompt length early to avoid wasting DB queries on invalid requests
+	const maxAgentPromptLength = 10 * 1024 // 10KB
+	if req.AgentPrompt != nil && len(*req.AgentPrompt) > maxAgentPromptLength {
+		span.SetStatus(codes.Error, "validation_error")
+		return "", &APIError{
+			Code:    ErrorCodeInvalidArgument,
+			Message: fmt.Sprintf("agent_prompt too long: %d bytes (max %d)", len(*req.AgentPrompt), maxAgentPromptLength),
+		}
+	}
+
 	if apiErr := h.checkClientIdIdempotency(ctx, req.ClientId); apiErr != nil {
 		span.SetStatus(codes.Error, apiErr.Message)
 		return "", apiErr
@@ -208,16 +234,9 @@ func (h *Handler) prepareSession(ctx context.Context, req *protocol.SendMessageR
 		return nil, false, h.internalError(ctx, "session.error", "internal error", err)
 	}
 
-	const maxAgentPromptLength = 10 * 1024 // 10KB
 	span.SetAttributes(attribute.String("session.id", session.ID.String()))
 	if isNew && req.AgentPrompt != nil {
-		if len(*req.AgentPrompt) > maxAgentPromptLength {
-			span.SetStatus(codes.Error, "validation_error")
-			return nil, false, &APIError{
-				Code:    ErrorCodeInvalidArgument,
-				Message: fmt.Sprintf("agent_prompt too long: %d bytes (max %d)", len(*req.AgentPrompt), maxAgentPromptLength),
-			}
-		}
+		// Validation already done in validateSendMessageRequest, safe to assign directly
 		session.AgentPrompt = *req.AgentPrompt
 	}
 	if !isNew {
@@ -283,6 +302,9 @@ func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol
 	if err != nil {
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[SendMessage] push failed after commit (data safe)", zap.Error(err))
+			// Mark that sync is required so the client knows to fetch latest state
+			// We'll set this in the response via a wrapper
+			return createdMessage, pushUpdates, &ErrPushAfterCommitSyncRequired{OriginalError: err}
 		} else {
 			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
@@ -291,6 +313,19 @@ func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol
 	}
 
 	return createdMessage, pushUpdates, nil
+}
+
+// ErrPushAfterCommitSyncRequired wraps ErrPushAfterCommit to signal that sync_required should be set
+type ErrPushAfterCommitSyncRequired struct {
+	OriginalError error
+}
+
+func (e *ErrPushAfterCommitSyncRequired) Error() string {
+	return e.OriginalError.Error()
+}
+
+func (e *ErrPushAfterCommitSyncRequired) Unwrap() error {
+	return e.OriginalError
 }
 
 // touchOrCreateSession touches or creates the session within the transaction.
@@ -353,6 +388,14 @@ func (h *Handler) createPromptMessageIfNeeded(txCtx context.Context, ctx context
 func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string) *APIError {
 	if clientID == "" {
 		return nil
+	}
+	// Validate length上限，防止过长 ID 导致数据库查询性能问题
+	const maxClientIDLength = 255
+	if len(clientID) > maxClientIDLength {
+		return &APIError{
+			Code:    ErrorCodeInvalidArgument,
+			Message: fmt.Sprintf("client_id too long: %d bytes (max %d)", len(clientID), maxClientIDLength),
+		}
 	}
 	existing, err := h.deps.Deps.MessageRepo.FindByClientID(ctx, clientID)
 	if err != nil {

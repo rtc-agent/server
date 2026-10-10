@@ -117,22 +117,35 @@ func (mgr *SessionTurnManager) onAgentEvents(
 		}
 		completeWorkCalled = true
 		eventsSpan.AddEvent("complete_work")
-		bgCtx, bgCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer bgCancel()
+		// Use a timeout context derived from the parent context to ensure CompleteWork
+		// finishes before the request context is fully cancelled. This prevents state
+		// inconsistency where the work is marked complete in the tracker but not in the queue.
+		// If the parent context is already cancelled, fall back to a background context with
+		// a short timeout to ensure cleanup still happens.
+		var completeCtx context.Context
+		var completeCancel context.CancelFunc
+		if ctx.Err() != nil {
+			// Parent context already cancelled, use background with short timeout
+			completeCtx, completeCancel = context.WithTimeout(context.Background(), 5*time.Second)
+		} else {
+			// Parent context still valid, use it with a reasonable timeout
+			completeCtx, completeCancel = context.WithTimeout(ctx, 10*time.Second)
+		}
+		defer completeCancel()
 		for _, item := range tc.Consumed {
 			if item.WorkID == "" {
 				continue
 			}
-			if err := mgr.queue.CompleteWork(bgCtx, item.WorkID); err != nil {
+			if err := mgr.queue.CompleteWork(completeCtx, item.WorkID); err != nil {
 				eventsSpan.RecordError(err)
-				mgr.log(bgCtx, LogLevelError, "on_agent_events.complete_work_failed", map[string]any{
+				mgr.log(completeCtx, LogLevelError, "on_agent_events.complete_work_failed", map[string]any{
 					"session_id": mgr.sessionID,
 					"turn_id":    turnID,
 					"work_id":    item.WorkID,
 					"error":      err.Error(),
 				})
 			} else {
-				mgr.log(bgCtx, LogLevelDebug, "on_agent_events.complete_work_success", map[string]any{
+				mgr.log(completeCtx, LogLevelDebug, "on_agent_events.complete_work_success", map[string]any{
 					"session_id": mgr.sessionID,
 					"turn_id":    turnID,
 					"work_id":    item.WorkID,
