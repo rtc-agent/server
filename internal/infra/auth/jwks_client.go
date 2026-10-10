@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,6 +59,14 @@ type JWKSClientConfig struct {
 	MaxResponseSize int64
 }
 
+// issuerCircuitBreaker tracks per-issuer circuit breaker state for JWKS refresh.
+// It implements exponential backoff to prevent thundering herd when the JWKS
+// endpoint is failing or slow.
+type issuerCircuitBreaker struct {
+	consecutiveFailures int
+	lastFailureTime     time.Time
+}
+
 // JWKSClient fetches, caches, and manages JWKS public keys from external issuers.
 //
 // Caching strategy:
@@ -64,12 +74,17 @@ type JWKSClientConfig struct {
 //   - On cache miss, the full JWKS is fetched from the issuer's jwks_uri
 //   - On verification failure, the cache is automatically refreshed
 //   - A distributed lock prevents multiple instances from simultaneously refreshing
+//   - Per-issuer circuit breaker with exponential backoff prevents thundering herd
 type JWKSClient struct {
 	httpClient      *http.Client
 	redis           redis.UniversalClient
 	defaultCacheTTL time.Duration
 	lockTTL         time.Duration
 	maxResponseSize int64
+
+	// Per-issuer circuit breaker state (exponential backoff for refresh failures)
+	cbMu     sync.Mutex
+	cbStates map[string]*issuerCircuitBreaker
 }
 
 // NewJWKSClient creates a new JWKSClient with the given configuration.
@@ -99,6 +114,7 @@ func NewJWKSClient(cfg JWKSClientConfig) (*JWKSClient, error) {
 		defaultCacheTTL: cacheTTL,
 		lockTTL:         lockTTL,
 		maxResponseSize: maxSize,
+		cbStates:        make(map[string]*issuerCircuitBreaker),
 	}, nil
 }
 
@@ -183,6 +199,13 @@ func (c *JWKSClient) FetchJWKS(ctx context.Context, jwksURI string) (jwk.Set, er
 // validateJWKSSchema validates the basic structure of a JWKS response.
 // SECURITY: This prevents cache poisoning attacks where a malicious endpoint
 // returns a non-JWKS JSON response that could be parsed as valid keys.
+//
+// Validation includes:
+//   - "keys" array must be present
+//   - Each key must have "kty" (key type) per RFC 7517
+//   - Each key must have "kid" (key ID) for key matching
+//   - "use" must be "sig" (signature) if present
+//   - "alg" must be a valid signature algorithm if present
 func validateJWKSSchema(data []byte) bool {
 	var jwks struct {
 		Keys []json.RawMessage `json:"keys"`
@@ -200,6 +223,7 @@ func validateJWKSSchema(data []byte) bool {
 			Kty string `json:"kty"`
 			Kid string `json:"kid"`
 			Use string `json:"use"`
+			Alg string `json:"alg"`
 		}
 		if err := json.Unmarshal(keyData, &key); err != nil {
 			return false
@@ -216,8 +240,26 @@ func validateJWKSSchema(data []byte) bool {
 		if key.Use != "" && key.Use != "sig" {
 			return false
 		}
+		// alg must be a valid signature algorithm if present
+		// Common algorithms: RS256, RS384, RS512, ES256, ES384, ES512, PS256, PS384, PS512, EdDSA
+		if key.Alg != "" && !isValidSignatureAlgorithm(key.Alg) {
+			return false
+		}
 	}
 	return true
+}
+
+// isValidSignatureAlgorithm checks if the algorithm is a valid signature algorithm.
+func isValidSignatureAlgorithm(alg string) bool {
+	switch alg {
+	case "RS256", "RS384", "RS512",
+		"ES256", "ES384", "ES512",
+		"PS256", "PS384", "PS512",
+		"EdDSA":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetKey retrieves a specific key by issuer and key ID.
@@ -249,7 +291,23 @@ func (c *JWKSClient) GetKey(ctx context.Context, issuer, jwksURI, kid string) (j
 
 // RefreshKey forces a cache refresh for the given issuer's JWKS.
 // Uses a distributed lock to prevent concurrent refreshes across instances.
+// Implements per-issuer circuit breaker with exponential backoff to prevent
+// thundering herd when the JWKS endpoint is failing.
 func (c *JWKSClient) RefreshKey(ctx context.Context, issuer, jwksURI, kid string) (jwk.Key, error) {
+	// Check circuit breaker before attempting refresh.
+	if backoff, remaining := c.getCircuitBreakerBackoff(issuer); backoff > 0 {
+		logger.Warn(ctx, "jwks: circuit breaker open, skipping refresh",
+			zap.String("issuer", issuer),
+			zap.Duration("backoff_remaining", remaining))
+		// Try to serve from cache while circuit breaker is open.
+		cachedKey, cacheErr := c.getCachedKey(ctx, issuer, kid)
+		if cacheErr == nil && cachedKey != nil {
+			return cachedKey, nil
+		}
+		return nil, fmt.Errorf("%w: circuit breaker open for issuer %s (backoff %v)",
+			ErrJWKSEndpointUnreachable, issuer, remaining)
+	}
+
 	// Acquire distributed lock to prevent concurrent refreshes.
 	lockKey := cache.JWKSLockKey(issuer)
 	holderUUID := uuid.Must(uuid.NewV7()).String()
@@ -263,9 +321,10 @@ func (c *JWKSClient) RefreshKey(ctx context.Context, issuer, jwksURI, kid string
 	}
 
 	if !acquired {
-		// Another instance is refreshing; wait briefly and try cache again.
+		// Another instance is refreshing; wait with exponential backoff and try cache again.
 		// Use a context-aware timer so the wait can be cancelled on shutdown.
-		timer := time.NewTimer(200 * time.Millisecond)
+		backoff := c.calculateBackoff(issuer)
+		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -293,6 +352,8 @@ func (c *JWKSClient) RefreshKey(ctx context.Context, issuer, jwksURI, kid string
 	// Fetch fresh JWKS.
 	set, err := c.FetchJWKS(ctx, jwksURI)
 	if err != nil {
+		// Record failure in circuit breaker.
+		c.recordCircuitBreakerFailure(ctx, issuer)
 		return nil, err
 	}
 
@@ -304,7 +365,96 @@ func (c *JWKSClient) RefreshKey(ctx context.Context, issuer, jwksURI, kid string
 		return nil, fmt.Errorf("%w: kid=%s issuer=%s", ErrJWKSKeyNotFound, kid, issuer)
 	}
 
+	// Success: reset circuit breaker.
+	c.resetCircuitBreaker(issuer)
+
 	return key, nil
+}
+
+// Circuit breaker constants for JWKS refresh.
+const (
+	// cbMaxBackoff is the maximum backoff duration (5 minutes).
+	cbMaxBackoff = 5 * time.Minute
+	// cbBaseBackoff is the base backoff duration (1 second).
+	cbBaseBackoff = 1 * time.Second
+	// cbResetAfter is the duration after which failures are reset if no new failures occur (10 minutes).
+	cbResetAfter = 10 * time.Minute
+)
+
+// getCircuitBreakerBackoff returns the remaining backoff duration for an issuer.
+// Returns (0, 0) if the circuit breaker is closed (no backoff needed).
+func (c *JWKSClient) getCircuitBreakerBackoff(issuer string) (time.Duration, time.Duration) {
+	c.cbMu.Lock()
+	defer c.cbMu.Unlock()
+
+	cb, exists := c.cbStates[issuer]
+	if !exists || cb.consecutiveFailures == 0 {
+		return 0, 0
+	}
+
+	// Auto-reset if enough time has passed since last failure.
+	if time.Since(cb.lastFailureTime) > cbResetAfter {
+		delete(c.cbStates, issuer)
+		return 0, 0
+	}
+
+	backoff := c.calculateBackoffLocked(issuer)
+	if backoff <= 0 {
+		return 0, 0
+	}
+
+	remaining := backoff - time.Since(cb.lastFailureTime)
+	if remaining <= 0 {
+		return 0, 0
+	}
+	return remaining, remaining
+}
+
+// calculateBackoff calculates the backoff duration for an issuer.
+func (c *JWKSClient) calculateBackoff(issuer string) time.Duration {
+	c.cbMu.Lock()
+	defer c.cbMu.Unlock()
+	return c.calculateBackoffLocked(issuer)
+}
+
+// calculateBackoffLocked calculates the backoff duration (caller must hold cbMu).
+func (c *JWKSClient) calculateBackoffLocked(issuer string) time.Duration {
+	cb, exists := c.cbStates[issuer]
+	if !exists || cb.consecutiveFailures == 0 {
+		return 200 * time.Millisecond // Default short wait for lock contention.
+	}
+
+	// Exponential backoff: base * 2^(failures-1), capped at max.
+	backoff := float64(cbBaseBackoff) * math.Pow(2, float64(cb.consecutiveFailures-1))
+	if backoff > float64(cbMaxBackoff) {
+		backoff = float64(cbMaxBackoff)
+	}
+	return time.Duration(backoff)
+}
+
+// recordCircuitBreakerFailure records a refresh failure for the circuit breaker.
+func (c *JWKSClient) recordCircuitBreakerFailure(ctx context.Context, issuer string) {
+	c.cbMu.Lock()
+	defer c.cbMu.Unlock()
+
+	cb, exists := c.cbStates[issuer]
+	if !exists {
+		cb = &issuerCircuitBreaker{}
+		c.cbStates[issuer] = cb
+	}
+	cb.consecutiveFailures++
+	cb.lastFailureTime = time.Now()
+
+	logger.Warn(ctx, "jwks: refresh failed, circuit breaker updated",
+		zap.String("issuer", issuer),
+		zap.Int("consecutive_failures", cb.consecutiveFailures))
+}
+
+// resetCircuitBreaker resets the circuit breaker for an issuer after a successful refresh.
+func (c *JWKSClient) resetCircuitBreaker(issuer string) {
+	c.cbMu.Lock()
+	defer c.cbMu.Unlock()
+	delete(c.cbStates, issuer)
 }
 
 // getCachedKey retrieves a cached JWK from Redis.

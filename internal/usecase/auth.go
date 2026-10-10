@@ -214,10 +214,15 @@ func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken 
 
 	if rt.Revoked {
 		// Potential token reuse detection: if a revoked token is used, it may indicate
-		// that the token was stolen.
+		// that the token was stolen. This is a security-critical event that should
+		// trigger alerting and potentially session revocation.
 		logger.Warn(ctx, "auth.refresh_token_reuse_detected",
-			zap.String("token_hash_prefix", rtHash[:16]))
-		// Record Prometheus metric for security monitoring and alerting
+			zap.String("token_hash_prefix", rtHash[:16]),
+			zap.String("user_id", rt.UserID.String()),
+			zap.String("device_id", rt.DeviceID),
+			zap.Time("token_expires_at", rt.ExpiresAt))
+		// Record Prometheus metric for security monitoring and alerting.
+		// Alert rule suggestion: rate(sec_events_total{event_type="refresh_token_reuse"}) > 0
 		auth.RecordSecurityEvent("refresh_token_reuse")
 		return nil, ErrRefreshTokenRevoked
 	}

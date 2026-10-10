@@ -186,7 +186,13 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to store state")
 		return
 	}
-	if err := h.stateStore.Set(ctx, state, string(stateJSON), h.authConfig.OAuth2StateTTL); err != nil {
+	// Security: ensure state TTL is within safe bounds (5-30 minutes).
+	// Fallback to 10 minutes if not configured or invalid.
+	stateTTL := h.authConfig.OAuth2StateTTL
+	if stateTTL < 5*time.Minute || stateTTL > 30*time.Minute {
+		stateTTL = 10 * time.Minute
+	}
+	if err := h.stateStore.Set(ctx, state, string(stateJSON), stateTTL); err != nil {
 		logger.Error(ctx, "failed to store state", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to store state")
 		return

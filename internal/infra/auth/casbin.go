@@ -15,10 +15,25 @@ import (
 
 // CasbinModelText is the RBAC model definition used by the enforcer.
 //
-// - r = subject (user ID), object (resource), action
-// - p = subject (role ID), object (resource), action
-// - g = user-role grouping (g, userID, roleID)
-// - Role inheritance via g() matcher function
+// Current model: basic RBAC without domain/tenant isolation.
+//   - r = subject (user ID), object (resource), action
+//   - p = subject (role ID), object (resource), action
+//   - g = user-role grouping (g, userID, roleID)
+//   - Role inheritance via g() matcher function
+//
+// TODO(security): Multi-tenant support
+//
+//	For multi-tenant deployments, this model MUST be extended to include domain/tenant
+//	isolation to prevent cross-tenant permission leakage. Required changes:
+//	1. Add domain definition: [domain_definition] d = _
+//	2. Extend request: r = sub, dom, obj, act
+//	3. Extend policy: p = sub, dom, obj, act
+//	4. Extend grouping: g = _, _, _ (user, role, domain)
+//	5. Update matcher: m = g(r.sub, p.sub, r.dom) && r.dom == p.dom && r.obj == p.obj && r.act == p.act
+//	6. Add domain parameter to all Enforce/AddPolicy/RemovePolicy calls
+//	7. Consider using Casbin's built-in domain support: https://casbin.org/docs/rbac-with-domains/
+//	Without this, all tenants share the same permission namespace, which is a critical
+//	security risk in multi-tenant deployments.
 const CasbinModelText = `
 [request_definition]
 r = sub, obj, act
