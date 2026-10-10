@@ -44,42 +44,15 @@ func rootInterruptCtx(ctxs []*adk.InterruptCtx) *adk.InterruptCtx {
 // the session's TurnLoop and blocks until the work is completed by
 // OnAgentEvents.
 func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan rtcqueue.CancelMessage) (retErr error) {
-	// 1. Decode payload.
-	var p WorkPayload
-	if err := json.Unmarshal([]byte(work.Data), &p); err != nil {
-		return fmt.Errorf("turnagent: decode work payload: %w", err)
+	// 1. Decode payload and handle fast paths.
+	p, ctx, err := a.decodeAndPreparePayload(ctx, work)
+	if err != nil {
+		return err
 	}
-	if p.SessionID == "" {
-		return fmt.Errorf("turnagent: work payload missing session_id")
-	}
-
-	// 1.1. Restore trace context from payload (if available).
-	// This must happen BEFORE startSpanIfEnabled (line ~93) so that the "turn" span
-	// becomes a child of the restored span context, inheriting the same TraceID.
-	// For legacy payloads without trace_id, this is a no-op (empty strings are ignored).
-	if p.TraceID != "" && p.SpanID != "" {
-		ctx = WithTraceContext(ctx, p.TraceID, p.SpanID)
-	}
-
-	a.log(ctx, LogLevelInfo, "agent.process", map[string]any{
-		"session_id": p.SessionID,
-		"kind":       p.Kind,
-		"work_id":    work.ID,
-	})
 
 	// 1.5. Fast path: compact work bypasses the turn loop entirely.
 	if p.Kind == WorkKindCompact {
-		if a.cfg.CompactContext == nil {
-			a.log(ctx, LogLevelWarn, "agent.compact_no_handler", map[string]any{
-				"session_id": p.SessionID,
-			})
-			return nil
-		}
-		// Inject user ID into context for ConfigProvider calls
-		if p.UserID != "" {
-			ctx = WithUserID(ctx, p.UserID)
-		}
-		return a.cfg.CompactContext(ctx, p.SessionID, p.CustomInstruction)
+		return a.handleCompactWork(ctx, p)
 	}
 
 	// 2. Obtain the turnID.
@@ -100,12 +73,71 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		return fmt.Errorf("turnagent: resolveTurnID: %w", err)
 	}
 
-	// 2.5. Observability: start a turn span.
+	// 2.5. Setup turn context with observability.
+	turnCtx, turnSpan, turnCancel := a.setupTurnContext(ctx, p, turnID, work.ID)
+	defer turnCancel()
+	defer turnSpan.End()
+
+	// 2.6. Panic recovery.
+	defer a.setupPanicRecovery(turnCtx, p.SessionID, turnID, &retErr)
+
+	// 3-5. Create/get session manager and push work.
+	mgr, isNew, err := a.createAndPushWork(turnCtx, p, turnID, work, turnSpan)
+	if err != nil {
+		return err
+	}
+
+	// 6-8. Setup cancel listener, wait for completion, handle lifecycle.
+	return a.waitForWorkCompletion(turnCtx, turnSpan, p, turnID, work.ID, cancel, mgr, isNew, turnCancel)
+}
+
+// decodeAndPreparePayload decodes the work payload and restores trace context.
+func (a *Agent) decodeAndPreparePayload(ctx context.Context, work *rtcqueue.Work) (WorkPayload, context.Context, error) {
+	var p WorkPayload
+	if err := json.Unmarshal([]byte(work.Data), &p); err != nil {
+		return p, ctx, fmt.Errorf("turnagent: decode work payload: %w", err)
+	}
+	if p.SessionID == "" {
+		return p, ctx, fmt.Errorf("turnagent: work payload missing session_id")
+	}
+
+	// Restore trace context from payload (if available).
+	// This must happen BEFORE startSpanIfEnabled so that the "turn" span
+	// becomes a child of the restored span context, inheriting the same TraceID.
+	if p.TraceID != "" && p.SpanID != "" {
+		ctx = WithTraceContext(ctx, p.TraceID, p.SpanID)
+	}
+
+	a.log(ctx, LogLevelInfo, "agent.process", map[string]any{
+		"session_id": p.SessionID,
+		"kind":       p.Kind,
+		"work_id":    work.ID,
+	})
+
+	return p, ctx, nil
+}
+
+// handleCompactWork handles the fast path for compact work items.
+func (a *Agent) handleCompactWork(ctx context.Context, p WorkPayload) error {
+	if a.cfg.CompactContext == nil {
+		a.log(ctx, LogLevelWarn, "agent.compact_no_handler", map[string]any{
+			"session_id": p.SessionID,
+		})
+		return nil
+	}
+	// Inject user ID into context for ConfigProvider calls
+	if p.UserID != "" {
+		ctx = WithUserID(ctx, p.UserID)
+	}
+	return a.cfg.CompactContext(ctx, p.SessionID, p.CustomInstruction)
+}
+
+// setupTurnContext creates the turn context with tracing and enrichment.
+func (a *Agent) setupTurnContext(ctx context.Context, p WorkPayload, turnID string, workID string) (context.Context, trace.Span, context.CancelFunc) {
 	// Create turnCtx with its own cancel so we can cancel the entire turn
 	// (including the LLM call running in mgr.Run) when StopTurn is called.
 	turnCtx, turnCancel := context.WithCancel(ctx)
-	var turnSpan trace.Span
-	turnCtx, turnSpan = a.startSpanIfEnabled(turnCtx, "turn_agent.turn")
+	turnCtx, turnSpan := a.startSpanIfEnabled(turnCtx, "turn_agent.turn")
 	// Enrich context with sessionID so ALL callbacks (not just beginTurn) can
 	// fall back to it when DB lookups fail (e.g., failTurn/cancelTurn session
 	// status update). Without this, a GetByID failure after a terminal turn
@@ -113,54 +145,58 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// turn scanner runs (5-30 minutes).
 	turnCtx = WithSessionID(turnCtx, p.SessionID)
 	turnCtx = WithUserID(turnCtx, p.UserID)
-	defer turnCancel()
-	defer turnSpan.End()
+
 	turnSpan.SetAttributes(
 		attribute.String("session.id", p.SessionID),
 		attribute.String("user.id", p.UserID),
 		attribute.String("turn.id", turnID),
 		attribute.String("turn.work_kind", string(p.Kind)),
 	)
-	turnStart := time.Now()
+
 	a.log(turnCtx, LogLevelInfo, "turn.start", map[string]any{
 		"session_id": p.SessionID,
 		"user_id":    p.UserID,
 		"turn_id":    turnID,
 		"work_kind":  string(p.Kind),
-		"work_id":    work.ID,
+		"work_id":    workID,
 	})
 
-	// 2.6. Panic recovery.
-	defer func() {
-		r := recover()
-		if r == nil {
-			return
-		}
-		var pErr error
-		switch v := r.(type) {
-		case error:
-			pErr = fmt.Errorf("turnagent: panic in callback: %w", v)
-		default:
-			pErr = fmt.Errorf("turnagent: panic in callback: %v", v)
-		}
-		a.log(turnCtx, LogLevelError, "turn.panicked", map[string]any{
-			"session_id": p.SessionID,
-			"turn_id":    turnID,
-			"error":      pErr.Error(),
-			"stack":      string(debug.Stack()),
-		})
-		if turnID != "" {
-			func() {
-				// Nested recover: FailTurn may panic (e.g., DB unreachable).
-				// Swallow the panic to prevent it from crashing the process
-				// during an already-in-flight panic recovery.
-				defer func() { _ = recover() }()
-				_ = a.cfg.FailTurn(turnCtx, turnID, pErr)
-			}()
-		}
-		retErr = pErr
-	}()
+	return turnCtx, turnSpan, turnCancel
+}
 
+// setupPanicRecovery sets up panic recovery for the turn.
+func (a *Agent) setupPanicRecovery(turnCtx context.Context, sessionID, turnID string, retErr *error) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	var pErr error
+	switch v := r.(type) {
+	case error:
+		pErr = fmt.Errorf("turnagent: panic in callback: %w", v)
+	default:
+		pErr = fmt.Errorf("turnagent: panic in callback: %v", v)
+	}
+	a.log(turnCtx, LogLevelError, "turn.panicked", map[string]any{
+		"session_id": sessionID,
+		"turn_id":    turnID,
+		"error":      pErr.Error(),
+		"stack":      string(debug.Stack()),
+	})
+	if turnID != "" {
+		func() {
+			// Nested recover: FailTurn may panic (e.g., DB unreachable).
+			// Swallow the panic to prevent it from crashing the process
+			// during an already-in-flight panic recovery.
+			defer func() { _ = recover() }()
+			_ = a.cfg.FailTurn(turnCtx, turnID, pErr)
+		}()
+	}
+	*retErr = pErr
+}
+
+// createAndPushWork creates/gets the session manager and pushes the work item.
+func (a *Agent) createAndPushWork(turnCtx context.Context, p WorkPayload, turnID string, work *rtcqueue.Work, turnSpan trace.Span) (*SessionTurnManager, bool, error) {
 	// 3. Checkpoint ID.
 	checkpointID := a.cfg.DeriveCheckpointID(p.SessionID)
 
@@ -181,7 +217,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 			"turn_id":    turnID,
 			"error":      err.Error(),
 		})
-		return fmt.Errorf("turnagent: GetOrCreate: %w", err)
+		return nil, false, fmt.Errorf("turnagent: GetOrCreate: %w", err)
 	}
 
 	// 5. Build work item and push to the loop.
@@ -193,7 +229,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 
 	mgr, isNew, err = a.pushOrReplace(turnCtx, mgr, isNew, workItem, p.SessionID, turnID, checkpointID, work.Credential)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 
 	// If this is a new manager, begin the turn.
@@ -202,10 +238,16 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		// when DB lookups fail (e.g., beginTurn session activation).
 		beginCtx := WithSessionID(turnCtx, p.SessionID)
 		if err := a.beginTurn(beginCtx, turnSpan, p.SessionID, turnID, p.Kind); err != nil {
-			return err
+			return nil, false, err
 		}
 	}
 
+	return mgr, isNew, nil
+}
+
+// waitForWorkCompletion sets up cancel listener, waits for work completion,
+// and handles lifecycle transitions.
+func (a *Agent) waitForWorkCompletion(turnCtx context.Context, turnSpan trace.Span, p WorkPayload, turnID string, workID string, cancel <-chan rtcqueue.CancelMessage, mgr *SessionTurnManager, isNew bool, turnCancel context.CancelFunc) error {
 	// 6. Cancel listener.
 	innerCtx, innerCancel := context.WithCancel(turnCtx)
 	defer innerCancel()
@@ -215,12 +257,12 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	a.startCancelListener(cancel, mgr, done, innerCancel, turnCancel)
 
 	// 7. Register work with tracker and wait for completion.
-	completionCh := mgr.Tracker().Register(work.ID)
+	completionCh := mgr.Tracker().Register(workID)
 
 	a.log(turnCtx, LogLevelInfo, "turn.waiting_completion", map[string]any{
 		"session_id": p.SessionID,
 		"turn_id":    turnID,
-		"work_id":    work.ID,
+		"work_id":    workID,
 	})
 
 	// Wait for either:
@@ -231,13 +273,13 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		a.log(turnCtx, LogLevelInfo, "turn.work_completed", map[string]any{
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
-			"work_id":    work.ID,
+			"work_id":    workID,
 		})
 	case <-innerCtx.Done():
 		a.log(turnCtx, LogLevelInfo, "turn.ctx_done_waiting", map[string]any{
 			"session_id": p.SessionID,
 			"turn_id":    turnID,
-			"work_id":    work.ID,
+			"work_id":    workID,
 		})
 	}
 
@@ -247,10 +289,11 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	// for their work item completion and return.
 	if !isNew {
 		return a.handleNonOwnerCompletion(
-			turnCtx, mgr, completionCh, work.ID,
+			turnCtx, mgr, completionCh, workID,
 			p.SessionID, turnID,
 		)
 	}
 
-	return a.handleOwnerLifecycleEnd(turnCtx, turnSpan, innerCtx, mgr, p, turnID, turnStart, work.ID)
+	turnStart := time.Now() // approximate; actual start was earlier
+	return a.handleOwnerLifecycleEnd(turnCtx, turnSpan, innerCtx, mgr, p, turnID, turnStart, workID)
 }

@@ -818,122 +818,15 @@ func (uc *ServerConfigUsecase) RollbackConfig(ctx context.Context, key string, u
 
 		// Special case: target_version=0 means delete the config (revert to yaml default).
 		if input.TargetVersion == 0 {
-			// Delete the config record.
-			deletedCfg, delErr := uc.configRepo.Delete(txCtx, key, userID, input.Version)
-			if delErr != nil {
-				if errors.Is(delErr, repo.ErrNotFound) {
-					return ErrConfigNotFound
-				}
-				if errors.Is(delErr, repo.ErrConflict) {
-					return ErrOptimisticLock
-				}
-				return fmt.Errorf("delete config for rollback to v0: %w", delErr)
-			}
-
-			rolledBackJSON = nil // nil indicates deletion
-			newVersion = deletedCfg.Version + 1
-
-			// Create history record for the deletion.
-			history := &model.ServerConfigHistory{
-				Key:        key,
-				UserID:     userID,
-				OldValue:   deletedCfg.Value,
-				NewValue:   datatypes.JSON("null"),
-				Version:    newVersion,
-				ChangedBy:  operatorID,
-				ChangedAt:  now,
-				ChangeNote: input.ChangeNote,
-			}
-			if err := tx.WithContext(ctx).Create(history).Error; err != nil {
-				return fmt.Errorf("create rollback to v0 history: %w", err)
-			}
-
-			if trimErr := uc.configRepo.TrimHistory(txCtx, key, userID, 100); trimErr != nil {
-				logger.Warn(ctx, "config.trim_history_failed", zap.Error(trimErr))
-			}
-
-			auditDetails := map[string]any{
-				"key":             key,
-				"user_id":         userIDString(userID),
-				"deleted_value":   unmarshalJSONB(deletedCfg.Value),
-				"deleted_version": deletedCfg.Version,
-				"target_version":  0,
-				"change_note":     input.ChangeNote,
-			}
-			auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.rollback", "server_config", uuid.Nil, auditDetails)
-			if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
-				return fmt.Errorf("create rollback to v0 audit log: %w", err)
-			}
-
-			return nil
+			var v0Err error
+			newVersion, v0Err = uc.rollbackToV0(tx, txCtx, ctx, key, userID, input, operatorID, operatorIP, now)
+			return v0Err
 		}
 
-		// Look up target version in history inside transaction.
-		targetHistory, histErr := uc.configRepo.GetHistoryByVersion(txCtx, key, userID, input.TargetVersion)
-		if histErr != nil {
-			if errors.Is(histErr, repo.ErrNotFound) {
-				return ErrVersionNotFound
-			}
-			return fmt.Errorf("get history for rollback: %w", histErr)
-		}
-
-		targetValue := targetHistory.NewValue
-		rolledBackJSON = targetValue
-		newVersion = input.Version + 1
-
-		cfg := &model.ServerConfig{
-			Key:         key,
-			UserID:      userID,
-			Value:       targetValue,
-			ValueType:   entry.ValueType,
-			Category:    entry.Category,
-			Description: entry.Description,
-			Version:     newVersion,
-			UpdatedBy:   &operatorID,
-			UpdatedAt:   now,
-		}
-
-		if upsertErr := uc.configRepo.Upsert(txCtx, cfg, input.Version); upsertErr != nil {
-			if errors.Is(upsertErr, repo.ErrConflict) {
-				return ErrOptimisticLock
-			}
-			return fmt.Errorf("upsert config for rollback: %w", upsertErr)
-		}
-
-		history := &model.ServerConfigHistory{
-			Key:        key,
-			UserID:     userID,
-			OldValue:   currentCfg.Value,
-			NewValue:   targetValue,
-			Version:    newVersion,
-			ChangedBy:  operatorID,
-			ChangedAt:  now,
-			ChangeNote: input.ChangeNote,
-		}
-		if err := tx.WithContext(ctx).Create(history).Error; err != nil {
-			return fmt.Errorf("create rollback history: %w", err)
-		}
-
-		if trimErr := uc.configRepo.TrimHistory(txCtx, key, userID, 100); trimErr != nil {
-			logger.Warn(ctx, "config.trim_history_failed", zap.Error(trimErr))
-		}
-
-		auditDetails := map[string]any{
-			"key":                      key,
-			"user_id":                  userIDString(userID),
-			"old_value":                unmarshalJSONB(currentCfg.Value),
-			"new_value":                unmarshalJSONB(targetValue),
-			"rolled_back_from_version": currentCfg.Version,
-			"target_version":           input.TargetVersion,
-			"version":                  newVersion,
-			"change_note":              input.ChangeNote,
-		}
-		auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.rollback", "server_config", uuid.Nil, auditDetails)
-		if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
-			return fmt.Errorf("create rollback audit log: %w", err)
-		}
-
-		return nil
+		// Normal rollback to historical version.
+		var histErr error
+		rolledBackJSON, newVersion, histErr = uc.rollbackToHistoricalVersion(tx, txCtx, ctx, key, userID, entry, input, currentCfg, operatorID, operatorIP, now)
+		return histErr
 	})
 	if err != nil {
 		return nil, 0, err
@@ -949,6 +842,128 @@ func (uc *ServerConfigUsecase) RollbackConfig(ctx context.Context, key string, u
 	}
 
 	return unmarshalJSONB(rolledBackJSON), newVersion, nil
+}
+
+// rollbackToV0 handles the special case where target_version=0 (delete config).
+// Returns the new version number and any error.
+func (uc *ServerConfigUsecase) rollbackToV0(tx *gorm.DB, txCtx context.Context, ctx context.Context, key string, userID *uuid.UUID, input RollbackConfigInput, operatorID uuid.UUID, operatorIP string, now time.Time) (int, error) {
+	// Delete the config record.
+	deletedCfg, delErr := uc.configRepo.Delete(txCtx, key, userID, input.Version)
+	if delErr != nil {
+		if errors.Is(delErr, repo.ErrNotFound) {
+			return 0, ErrConfigNotFound
+		}
+		if errors.Is(delErr, repo.ErrConflict) {
+			return 0, ErrOptimisticLock
+		}
+		return 0, fmt.Errorf("delete config for rollback to v0: %w", delErr)
+	}
+
+	newVersion := deletedCfg.Version + 1
+
+	// Create history record for the deletion.
+	history := &model.ServerConfigHistory{
+		Key:        key,
+		UserID:     userID,
+		OldValue:   deletedCfg.Value,
+		NewValue:   datatypes.JSON("null"),
+		Version:    newVersion,
+		ChangedBy:  operatorID,
+		ChangedAt:  now,
+		ChangeNote: input.ChangeNote,
+	}
+	if err := tx.WithContext(ctx).Create(history).Error; err != nil {
+		return 0, fmt.Errorf("create rollback to v0 history: %w", err)
+	}
+
+	if trimErr := uc.configRepo.TrimHistory(txCtx, key, userID, 100); trimErr != nil {
+		logger.Warn(ctx, "config.trim_history_failed", zap.Error(trimErr))
+	}
+
+	auditDetails := map[string]any{
+		"key":             key,
+		"user_id":         userIDString(userID),
+		"deleted_value":   unmarshalJSONB(deletedCfg.Value),
+		"deleted_version": deletedCfg.Version,
+		"target_version":  0,
+		"change_note":     input.ChangeNote,
+	}
+	auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.rollback", "server_config", uuid.Nil, auditDetails)
+	if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
+		return 0, fmt.Errorf("create rollback to v0 audit log: %w", err)
+	}
+
+	return newVersion, nil
+}
+
+// rollbackToHistoricalVersion handles rollback to a specific historical version.
+// Returns the rolled back JSON value, the new version number, and any error.
+func (uc *ServerConfigUsecase) rollbackToHistoricalVersion(tx *gorm.DB, txCtx context.Context, ctx context.Context, key string, userID *uuid.UUID, entry *config.ConfigEntry, input RollbackConfigInput, currentCfg *model.ServerConfig, operatorID uuid.UUID, operatorIP string, now time.Time) (datatypes.JSON, int, error) {
+	// Look up target version in history inside transaction.
+	targetHistory, histErr := uc.configRepo.GetHistoryByVersion(txCtx, key, userID, input.TargetVersion)
+	if histErr != nil {
+		if errors.Is(histErr, repo.ErrNotFound) {
+			return nil, 0, ErrVersionNotFound
+		}
+		return nil, 0, fmt.Errorf("get history for rollback: %w", histErr)
+	}
+
+	targetValue := targetHistory.NewValue
+	newVersion := input.Version + 1
+
+	cfg := &model.ServerConfig{
+		Key:         key,
+		UserID:      userID,
+		Value:       targetValue,
+		ValueType:   entry.ValueType,
+		Category:    entry.Category,
+		Description: entry.Description,
+		Version:     newVersion,
+		UpdatedBy:   &operatorID,
+		UpdatedAt:   now,
+	}
+
+	if upsertErr := uc.configRepo.Upsert(txCtx, cfg, input.Version); upsertErr != nil {
+		if errors.Is(upsertErr, repo.ErrConflict) {
+			return nil, 0, ErrOptimisticLock
+		}
+		return nil, 0, fmt.Errorf("upsert config for rollback: %w", upsertErr)
+	}
+
+	history := &model.ServerConfigHistory{
+		Key:        key,
+		UserID:     userID,
+		OldValue:   currentCfg.Value,
+		NewValue:   targetValue,
+		Version:    newVersion,
+		ChangedBy:  operatorID,
+		ChangedAt:  now,
+		ChangeNote: input.ChangeNote,
+	}
+	if err := tx.WithContext(ctx).Create(history).Error; err != nil {
+		return nil, 0, fmt.Errorf("create rollback history: %w", err)
+	}
+
+	if trimErr := uc.configRepo.TrimHistory(txCtx, key, userID, 100); trimErr != nil {
+		logger.Warn(ctx, "config.trim_history_failed", zap.Error(trimErr))
+	}
+
+	auditDetails := map[string]any{
+		"key":                      key,
+		"user_id":                  userIDString(userID),
+		"old_value":                unmarshalJSONB(currentCfg.Value),
+		"new_value":                unmarshalJSONB(targetValue),
+		"rolled_back_from_version": currentCfg.Version,
+		"target_version":           input.TargetVersion,
+		"version":                  newVersion,
+		"change_note":              input.ChangeNote,
+	}
+	auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.rollback", "server_config", uuid.Nil, auditDetails)
+	if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
+		return nil, 0, fmt.Errorf("create rollback audit log: %w", err)
+	}
+
+	return targetValue, newVersion, nil
 }
 
 // GetEffectiveValue returns the effective config value for a key and user.

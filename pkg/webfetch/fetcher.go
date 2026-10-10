@@ -256,13 +256,7 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 	// 2. Cache check (before SSRF to avoid unnecessary DNS).
 	cacheKey := m.buildCacheKey(req.URL, req.Prompt)
 	if cached, ok := m.cache.Get(ctx, cacheKey); ok {
-		m.metrics.RecordCacheHit()
-		respCopy := *cached
-		respCopy.Cached = true
-		respCopy.DurationMs = time.Since(start).Milliseconds()
-		m.metrics.RecordSuccess("cached", respCopy.DurationMs)
-		m.logAudit(req, &respCopy, start, nil)
-		return &respCopy, nil
+		return m.buildCachedResponse(cached, req, start), nil
 	}
 	m.metrics.RecordCacheMiss()
 
@@ -274,15 +268,8 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 	}
 
 	// 3.5 Robots.txt check (Phase 2).
-	if m.robots != nil {
-		allowed, err := m.robots.IsAllowed(req.URL, m.config.UserAgent)
-		if err != nil {
-			m.logger.Warn("robots.txt check failed, allowing by default",
-				zap.String("url", req.URL), zap.Error(err))
-		} else if !allowed {
-			m.logAudit(req, nil, start, fmt.Errorf("blocked by robots.txt"))
-			return nil, fmt.Errorf("%w: %s", ErrRobotsBlocked, req.URL)
-		}
+	if err := m.checkRobotsTxt(req, start); err != nil {
+		return nil, err
 	}
 
 	// 4. Rate limit.
@@ -298,69 +285,117 @@ func (m *WebFetchManager) Fetch(ctx context.Context, req *FetchRequest) (*FetchR
 
 	// 6. singleflight dedup.
 	ch := m.singleFlight.DoChan(cacheKey, func() (interface{}, error) {
-		rawResult, err := m.doFetch(ctx, req, parsedURL)
-		if err != nil {
-			if errors.Is(err, ErrCrossDomainRedirect) {
-				return rawResult, err
-			}
-			return nil, err
-		}
-		response, err := m.processContent(ctx, req, parsedURL, rawResult)
-		if err != nil {
-			return nil, err
-		}
-		m.cache.Set(ctx, cacheKey, response, m.config.CacheTTL)
-
-		return response, nil
+		return m.executeSingleflightWork(ctx, req, parsedURL, cacheKey)
 	})
 
-	// Context-aware wait.
+	// 7. Context-aware wait and result processing.
+	return m.waitForSingleflightResult(ctx, ch, req, parsedURL, start)
+}
+
+// buildCachedResponse constructs a response from a cache hit.
+func (m *WebFetchManager) buildCachedResponse(cached *FetchResponse, req *FetchRequest, start time.Time) *FetchResponse {
+	m.metrics.RecordCacheHit()
+	respCopy := *cached
+	respCopy.Cached = true
+	respCopy.DurationMs = time.Since(start).Milliseconds()
+	m.metrics.RecordSuccess("cached", respCopy.DurationMs)
+	m.logAudit(req, &respCopy, start, nil)
+	return &respCopy
+}
+
+// checkRobotsTxt checks robots.txt rules and returns an error if the request is blocked.
+func (m *WebFetchManager) checkRobotsTxt(req *FetchRequest, start time.Time) error {
+	if m.robots == nil {
+		return nil
+	}
+	allowed, err := m.robots.IsAllowed(req.URL, m.config.UserAgent)
+	if err != nil {
+		m.logger.Warn("robots.txt check failed, allowing by default",
+			zap.String("url", req.URL), zap.Error(err))
+		return nil
+	}
+	if !allowed {
+		m.logAudit(req, nil, start, fmt.Errorf("blocked by robots.txt"))
+		return fmt.Errorf("%w: %s", ErrRobotsBlocked, req.URL)
+	}
+	return nil
+}
+
+// executeSingleflightWork performs the actual fetch work inside singleflight.
+func (m *WebFetchManager) executeSingleflightWork(ctx context.Context, req *FetchRequest, parsedURL *url.URL, cacheKey string) (interface{}, error) {
+	rawResult, err := m.doFetch(ctx, req, parsedURL)
+	if err != nil {
+		if errors.Is(err, ErrCrossDomainRedirect) {
+			return rawResult, err
+		}
+		return nil, err
+	}
+	response, err := m.processContent(ctx, req, parsedURL, rawResult)
+	if err != nil {
+		return nil, err
+	}
+	m.cache.Set(ctx, cacheKey, response, m.config.CacheTTL)
+	return response, nil
+}
+
+// waitForSingleflightResult waits for the singleflight result and processes it.
+func (m *WebFetchManager) waitForSingleflightResult(ctx context.Context, ch <-chan singleflight.Result, req *FetchRequest, parsedURL *url.URL, start time.Time) (*FetchResponse, error) {
 	select {
 	case result := <-ch:
-		// Cross-domain redirect: build RedirectInfo response.
-		if errors.Is(result.Err, ErrCrossDomainRedirect) {
-			rawResult, _ := result.Val.(*rawFetchResult)
-			redirectURL := ""
-			statusCode := 0
-			if rawResult != nil {
-				redirectURL = rawResult.finalURL
-				statusCode = rawResult.statusCode
-			}
-			redirectResp := &FetchResponse{
-				URL:      req.URL,
-				Result:   formatRedirectMessage(req.URL, redirectURL, statusCode),
-				Code:     statusCode,
-				CodeText: http.StatusText(statusCode),
-			}
-			m.metrics.RecordSuccess("redirect", time.Since(start).Milliseconds())
-			m.logAudit(req, redirectResp, start, nil)
-			return redirectResp, nil
-		}
-		if result.Err != nil {
-			m.metrics.RecordError(classifyError(result.Err))
-			m.logAudit(req, nil, start, result.Err)
-			return nil, result.Err
-		}
-		resp, ok := result.Val.(*FetchResponse)
-		if !ok || resp == nil {
-			return nil, fmt.Errorf("unexpected result type from singleflight: %T", result.Val)
-		}
-		respCopy := *resp
-		respCopy.DurationMs = time.Since(start).Milliseconds()
-
-		domainType := "other"
-		if m.security.IsPreApproved(parsedURL.Hostname()) {
-			domainType = "pre_approved"
-		}
-		m.metrics.RecordSuccess(domainType, respCopy.DurationMs)
-		m.logAudit(req, &respCopy, start, nil)
-		return &respCopy, nil
-
+		return m.processSingleflightResult(result, req, parsedURL, start)
 	case <-ctx.Done():
 		m.metrics.RecordError("context_canceled")
 		m.logAudit(req, nil, start, ctx.Err())
 		return nil, fmt.Errorf("fetch canceled: %w", ctx.Err())
 	}
+}
+
+// processSingleflightResult handles the result from singleflight, including
+// cross-domain redirect detection and normal response processing.
+func (m *WebFetchManager) processSingleflightResult(result singleflight.Result, req *FetchRequest, parsedURL *url.URL, start time.Time) (*FetchResponse, error) {
+	// Cross-domain redirect: build RedirectInfo response.
+	if errors.Is(result.Err, ErrCrossDomainRedirect) {
+		return m.buildRedirectResponse(result, req, start), nil
+	}
+	if result.Err != nil {
+		m.metrics.RecordError(classifyError(result.Err))
+		m.logAudit(req, nil, start, result.Err)
+		return nil, result.Err
+	}
+	resp, ok := result.Val.(*FetchResponse)
+	if !ok || resp == nil {
+		return nil, fmt.Errorf("unexpected result type from singleflight: %T", result.Val)
+	}
+	respCopy := *resp
+	respCopy.DurationMs = time.Since(start).Milliseconds()
+
+	domainType := "other"
+	if m.security.IsPreApproved(parsedURL.Hostname()) {
+		domainType = "pre_approved"
+	}
+	m.metrics.RecordSuccess(domainType, respCopy.DurationMs)
+	m.logAudit(req, &respCopy, start, nil)
+	return &respCopy, nil
+}
+
+// buildRedirectResponse constructs a response for cross-domain redirects.
+func (m *WebFetchManager) buildRedirectResponse(result singleflight.Result, req *FetchRequest, start time.Time) *FetchResponse {
+	rawResult, _ := result.Val.(*rawFetchResult)
+	redirectURL := ""
+	statusCode := 0
+	if rawResult != nil {
+		redirectURL = rawResult.finalURL
+		statusCode = rawResult.statusCode
+	}
+	redirectResp := &FetchResponse{
+		URL:      req.URL,
+		Result:   formatRedirectMessage(req.URL, redirectURL, statusCode),
+		Code:     statusCode,
+		CodeText: http.StatusText(statusCode),
+	}
+	m.metrics.RecordSuccess("redirect", time.Since(start).Milliseconds())
+	m.logAudit(req, redirectResp, start, nil)
+	return redirectResp
 }
 
 // ---------------------------------------------------------------------------

@@ -80,6 +80,47 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("migrate server_configs table: %w", err)
 	}
 
+	ctx := context.Background()
+
+	if err := createMigrationIndexes(db); err != nil {
+		return err
+	}
+
+	// Bootstrap default roles and Casbin policies (idempotent).
+	// This ensures default roles exist even when only `migrate` is run without `serve`.
+	// If Casbin enforcer initialization fails (e.g., table not yet created), we skip
+	// bootstrap here — the serve command will retry on startup.
+	enforcer, err := auth.NewCasbinEnforcer(db)
+	if err != nil {
+		logger.Warn(ctx, "casbin_enforcer_init_failed_skipping_bootstrap", zap.Error(err))
+	} else {
+		roleRepo := repo.NewAdminRoleRepo(db)
+		if err := usecase.BootstrapAdmin(ctx, db, roleRepo, enforcer); err != nil {
+			logger.Warn(ctx, "bootstrap_admin_failed_will_retry_on_serve", zap.Error(err))
+		}
+	}
+
+	// Bootstrap dynamic configs from registry (idempotent).
+	// This ensures "out-of-box" experience: new deployments have all configs ready for editing.
+	configRepo := repo.NewServerConfigRepo(db)
+	auditLogRepo := repo.NewAuditLogRepo(db)
+	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
+	serverConfigUsecase := usecase.NewServerConfigUsecase(configRepo, auditLogRepo, oauth2UserRepo, db)
+	if err := serverConfigUsecase.BootstrapDynamicConfigs(ctx, uuid.Nil); err != nil {
+		return fmt.Errorf("bootstrap dynamic configs: %w", err)
+	}
+
+	if err := runOwnerMigrations(ctx, db); err != nil {
+		return err
+	}
+
+	logger.Info(context.Background(), "Database migration completed successfully")
+	return nil
+}
+
+// createMigrationIndexes creates partial unique indexes and composite indexes
+// needed for the application. All indexes use CONCURRENTLY to avoid table locks.
+func createMigrationIndexes(db *gorm.DB) error {
 	// Create partial unique indexes for server_configs to enforce (key, user_id) uniqueness.
 	// Two indexes are needed because PostgreSQL NULL != NULL, so a single unique index
 	// would allow multiple NULL user_id rows for the same key.
@@ -109,32 +150,12 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create index for sessions: %w", err)
 	}
 
-	// Bootstrap default roles and Casbin policies (idempotent).
-	// This ensures default roles exist even when only `migrate` is run without `serve`.
-	// If Casbin enforcer initialization fails (e.g., table not yet created), we skip
-	// bootstrap here — the serve command will retry on startup.
-	ctx := context.Background()
-	enforcer, err := auth.NewCasbinEnforcer(db)
-	if err != nil {
-		logger.Warn(ctx, "casbin_enforcer_init_failed_skipping_bootstrap", zap.Error(err))
-	} else {
-		roleRepo := repo.NewAdminRoleRepo(db)
-		if err := usecase.BootstrapAdmin(ctx, db, roleRepo, enforcer); err != nil {
-			logger.Warn(ctx, "bootstrap_admin_failed_will_retry_on_serve", zap.Error(err))
-		}
-	}
+	return nil
+}
 
-	// Bootstrap dynamic configs from registry (idempotent).
-	// This ensures "out-of-box" experience: new deployments have all configs ready for editing.
-	configRepo := repo.NewServerConfigRepo(db)
-	auditLogRepo := repo.NewAuditLogRepo(db)
-	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
-	serverConfigUsecase := usecase.NewServerConfigUsecase(configRepo, auditLogRepo, oauth2UserRepo, db)
-	if err := serverConfigUsecase.BootstrapDynamicConfigs(ctx, uuid.Nil); err != nil {
-		return fmt.Errorf("bootstrap dynamic configs: %w", err)
-	}
-
-	// Run owner migration stages with checkpoint checks to avoid re-running completed work.
+// runOwnerMigrations executes owner migration stages (1-4) with checkpoint checks
+// to avoid re-running completed work.
+func runOwnerMigrations(ctx context.Context, db *gorm.DB) error {
 	// Check if stages 1+2 are already done by looking for backfilled data.
 	var hasBackfilledData bool
 	if err := db.Raw(`
@@ -155,6 +176,17 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		logger.Info(ctx, "owner.migration.stages_1_and_2_already_completed")
 	}
 
+	// Verify backfill completeness and run stages 3-4.
+	if err := verifyAndRunOwnerStages3And4(ctx, db); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// verifyAndRunOwnerStages3And4 verifies backfill completeness and runs owner
+// migration stages 3 (NOT NULL constraints) and 4 (legacy column removal).
+func verifyAndRunOwnerStages3And4(ctx context.Context, db *gorm.DB) error {
 	// Verify backfill completeness before Stage 3 (setting NOT NULL constraints).
 	// If Stage 2 partially succeeded then crashed, we must ensure all rows are backfilled
 	// before attempting to add NOT NULL constraints, otherwise Stage 3 will fail.
@@ -186,7 +218,21 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Check if stage 3 is done by checking if NOT NULL constraint exists.
+	// Run stage 3 (NOT NULL constraints) if not already done.
+	if err := runOwnerStage3IfNeeded(ctx, db); err != nil {
+		return err
+	}
+
+	// Run stage 4 (legacy column removal) if not already done.
+	if err := runOwnerStage4IfNeeded(ctx, db); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// runOwnerStage3IfNeeded checks if stage 3 is done and runs it if needed.
+func runOwnerStage3IfNeeded(ctx context.Context, db *gorm.DB) error {
 	var hasNotNullConstraint bool
 	if err := db.Raw(`
 		SELECT EXISTS (
@@ -204,8 +250,11 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	} else {
 		logger.Info(ctx, "owner.migration.stage_3_already_completed")
 	}
+	return nil
+}
 
-	// Check if stage 4 is done by checking if legacy user_id column still exists.
+// runOwnerStage4IfNeeded checks if stage 4 is done and runs it if needed.
+func runOwnerStage4IfNeeded(ctx context.Context, db *gorm.DB) error {
 	var hasLegacyColumn bool
 	if err := db.Raw(`
 		SELECT EXISTS (
@@ -223,7 +272,5 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	} else {
 		logger.Info(ctx, "owner.migration.stage_4_already_completed")
 	}
-
-	logger.Info(context.Background(), "Database migration completed successfully")
 	return nil
 }
