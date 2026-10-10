@@ -76,6 +76,13 @@ func (h *OSS3Handler) handleDeleteObjects(w http.ResponseWriter, r *http.Request
 	// S3 spec allows up to 1000 keys per request; typical XML is ~50KB.
 	r.Body = http.MaxBytesReader(w, r.Body, maxXMLRequestBodySize)
 
+	// Reject oversized payloads early based on Content-Length before parsing XML.
+	// This avoids wasting CPU/memory on obviously malformed requests.
+	if r.ContentLength > maxXMLRequestBodySize {
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrEntityTooLarge, r.URL.Path, "")
+		return
+	}
+
 	// Parse XML request body
 	type deleteRequest struct {
 		XMLName xml.Name `xml:"Delete"`

@@ -98,7 +98,7 @@ func parseClientInfo(info []byte) *clientInfo {
 		if err := json.Unmarshal(info, ci); err != nil {
 			logger.Warn(stdcontext.Background(), "[Centrifuge] failed to parse client info, using zero value",
 				zap.Error(err),
-				zap.String("info_preview", previewToken(string(info))),
+				zap.String("info_preview", truncateForLog(string(info))),
 			)
 		}
 	}
@@ -151,8 +151,8 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 	return func(ctx stdcontext.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		start := time.Now()
 
-		logger.Info(ctx, "[Centrifuge] OnConnecting started",
-			zap.String("token_length", fmt.Sprintf("%d", len(e.Token))),
+		logger.Debug(ctx, "[Centrifuge] OnConnecting started",
+			zap.Int("token_length", len(e.Token)),
 			zap.Bool("has_token", len(e.Token) > 0),
 		)
 
@@ -161,7 +161,7 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 			metrics.recordConnecting("error", time.Since(start))
 			logger.Error(ctx, "[Centrifuge] JWT verification failed, rejecting connection",
 				zap.Error(err),
-				zap.String("token_preview", previewToken(e.Token)),
+				zap.String("token_preview", truncateForLog(e.Token)),
 			)
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 		}
@@ -222,16 +222,16 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 	}
 }
 
-// previewToken truncates a token to the first 20 characters for logging
-// (avoids recording the full token).
-func previewToken(token string) string {
-	if len(token) == 0 {
+// truncateForLog truncates a string to the first 20 characters for logging
+// (avoids recording full sensitive or verbose data).
+func truncateForLog(s string) string {
+	if len(s) == 0 {
 		return "<empty>"
 	}
-	if len(token) <= 20 {
-		return token
+	if len(s) <= 20 {
+		return s
 	}
-	return token[:20] + "..."
+	return s[:20] + "..."
 }
 
 // createOnConnectHandler returns the OnConnect callback: subscription

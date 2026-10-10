@@ -88,9 +88,10 @@ func (h *OSS3MultipartHandler) handleListParts(
 
 	// Parse pagination parameters
 	const maxPartsPerPage = 1000
+	const maxPartNumber = 10000
 	partNumberMarker := 0
 	if marker := r.URL.Query().Get("part-number-marker"); marker != "" {
-		if parsed, err := strconv.Atoi(marker); err == nil && parsed >= 0 {
+		if parsed, err := strconv.Atoi(marker); err == nil && parsed >= 0 && parsed <= maxPartNumber {
 			partNumberMarker = parsed
 		}
 	}
