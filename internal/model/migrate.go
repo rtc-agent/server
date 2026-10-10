@@ -1,10 +1,13 @@
 package model
 
 import (
+	"context"
 	"fmt"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/memory"
 )
 
@@ -39,7 +42,10 @@ func AutoMigrate(db *gorm.DB) error {
 	// Drop legacy composite unique index on files (user_id, key) if it exists.
 	// The unique constraint is now on (key) only — content-addressed storage
 	// guarantees key uniqueness per content hash. See oss3-phase3 review Task 4.
-	_ = db.Exec("DROP INDEX IF EXISTS idx_files_user_key").Error
+	if err := db.Exec("DROP INDEX IF EXISTS idx_files_user_key").Error; err != nil {
+		logger.Warn(context.Background(), "migrate.drop_legacy_index_failed",
+			zap.String("index", "idx_files_user_key"), zap.Error(err))
+	}
 
 	// Add composite index on memory_links to optimise queries by from_id + relation.
 	// CONCURRENTLY avoids table lock during index creation.
@@ -55,7 +61,10 @@ func AutoMigrate(db *gorm.DB) error {
 	// Migrate user_memories.tags from text[] to jsonb (matches StringArray JSON serialization).
 	// to_jsonb() converts a PostgreSQL array into a JSON array — direct cast text[]->jsonb is not allowed.
 	// Silently ignored if the column is already jsonb or doesn't exist.
-	_ = db.Exec("ALTER TABLE user_memories ALTER COLUMN tags TYPE jsonb USING to_jsonb(tags)").Error
+	if err := db.Exec("ALTER TABLE user_memories ALTER COLUMN tags TYPE jsonb USING to_jsonb(tags)").Error; err != nil {
+		logger.Warn(context.Background(), "migrate.user_memories_tags_type_change_failed",
+			zap.Error(err))
+	}
 
 	// Composite indexes for query performance.
 	// CONCURRENTLY avoids table lock during index creation on large tables.

@@ -350,10 +350,10 @@ func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 
 	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (any, error) {
 		if !isAllowedAlgorithm(t.Method.Alg(), allowedAlgs) {
-			return nil, fmt.Errorf("unexpected signing algorithm: %s", t.Method.Alg())
+			return nil, errors.New("invalid token: unsupported signing algorithm")
 		}
 		if err := validateKeyType(t.Method, pubKey); err != nil {
-			return nil, err
+			return nil, errors.New("invalid token: key type mismatch")
 		}
 		return pubKey, nil
 	},
@@ -487,7 +487,7 @@ func jwkToPublicKey(key jwk.Key) (crypto.PublicKey, error) {
 	case ed25519.PublicKey:
 		return k, nil
 	default:
-		return nil, fmt.Errorf("unsupported key type: %T", rawKey)
+		return nil, errors.New("invalid token: unsupported key type")
 	}
 }
 

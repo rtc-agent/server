@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -226,7 +227,7 @@ func (b *TopicBroker) RemoveHistory(ch string) error {
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("remove history errors: %v", errs)
+		return fmt.Errorf("remove history errors: %w", errors.Join(errs...))
 	}
 	return nil
 }

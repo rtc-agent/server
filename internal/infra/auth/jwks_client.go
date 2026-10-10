@@ -233,7 +233,10 @@ func (c *JWKSClient) RefreshKey(ctx context.Context, issuer, jwksURI, kid string
 	// The Lua script ensures we only delete our own lock, never another instance's.
 	if acquired {
 		defer func() {
-			_ = c.redis.Eval(ctx, safeReleaseLua, []string{lockKey}, holderUUID).Err()
+			if err := c.redis.Eval(ctx, safeReleaseLua, []string{lockKey}, holderUUID).Err(); err != nil {
+				logger.Warn(ctx, "jwks: failed to release refresh lock",
+					zap.String("issuer", issuer), zap.Error(err))
+			}
 		}()
 	}
 
@@ -268,7 +271,10 @@ func (c *JWKSClient) getCachedKey(ctx context.Context, issuer, kid string) (jwk.
 	key, err := jwk.ParseKey([]byte(data))
 	if err != nil {
 		// Corrupted cache entry; delete it.
-		_ = c.redis.Del(ctx, cacheKey).Err()
+		if delErr := c.redis.Del(ctx, cacheKey).Err(); delErr != nil {
+			logger.Warn(ctx, "jwks: failed to delete corrupted cache key",
+				zap.String("cache_key", cacheKey), zap.Error(delErr))
+		}
 		return nil, fmt.Errorf("parse cached jwk: %w", err)
 	}
 

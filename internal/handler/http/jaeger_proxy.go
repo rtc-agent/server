@@ -67,7 +67,9 @@ func NewJaegerProxyHandler(jaegerURL string) *JaegerProxyHandler {
 				zap.String("path", r.URL.Path), zap.Error(err))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadGateway)
-			_, _ = w.Write([]byte(`{"status":"error","error":"jaeger unavailable"}`))
+			if _, writeErr := w.Write([]byte(`{"status":"error","error":"jaeger unavailable"}`)); writeErr != nil {
+				logger.Warn(r.Context(), "admin.jaeger_proxy_response_write_failed", zap.Error(writeErr))
+			}
 		},
 	}
 

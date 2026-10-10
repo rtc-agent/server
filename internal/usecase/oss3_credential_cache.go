@@ -136,7 +136,11 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 
 	data, err := json.Marshal(cacheVal)
 	if err == nil {
-		_ = uc.redis.Set(ctx, cacheKey, data, ttl).Err()
+		if setErr := uc.redis.Set(ctx, cacheKey, data, ttl).Err(); setErr != nil {
+			logger.Warn(ctx, "credential_cache_set_failed",
+				zap.String("access_key_id", accessKeyID),
+				zap.Error(setErr))
+		}
 		// best-effort; cache miss on next read will repopulate
 	}
 

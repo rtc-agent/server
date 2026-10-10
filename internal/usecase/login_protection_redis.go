@@ -55,13 +55,13 @@ func (lp *RedisLoginProtection) CheckLoginAllowed(ctx context.Context, ip, email
 	// Check IP lockout
 	ipKey := fmt.Sprintf("admin:login:lock:ip:%s", ip)
 	if ttl, err := lp.rdb.TTL(ctx, ipKey).Result(); err == nil && ttl > 0 {
-		return fmt.Errorf("IP 已被锁定，请在 %d 秒后重试", int(ttl.Seconds()))
+		return fmt.Errorf("IP locked, please retry in %d seconds", int(ttl.Seconds()))
 	}
 
 	// Check email lockout
 	emailKey := fmt.Sprintf("admin:login:lock:email:%s", email)
 	if ttl, err := lp.rdb.TTL(ctx, emailKey).Result(); err == nil && ttl > 0 {
-		return fmt.Errorf("该账号已被锁定，请在 %d 秒后重试", int(ttl.Seconds()))
+		return fmt.Errorf("account locked, please retry in %d seconds", int(ttl.Seconds()))
 	}
 
 	return nil

@@ -63,7 +63,11 @@ func (s *RedisOTPStore) Get(ctx context.Context, emailAddr string) (string, erro
 // Delete removes the stored OTP for the given email.
 func (s *RedisOTPStore) Delete(ctx context.Context, emailAddr string) {
 	key := fmt.Sprintf("admin:otp:code:%s", emailAddr)
-	_ = s.rdb.Del(ctx, key).Err()
+	if err := s.rdb.Del(ctx, key).Err(); err != nil {
+		logger.Warn(ctx, "redis_otp_delete_failed",
+			zap.String("email", emailAddr),
+			zap.Error(err))
+	}
 }
 
 // CheckSendAllowed returns nil if sending OTP is allowed for the email and IP.

@@ -77,13 +77,13 @@ func (lp *LoginProtection) CheckLoginAllowed(_ context.Context, ip, email string
 	// Check IP lockout
 	if lockUntil, ok := lp.lockedUntil["ip:"+ip]; ok && now.Before(lockUntil) {
 		retryAfter := lockUntil.Sub(now)
-		return fmt.Errorf("IP 已被锁定，请在 %s 后重试", formatDuration(retryAfter))
+		return fmt.Errorf("IP locked, please retry in %s", formatDuration(retryAfter))
 	}
 
 	// Check email lockout
 	if lockUntil, ok := lp.lockedUntil["email:"+email]; ok && now.Before(lockUntil) {
 		retryAfter := lockUntil.Sub(now)
-		return fmt.Errorf("该账号已被锁定，请在 %s 后重试", formatDuration(retryAfter))
+		return fmt.Errorf("account locked, please retry in %s", formatDuration(retryAfter))
 	}
 
 	return nil

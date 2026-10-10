@@ -139,12 +139,16 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 		if errors.Is(err, usecase.ErrForbidden) {
 			// Headers already set, but we can still write status
 			w.WriteHeader(http.StatusForbidden)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
+			if encErr := json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"}); encErr != nil {
+				logger.Warn(ctx, "[memories.HTTP] forbidden_response_encode_failed", zap.Error(encErr))
+			}
 			return
 		}
 		if errors.Is(err, usecase.ErrSessionNotFound) {
 			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "session.not_found"})
+			if encErr := json.NewEncoder(w).Encode(map[string]string{"error": "session.not_found"}); encErr != nil {
+				logger.Warn(ctx, "[memories.HTTP] not_found_response_encode_failed", zap.Error(encErr))
+			}
 			return
 		}
 
