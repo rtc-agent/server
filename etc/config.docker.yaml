@@ -53,7 +53,13 @@ providers:
     client_secret: "${PROVIDERS__MOCK__CLIENT_SECRET}"  # 通过环境变量 PROVIDERS__MOCK__CLIENT_SECRET 配置
 
 cors:
-  allow_origins: ["*"]
+  # Security: Restrict CORS to specific origins instead of wildcard "*".
+  # Include frontend apps, web component embedding pages, and local dev servers.
+  allow_origins:
+    - "http://localhost:23001"  # Grafana
+    - "http://localhost:5173"   # Vite dev server
+    - "http://localhost:8000"   # Admin UI dev server
+    - "http://localhost:8888"   # Main server (self)
 
 # LLM 配置
 # 优先级说明：config file > environment variable > default
@@ -225,7 +231,13 @@ storage:
   s3_endpoint:
     host: "0.0.0.0"
     port: 9000
-    allowed_origins: ["*"]
+    # Security: Restrict CORS to specific origins instead of wildcard "*".
+    # Must match the main cors.allow_origins for consistent cross-origin behavior.
+    allowed_origins:
+      - "http://localhost:23001"  # Grafana
+      - "http://localhost:5173"   # Vite dev server
+      - "http://localhost:8000"   # Admin UI dev server
+      - "http://localhost:8888"   # Main server
   quota:
     max_file_size_bytes: 104857600     # 100MB
     max_user_quota_bytes: 1073741824   # 1GB
