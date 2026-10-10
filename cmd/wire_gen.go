@@ -328,7 +328,7 @@ func provideUsecaseDependencies(
 	metrics *turnagent.PrometheusMetrics,
 ) *usecase.Dependencies {
 
-	dbConfigProvider := config.NewDBConfigProvider(svcCtx.ServerConfigRepo)
+	dbConfigProvider := config.NewDBConfigProvider(svcCtx.ServerConfigRepo, metrics)
 	cachedConfigProvider := config.NewCachedConfigProvider(dbConfigProvider, 60*time.Second)
 
 	deps := &usecase.Dependencies{

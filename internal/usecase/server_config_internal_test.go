@@ -17,49 +17,49 @@ import (
 
 func TestUnmarshalJSONB(t *testing.T) {
 	t.Run("returns nil for empty JSON", func(t *testing.T) {
-		result := unmarshalJSONB(nil)
+		result := config.UnmarshalJSONB(nil)
 		assert.Nil(t, result)
 
-		result = unmarshalJSONB([]byte{})
+		result = config.UnmarshalJSONB([]byte{})
 		assert.Nil(t, result)
 	})
 
 	t.Run("unmarshals string", func(t *testing.T) {
-		result := unmarshalJSONB(datatypes.JSON([]byte(`"hello"`)))
+		result := config.UnmarshalJSONB(datatypes.JSON([]byte(`"hello"`)))
 		assert.Equal(t, "hello", result)
 	})
 
 	t.Run("unmarshals number", func(t *testing.T) {
-		result := unmarshalJSONB(datatypes.JSON([]byte(`42`)))
+		result := config.UnmarshalJSONB(datatypes.JSON([]byte(`42`)))
 		assert.Equal(t, float64(42), result)
 	})
 
 	t.Run("unmarshals object", func(t *testing.T) {
-		result := unmarshalJSONB(datatypes.JSON([]byte(`{"key":"value"}`)))
+		result := config.UnmarshalJSONB(datatypes.JSON([]byte(`{"key":"value"}`)))
 		m, ok := result.(map[string]interface{})
 		require.True(t, ok)
 		assert.Equal(t, "value", m["key"])
 	})
 
 	t.Run("unmarshals array", func(t *testing.T) {
-		result := unmarshalJSONB(datatypes.JSON([]byte(`[1,2,3]`)))
+		result := config.UnmarshalJSONB(datatypes.JSON([]byte(`[1,2,3]`)))
 		arr, ok := result.([]interface{})
 		require.True(t, ok)
 		assert.Len(t, arr, 3)
 	})
 
 	t.Run("returns string for invalid JSON", func(t *testing.T) {
-		result := unmarshalJSONB(datatypes.JSON([]byte(`invalid`)))
+		result := config.UnmarshalJSONB(datatypes.JSON([]byte(`invalid`)))
 		assert.Equal(t, "invalid", result)
 	})
 
 	t.Run("unmarshals boolean", func(t *testing.T) {
-		result := unmarshalJSONB(datatypes.JSON([]byte(`true`)))
+		result := config.UnmarshalJSONB(datatypes.JSON([]byte(`true`)))
 		assert.Equal(t, true, result)
 	})
 
 	t.Run("unmarshals null", func(t *testing.T) {
-		result := unmarshalJSONB(datatypes.JSON([]byte(`null`)))
+		result := config.UnmarshalJSONB(datatypes.JSON([]byte(`null`)))
 		assert.Nil(t, result)
 	})
 }

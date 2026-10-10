@@ -240,7 +240,7 @@ func provideUsecaseDependencies(
 	// Create CachedConfigProvider for efficient config reads with TTL-based caching
 	// In multi-instance deployments, cache invalidation is handled via Redis Pub/Sub
 	// (see Server.Start() where RedisConfigSubscriber is started)
-	dbConfigProvider := config.NewDBConfigProvider(svcCtx.ServerConfigRepo)
+	dbConfigProvider := config.NewDBConfigProvider(svcCtx.ServerConfigRepo, metrics)
 	cachedConfigProvider := config.NewCachedConfigProvider(dbConfigProvider, 60*time.Second)
 
 	deps := &usecase.Dependencies{
@@ -362,7 +362,7 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 	}
 
 	// Build search providers from config.
-	var providers []websearch.WebSearchProvider
+	providers := make([]websearch.WebSearchProvider, 0, len(cfg.WebSearch.Providers))
 	for _, p := range cfg.WebSearch.Providers {
 		if !p.Enabled {
 			continue
@@ -461,6 +461,8 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 		GlobalTimeout:      cfg.WebSearch.GlobalTimeout,
 		ProxyHealthURL:     cfg.WebSearch.ProxyHealthURL,
 		ProxyCheckInterval: cfg.WebSearch.ProxyCheckInterval,
+		Providers:          make([]websearch.ProviderConfig, 0, len(cfg.WebSearch.Providers)),
+		Proxies:            make([]proxy.ProxyConfig, 0, len(cfg.WebSearch.Proxies)),
 		CircuitBreaker: circuitbreaker.CircuitBreakerConfig{
 			FailureThreshold:    cfg.WebSearch.CircuitBreaker.FailureThreshold,
 			OpenTimeout:         cfg.WebSearch.CircuitBreaker.OpenTimeout,

@@ -45,6 +45,9 @@ type PrometheusMetrics struct {
 
 	// Background goroutine tracking metrics (for monitoring context.WithoutCancel usage)
 	activeGoroutines *prometheus.GaugeVec
+
+	// Config fallback metrics (tracks degradation to YAML defaults)
+	configFallback *prometheus.CounterVec
 }
 
 // NewPrometheusMetrics creates and registers all Prometheus metrics.
@@ -223,6 +226,15 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name:      "active",
 			Help:      "Number of active background goroutines (context.WithoutCancel).",
 		}, []string{"type"}), // type: "session_memory_extraction", "stream_drain"
+
+		// Config fallback tracking for monitoring degradation to YAML defaults.
+		// Incremented when DB config lookup fails and falls back to YAML baseline.
+		configFallback: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "config",
+			Name:      "fallback_total",
+			Help:      "Total number of config reads that fell back to YAML defaults (DB unavailable or key not found).",
+		}, []string{"key", "reason"}), // reason: "not_found", "db_error"
 	}
 }
 
@@ -389,4 +401,13 @@ func (m *PrometheusMetrics) DecBackgroundGoroutine(goroutineType string) {
 		goroutineType = "unknown"
 	}
 	m.activeGoroutines.WithLabelValues(goroutineType).Dec()
+}
+
+// RecordConfigFallback records a config fallback event (degradation to YAML defaults).
+// Called when DB config lookup fails and the system falls back to YAML baseline values.
+func (m *PrometheusMetrics) RecordConfigFallback(ctx context.Context, key, reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	m.configFallback.WithLabelValues(key, reason).Inc()
 }

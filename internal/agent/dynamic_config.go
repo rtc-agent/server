@@ -2,16 +2,17 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // resolveEffectiveValue fetches the effective config value for a key.
@@ -21,7 +22,7 @@ func resolveEffectiveValue(ctx context.Context, configRepo usecase.ServerConfigR
 	if userID != nil {
 		cfg, err := configRepo.Get(ctx, key, userID)
 		if err == nil {
-			return unmarshalJSONBToNative(cfg.Value), nil
+			return config.UnmarshalJSONB(cfg.Value), nil
 		}
 		if !errors.Is(err, dbutil.ErrNotFound) {
 			return nil, fmt.Errorf("get user config %q: %w", key, err)
@@ -29,7 +30,7 @@ func resolveEffectiveValue(ctx context.Context, configRepo usecase.ServerConfigR
 	}
 	cfg, err := configRepo.Get(ctx, key, nil)
 	if err == nil {
-		return unmarshalJSONBToNative(cfg.Value), nil
+		return config.UnmarshalJSONB(cfg.Value), nil
 	}
 	if !errors.Is(err, dbutil.ErrNotFound) {
 		return nil, fmt.Errorf("get system config %q: %w", key, err)
@@ -106,17 +107,6 @@ func resolveOverrides(ctx context.Context, configRepo usecase.ServerConfigRepo, 
 	return overrides, nil
 }
 
-// unmarshalJSONBToNative converts datatypes.JSON (raw JSON bytes) to a native Go value.
-func unmarshalJSONBToNative(data []byte) any {
-	if len(data) == 0 {
-		return nil
-	}
-	var v any
-	if err := json.Unmarshal(data, &v); err != nil {
-		return string(data)
-	}
-	return v
-}
 
 // toInt64 converts a numeric any to int64.
 func toInt64(v any) (int64, bool) {
@@ -156,6 +146,10 @@ func ResolveChatModel(ctx context.Context, deps *usecase.Dependencies) einomodel
 
 	overrides, err := resolveOverrides(ctx, deps.ServerConfigRepo, nil)
 	if err != nil {
+		// Log fallback reason for observability (P1-3 fix).
+		logger.Warn(ctx, "resolveChatModel.fallback",
+			zap.String("reason", "resolve_overrides_failed"),
+			zap.Error(err))
 		return deps.ChatModel
 	}
 

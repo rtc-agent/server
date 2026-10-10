@@ -8,20 +8,24 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/datatypes"
 
 	"github.com/rtc-agent/server/internal/repo"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // DBConfigProvider is the V1 ConfigProvider implementation.
 // It reads from the database on every call (no caching).
 type DBConfigProvider struct {
 	configRepo repo.ServerConfigRepo
+	metrics    *turnagent.PrometheusMetrics
 }
 
 // NewDBConfigProvider creates a new DBConfigProvider.
-func NewDBConfigProvider(configRepo repo.ServerConfigRepo) ConfigProvider {
-	return &DBConfigProvider{configRepo: configRepo}
+func NewDBConfigProvider(configRepo repo.ServerConfigRepo, metrics *turnagent.PrometheusMetrics) ConfigProvider {
+	return &DBConfigProvider{
+		configRepo: configRepo,
+		metrics:    metrics,
+	}
 }
 
 // GetEffectiveString returns the effective string value for the given config key.
@@ -125,34 +129,30 @@ func (p *DBConfigProvider) getEffectiveAny(ctx context.Context, key string, user
 	if userID != nil {
 		cfg, err := p.configRepo.Get(ctx, key, userID)
 		if err == nil {
-			return unmarshalJSONB(cfg.Value), nil
+			return UnmarshalJSONB(cfg.Value), nil
 		}
 		if !errors.Is(err, repo.ErrNotFound) {
 			return nil, fmt.Errorf("get user config %q: %w", key, err)
 		}
+		// User config not found, will fall through to system default.
 	}
 
 	// Try system default.
 	cfg, err := p.configRepo.Get(ctx, key, nil)
 	if err == nil {
-		return unmarshalJSONB(cfg.Value), nil
+		return UnmarshalJSONB(cfg.Value), nil
 	}
 	if !errors.Is(err, repo.ErrNotFound) {
+		// DB error: record fallback metric.
+		if p.metrics != nil {
+			p.metrics.RecordConfigFallback(ctx, key, "db_error")
+		}
 		return nil, fmt.Errorf("get system config %q: %w", key, err)
 	}
 
-	// Fall back to yaml baseline.
+	// Fall back to yaml baseline: record fallback metric.
+	if p.metrics != nil {
+		p.metrics.RecordConfigFallback(ctx, key, "not_found")
+	}
 	return entry.YamlDefault, nil
-}
-
-// unmarshalJSONB safely unmarshals datatypes.JSON to a Go value.
-func unmarshalJSONB(data datatypes.JSON) any {
-	if len(data) == 0 {
-		return nil
-	}
-	var v any
-	if err := json.Unmarshal(data, &v); err != nil {
-		return string(data)
-	}
-	return v
 }

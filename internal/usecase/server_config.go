@@ -155,7 +155,7 @@ func (uc *ServerConfigUsecase) ListSystemConfigs(ctx context.Context, category s
 		}
 		if dbCfg, ok := dbMap[key]; ok {
 			item.Source = "system"
-			item.Value = unmarshalJSONB(dbCfg.Value)
+			item.Value = config.UnmarshalJSONB(dbCfg.Value)
 			item.Version = dbCfg.Version
 			if dbCfg.UpdatedBy != nil {
 				s := dbCfg.UpdatedBy.String()
@@ -196,7 +196,7 @@ func (uc *ServerConfigUsecase) GetSystemConfig(ctx context.Context, key string) 
 	dbCfg, err := uc.configRepo.Get(ctx, key, nil)
 	if err == nil {
 		item.Source = "system"
-		item.Value = unmarshalJSONB(dbCfg.Value)
+		item.Value = config.UnmarshalJSONB(dbCfg.Value)
 		item.Version = dbCfg.Version
 		if dbCfg.UpdatedBy != nil {
 			s := dbCfg.UpdatedBy.String()
@@ -319,7 +319,7 @@ func (uc *ServerConfigUsecase) UpdateSystemConfig(ctx context.Context, key strin
 			auditDetails := map[string]any{
 				"key":         key,
 				"user_id":     nil,
-				"old_value":   unmarshalJSONB(oldValueJSON),
+				"old_value":   config.UnmarshalJSONB(oldValueJSON),
 				"new_value":   input.Value,
 				"version":     newVersion,
 				"change_note": input.ChangeNote,
@@ -387,7 +387,7 @@ func (uc *ServerConfigUsecase) DeleteSystemConfig(ctx context.Context, key strin
 		}
 
 		oldValueJSON := deletedCfg.Value
-		deletedValue = unmarshalJSONB(oldValueJSON)
+		deletedValue = config.UnmarshalJSONB(oldValueJSON)
 		deletedVersion = deletedCfg.Version
 
 		// Write history.
@@ -482,10 +482,10 @@ func (uc *ServerConfigUsecase) GetUserConfigsView(ctx context.Context, userID uu
 		userCfg := userMap[key]
 
 		if sysCfg != nil {
-			item.SystemValue = unmarshalJSONB(sysCfg.Value)
+			item.SystemValue = config.UnmarshalJSONB(sysCfg.Value)
 		}
 		if userCfg != nil {
-			item.UserValue = unmarshalJSONB(userCfg.Value)
+			item.UserValue = config.UnmarshalJSONB(userCfg.Value)
 			item.Version = userCfg.Version
 			ts := userCfg.UpdatedAt.Format(time.RFC3339)
 			item.UpdatedAt = &ts
@@ -531,7 +531,7 @@ func (uc *ServerConfigUsecase) GetUserConfig(ctx context.Context, userID uuid.UU
 		return nil, fmt.Errorf("get system config for user view: %w", sysErr)
 	}
 	if sysErr == nil {
-		item.SystemValue = unmarshalJSONB(sysCfg.Value)
+		item.SystemValue = config.UnmarshalJSONB(sysCfg.Value)
 	}
 	// User DB value.
 	userCfg, userErr := uc.configRepo.Get(ctx, key, &userID)
@@ -539,7 +539,7 @@ func (uc *ServerConfigUsecase) GetUserConfig(ctx context.Context, userID uuid.UU
 		return nil, fmt.Errorf("get user config for user view: %w", userErr)
 	}
 	if userErr == nil {
-		item.UserValue = unmarshalJSONB(userCfg.Value)
+		item.UserValue = config.UnmarshalJSONB(userCfg.Value)
 		item.Version = userCfg.Version
 		ts := userCfg.UpdatedAt.Format(time.RFC3339)
 		item.UpdatedAt = &ts
@@ -605,6 +605,16 @@ func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID
 				currentCfg, getErr := uc.configRepo.Get(txCtx, key, &userID)
 				if getErr == nil {
 					currentVersion = currentCfg.Version
+				} else if errors.Is(getErr, repo.ErrNotFound) {
+					// Record disappeared between getOldValue and Get (should not happen within tx, but be defensive).
+					currentVersion = 0
+				} else {
+					// Non-ErrNotFound DB error: log and return to surface the issue (P1-2 fix).
+					logger.Warn(ctx, "config.force_overwrite.get_version_failed",
+						zap.String("key", key),
+						zap.String("user_id", userID.String()),
+						zap.Error(getErr))
+					return fmt.Errorf("get current user config %q for force overwrite: %w", key, getErr)
 				}
 			}
 			newVersion = currentVersion + 1
@@ -663,7 +673,7 @@ func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID
 	auditDetails := map[string]any{
 		"key":         key,
 		"user_id":     userID.String(),
-		"old_value":   unmarshalJSONB(oldValueJSON),
+		"old_value":   config.UnmarshalJSONB(oldValueJSON),
 		"new_value":   input.Value,
 		"version":     newVersion,
 		"change_note": input.ChangeNote,
@@ -711,7 +721,7 @@ func (uc *ServerConfigUsecase) DeleteUserConfigOverride(ctx context.Context, use
 		}
 
 		oldValueJSON := deletedCfg.Value
-		deletedValue = unmarshalJSONB(oldValueJSON)
+		deletedValue = config.UnmarshalJSONB(oldValueJSON)
 		deletedVersion = deletedCfg.Version
 
 		history := &model.ServerConfigHistory{
@@ -772,8 +782,8 @@ func (uc *ServerConfigUsecase) GetHistory(ctx context.Context, key string, userI
 	for _, h := range histories {
 		items = append(items, ConfigHistoryItem{
 			Version:    h.Version,
-			OldValue:   unmarshalJSONB(h.OldValue),
-			NewValue:   unmarshalJSONB(h.NewValue),
+			OldValue:   config.UnmarshalJSONB(h.OldValue),
+			NewValue:   config.UnmarshalJSONB(h.NewValue),
 			ChangedBy:  h.ChangedBy.String(),
 			ChangedAt:  h.ChangedAt.Format(time.RFC3339),
 			ChangeNote: h.ChangeNote,
@@ -841,7 +851,7 @@ func (uc *ServerConfigUsecase) RollbackConfig(ctx context.Context, key string, u
 		}
 	}
 
-	return unmarshalJSONB(rolledBackJSON), newVersion, nil
+	return config.UnmarshalJSONB(rolledBackJSON), newVersion, nil
 }
 
 // rollbackToV0 handles the special case where target_version=0 (delete config).
@@ -883,7 +893,7 @@ func (uc *ServerConfigUsecase) rollbackToV0(tx *gorm.DB, txCtx context.Context, 
 	auditDetails := map[string]any{
 		"key":             key,
 		"user_id":         userIDString(userID),
-		"deleted_value":   unmarshalJSONB(deletedCfg.Value),
+		"deleted_value":   config.UnmarshalJSONB(deletedCfg.Value),
 		"deleted_version": deletedCfg.Version,
 		"target_version":  0,
 		"change_note":     input.ChangeNote,
@@ -951,8 +961,8 @@ func (uc *ServerConfigUsecase) rollbackToHistoricalVersion(tx *gorm.DB, txCtx co
 	auditDetails := map[string]any{
 		"key":                      key,
 		"user_id":                  userIDString(userID),
-		"old_value":                unmarshalJSONB(currentCfg.Value),
-		"new_value":                unmarshalJSONB(targetValue),
+		"old_value":                config.UnmarshalJSONB(currentCfg.Value),
+		"new_value":                config.UnmarshalJSONB(targetValue),
 		"rolled_back_from_version": currentCfg.Version,
 		"target_version":           input.TargetVersion,
 		"version":                  newVersion,
@@ -979,7 +989,7 @@ func (uc *ServerConfigUsecase) GetEffectiveValue(ctx context.Context, key string
 	if userID != nil {
 		userCfg, err := uc.configRepo.Get(ctx, key, userID)
 		if err == nil {
-			return unmarshalJSONB(userCfg.Value), nil
+			return config.UnmarshalJSONB(userCfg.Value), nil
 		}
 		if !errors.Is(err, repo.ErrNotFound) {
 			return nil, fmt.Errorf("get user config: %w", err)
@@ -989,7 +999,7 @@ func (uc *ServerConfigUsecase) GetEffectiveValue(ctx context.Context, key string
 	// Try system default.
 	sysCfg, err := uc.configRepo.Get(ctx, key, nil)
 	if err == nil {
-		return unmarshalJSONB(sysCfg.Value), nil
+		return config.UnmarshalJSONB(sysCfg.Value), nil
 	}
 	if !errors.Is(err, repo.ErrNotFound) {
 		return nil, fmt.Errorf("get system config: %w", err)
@@ -1115,17 +1125,6 @@ func toFloat(v any) (float64, error) {
 	}
 }
 
-// unmarshalJSONB safely unmarshals datatypes.JSON to a Go value.
-func unmarshalJSONB(data datatypes.JSON) any {
-	if len(data) == 0 {
-		return nil
-	}
-	var v any
-	if err := json.Unmarshal(data, &v); err != nil {
-		return string(data)
-	}
-	return v
-}
 
 func userIDString(uid *uuid.UUID) any {
 	if uid == nil {
