@@ -210,7 +210,12 @@ func (c *Config) validateCORS() error {
 	// Validate CORS origins format
 	for i, origin := range c.CORS.AllowOrigins {
 		if origin == "*" {
-			continue // Wildcard is valid but should be used with caution
+			// Security: wildcard origin combined with credentials allows any site to make
+			// authenticated cross-origin requests. Block it in production.
+			if c.Server.Env == "production" {
+				return fmt.Errorf("cors.allow_origins must not contain \"*\" in production environment: specify explicit trusted origins")
+			}
+			continue
 		}
 		if _, err := url.Parse(origin); err != nil {
 			return fmt.Errorf("cors.allow_origins[%d] is invalid: %w", i, err)

@@ -81,6 +81,10 @@ func NewAdminJWTSigner(cfg AdminJWTConfig) (*AdminJWTSigner, error) {
 	if cfg.Algorithm == "" {
 		cfg.Algorithm = "RS256"
 	}
+	// Validate algorithm early to prevent silent fallback to RS256 on typo.
+	if err := validateJWTAlgorithm(cfg.Algorithm); err != nil {
+		return nil, err
+	}
 	if cfg.AccessTTL <= 0 {
 		cfg.AccessTTL = time.Hour
 	}
@@ -277,7 +281,24 @@ func (s *AdminJWTSigner) parseToken(tokenString string, tokenType string) (*Admi
 	return claims, nil
 }
 
+// supportedJWTAlgorithms lists all algorithms accepted by NewAdminJWTSigner.
+var supportedJWTAlgorithms = map[string]bool{
+	"RS256": true, "RS384": true, "RS512": true,
+	"ES256": true, "ES384": true, "ES512": true,
+	"EdDSA": true,
+}
+
+// validateJWTAlgorithm returns an error if the algorithm is not supported.
+func validateJWTAlgorithm(alg string) error {
+	if !supportedJWTAlgorithms[alg] {
+		return fmt.Errorf("admin JWT: unsupported algorithm %q (supported: RS256, RS384, RS512, ES256, ES384, ES512, EdDSA)", alg)
+	}
+	return nil
+}
+
 // getSigningMethod returns the JWT signing method based on algorithm.
+// Panics only if the signer was created without validation; NewAdminJWTSigner
+// rejects unknown algorithms at construction time.
 func (s *AdminJWTSigner) getSigningMethod() jwt.SigningMethod {
 	switch s.algorithm {
 	case "RS256":
@@ -295,7 +316,8 @@ func (s *AdminJWTSigner) getSigningMethod() jwt.SigningMethod {
 	case "EdDSA":
 		return jwt.SigningMethodEdDSA
 	default:
-		return jwt.SigningMethodRS256
+		// Should never be reached; constructor validates algorithm.
+		panic(fmt.Sprintf("admin JWT: unsupported signing algorithm %q", s.algorithm))
 	}
 }
 

@@ -375,7 +375,14 @@ func initLoginProtection(ctx context.Context, cfg *config.AdminConfig, rdb *redi
 		logger.Info(ctx, "admin.redis_login_protection_enabled")
 		return usecase.NewRedisLoginProtection(rdb, lpCfg)
 	}
-	logger.Info(ctx, "admin.memory_login_protection_enabled_single_instance_only")
+	// Memory-based login protection does not share state across instances.
+	// In production with multiple replicas, an attacker can rotate requests
+	// across instances to bypass lockout. Warn so operators can enable Redis.
+	if cfg.Server.Env == "production" {
+		logger.Warn(ctx, "admin.memory_login_protection_unsafe_in_multi_instance_deployments_consider_redis")
+	} else {
+		logger.Info(ctx, "admin.memory_login_protection_enabled_single_instance_only")
+	}
 	return usecase.NewLoginProtection(lpCfg)
 }
 
