@@ -34,6 +34,18 @@ var (
 		Help:    "Duration of analysis requests",
 		Buckets: prometheus.DefBuckets,
 	})
+	avgHitRate = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "cache_analyzer_avg_hit_rate",
+		Help: "Average cache hit rate from the most recent analysis",
+	})
+	totalInputTokens = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cache_analyzer_total_input_tokens",
+		Help: "Total number of input tokens processed",
+	})
+	totalCacheReadTokens = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cache_analyzer_total_cache_read_tokens",
+		Help: "Total number of cache read tokens",
+	})
 )
 
 // Server represents the cache analyzer HTTP server.
@@ -98,13 +110,15 @@ func (s *Server) handleReportPage(c *gin.Context) {
 	defer func() {
 		analysisDuration.Observe(time.Since(start).Seconds())
 	}()
-	analysisRequestsTotal.Inc()
 
 	sessionID := c.PostForm("session_id")
 	if sessionID == "" {
 		c.String(http.StatusBadRequest, "Session ID is required")
 		return
 	}
+
+	// Increment counter only after basic validation passes
+	analysisRequestsTotal.Inc()
 
 	// Get log files from form (can override server config)
 	logFiles := c.PostFormArray("log_paths[]")
@@ -131,6 +145,11 @@ func (s *Server) handleReportPage(c *gin.Context) {
 
 	// Calculate summary statistics
 	summary := calculateSummary(requests)
+
+	// Record Prometheus metrics
+	avgHitRate.Set(summary.AvgHitRate)
+	totalInputTokens.Add(float64(summary.TotalInputTokens))
+	totalCacheReadTokens.Add(float64(summary.TotalCacheReadTokens))
 
 	// Generate diff data for each request
 	diffs := generateDiffs(requests)
