@@ -84,7 +84,13 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("admin auto migrate: %w", err)
 	}
 
-	// ServerConfig needs special handling: migrate from composite PK to surrogate PK
+	// ServerConfig needs special handling: migrate from composite PK to surrogate PK.
+	// WARNING: This migration performs DDL operations (ALTER COLUMN SET NOT NULL, ADD PRIMARY KEY)
+	// that require ACCESS EXCLUSIVE locks on the table. On large tables, this can block all reads
+	// and writes during migration. For tables with >1M rows, consider breaking this into multiple
+	// smaller migrations or using pg_repack for online table reorganization.
+	logger.Info(context.Background(), "migrate.server_config_table.starting",
+		zap.String("warning", "This operation may block reads/writes on large tables due to ACCESS EXCLUSIVE locks"))
 	if err := model.MigrateServerConfigTable(db); err != nil {
 		return fmt.Errorf("migrate server_configs table: %w", err)
 	}

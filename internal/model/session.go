@@ -37,7 +37,7 @@ type Session struct {
 	ID          uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`
 	ClientID    string          `gorm:"size:255;uniqueIndex" json:"client_id,omitempty"` // client-generated idempotency ID
 	OwnerKind   string          `gorm:"size:32;default:'user'" json:"owner_kind"`
-	OwnerRefID  string          `gorm:"size:255;index" json:"owner_ref_id"`
+	OwnerRefID  string          `gorm:"size:255" json:"owner_ref_id"`        // Indexed via idx_sessions_owner_created composite index (owner_kind, owner_ref_id, created_at)
 	DeviceID    string          `gorm:"size:255" json:"device_id,omitempty"` // only for user-owned sessions; remove after protocol migration
 	Title       string          `gorm:"size:255" json:"title,omitempty"`
 	Status      string          `gorm:"size:20;not null;default:active;index" json:"status"`
