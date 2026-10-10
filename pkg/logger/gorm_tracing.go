@@ -133,9 +133,9 @@ func (cb *tracingCallbacks) after(db *gorm.DB) {
 	}
 	defer span.End()
 
-	// Record SQL
+	// Record SQL (sanitized to prevent sensitive data leakage)
 	if db.Statement.SQL.String() != "" {
-		span.SetAttributes(attribute.String("db.statement", db.Statement.SQL.String()))
+		span.SetAttributes(attribute.String("db.statement", sanitizeSQL(db.Statement.SQL.String())))
 	}
 
 	// Record affected rows
