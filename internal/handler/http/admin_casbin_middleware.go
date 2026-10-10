@@ -7,8 +7,10 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // routeResourceMapping maps HTTP method + exact Gin route pattern to (resource, action).
@@ -219,6 +221,11 @@ func CasbinMiddleware(enforcer *auth.CasbinEnforcer, permissionSystemEnabled boo
 		// Check permission
 		allowed, err := enforcer.Enforce(c.Request.Context(), userID, resource, action)
 		if err != nil {
+			logger.Error(c.Request.Context(), "casbin.enforce_failed",
+				zap.String("user_id", userID),
+				zap.String("resource", resource),
+				zap.String("action", action),
+				zap.Error(err))
 			Error(c, "server_error", "permission check failed")
 			c.Abort()
 			return

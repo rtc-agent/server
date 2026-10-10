@@ -21,12 +21,10 @@ import (
 // AdminAuthHandler handles admin authentication endpoints.
 type AdminAuthHandler struct {
 	adminAuthUsecase        *usecase.AdminAuthUsecase
+	adminUserUsecase        *usecase.AdminUserUsecase
 	emailOTPUsecase         *usecase.EmailOTPUsecase // optional, nil if email not configured
 	jwtSigner               *auth.AdminJWTSigner
 	db                      *gorm.DB
-	roleRepo                roleLookup
-	adminUserRoleRepo       adminUserRoleLister
-	enforcer                *auth.CasbinEnforcer
 	permissionSystemEnabled bool
 	passwordEnabled         bool
 	cookieSecure            bool
@@ -35,34 +33,27 @@ type AdminAuthHandler struct {
 // NewAdminAuthHandler creates a new AdminAuthHandler.
 func NewAdminAuthHandler(
 	adminAuthUsecase *usecase.AdminAuthUsecase,
+	adminUserUsecase *usecase.AdminUserUsecase,
 	jwtSigner *auth.AdminJWTSigner,
 	db *gorm.DB,
 ) *AdminAuthHandler {
 	return &AdminAuthHandler{
 		adminAuthUsecase: adminAuthUsecase,
+		adminUserUsecase: adminUserUsecase,
 		jwtSigner:        jwtSigner,
 		db:               db,
 	}
-}
-
-// SetPermissionDeps injects permission system dependencies into the handler.
-// This must be called before RegisterRoutes if the permission system is enabled.
-func (h *AdminAuthHandler) SetPermissionDeps(
-	roleRepo roleLookup,
-	adminUserRoleRepo adminUserRoleLister,
-	enforcer *auth.CasbinEnforcer,
-	permissionSystemEnabled bool,
-) {
-	h.roleRepo = roleRepo
-	h.adminUserRoleRepo = adminUserRoleRepo
-	h.enforcer = enforcer
-	h.permissionSystemEnabled = permissionSystemEnabled
 }
 
 // SetEmailOTPUsecase injects the email OTP usecase into the handler.
 // Call this after construction if email OTP login is configured.
 func (h *AdminAuthHandler) SetEmailOTPUsecase(uc *usecase.EmailOTPUsecase) {
 	h.emailOTPUsecase = uc
+}
+
+// SetPermissionSystemEnabled sets whether the permission system is enabled.
+func (h *AdminAuthHandler) SetPermissionSystemEnabled(enabled bool) {
+	h.permissionSystemEnabled = enabled
 }
 
 // SetPasswordEnabled sets whether password login is enabled.
@@ -121,6 +112,10 @@ const maxAdminRequestBodySize = 1 << 20 // 1MB
 // sanitizeBindingError converts a Gin binding error into a safe, user-facing message.
 // Internal struct field names (e.g. "LoginRequest.Password") are intentionally omitted
 // to avoid leaking API implementation details to potential attackers.
+//
+// SECURITY: Never return err.Error() directly to clients. Gin binding errors may contain
+// internal struct field names, validation tags, or other implementation details that could
+// help attackers understand the API schema. Always map to generic, user-friendly messages.
 func sanitizeBindingError(err error) string {
 	msg := err.Error()
 	// JSON syntax errors are safe to surface (they describe the malformed input, not the schema).
@@ -220,9 +215,9 @@ func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	// If permission system is enabled and deps are injected, include roles and permissions
-	if h.permissionSystemEnabled && h.roleRepo != nil && h.enforcer != nil {
-		resp, err := GetCurrentUserWithRoles(ctx, user, h.adminUserRoleRepo, h.roleRepo, h.enforcer)
+	// If permission system is enabled, include roles and permissions
+	if h.permissionSystemEnabled {
+		resp, err := h.adminUserUsecase.GetCurrentUserWithRoles(ctx, user)
 		if err != nil {
 			logger.Error(ctx, "admin_auth.get_current_user_roles_failed",
 				zap.String("user_id", userUUID.String()),
@@ -334,6 +329,11 @@ func (h *AdminAuthHandler) JWKS(c *gin.Context) {
 
 // Health handles GET /health
 // Verifies database connectivity before reporting healthy status.
+//
+// NOTE: This endpoint returns real HTTP status codes (200/503) instead of the project's
+// usual HTTP 200 + error code pattern. This is intentional: health endpoints are consumed
+// by infrastructure monitoring systems (Kubernetes liveness/readiness probes, load balancers,
+// Prometheus exporters) that rely on standard HTTP status codes to determine service health.
 func (h *AdminAuthHandler) Health(c *gin.Context) {
 	// Check database connectivity via a lightweight query.
 	sqlDB, err := h.db.DB()

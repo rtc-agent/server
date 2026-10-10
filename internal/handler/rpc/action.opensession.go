@@ -51,7 +51,7 @@ func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequ
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")
-			return nil, &APIError{Code: ErrorCodeSessionNotFound, Message: fmt.Sprintf("session %s not found", req.SessionId)}
+			return nil, &APIError{Code: ErrorCodeSessionNotFound, Message: "session not found"}
 		}
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
@@ -59,7 +59,7 @@ func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequ
 	}
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
 		span.SetStatus(codes.Error, "permission_denied")
-		return nil, &APIError{Code: ErrorCodePermissionDenied, Message: fmt.Sprintf("session %s does not belong to user", session.ID)}
+		return nil, &APIError{Code: ErrorCodePermissionDenied, Message: "permission denied"}
 	}
 
 	// Idempotent: if session is not closed, return success without modifying.

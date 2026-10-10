@@ -514,7 +514,7 @@ func validateKeyType(method jwt.SigningMethod, pubKey crypto.PublicKey) error {
 			return fmt.Errorf("Ed25519 algorithm requires Ed25519 public key")
 		}
 	default:
-		return fmt.Errorf("unsupported signing method: %v", method)
+		return fmt.Errorf("unsupported signing method: %T", method)
 	}
 	return nil
 }
