@@ -114,11 +114,21 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		return nil, apiErr
 	}
 
+	// Validate content type: only user-facing types are allowed.
+	if req.ContentData.Type != protocol.ContentTypeText &&
+		req.ContentData.Type != protocol.ContentTypeUserMessage {
+		span.SetStatus(codes.Error, "validation_error")
+		return nil, &APIError{
+			Code:    ErrorCodeInvalidArgument,
+			Message: "invalid content_data type for user message",
+		}
+	}
+
 	content := extractMessageContent(ctx, req.ContentData)
 
 	if err := primitives.ValidateCreateMessageRequest(content); err != nil {
 		span.SetStatus(codes.Error, "validation_error")
-		return nil, &APIError{Code: ErrorCodeInvalidArgument, Message: err.Error()}
+		return nil, &APIError{Code: ErrorCodeInvalidArgument, Message: "Message content validation failed"}
 	}
 
 	sessionUUIDPtr, apiErr := parseUUIDPtr(req.ServerSessionId, "server_session_id")
@@ -151,8 +161,16 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		span.RecordError(err)
 		return nil, h.internalError(ctx, "session.error", "internal error", err)
 	}
+	const maxAgentPromptLength = 10 * 1024 // 10KB
 	span.SetAttributes(attribute.String("session.id", session.ID.String()))
 	if isNew && req.AgentPrompt != nil {
+		if len(*req.AgentPrompt) > maxAgentPromptLength {
+			span.SetStatus(codes.Error, "validation_error")
+			return nil, &APIError{
+				Code:    ErrorCodeInvalidArgument,
+				Message: fmt.Sprintf("agent_prompt too long: %d bytes (max %d)", len(*req.AgentPrompt), maxAgentPromptLength),
+			}
+		}
 		session.AgentPrompt = *req.AgentPrompt
 	}
 	if !isNew {
@@ -168,16 +186,16 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		if isNew {
 			if err := primitives.CreateSession(txCtx, h.deps.Deps, session); err != nil {
-				return nil, fmt.Errorf("create session: %w", err)
+				return nil, fmt.Errorf("create session failed")
 			}
 			// Record session creation metric
 			h.deps.Metrics.RecordSessionCreated(txCtx)
 		} else {
 			if err := primitives.TouchSession(txCtx, h.deps.Deps, session.ID); err != nil {
 				if errors.Is(err, primitives.ErrSessionClosedOrNotFound) {
-					return nil, fmt.Errorf("session %s is closed: %w", session.ID, primitives.ErrSessionClosed)
+					return nil, fmt.Errorf("session is closed")
 				}
-				return nil, fmt.Errorf("touch session: %w", err)
+				return nil, fmt.Errorf("touch session failed")
 			}
 		}
 
@@ -202,7 +220,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 					nil,
 				)
 				if createErr != nil {
-					return nil, fmt.Errorf("create prompt message: %w", createErr)
+					return nil, fmt.Errorf("create prompt message failed")
 				}
 				logger.Info(ctx, "[SendMessage] created prompt message",
 					zap.String("prompt_msg_id", promptMsg.ID.String()))
@@ -219,7 +237,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 			nil,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("create message: %w", err)
+			return nil, fmt.Errorf("create message failed")
 		}
 		createdMessage = msg
 
@@ -295,7 +313,9 @@ func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string)
 // publishSubmitWork publishes a submit work item inside the transaction.
 func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, userID string) error {
 	if h.deps.Queue == nil {
-		return nil
+		logger.Error(txCtx, "[SendMessage] queue is nil, message will not be processed by agent",
+			zap.String("session", sessionID.String()))
+		return fmt.Errorf("queue not initialized")
 	}
 	// Extract trace context from the transaction context for cross-process propagation.
 	traceID, spanID := turnagent.ExtractTraceFromCtx(txCtx)

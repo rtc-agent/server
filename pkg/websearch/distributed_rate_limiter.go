@@ -3,6 +3,7 @@ package websearch
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -117,7 +118,15 @@ func NewHybridRateLimiter(
 	// Initially assume Redis is available, start background health check
 	h.redisHealthy.Store(true)
 	h.wg.Add(1)
-	go h.redisHealthLoop()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// Use stdlib for logging to avoid import cycle
+				fmt.Printf("panic_recovered: goroutine=HybridRateLimiter.redisHealthLoop, panic=%v, stack=%s\n", r, debug.Stack())
+			}
+		}()
+		h.redisHealthLoop()
+	}()
 
 	return h
 }

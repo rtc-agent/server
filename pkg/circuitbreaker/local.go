@@ -2,6 +2,7 @@ package circuitbreaker
 
 import (
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -87,7 +88,15 @@ func NewCircuitBreaker(cfg CircuitBreakerConfig, providerName string) *CircuitBr
 			cb.callbacksMu.RUnlock()
 
 			for _, callback := range callbacks {
-				go callback(event)
+				go func(cb CircuitBreakerCallback) {
+					defer func() {
+						if r := recover(); r != nil {
+							// Use stdlib for logging to avoid import cycle
+							fmt.Printf("panic_recovered: goroutine=CircuitBreaker.callback, panic=%v, stack=%s\n", r, debug.Stack())
+						}
+					}()
+					cb(event)
+				}(callback)
 			}
 		},
 	}

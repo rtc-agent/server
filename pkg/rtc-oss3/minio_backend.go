@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -214,6 +215,14 @@ func (b *MinIOBackend) DeleteObjects(ctx context.Context, bucket string, keys []
 
 	objectsCh := make(chan minio.ObjectInfo, len(keys))
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error(context.Background(), "panic_recovered",
+					zap.String("goroutine", "MinIOBackend.DeleteObjects"),
+					zap.Any("panic", r),
+					zap.String("stack", string(debug.Stack())))
+			}
+		}()
 		defer close(objectsCh)
 		for _, key := range keys {
 			select {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -123,6 +124,14 @@ func (s *RedisConfigSubscriber) Start(ctx context.Context) func() {
 
 	// Process messages in a goroutine.
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error(ctx, "panic_recovered",
+					zap.String("goroutine", "RedisConfigSubscriber.Start"),
+					zap.Any("panic", r),
+					zap.String("stack", string(debug.Stack())))
+			}
+		}()
 		ch := pubsub.Channel()
 		for {
 			select {

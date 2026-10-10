@@ -3,6 +3,7 @@ package websearch
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -94,6 +95,12 @@ func (r *RedisClient) Start() {
 	r.startOnce.Do(func() {
 		r.wg.Add(1)
 		go func() {
+			defer func() {
+				if rv := recover(); rv != nil {
+					// Use stdlib for logging to avoid import cycle
+					fmt.Printf("panic_recovered: goroutine=RedisClient.healthCheck, panic=%v, stack=%s\n", rv, debug.Stack())
+				}
+			}()
 			defer r.wg.Done()
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
