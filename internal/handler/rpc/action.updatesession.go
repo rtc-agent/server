@@ -4,7 +4,6 @@ package rpchandler
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/updates"
@@ -81,7 +80,7 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		if err := primitives.UpdateSessionFields(txCtx, h.deps.Deps, sessionUUID, fields); err != nil {
-			return nil, fmt.Errorf("update session fields: %w", err)
+			return nil, h.internalError(txCtx, ErrorCodeUpdateSessionFields, "failed to update session fields", err)
 		}
 		// Use pre-loaded session for routing metadata. Do not reload inside
 		// the transaction — a transient DB error on reload must not abort
@@ -91,6 +90,8 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 	if err != nil {
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[UpdateSession] push failed after commit (data safe)", zap.Error(err))
+		} else if apiErr, ok := err.(*APIError); ok {
+			return nil, apiErr
 		} else {
 			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)

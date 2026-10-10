@@ -202,7 +202,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	var createdMessages []*model.Message
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		if err := primitives.CreateSession(txCtx, h.deps.Deps, newSession); err != nil {
-			return nil, fmt.Errorf("create session: %w", err)
+			return nil, h.internalError(txCtx, ErrorCodeForkCreateSession, "failed to create session", err)
 		}
 		// Record session creation metric
 		h.deps.Metrics.RecordSessionCreated(txCtx)
@@ -210,7 +210,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		// turnID is nil — the turn is created asynchronously by turn-agent.
 		createdMessages, err = primitives.BatchCreateMessages(txCtx, h.deps.Deps, newSession.ID, nil, messagesToCreate)
 		if err != nil {
-			return nil, fmt.Errorf("batch create messages: %w", err)
+			return nil, h.internalError(txCtx, ErrorCodeForkBatchCreateMessages, "failed to batch create messages", err)
 		}
 
 		if err := h.publishSubmitWork(txCtx, newSession.ID, userID.String()); err != nil {
@@ -222,6 +222,8 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	if err != nil {
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[ForkSession] push failed after commit (data safe)", zap.Error(err))
+		} else if apiErr, ok := err.(*APIError); ok {
+			return nil, apiErr
 		} else {
 			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)

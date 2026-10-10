@@ -49,4 +49,36 @@ const (
 
 	// Compact errors
 	ErrorCodeCompactAlreadyPending = "compact.already_pending"
+
+	// Send errors
+	ErrorCodeSendCreateMessage  = "send.create_message_failed"
+	ErrorCodeSendCreateSession  = "send.create_session_failed"
+	ErrorCodeSendTouchSession   = "send.touch_session_failed"
+	ErrorCodeSendQueueUninit    = "send.queue_uninitialized"
+	ErrorCodeSendMarshalPayload = "send.marshal_payload_failed"
+	ErrorCodeSendQueuePublish   = "send.queue_publish_failed"
+
+	// Close errors (extended)
+	ErrorCodeCloseUpdateStatus = "close.update_status_failed"
+
+	// Open errors
+	ErrorCodeOpenUpdateStatus  = "open.update_status_failed"
+	ErrorCodeOpenClearClosedAt = "open.clear_closed_at_failed"
+
+	// Fork errors
+	ErrorCodeForkCreateSession       = "fork.create_session_failed"
+	ErrorCodeForkBatchCreateMessages = "fork.batch_create_messages_failed"
+
+	// Submit RTC result errors
+	ErrorCodeSubmitUpdateRtcResult    = "submit.update_rtc_result_failed"
+	ErrorCodeSubmitGetInputMessage    = "submit.get_input_message_failed"
+	ErrorCodeSubmitParseInputContent  = "submit.parse_input_content_failed"
+	ErrorCodeSubmitParseInputToolCall = "submit.parse_input_tool_call_failed"
+	ErrorCodeSubmitCreateOutputMsg    = "submit.create_output_message_failed"
+
+	// Update RTC status errors
+	ErrorCodeUpdateRtcStatus = "update_rtc.status_update_failed"
+
+	// Update session errors
+	ErrorCodeUpdateSessionFields = "update.session_fields_failed"
 )

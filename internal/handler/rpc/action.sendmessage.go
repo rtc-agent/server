@@ -289,7 +289,7 @@ func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol
 			nil,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("create message: %w", err)
+			return nil, h.internalError(txCtx, ErrorCodeSendCreateMessage, "failed to create message", err)
 		}
 		createdMessage = msg
 
@@ -321,6 +321,9 @@ func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol
 			// Mark that sync is required so the client knows to fetch latest state
 			// We'll set this in the response via a wrapper
 			return createdMessage, pushUpdates, &ErrPushAfterCommitSyncRequired{OriginalError: err}
+		} else if apiErr, ok := err.(*APIError); ok {
+			// Already a structured API error from inner handler — pass through.
+			return nil, nil, apiErr
 		} else {
 			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
@@ -348,16 +351,16 @@ func (e *ErrPushAfterCommitSyncRequired) Unwrap() error {
 func (h *Handler) touchOrCreateSession(txCtx context.Context, session *model.Session, isNew bool) error {
 	if isNew {
 		if err := primitives.CreateSession(txCtx, h.deps.Deps, session); err != nil {
-			return fmt.Errorf("create session: %w", err)
+			return h.internalError(txCtx, ErrorCodeSendCreateSession, "failed to create session", err)
 		}
 		// Record session creation metric
 		h.deps.Metrics.RecordSessionCreated(txCtx)
 	} else {
 		if err := primitives.TouchSession(txCtx, h.deps.Deps, session.ID); err != nil {
 			if errors.Is(err, primitives.ErrSessionClosedOrNotFound) {
-				return fmt.Errorf("session is closed: %w", err)
+				return &APIError{Code: ErrorCodeSessionClosed, Message: "session is closed"}
 			}
-			return fmt.Errorf("touch session: %w", err)
+			return h.internalError(txCtx, ErrorCodeSendTouchSession, "failed to touch session", err)
 		}
 	}
 	return nil
@@ -436,7 +439,7 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 	if h.deps.Queue == nil {
 		logger.Error(txCtx, "rpc.send_message.queue_uninitialized",
 			zap.String("session", sessionID.String()))
-		return fmt.Errorf("queue not initialized")
+		return h.internalError(txCtx, ErrorCodeSendQueueUninit, "queue not initialized", nil)
 	}
 	// Extract trace context from the transaction context for cross-process propagation.
 	traceID, spanID := turnagent.ExtractTraceFromCtx(txCtx)
@@ -448,7 +451,7 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 		SpanID:    spanID,
 	})
 	if err != nil {
-		return fmt.Errorf("marshal work payload: %w", err)
+		return h.internalError(txCtx, ErrorCodeSendMarshalPayload, "failed to marshal work payload", err)
 	}
 
 	bo := backoff.NewExponentialBackOff()
@@ -469,7 +472,7 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 		backoff.WithMaxTries(3),
 	)
 	if err != nil {
-		return fmt.Errorf("queue publish: %w", err)
+		return h.internalError(txCtx, ErrorCodeSendQueuePublish, "failed to publish to queue", err)
 	}
 	return nil
 }

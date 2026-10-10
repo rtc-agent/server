@@ -124,6 +124,8 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	if err != nil {
 		if errors.Is(err, updates.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[SubmitRtcResult] push failed after commit (data safe)", zap.Error(err))
+		} else if apiErr, ok := err.(*APIError); ok {
+			return nil, apiErr
 		} else {
 			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
@@ -184,20 +186,20 @@ func (h *Handler) checkIdempotentSubmit(ctx context.Context, rtc *model.Rtc, req
 // creates the toolcall_output message, and builds update items for event publishing.
 func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc, rtcUUID uuid.UUID, targetStatus protocol.RtcStatus, resultJSON *string, reqError *string, session *model.Session) ([]updates.UpdatePublishItem, error) {
 	if err := primitives.UpdateRtcResult(txCtx, h.deps.Deps, rtcUUID, targetStatus, resultJSON, model.DerefStr(reqError)); err != nil {
-		return nil, fmt.Errorf("update rtc result: %w", err)
+		return nil, h.internalError(txCtx, ErrorCodeSubmitUpdateRtcResult, "failed to update rtc result", err)
 	}
 
 	inputMsg, err := h.deps.Deps.RtcSessionUsecase.GetMessage(txCtx, rtc.MessageID)
 	if err != nil {
-		return nil, fmt.Errorf("get input message: %w", err)
+		return nil, h.internalError(txCtx, ErrorCodeSubmitGetInputMessage, "failed to get input message", err)
 	}
 	inputContentData, err := primitives.ParseContentData(inputMsg.Content)
 	if err != nil {
-		return nil, fmt.Errorf("parse input content: %w", err)
+		return nil, h.internalError(txCtx, ErrorCodeSubmitParseInputContent, "failed to parse input content", err)
 	}
 	inputToolCall, err := primitives.ParseContentDataToolCall(inputContentData.Data)
 	if err != nil {
-		return nil, fmt.Errorf("parse input tool call: %w", err)
+		return nil, h.internalError(txCtx, ErrorCodeSubmitParseInputToolCall, "failed to parse input tool call", err)
 	}
 
 	toolOutput := ""
@@ -244,7 +246,7 @@ func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc
 		&parentMsgID,
 	)
 	if createErr != nil {
-		return nil, fmt.Errorf("create output message: %w", createErr)
+		return nil, h.internalError(txCtx, ErrorCodeSubmitCreateOutputMsg, "failed to create output message", createErr)
 	}
 
 	if err := h.deps.Deps.RtcRepo.UpdateOutputMessageID(txCtx, rtcUUID, outputMsg.ID); err != nil {
