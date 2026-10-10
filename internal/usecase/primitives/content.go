@@ -136,6 +136,73 @@ func ParseContentData(content string) (protocol.ContentData, error) {
 	return cd, nil
 }
 
+// unmarshalStringField safely unmarshals a JSON string field, logging on error.
+func unmarshalStringField(raw map[string]json.RawMessage, key string, dest *string, fieldName string) {
+	if v, ok := raw[key]; ok {
+		if err := json.Unmarshal(v, dest); err != nil {
+			slog.Warn("ParseContentDataToolCall: failed to unmarshal "+fieldName, "raw", string(v), "error", err)
+		}
+	}
+}
+
+// parseToolCallStatus parses the status field which may be null or a string.
+func parseToolCallStatus(raw map[string]json.RawMessage) *string {
+	v, ok := raw["status"]
+	if !ok || len(v) == 0 || string(v) == "null" {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(v, &s); err != nil {
+		slog.Warn("ParseContentDataToolCall: failed to unmarshal status", "raw", string(v), "error", err)
+	}
+	return &s
+}
+
+// parseToolCallInput parses the input field which can be a JSON string (old format)
+// or a JSON object (new format).
+func parseToolCallInput(raw map[string]json.RawMessage) string {
+	v, ok := raw["input"]
+	if !ok || len(v) == 0 {
+		return ""
+	}
+	trimmed := trimJSONNull(v)
+	if len(trimmed) == 0 {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		// Old format: JSON string → use as-is (it's already a JSON string).
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			slog.Warn("ParseContentDataToolCall: failed to unmarshal input string", "raw", string(trimmed), "error", err)
+		}
+		return s
+	}
+	// New format: JSON object → use as string for protocol.ToolCall.
+	return string(trimmed)
+}
+
+// parseToolCallOutput parses the output field which can be a JSON string (old format)
+// or a JSON object (new format). Returns nil if not present or null.
+func parseToolCallOutput(raw map[string]json.RawMessage) *string {
+	v, ok := raw["output"]
+	if !ok || len(v) == 0 {
+		return nil
+	}
+	trimmed := trimJSONNull(v)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			slog.Warn("ParseContentDataToolCall: failed to unmarshal output string", "raw", string(trimmed), "error", err)
+		}
+		return &s
+	}
+	s := string(trimmed)
+	return &s
+}
+
 // ParseContentDataToolCall converts an arbitrary value into a protocol.ToolCall
 // by round-tripping through JSON serialization.
 //
@@ -157,55 +224,16 @@ func ParseContentDataToolCall(data any) (protocol.ToolCall, error) {
 
 	tc := protocol.ToolCall{}
 
-	// id
-	if v, ok := raw["id"]; ok {
-		if err := json.Unmarshal(v, &tc.Id); err != nil {
-			slog.Warn("ParseContentDataToolCall: failed to unmarshal id", "raw", string(v), "error", err)
-		}
-	}
-	// tool_name
-	if v, ok := raw["tool_name"]; ok {
-		if err := json.Unmarshal(v, &tc.ToolName); err != nil {
-			slog.Warn("ParseContentDataToolCall: failed to unmarshal tool_name", "raw", string(v), "error", err)
-		}
-	}
-	// status
-	if v, ok := raw["status"]; ok && len(v) > 0 && string(v) != "null" {
-		var s string
-		if err := json.Unmarshal(v, &s); err != nil {
-			slog.Warn("ParseContentDataToolCall: failed to unmarshal status", "raw", string(v), "error", err)
-		}
-		tc.Status = &s
-	}
+	// Parse simple string fields
+	unmarshalStringField(raw, "id", &tc.Id, "id")
+	unmarshalStringField(raw, "tool_name", &tc.ToolName, "tool_name")
 
-	// input: old format = JSON string ("…"), new format = JSON object ({…})
-	if v, ok := raw["input"]; ok && len(v) > 0 {
-		trimmed := trimJSONNull(v)
-		if len(trimmed) > 0 && trimmed[0] == '"' {
-			// Old format: JSON string → use as-is (it's already a JSON string).
-			if err := json.Unmarshal(trimmed, &tc.Input); err != nil {
-				slog.Warn("ParseContentDataToolCall: failed to unmarshal input string", "raw", string(trimmed), "error", err)
-			}
-		} else {
-			// New format: JSON object → marshal to string for protocol.ToolCall.
-			tc.Input = string(trimmed)
-		}
-	}
+	// Parse status (nullable string)
+	tc.Status = parseToolCallStatus(raw)
 
-	// output: same dual-format handling
-	if v, ok := raw["output"]; ok && len(v) > 0 {
-		trimmed := trimJSONNull(v)
-		if len(trimmed) > 0 && trimmed[0] == '"' {
-			var s string
-			if err := json.Unmarshal(trimmed, &s); err != nil {
-				slog.Warn("ParseContentDataToolCall: failed to unmarshal output string", "raw", string(trimmed), "error", err)
-			}
-			tc.Output = &s
-		} else if len(trimmed) > 0 && string(trimmed) != "null" {
-			s := string(trimmed)
-			tc.Output = &s
-		}
-	}
+	// Parse input and output (dual format: string or object)
+	tc.Input = parseToolCallInput(raw)
+	tc.Output = parseToolCallOutput(raw)
 
 	return tc, nil
 }

@@ -323,6 +323,32 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
 }
 
+// cancelIfNotNil safely cancels a context cancel function if it's not nil.
+func cancelIfNotNil(cancel context.CancelFunc, name string, ctx context.Context) {
+	if cancel != nil {
+		cancel()
+		if logger.IsDebugMode() {
+			logger.Debug(ctx, "[Server] canceled", zap.String("component", name))
+		}
+	}
+}
+
+// stopBackgroundWorkers stops all background worker goroutines.
+func (s *Server) stopBackgroundWorkers(ctx context.Context) {
+	s.cancelIfNotNil(s.recoveryCancel, "recovery", ctx)
+	s.cancelIfNotNil(s.staleScannerCancel, "stale-scanner", ctx)
+	s.cancelIfNotNil(s.cleanupCancel, "oss3-cleanup", ctx)
+	s.cancelIfNotNil(s.refreshTokenCleanupCancel, "refresh-token-cleanup", ctx)
+	s.cancelIfNotNil(s.ipRateLimiterCancel, "ip-rate-limiter-cleanup", ctx)
+	s.cancelIfNotNil(s.configSubscriberCancel, "config-subscriber", ctx)
+	s.cancelIfNotNil(s.goroutineCancel, "goroutine-metrics", ctx)
+}
+
+// cancelIfNotNil is a method wrapper for the package-level function.
+func (s *Server) cancelIfNotNil(cancel context.CancelFunc, name string, ctx context.Context) {
+	cancelIfNotNil(cancel, name, ctx)
+}
+
 // Stop stops the server.
 func (s *Server) Stop() {
 	if logger.IsDebugMode() {
@@ -353,46 +379,14 @@ func (s *Server) Stop() {
 		}
 	}
 
-	// Stop recovery goroutine
-	if s.recoveryCancel != nil {
-		s.recoveryCancel()
-	}
-
-	// Stop stale turn scanner goroutine
-	if s.staleScannerCancel != nil {
-		s.staleScannerCancel()
-	}
-
-	// Stop OSS3 cleanup goroutine
-	if s.cleanupCancel != nil {
-		s.cleanupCancel()
-	}
-
-	// Stop refresh token cleanup goroutine
-	if s.refreshTokenCleanupCancel != nil {
-		s.refreshTokenCleanupCancel()
-	}
-
-	// Stop IP rate limiter cleanup goroutine
-	if s.ipRateLimiterCancel != nil {
-		s.ipRateLimiterCancel()
-	}
+	// Stop all background worker goroutines
+	s.stopBackgroundWorkers(ctx)
 
 	// Stop BanWatcher
 	if s.banWatcher != nil {
 		if err := s.banWatcher.Close(); err != nil {
 			logger.Error(ctx, "[Server] ban watcher close error", zap.Error(err))
 		}
-	}
-
-	// Stop Config subscriber
-	if s.configSubscriberCancel != nil {
-		s.configSubscriberCancel()
-	}
-
-	// Stop goroutine metrics collector
-	if s.goroutineCancel != nil {
-		s.goroutineCancel()
 	}
 
 	// Close RPC Handler (stops recorder worker).
