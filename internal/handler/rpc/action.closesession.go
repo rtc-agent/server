@@ -51,7 +51,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 
 	logger.Info(ctx, "[CloseSession]", zap.String("user", userID.String()), zap.String("session", req.SessionId))
 
-	session, err := h.deps.Deps.SessionRepo.GetByID(ctx, sessionUUID)
+	session, err := h.deps.Deps.RtcSessionUsecase.GetSession(ctx, sessionUUID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")

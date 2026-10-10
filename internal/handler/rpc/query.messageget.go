@@ -17,7 +17,7 @@ func (h *Handler) MessageGet(ctx context.Context, req *protocol.MessageGetReques
 		"message_id",
 		"message.not_found",
 		"message",
-		h.deps.Deps.MessageRepo.GetByID,
+		h.deps.Deps.RtcSessionUsecase.GetMessage,
 		func(m *model.Message) uuid.UUID { return m.SessionID },
 	)
 	if err != nil {

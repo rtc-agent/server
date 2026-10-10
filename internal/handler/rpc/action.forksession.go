@@ -169,7 +169,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 		return nil, err
 	}
 
-	oldMessage, err := h.deps.Deps.MessageRepo.GetByID(ctx, oldMessageID)
+	oldMessage, err := h.deps.Deps.RtcSessionUsecase.GetMessage(ctx, oldMessageID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "message.not_found")
@@ -185,7 +185,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 	// first message), preventing the "first non-system message is assistant" bug.
 	minOffset := oldSession.LatestSummaryOffset
 
-	oldMessages, err := h.deps.Deps.MessageRepo.ListBySessionBeforeOffset(ctx, oldSessionID, minOffset, oldMessage.GlobalOffset, 0)
+	oldMessages, err := h.deps.Deps.RtcSessionUsecase.ListMessagesBeforeOffset(ctx, oldSessionID, minOffset, oldMessage.GlobalOffset, 0)
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
@@ -248,7 +248,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 
 // validateForkSource checks that the old session exists and belongs to the user.
 func (h *Handler) validateForkSource(ctx context.Context, oldSessionID uuid.UUID, creator usecase.UserCreator) (*model.Session, error) {
-	oldSession, err := h.deps.Deps.SessionRepo.GetByID(ctx, oldSessionID)
+	oldSession, err := h.deps.Deps.RtcSessionUsecase.GetSession(ctx, oldSessionID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			return nil, &APIError{Code: ErrorCodeSessionNotFound, Message: fmt.Sprintf("old session %s not found", oldSessionID)}

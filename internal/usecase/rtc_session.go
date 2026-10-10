@@ -16,15 +16,92 @@ import (
 type RtcSessionUsecase struct {
 	sessionRepo repo.SessionRepo
 	messageRepo repo.MessageRepo
+	turnRepo    repo.TurnRepo
 }
 
 // NewRtcSessionUsecase creates a new RtcSessionUsecase.
-func NewRtcSessionUsecase(sessionRepo repo.SessionRepo, messageRepo repo.MessageRepo) *RtcSessionUsecase {
+func NewRtcSessionUsecase(
+	sessionRepo repo.SessionRepo,
+	messageRepo repo.MessageRepo,
+	turnRepo repo.TurnRepo,
+) *RtcSessionUsecase {
 	return &RtcSessionUsecase{
 		sessionRepo: sessionRepo,
 		messageRepo: messageRepo,
+		turnRepo:    turnRepo,
 	}
 }
+
+// ============================================================
+// Session operations (used by RPC handlers)
+// ============================================================
+
+// GetSession returns a session by ID.
+// Returns nil and an error if the session is not found.
+func (uc *RtcSessionUsecase) GetSession(ctx context.Context, id uuid.UUID) (*model.Session, error) {
+	return uc.sessionRepo.GetByID(ctx, id)
+}
+
+// ListSessionsByUser returns sessions for a user with cursor pagination.
+func (uc *RtcSessionUsecase) ListSessionsByUser(ctx context.Context, userID uuid.UUID, cursor *string, limit int) ([]*model.Session, error) {
+	return uc.sessionRepo.GetByUser(ctx, userID, cursor, limit)
+}
+
+// UpdateSession updates specific fields of a session.
+func (uc *RtcSessionUsecase) UpdateSession(ctx context.Context, id uuid.UUID, fields map[string]any) error {
+	return uc.sessionRepo.Update(ctx, id, fields)
+}
+
+// ============================================================
+// Message operations (used by RPC handlers)
+// ============================================================
+
+// GetMessage returns a message by ID.
+// Returns nil and an error if the message is not found.
+func (uc *RtcSessionUsecase) GetMessage(ctx context.Context, id uuid.UUID) (*model.Message, error) {
+	return uc.messageRepo.GetByID(ctx, id)
+}
+
+// FindMessageByClientID returns a message by client-assigned ID.
+// Returns nil if not found (not an error).
+func (uc *RtcSessionUsecase) FindMessageByClientID(ctx context.Context, clientID string) (*model.Message, error) {
+	return uc.messageRepo.FindByClientID(ctx, clientID)
+}
+
+// ListMessagesBySession returns messages for a session with cursor pagination (ASC by global_offset).
+func (uc *RtcSessionUsecase) ListMessagesBySession(ctx context.Context, sessionID uuid.UUID, cursor *uint32, limit int) ([]*model.Message, error) {
+	return uc.messageRepo.ListBySession(ctx, sessionID, cursor, limit)
+}
+
+// ListMessagesBeforeOffset returns messages with minOffset <= global_offset <= maxOffset.
+// Pass minOffset=0 to omit the lower bound.
+func (uc *RtcSessionUsecase) ListMessagesBeforeOffset(ctx context.Context, sessionID uuid.UUID, minOffset uint32, maxOffset uint32, limit int) ([]*model.Message, error) {
+	return uc.messageRepo.ListBySessionBeforeOffset(ctx, sessionID, minOffset, maxOffset, limit)
+}
+
+// ============================================================
+// Turn operations (used by RPC handlers)
+// ============================================================
+
+// GetTurn returns a turn by ID.
+// Returns nil and an error if the turn is not found.
+func (uc *RtcSessionUsecase) GetTurn(ctx context.Context, id uuid.UUID) (*model.Turn, error) {
+	return uc.turnRepo.GetByID(ctx, id)
+}
+
+// ListTurnsBySession returns turns for a session with cursor pagination.
+func (uc *RtcSessionUsecase) ListTurnsBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Turn, error) {
+	return uc.turnRepo.ListBySession(ctx, sessionID, cursor, limit)
+}
+
+// FindActiveTurnsBySession returns all non-terminal turns for a session.
+func (uc *RtcSessionUsecase) FindActiveTurnsBySession(ctx context.Context, sessionID uuid.UUID) ([]*model.Turn, error) {
+	return uc.turnRepo.FindActiveBySession(ctx, sessionID)
+}
+
+// ============================================================
+// Admin operations (used by HTTP admin handlers)
+// ============================================================
 
 // ListSessionsFilter holds filter criteria for admin session listing.
 type ListSessionsFilter struct {

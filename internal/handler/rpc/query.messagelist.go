@@ -46,7 +46,7 @@ func (h *Handler) MessageList(ctx context.Context, req *protocol.MessageListRequ
 		cursor = &offset32
 	}
 
-	messages, err := h.deps.Deps.MessageRepo.ListBySession(ctx, sessionUUID, cursor, limit)
+	messages, err := h.deps.Deps.RtcSessionUsecase.ListMessagesBySession(ctx, sessionUUID, cursor, limit)
 	if err != nil {
 		return nil, h.internalError(ctx, "message.list_failed", "internal error", err)
 	}

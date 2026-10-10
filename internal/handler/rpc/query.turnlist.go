@@ -12,7 +12,7 @@ import (
 func (h *Handler) TurnList(ctx context.Context, req *protocol.TurnListRequest) (*protocol.TurnListResponse, error) {
 	items, nextCursor, err := listBySessionCursor(ctx, h,
 		req.SessionId, req.Limit, req.Cursor, "turn",
-		h.deps.Deps.TurnRepo.ListBySession,
+		h.deps.Deps.RtcSessionUsecase.ListTurnsBySession,
 		model.ToProtocolTurn,
 		func(t *model.Turn) string { return t.ID.String() },
 	)

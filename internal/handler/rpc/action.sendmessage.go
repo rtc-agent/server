@@ -397,7 +397,7 @@ func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string)
 			Message: fmt.Sprintf("client_id too long: %d bytes (max %d)", len(clientID), maxClientIDLength),
 		}
 	}
-	existing, err := h.deps.Deps.MessageRepo.FindByClientID(ctx, clientID)
+	existing, err := h.deps.Deps.RtcSessionUsecase.FindMessageByClientID(ctx, clientID)
 	if err != nil {
 		return &APIError{Code: ErrorCodeInternalError, Message: "idempotency check failed"}
 	}

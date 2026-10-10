@@ -60,6 +60,44 @@ func (m *mockMemoryRepo) CountTokensByScope(_ context.Context, _ memory.ScopeTyp
 	return 0, nil
 }
 
+// mockTurnRepo implements repo.TurnRepo for testing.
+type mockTurnRepo struct{}
+
+func (m *mockTurnRepo) Create(_ context.Context, _ *model.Turn) error { return nil }
+func (m *mockTurnRepo) GetByID(_ context.Context, _ uuid.UUID) (*model.Turn, error) {
+	return nil, repo.ErrTurnNotFound
+}
+func (m *mockTurnRepo) FindByClientID(_ context.Context, _ string) (*model.Turn, error) {
+	return nil, nil
+}
+func (m *mockTurnRepo) ListBySession(_ context.Context, _ uuid.UUID, _ *string, _ int) ([]*model.Turn, error) {
+	return nil, nil
+}
+func (m *mockTurnRepo) FindActiveBySession(_ context.Context, _ uuid.UUID) ([]*model.Turn, error) {
+	return nil, nil
+}
+func (m *mockTurnRepo) FindStaleTurns(_ context.Context, _ []string) ([]*model.Turn, error) {
+	return nil, nil
+}
+func (m *mockTurnRepo) UpdateStatus(_ context.Context, _ uuid.UUID, _ protocol.TurnStatus, _ string) error {
+	return nil
+}
+func (m *mockTurnRepo) UpdateStatusBySession(_ context.Context, _ uuid.UUID, _ []string, _ protocol.TurnStatus) (int64, error) {
+	return 0, nil
+}
+func (m *mockTurnRepo) UpdateStatusAndInterruptID(_ context.Context, _ uuid.UUID, _ protocol.TurnStatus, _ string) error {
+	return nil
+}
+func (m *mockTurnRepo) GetByIDs(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]*model.Turn, error) {
+	return nil, nil
+}
+func (m *mockTurnRepo) CountBySessionAndStatus(_ context.Context, _ uuid.UUID, _ string) (int64, error) {
+	return 0, nil
+}
+func (m *mockTurnRepo) FindStaleTurnsWithLimit(_ context.Context, _ []string, _ int) ([]*model.Turn, error) {
+	return nil, nil
+}
+
 // mockUpdatePublisher implements usecase.UpdatePublisher for testing.
 type mockUpdatePublisher struct {
 	runAndPublishFunc func(ctx context.Context, fn func(txCtx context.Context) ([]updates.UpdatePublishItem, error)) ([]*protocol.Update, error)
@@ -84,10 +122,17 @@ func (m *mockUpdatePublisher) ResolveMessageContent(_ *model.Message) string { r
 func mockDependencies(t *testing.T, sessionRepo *mockSessionRepo, memoryRepo *mockMemoryRepo, publisher *mockUpdatePublisher) *Dependencies {
 	t.Helper()
 
+	// Create mock message and turn repos for RtcSessionUsecase
+	messageRepo := &mockMessageRepo{}
+	turnRepo := &mockTurnRepo{}
+
 	usecaseDeps := &usecase.Dependencies{
-		SessionRepo:     sessionRepo,
-		MemoryRepo:      memoryRepo,
-		UpdatePublisher: publisher,
+		SessionRepo:       sessionRepo,
+		MessageRepo:       messageRepo,
+		TurnRepo:          turnRepo,
+		MemoryRepo:        memoryRepo,
+		UpdatePublisher:   publisher,
+		RtcSessionUsecase: usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo),
 	}
 
 	// Create a no-op metrics instance

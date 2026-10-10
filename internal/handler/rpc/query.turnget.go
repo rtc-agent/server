@@ -17,7 +17,7 @@ func (h *Handler) TurnGet(ctx context.Context, req *protocol.TurnGetRequest) (*p
 		"turn_id",
 		"turn.not_found",
 		"turn",
-		h.deps.Deps.TurnRepo.GetByID,
+		h.deps.Deps.RtcSessionUsecase.GetTurn,
 		func(t *model.Turn) uuid.UUID { return t.SessionID },
 	)
 	if err != nil {

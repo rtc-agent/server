@@ -268,6 +268,13 @@ func provideUsecaseDependencies(
 		WebFetchManager:  webFetchManager,
 	}
 
+	// Initialize RtcSessionUsecase for RPC handler session/message/turn operations.
+	deps.RtcSessionUsecase = usecase.NewRtcSessionUsecase(
+		svcCtx.SessionRepo,
+		svcCtx.MessageRepo,
+		svcCtx.TurnRepo,
+	)
+
 	// Wire ChatModelFactory for dynamic per-turn config resolution.
 	// When ChatModelFactory is non-nil, createAgent and background LLM calls
 	// resolve model settings from the dynamic config registry (DB > yaml)

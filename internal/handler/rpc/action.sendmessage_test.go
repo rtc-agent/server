@@ -104,10 +104,15 @@ var testMetrics = turnagent.NewPrometheusMetrics()
 func newTestSendMessageHandler(t *testing.T, sessionRepo *mockSessionRepo, messageRepo *mockMessageRepo, publisher *mockPublisher) *Handler {
 	t.Helper()
 
+	// Create minimal mock turn repo for RtcSessionUsecase
+	turnRepo := &noopTurnRepoForSend{}
+
 	usecaseDeps := &usecase.Dependencies{
-		SessionRepo:     sessionRepo,
-		MessageRepo:     messageRepo,
-		UpdatePublisher: publisher,
+		SessionRepo:       sessionRepo,
+		MessageRepo:       messageRepo,
+		TurnRepo:          turnRepo,
+		UpdatePublisher:   publisher,
+		RtcSessionUsecase: usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo),
 		// Redis is nil here - only error path tests that fail before Redis
 		// is accessed can use this helper.
 	}
@@ -118,6 +123,44 @@ func newTestSendMessageHandler(t *testing.T, sessionRepo *mockSessionRepo, messa
 	}
 
 	return &Handler{deps: deps}
+}
+
+// noopTurnRepoForSend is a minimal no-op implementation of repo.TurnRepo for tests.
+type noopTurnRepoForSend struct{}
+
+func (m *noopTurnRepoForSend) Create(_ context.Context, _ *model.Turn) error { return nil }
+func (m *noopTurnRepoForSend) GetByID(_ context.Context, _ uuid.UUID) (*model.Turn, error) {
+	return nil, repo.ErrTurnNotFound
+}
+func (m *noopTurnRepoForSend) FindByClientID(_ context.Context, _ string) (*model.Turn, error) {
+	return nil, nil
+}
+func (m *noopTurnRepoForSend) ListBySession(_ context.Context, _ uuid.UUID, _ *string, _ int) ([]*model.Turn, error) {
+	return nil, nil
+}
+func (m *noopTurnRepoForSend) FindActiveBySession(_ context.Context, _ uuid.UUID) ([]*model.Turn, error) {
+	return nil, nil
+}
+func (m *noopTurnRepoForSend) FindStaleTurns(_ context.Context, _ []string) ([]*model.Turn, error) {
+	return nil, nil
+}
+func (m *noopTurnRepoForSend) UpdateStatus(_ context.Context, _ uuid.UUID, _ protocol.TurnStatus, _ string) error {
+	return nil
+}
+func (m *noopTurnRepoForSend) UpdateStatusBySession(_ context.Context, _ uuid.UUID, _ []string, _ protocol.TurnStatus) (int64, error) {
+	return 0, nil
+}
+func (m *noopTurnRepoForSend) UpdateStatusAndInterruptID(_ context.Context, _ uuid.UUID, _ protocol.TurnStatus, _ string) error {
+	return nil
+}
+func (m *noopTurnRepoForSend) GetByIDs(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]*model.Turn, error) {
+	return nil, nil
+}
+func (m *noopTurnRepoForSend) CountBySessionAndStatus(_ context.Context, _ uuid.UUID, _ string) (int64, error) {
+	return 0, nil
+}
+func (m *noopTurnRepoForSend) FindStaleTurnsWithLimit(_ context.Context, _ []string, _ int) ([]*model.Turn, error) {
+	return nil, nil
 }
 
 func sendMsgCtx(t *testing.T, userID uuid.UUID, _ string) context.Context {

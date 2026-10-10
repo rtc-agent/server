@@ -105,7 +105,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 	// sufficient. If the pre-load fails, we proceed with nil session and
 	// the update publisher skips event delivery; the frontend will reload
 	// the latest state when it notices the RTC status change.
-	sessionBefore, sessionLoadErr := h.deps.Deps.SessionRepo.GetByID(ctx, rtc.SessionID)
+	sessionBefore, sessionLoadErr := h.deps.Deps.RtcSessionUsecase.GetSession(ctx, rtc.SessionID)
 	if sessionLoadErr != nil {
 		logger.Warn(ctx, "[UpdateRtcStatus] pre-load session failed (will skip event publishing)",
 			zap.String("session", rtc.SessionID.String()),

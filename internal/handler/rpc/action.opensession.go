@@ -47,7 +47,7 @@ func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequ
 
 	logger.Info(ctx, "[OpenSession]", zap.String("user", userID.String()), zap.String("session", req.SessionId))
 
-	session, err := h.deps.Deps.SessionRepo.GetByID(ctx, sessionUUID)
+	session, err := h.deps.Deps.RtcSessionUsecase.GetSession(ctx, sessionUUID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")
@@ -77,7 +77,7 @@ func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequ
 		}
 
 		// Clear closed_at so the session is fully reopened.
-		if err := h.deps.Deps.SessionRepo.Update(txCtx, session.ID, map[string]any{"closed_at": nil}); err != nil {
+		if err := h.deps.Deps.RtcSessionUsecase.UpdateSession(txCtx, session.ID, map[string]any{"closed_at": nil}); err != nil {
 			return nil, fmt.Errorf("clear closed_at failed")
 		}
 

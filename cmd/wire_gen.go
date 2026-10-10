@@ -356,6 +356,13 @@ func provideUsecaseDependencies(
 		WebFetchManager:     webFetchManager,
 	}
 
+	// Initialize RtcSessionUsecase for RPC handler session/message/turn operations.
+	deps.RtcSessionUsecase = usecase.NewRtcSessionUsecase(
+		svcCtx.SessionRepo,
+		svcCtx.MessageRepo,
+		svcCtx.TurnRepo,
+	)
+
 	if chatModelResult2.model != nil {
 		deps.ChatModelFactory = server.NewChatModelFactory(cfg.LLM, metrics, logger.IsDebugMode())
 	}

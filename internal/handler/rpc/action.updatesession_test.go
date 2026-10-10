@@ -22,9 +22,16 @@ import (
 func newTestUpdateSessionHandler(t *testing.T, sessionRepo *mockSessionRepo, publisher *mockPublisher) *Handler {
 	t.Helper()
 
+	// Create minimal mock repos for RtcSessionUsecase
+	messageRepo := &noopMessageRepoForUpdate{}
+	turnRepo := &noopTurnRepoForUpdate{}
+
 	usecaseDeps := &usecase.Dependencies{
-		SessionRepo:     sessionRepo,
-		UpdatePublisher: publisher,
+		SessionRepo:       sessionRepo,
+		MessageRepo:       messageRepo,
+		TurnRepo:          turnRepo,
+		UpdatePublisher:   publisher,
+		RtcSessionUsecase: usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo),
 	}
 
 	deps := &Dependencies{
@@ -33,6 +40,83 @@ func newTestUpdateSessionHandler(t *testing.T, sessionRepo *mockSessionRepo, pub
 	}
 
 	return &Handler{deps: deps}
+}
+
+// noopMessageRepoForUpdate is a minimal no-op implementation of repo.MessageRepo for tests.
+type noopMessageRepoForUpdate struct{}
+
+func (m *noopMessageRepoForUpdate) Create(_ context.Context, _ *model.Message) error { return nil }
+func (m *noopMessageRepoForUpdate) BatchCreate(_ context.Context, _ []*model.Message) error {
+	return nil
+}
+func (m *noopMessageRepoForUpdate) GetByID(_ context.Context, _ uuid.UUID) (*model.Message, error) {
+	return nil, repo.ErrMessageNotFound
+}
+func (m *noopMessageRepoForUpdate) FindByClientID(_ context.Context, _ string) (*model.Message, error) {
+	return nil, nil
+}
+func (m *noopMessageRepoForUpdate) ListBySession(_ context.Context, _ uuid.UUID, _ *uint32, _ int) ([]*model.Message, error) {
+	return nil, nil
+}
+func (m *noopMessageRepoForUpdate) ListRecentBySession(_ context.Context, _ uuid.UUID, _ int) ([]*model.Message, error) {
+	return nil, nil
+}
+func (m *noopMessageRepoForUpdate) ListBySessionBeforeOffset(_ context.Context, _ uuid.UUID, _ uint32, _ uint32, _ int) ([]*model.Message, error) {
+	return nil, nil
+}
+func (m *noopMessageRepoForUpdate) GetNextGlobalOffset(_ context.Context, _ uuid.UUID) (uint32, error) {
+	return 1, nil
+}
+func (m *noopMessageRepoForUpdate) UpdateStreamingStatus(_ context.Context, _ uuid.UUID, _ protocol.MessageStreamingStatus, _ string) error {
+	return nil
+}
+func (m *noopMessageRepoForUpdate) DeleteByIDs(_ context.Context, _ []uuid.UUID) error { return nil }
+func (m *noopMessageRepoForUpdate) GetByIDs(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]*model.Message, error) {
+	return nil, nil
+}
+func (m *noopMessageRepoForUpdate) UpdateTokenUsage(_ context.Context, _ uuid.UUID, _ *model.TokenUsageUpdate) error {
+	return nil
+}
+func (m *noopMessageRepoForUpdate) ListForAdmin(_ context.Context, _ uuid.UUID, _ repo.MessageAdminFilter) ([]*model.Message, int64, error) {
+	return nil, 0, nil
+}
+
+// noopTurnRepoForUpdate is a minimal no-op implementation of repo.TurnRepo for tests.
+type noopTurnRepoForUpdate struct{}
+
+func (m *noopTurnRepoForUpdate) Create(_ context.Context, _ *model.Turn) error { return nil }
+func (m *noopTurnRepoForUpdate) GetByID(_ context.Context, _ uuid.UUID) (*model.Turn, error) {
+	return nil, repo.ErrTurnNotFound
+}
+func (m *noopTurnRepoForUpdate) FindByClientID(_ context.Context, _ string) (*model.Turn, error) {
+	return nil, nil
+}
+func (m *noopTurnRepoForUpdate) ListBySession(_ context.Context, _ uuid.UUID, _ *string, _ int) ([]*model.Turn, error) {
+	return nil, nil
+}
+func (m *noopTurnRepoForUpdate) FindActiveBySession(_ context.Context, _ uuid.UUID) ([]*model.Turn, error) {
+	return nil, nil
+}
+func (m *noopTurnRepoForUpdate) FindStaleTurns(_ context.Context, _ []string) ([]*model.Turn, error) {
+	return nil, nil
+}
+func (m *noopTurnRepoForUpdate) UpdateStatus(_ context.Context, _ uuid.UUID, _ protocol.TurnStatus, _ string) error {
+	return nil
+}
+func (m *noopTurnRepoForUpdate) UpdateStatusBySession(_ context.Context, _ uuid.UUID, _ []string, _ protocol.TurnStatus) (int64, error) {
+	return 0, nil
+}
+func (m *noopTurnRepoForUpdate) UpdateStatusAndInterruptID(_ context.Context, _ uuid.UUID, _ protocol.TurnStatus, _ string) error {
+	return nil
+}
+func (m *noopTurnRepoForUpdate) GetByIDs(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]*model.Turn, error) {
+	return nil, nil
+}
+func (m *noopTurnRepoForUpdate) CountBySessionAndStatus(_ context.Context, _ uuid.UUID, _ string) (int64, error) {
+	return 0, nil
+}
+func (m *noopTurnRepoForUpdate) FindStaleTurnsWithLimit(_ context.Context, _ []string, _ int) ([]*model.Turn, error) {
+	return nil, nil
 }
 
 func updateSessionCtx(t *testing.T, userID uuid.UUID) context.Context {

@@ -56,7 +56,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		zap.String("session", req.SessionId))
 
 	// 1. Verify session existence.
-	session, err := h.deps.Deps.SessionRepo.GetByID(ctx, sessionUUID)
+	session, err := h.deps.Deps.RtcSessionUsecase.GetSession(ctx, sessionUUID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")

@@ -52,6 +52,11 @@ type Dependencies struct {
 	FileRepo            repo.FileRepo            // file metadata storage (attachment validation)
 	UpdatePublisher     Publisher
 
+	// RtcSessionUsecase provides session/message/turn operations for RPC handlers.
+	// This usecase wraps repo operations to maintain proper layer separation
+	// (Handler -> Usecase -> Repo).
+	RtcSessionUsecase *RtcSessionUsecase
+
 	// ChatModel is the eino ChatModel for LLM interactions.
 	// Deprecated: prefer ChatModelFactory for dynamic config support.
 	// Kept for backwards compatibility when factory is not available.

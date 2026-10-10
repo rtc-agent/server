@@ -112,7 +112,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	}
 
 	// Pre-load session for event routing (best-effort, not critical).
-	sessionBefore, sessionLoadErr := h.deps.Deps.SessionRepo.GetByID(ctx, rtc.SessionID)
+	sessionBefore, sessionLoadErr := h.deps.Deps.RtcSessionUsecase.GetSession(ctx, rtc.SessionID)
 	if sessionLoadErr != nil {
 		logger.Warn(ctx, "[SubmitRtcResult] pre-load session failed (will use best-effort event publishing)",
 			zap.String("session", rtc.SessionID.String()), zap.Error(sessionLoadErr))
@@ -187,7 +187,7 @@ func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc
 		return nil, fmt.Errorf("update rtc result failed")
 	}
 
-	inputMsg, err := h.deps.Deps.MessageRepo.GetByID(txCtx, rtc.MessageID)
+	inputMsg, err := h.deps.Deps.RtcSessionUsecase.GetMessage(txCtx, rtc.MessageID)
 	if err != nil {
 		return nil, fmt.Errorf("get input message failed")
 	}
@@ -321,7 +321,7 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc, 
 	}
 
 	// Pre-check: skip triggering a new turn if session is already closed.
-	session, err := h.deps.Deps.SessionRepo.GetByID(ctx, rtc.SessionID)
+	session, err := h.deps.Deps.RtcSessionUsecase.GetSession(ctx, rtc.SessionID)
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
@@ -338,7 +338,7 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc, 
 	}
 
 	// Check if there's an active turn for this session.
-	activeTurns, err := h.deps.Deps.TurnRepo.FindActiveBySession(ctx, rtc.SessionID)
+	activeTurns, err := h.deps.Deps.RtcSessionUsecase.FindActiveTurnsBySession(ctx, rtc.SessionID)
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)

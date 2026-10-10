@@ -246,6 +246,7 @@ type repositories struct {
 	deviceRepo           repo.DeviceRepo
 	sessionRepo          repo.SessionRepo
 	messageRepo          repo.MessageRepo
+	turnRepo             repo.TurnRepo
 }
 
 // initRepositories initializes all repository dependencies.
@@ -262,6 +263,7 @@ func initRepositories(db *gorm.DB) repositories {
 		deviceRepo:           repo.NewDeviceRepo(db),
 		sessionRepo:          repo.NewSessionRepo(db),
 		messageRepo:          repo.NewMessageRepo(db),
+		turnRepo:             repo.NewTurnRepo(db),
 	}
 }
 
@@ -314,7 +316,7 @@ func initUsecases(ctx context.Context, db *gorm.DB, cfg *config.AdminConfig, rdb
 	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(db, repos.adminUserRepo, repos.adminRoleRepo, repos.adminUserRoleRepo, enforcer, repos.auditLogRepo)
 	adminUserUsecase := usecase.NewAdminUserUsecase(db, repos.adminUserRepo, repos.adminUserRoleRepo, repos.adminRoleRepo, enforcer)
 	rtcUserUsecase := usecase.NewRtcUserUsecase(db, repos.oauth2UserRepo, repos.mainRefreshTokenRepo, repos.auditLogRepo, repos.deviceRepo)
-	rtcSessionUsecase := usecase.NewRtcSessionUsecase(repos.sessionRepo, repos.messageRepo)
+	rtcSessionUsecase := usecase.NewRtcSessionUsecase(repos.sessionRepo, repos.messageRepo, repos.turnRepo)
 	serverConfigUsecase := usecase.NewServerConfigUsecase(repos.configRepo, repos.auditLogRepo, repos.oauth2UserRepo, db)
 
 	// Set up config publisher for multi-instance cache synchronization

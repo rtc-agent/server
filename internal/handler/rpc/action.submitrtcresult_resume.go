@@ -188,7 +188,7 @@ func (h *Handler) resolveInterruptID(ctx context.Context, rtc *model.Rtc, active
 	retryBO.InitialInterval = 20 * time.Millisecond
 	retryBO.MaxInterval = 200 * time.Millisecond
 	gotID, err := backoff.Retry(ctx, func() (string, error) {
-		updatedTurn, repoErr := h.deps.Deps.TurnRepo.GetByID(ctx, pendingTurnID)
+		updatedTurn, repoErr := h.deps.Deps.RtcSessionUsecase.GetTurn(ctx, pendingTurnID)
 		if repoErr != nil {
 			return "", backoff.Permanent(repoErr)
 		}
