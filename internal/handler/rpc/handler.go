@@ -26,14 +26,11 @@ import (
 
 // Dependencies required by the RPC Handler.
 type Dependencies struct {
-	Deps                *usecase.Dependencies
-	SessionRepo         primitives.SessionRepo
-	Queue               *rtcqueue.Queue // rtc-queue for publishing/cancelling work items
-	API                 config.APIConfig
-	ScriptExecutionRepo primitives.ScriptExecutionRepo // script execution persistence
-	Metrics             *turnagent.PrometheusMetrics   // Prometheus metrics
-	AsynqInspector      *hibikenasynq.Inspector        // asynq inspector for loop task cleanup
-	FileRepo            primitives.FileRepo            // file existence validation for attachments
+	Deps           *usecase.Dependencies
+	Queue          *rtcqueue.Queue // rtc-queue for publishing/cancelling work items
+	API            config.APIConfig
+	Metrics        *turnagent.PrometheusMetrics // Prometheus metrics
+	AsynqInspector *hibikenasynq.Inspector      // asynq inspector for loop task cleanup
 }
 
 // Handler is the RPC handler.
@@ -213,8 +210,8 @@ func (h *Handler) validateFileAttachments(
 	if umc.Files == nil || len(*umc.Files) == 0 {
 		return nil
 	}
-	if err := primitives.ValidateFilesExist(ctx, h.deps.FileRepo, *umc.Files, userID); err != nil {
-		return &APIError{Code: ErrorCodeFileNotFound, Message: err.Error()}
+	if err := primitives.ValidateFilesExist(ctx, h.deps.Deps.FileRepo, *umc.Files, userID); err != nil {
+		return &APIError{Code: ErrorCodeFileNotFound, Message: "One or more referenced files were not found"}
 	}
 	return nil
 }

@@ -28,9 +28,8 @@ func newTestUpdateSessionHandler(t *testing.T, sessionRepo *mockSessionRepo, pub
 	}
 
 	deps := &Dependencies{
-		Deps:        usecaseDeps,
-		SessionRepo: sessionRepo,
-		Metrics:     testMetrics, // Shared with sendmessage_test.go
+		Deps:    usecaseDeps,
+		Metrics: testMetrics, // Shared with sendmessage_test.go
 	}
 
 	return &Handler{deps: deps}

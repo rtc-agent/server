@@ -59,6 +59,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	deviceRepo := repo.NewDeviceRepo(db)
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
+	fileRepo := repo.NewFileRepo(db)
 	repository := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
 	serverConfigRepo := repo.NewServerConfigRepo(db)
@@ -75,7 +76,7 @@ func InitializeServiceContext(cfg *config.Config, db *gorm.DB, rdb *redis.Client
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, scriptExecutionRepo, repository, loopRepo, serverConfigRepo, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, scriptExecutionRepo, fileRepo, repository, loopRepo, serverConfigRepo, updatePublisher, node, dualBroker, jwtSigner)
 	return serviceContext, nil
 }
 
@@ -91,6 +92,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	deviceRepo := repo.NewDeviceRepo(db)
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
+	fileRepo := repo.NewFileRepo(db)
 	repository := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
 	serverConfigRepo := repo.NewServerConfigRepo(db)
@@ -107,7 +109,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, scriptExecutionRepo, repository, loopRepo, serverConfigRepo, updatePublisher, node, dualBroker, jwtSigner)
+	serviceContext := svc.NewServiceContextWithDeps(cfg, db, universalClient, sessionRepo, messageRepo, turnRepo, rtcRepo, goalRepo, oAuth2UserRepo, deviceRepo, refreshTokenRepo, scriptExecutionRepo, fileRepo, repository, loopRepo, serverConfigRepo, updatePublisher, node, dualBroker, jwtSigner)
 	prometheusMetrics := provideMetrics()
 	cmdChatModelResult, err := provideChatModel(cfg, prometheusMetrics)
 	if err != nil {
@@ -122,8 +124,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	dependencies := provideUsecaseDependencies(serviceContext, cmdChatModelResult, cfg, taskScheduler, webSearchManager, webFetchManager, prometheusMetrics)
 	queue := provideQueue(rdb)
 	inspector := provideAsynqInspector(cfg)
-	fileRepo := repo.NewFileRepo(db)
-	handler := provideRPCHandler(serviceContext, dependencies, sessionRepo, queue, cfg, prometheusMetrics, inspector, fileRepo)
+	handler := provideRPCHandler(serviceContext, dependencies, queue, cfg, prometheusMetrics, inspector)
 	httphandlerHandler := provideHTTPHandler(serviceContext)
 	redisStore := provideStateStore(universalClient)
 	client := provideOAuth2ProviderClient(cfg)
@@ -140,7 +141,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	oss3Usecase, err := provideOSS3Usecase(backend, db, fileRepo, multipartUploadRepo, temporaryCredentialRepo, rdb, v, cfg)
+	oss3Usecase, err := provideOSS3Usecase(backend, db, serviceContext.FileRepo, multipartUploadRepo, temporaryCredentialRepo, rdb, v, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -276,15 +277,15 @@ func (h *centrifugeLogHandler) handle(entry centrifuge.LogEntry) {
 
 	switch entry.Level {
 	case centrifuge.LogLevelTrace, centrifuge.LogLevelDebug:
-		logger.Debug(ctx, "[centrifuge] "+entry.Message, fields...)
+		logger.Debug(ctx, "centrifuge.log", zap.String("message", entry.Message))
 	case centrifuge.LogLevelInfo:
-		logger.Info(ctx, "[centrifuge] "+entry.Message, fields...)
+		logger.Info(ctx, "centrifuge.log", zap.String("message", entry.Message))
 	case centrifuge.LogLevelWarn:
-		logger.Warn(ctx, "[centrifuge] "+entry.Message, fields...)
+		logger.Warn(ctx, "centrifuge.log", zap.String("message", entry.Message))
 	case centrifuge.LogLevelError:
-		logger.Error(ctx, "[centrifuge] "+entry.Message, fields...)
+		logger.Error(ctx, "centrifuge.log", zap.String("message", entry.Message))
 	default:
-		logger.Info(ctx, "[centrifuge] "+entry.Message, fields...)
+		logger.Info(ctx, "centrifuge.log", zap.String("message", entry.Message))
 	}
 }
 
@@ -327,18 +328,20 @@ func provideUsecaseDependencies(
 	metrics *turnagent.PrometheusMetrics,
 ) *usecase.Dependencies {
 	deps := &usecase.Dependencies{
-		DB:               svcCtx.DB,
-		Redis:            svcCtx.Redis,
-		SessionRepo:      svcCtx.SessionRepo,
-		MessageRepo:      svcCtx.MessageRepo,
-		TurnRepo:         svcCtx.TurnRepo,
-		RtcRepo:          svcCtx.RtcRepo,
-		GoalRepo:         svcCtx.GoalRepo,
-		LoopRepo:         svcCtx.LoopRepo,
-		MemoryRepo:       svcCtx.MemoryRepo,
-		ServerConfigRepo: svcCtx.ServerConfigRepo,
-		ConfigProvider:   config.NewDBConfigProvider(svcCtx.ServerConfigRepo),
-		UpdatePublisher:  svcCtx.UpdatePublisher,
+		DB:                  svcCtx.DB,
+		Redis:               svcCtx.Redis,
+		SessionRepo:         svcCtx.SessionRepo,
+		MessageRepo:         svcCtx.MessageRepo,
+		TurnRepo:            svcCtx.TurnRepo,
+		RtcRepo:             svcCtx.RtcRepo,
+		GoalRepo:            svcCtx.GoalRepo,
+		LoopRepo:            svcCtx.LoopRepo,
+		MemoryRepo:          svcCtx.MemoryRepo,
+		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
+		FileRepo:            svcCtx.FileRepo,
+		ServerConfigRepo:    svcCtx.ServerConfigRepo,
+		ConfigProvider:      config.NewDBConfigProvider(svcCtx.ServerConfigRepo),
+		UpdatePublisher:     svcCtx.UpdatePublisher,
 		ChatModel:        chatModelResult2.model,
 		LLMConfig:        cfg.LLM,
 		SystemPrompt:     cfg.Worker.SystemPrompt,
@@ -665,11 +668,11 @@ func provideQueueWorker(
 type workerLogger struct{}
 
 func (l *workerLogger) Info(ctx context.Context, msg string, keysAndValues ...any) {
-	logger.Info(ctx, "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+	logger.Info(ctx, "rtcqueue."+msg, toZapFields(keysAndValues)...)
 }
 
 func (l *workerLogger) Error(ctx context.Context, msg string, keysAndValues ...any) {
-	logger.Error(ctx, "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+	logger.Error(ctx, "rtcqueue."+msg, toZapFields(keysAndValues)...)
 }
 
 // toZapFields converts key-value pairs to []zap.Field.
@@ -698,22 +701,17 @@ func provideOAuth2ProviderClient(cfg *config.Config) *oauth.Client {
 func provideRPCHandler(
 	svcCtx *svc.ServiceContext,
 	deps *usecase.Dependencies,
-	sessionRepo repo.SessionRepo,
 	queue *rtcqueue.Queue,
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
 	inspector *asynq.Inspector,
-	fileRepo repo.FileRepo,
 ) *rpchandler.Handler {
 	handler := rpchandler.NewHandler(&rpchandler.Dependencies{
-		Deps:                deps,
-		SessionRepo:         sessionRepo,
-		Queue:               queue,
-		API:                 cfg.API,
-		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
-		Metrics:             metrics,
-		AsynqInspector:      inspector,
-		FileRepo:            fileRepo,
+		Deps:           deps,
+		Queue:          queue,
+		API:            cfg.API,
+		Metrics:        metrics,
+		AsynqInspector: inspector,
 	})
 	svc.RegisterRPCHandler(handler)
 	return handler

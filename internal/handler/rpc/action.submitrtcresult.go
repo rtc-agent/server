@@ -112,7 +112,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 	}
 
 	// Pre-load session for event routing (best-effort, not critical).
-	sessionBefore, sessionLoadErr := h.deps.SessionRepo.GetByID(ctx, rtc.SessionID)
+	sessionBefore, sessionLoadErr := h.deps.Deps.SessionRepo.GetByID(ctx, rtc.SessionID)
 	if sessionLoadErr != nil {
 		logger.Warn(ctx, "[SubmitRtcResult] pre-load session failed (will use best-effort event publishing)",
 			zap.String("session", rtc.SessionID.String()), zap.Error(sessionLoadErr))
@@ -321,7 +321,7 @@ func (h *Handler) resumeTurnAfterRtc(callerCtx context.Context, rtc *model.Rtc, 
 	}
 
 	// Pre-check: skip triggering a new turn if session is already closed.
-	session, err := h.deps.SessionRepo.GetByID(ctx, rtc.SessionID)
+	session, err := h.deps.Deps.SessionRepo.GetByID(ctx, rtc.SessionID)
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)

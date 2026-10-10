@@ -156,8 +156,8 @@ func provideCentrifugeNode(cfg *config.Config) (*centrifuge.Node, error) {
 	}
 
 	return centrifuge.New(centrifuge.Config{
-		LogLevel:         centrifuge.LogLevelDebug, // elevated to Debug level
-		LogHandler:       newCentrifugeLogHandler(),
+		LogLevel:           centrifuge.LogLevelDebug, // elevated to Debug level
+		LogHandler:         newCentrifugeLogHandler(),
 		ClientQueueMaxSize: clientQueueMaxSize,
 	})
 }
@@ -186,15 +186,15 @@ func (h *centrifugeLogHandler) handle(entry centrifuge.LogEntry) {
 	// Map Centrifuge log level to zap log level.
 	switch entry.Level {
 	case centrifuge.LogLevelTrace, centrifuge.LogLevelDebug:
-		logger.Debug(ctx, "[centrifuge] "+entry.Message, fields...)
+		logger.Debug(ctx, "centrifuge.log", zap.String("message", entry.Message))
 	case centrifuge.LogLevelInfo:
-		logger.Info(ctx, "[centrifuge] "+entry.Message, fields...)
+		logger.Info(ctx, "centrifuge.log", zap.String("message", entry.Message))
 	case centrifuge.LogLevelWarn:
-		logger.Warn(ctx, "[centrifuge] "+entry.Message, fields...)
+		logger.Warn(ctx, "centrifuge.log", zap.String("message", entry.Message))
 	case centrifuge.LogLevelError:
-		logger.Error(ctx, "[centrifuge] "+entry.Message, fields...)
+		logger.Error(ctx, "centrifuge.log", zap.String("message", entry.Message))
 	default:
-		logger.Info(ctx, "[centrifuge] "+entry.Message, fields...)
+		logger.Info(ctx, "centrifuge.log", zap.String("message", entry.Message))
 	}
 }
 
@@ -238,18 +238,20 @@ func provideUsecaseDependencies(
 	metrics *turnagent.PrometheusMetrics,
 ) *usecase.Dependencies {
 	deps := &usecase.Dependencies{
-		DB:               svcCtx.DB,
-		Redis:            svcCtx.Redis,
-		SessionRepo:      svcCtx.SessionRepo,
-		MessageRepo:      svcCtx.MessageRepo,
-		TurnRepo:         svcCtx.TurnRepo,
-		RtcRepo:          svcCtx.RtcRepo,
-		GoalRepo:         svcCtx.GoalRepo,
-		LoopRepo:         svcCtx.LoopRepo,
-		MemoryRepo:       svcCtx.MemoryRepo,
-		ServerConfigRepo:       svcCtx.ServerConfigRepo,
-		ConfigProvider:   config.NewDBConfigProvider(svcCtx.ServerConfigRepo),
-		UpdatePublisher:  svcCtx.UpdatePublisher,
+		DB:                  svcCtx.DB,
+		Redis:               svcCtx.Redis,
+		SessionRepo:         svcCtx.SessionRepo,
+		MessageRepo:         svcCtx.MessageRepo,
+		TurnRepo:            svcCtx.TurnRepo,
+		RtcRepo:             svcCtx.RtcRepo,
+		GoalRepo:            svcCtx.GoalRepo,
+		LoopRepo:            svcCtx.LoopRepo,
+		MemoryRepo:          svcCtx.MemoryRepo,
+		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
+		FileRepo:            svcCtx.FileRepo,
+		ServerConfigRepo:    svcCtx.ServerConfigRepo,
+		ConfigProvider:      config.NewDBConfigProvider(svcCtx.ServerConfigRepo),
+		UpdatePublisher:     svcCtx.UpdatePublisher,
 		ChatModel:        chatModelResult.model,
 		LLMConfig:        cfg.LLM,
 		SystemPrompt:     cfg.Worker.SystemPrompt,
@@ -598,11 +600,11 @@ func provideQueueWorker(
 type workerLogger struct{}
 
 func (l *workerLogger) Info(ctx context.Context, msg string, keysAndValues ...any) {
-	logger.Info(ctx, "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+	logger.Info(ctx, "rtcqueue."+msg, toZapFields(keysAndValues)...)
 }
 
 func (l *workerLogger) Error(ctx context.Context, msg string, keysAndValues ...any) {
-	logger.Error(ctx, "[rtcqueue] "+msg, toZapFields(keysAndValues)...)
+	logger.Error(ctx, "rtcqueue."+msg, toZapFields(keysAndValues)...)
 }
 
 // toZapFields converts key-value pairs to []zap.Field.
@@ -631,22 +633,17 @@ func provideOAuth2ProviderClient(cfg *config.Config) *oauth.Client {
 func provideRPCHandler(
 	svcCtx *svc.ServiceContext,
 	deps *usecase.Dependencies,
-	sessionRepo repo.SessionRepo,
 	queue *rtcqueue.Queue,
 	cfg *config.Config,
 	metrics *turnagent.PrometheusMetrics,
 	inspector *hibikenasynq.Inspector,
-	fileRepo repo.FileRepo,
 ) *rpchandler.Handler {
 	handler := rpchandler.NewHandler(&rpchandler.Dependencies{
-		Deps:                deps,
-		SessionRepo:         sessionRepo,
-		Queue:               queue,
-		API:                 cfg.API,
-		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
-		Metrics:             metrics,
-		AsynqInspector:      inspector,
-		FileRepo:            fileRepo,
+		Deps:           deps,
+		Queue:          queue,
+		API:            cfg.API,
+		Metrics:        metrics,
+		AsynqInspector: inspector,
 	})
 	// Register globally for Centrifuge RPC callbacks
 	svc.RegisterRPCHandler(handler)

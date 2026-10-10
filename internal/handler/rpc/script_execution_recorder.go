@@ -233,7 +233,7 @@ func (r *scriptExecutionRecorder) processTask(task scriptRecordTask) {
 	// 7. Write to the database (with timeout to prevent indefinite blocking when connection pool is full).
 	dbCtx, dbCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer dbCancel()
-	if err := r.deps.ScriptExecutionRepo.Create(dbCtx, exec); err != nil {
+	if err := r.deps.Deps.ScriptExecutionRepo.Create(dbCtx, exec); err != nil {
 		logger.Error(ctx, "[scriptExecutionRecorder] create failed",
 			zap.String("rtc", rtc.ID.String()),
 			zap.Error(err))

@@ -113,9 +113,8 @@ func newTestSendMessageHandler(t *testing.T, sessionRepo *mockSessionRepo, messa
 	}
 
 	deps := &Dependencies{
-		Deps:        usecaseDeps,
-		SessionRepo: sessionRepo,
-		Metrics:     testMetrics,
+		Deps:    usecaseDeps,
+		Metrics: testMetrics,
 	}
 
 	return &Handler{deps: deps}

@@ -71,7 +71,7 @@ func (h *Handler) UpdateSession(ctx context.Context, req *protocol.UpdateSession
 	// sufficient. If the pre-load fails, we proceed with nil session and
 	// the update publisher skips event delivery; the frontend will reload
 	// the latest state when it notices the session title change.
-	sessionBefore, sessionLoadErr := h.deps.SessionRepo.GetByID(ctx, sessionUUID)
+	sessionBefore, sessionLoadErr := h.deps.Deps.SessionRepo.GetByID(ctx, sessionUUID)
 	if sessionLoadErr != nil {
 		logger.Warn(ctx, "[UpdateSession] pre-load session failed (will skip event publishing)",
 			zap.String("session", sessionUUID.String()),

@@ -41,7 +41,7 @@ func parseUUIDPtr(id *protocol.UUID, fieldName string) (*uuid.UUID, *APIError) {
 // loadOwnedSession loads a session and verifies ownership by the current user.
 // The returned session is guaranteed non-nil; on failure, a wrapped APIError is returned.
 func (h *Handler) loadOwnedSession(ctx context.Context, sessionID uuid.UUID, userID uuid.UUID) (*model.Session, error) {
-	session, err := h.deps.SessionRepo.GetByID(ctx, sessionID)
+	session, err := h.deps.Deps.SessionRepo.GetByID(ctx, sessionID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			return nil, &APIError{

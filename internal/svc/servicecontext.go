@@ -38,6 +38,7 @@ type ServiceContext struct {
 	DeviceRepo          repo.DeviceRepo
 	RefreshTokenRepo    repo.RefreshTokenRepo
 	ScriptExecutionRepo repo.ScriptExecutionRepo
+	FileRepo            repo.FileRepo     // file metadata storage (attachment validation)
 	MemoryRepo          memory.Repository // Phase 2: unified Memory storage
 	LoopRepo            repo.LoopRepo
 	ServerConfigRepo    repo.ServerConfigRepo // Dynamic configuration repository
@@ -61,6 +62,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	deviceRepo := repo.NewDeviceRepo(db)
 	refreshTokenRepo := repo.NewRefreshTokenRepo(db)
 	scriptExecutionRepo := repo.NewScriptExecutionRepo(db)
+	fileRepo := repo.NewFileRepo(db)
 	memoryRepo := repo.NewMemoryRepo(db)
 	loopRepo := repo.NewLoopRepo(db)
 	configRepo := repo.NewServerConfigRepo(db)
@@ -100,7 +102,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	return NewServiceContextWithDeps(cfg, db, rdb,
 		sessionRepo, messageRepo, turnRepo, rtcRepo,
 		goalRepo, oauth2UserRepo, deviceRepo, refreshTokenRepo,
-		scriptExecutionRepo, memoryRepo, loopRepo,
+		scriptExecutionRepo, fileRepo, memoryRepo, loopRepo,
 		configRepo,
 		updatePublisher, node, dualBroker, jwtSigner)
 }
@@ -122,6 +124,7 @@ func NewServiceContextWithDeps(
 	deviceRepo repo.DeviceRepo,
 	refreshTokenRepo repo.RefreshTokenRepo,
 	scriptExecutionRepo repo.ScriptExecutionRepo,
+	fileRepo repo.FileRepo,
 	memoryRepo memory.Repository,
 	loopRepo repo.LoopRepo,
 	configRepo repo.ServerConfigRepo,
@@ -148,6 +151,7 @@ func NewServiceContextWithDeps(
 		DeviceRepo:          deviceRepo,
 		RefreshTokenRepo:    refreshTokenRepo,
 		ScriptExecutionRepo: scriptExecutionRepo,
+		FileRepo:            fileRepo,
 		MemoryRepo:          memoryRepo,
 		LoopRepo:            loopRepo,
 		ServerConfigRepo:    configRepo,
@@ -216,15 +220,15 @@ func createCentrifugeLogHandler() centrifuge.LogHandler {
 		// Map Centrifuge log levels to zap log levels
 		switch entry.Level {
 		case centrifuge.LogLevelTrace, centrifuge.LogLevelDebug:
-			logger.Debug(ctx, "[centrifuge] "+entry.Message, fields...)
+			logger.Debug(ctx, "centrifuge.log", append(fields, zap.String("message", entry.Message))...)
 		case centrifuge.LogLevelInfo:
-			logger.Info(ctx, "[centrifuge] "+entry.Message, fields...)
+			logger.Info(ctx, "centrifuge.log", append(fields, zap.String("message", entry.Message))...)
 		case centrifuge.LogLevelWarn:
-			logger.Warn(ctx, "[centrifuge] "+entry.Message, fields...)
+			logger.Warn(ctx, "centrifuge.log", append(fields, zap.String("message", entry.Message))...)
 		case centrifuge.LogLevelError:
-			logger.Error(ctx, "[centrifuge] "+entry.Message, fields...)
+			logger.Error(ctx, "centrifuge.log", append(fields, zap.String("message", entry.Message))...)
 		default:
-			logger.Info(ctx, "[centrifuge] "+entry.Message, fields...)
+			logger.Info(ctx, "centrifuge.log", append(fields, zap.String("message", entry.Message))...)
 		}
 	}
 }

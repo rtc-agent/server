@@ -47,7 +47,7 @@ func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequ
 
 	logger.Info(ctx, "[OpenSession]", zap.String("user", userID.String()), zap.String("session", req.SessionId))
 
-	session, err := h.deps.SessionRepo.GetByID(ctx, sessionUUID)
+	session, err := h.deps.Deps.SessionRepo.GetByID(ctx, sessionUUID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")

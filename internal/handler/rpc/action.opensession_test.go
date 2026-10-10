@@ -92,7 +92,7 @@ func (m *mockSessionRepo) FindActiveByParent(_ context.Context, _ uuid.UUID) ([]
 	return nil, nil
 }
 
-func (m *mockSessionRepo) AtomicAddTokenUsage(_ context.Context, _ uuid.UUID, _ repo.TokenUsageDelta) error {
+func (m *mockSessionRepo) AtomicAddTokenUsage(_ context.Context, _ uuid.UUID, _ model.TokenUsageDelta) error {
 	return nil
 }
 
@@ -154,8 +154,7 @@ func newTestOpenSessionHandler(t *testing.T, sessionRepo *mockSessionRepo, publi
 	}
 
 	deps := &Dependencies{
-		Deps:        usecaseDeps,
-		SessionRepo: sessionRepo,
+		Deps: usecaseDeps,
 	}
 
 	return &Handler{deps: deps}

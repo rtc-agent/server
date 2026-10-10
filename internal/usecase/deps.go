@@ -39,16 +39,18 @@ type Publisher interface {
 // Contains only repos and infrastructure — no business logic.
 // Constructed and injected by the server layer at startup.
 type Dependencies struct {
-	DB              *gorm.DB
-	Redis           redis.UniversalClient
-	SessionRepo     repo.SessionRepo
-	MessageRepo     repo.MessageRepo
-	TurnRepo        repo.TurnRepo
-	RtcRepo         repo.RtcRepo
-	GoalRepo        repo.GoalRepo
-	LoopRepo        repo.LoopRepo
-	MemoryRepo      memory.Repository // unified Memory storage (OKF spec)
-	UpdatePublisher Publisher
+	DB                  *gorm.DB
+	Redis               redis.UniversalClient
+	SessionRepo         repo.SessionRepo
+	MessageRepo         repo.MessageRepo
+	TurnRepo            repo.TurnRepo
+	RtcRepo             repo.RtcRepo
+	GoalRepo            repo.GoalRepo
+	LoopRepo            repo.LoopRepo
+	MemoryRepo          memory.Repository        // unified Memory storage (OKF spec)
+	ScriptExecutionRepo repo.ScriptExecutionRepo // script execution persistence
+	FileRepo            repo.FileRepo            // file metadata storage (attachment validation)
+	UpdatePublisher     Publisher
 
 	// ChatModel is the eino ChatModel for LLM interactions.
 	// Deprecated: prefer ChatModelFactory for dynamic config support.
@@ -140,3 +142,32 @@ type TaskScheduler interface {
 	// Cancel cancels a previously scheduled task.
 	Cancel(ctx context.Context, taskID string) error
 }
+
+// Type aliases for repository interfaces.
+//
+// These aliases allow the agent and loop packages to reference repository
+// interfaces without directly importing the repo package, maintaining
+// proper layer separation (Handler → Usecase → Repo).
+//
+// New code should use these aliases (e.g., usecase.SessionRepo) rather
+// than importing repo directly.
+type (
+	// SessionRepo alias for repo.SessionRepo.
+	SessionRepo = repo.SessionRepo
+	// MessageRepo alias for repo.MessageRepo.
+	MessageRepo = repo.MessageRepo
+	// TurnRepo alias for repo.TurnRepo.
+	TurnRepo = repo.TurnRepo
+	// RtcRepo alias for repo.RtcRepo.
+	RtcRepo = repo.RtcRepo
+	// GoalRepo alias for repo.GoalRepo.
+	GoalRepo = repo.GoalRepo
+	// LoopRepo alias for repo.LoopRepo.
+	LoopRepo = repo.LoopRepo
+	// ServerConfigRepo alias for repo.ServerConfigRepo.
+	ServerConfigRepo = repo.ServerConfigRepo
+	// ScriptExecutionRepo alias for repo.ScriptExecutionRepo.
+	ScriptExecutionRepo = repo.ScriptExecutionRepo
+	// FileRepo alias for repo.FileRepo.
+	FileRepo = repo.FileRepo
+)

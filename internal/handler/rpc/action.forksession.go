@@ -248,7 +248,7 @@ func (h *Handler) ForkSession(ctx context.Context, req *protocol.ForkSessionRequ
 
 // validateForkSource checks that the old session exists and belongs to the user.
 func (h *Handler) validateForkSource(ctx context.Context, oldSessionID uuid.UUID, creator usecase.UserCreator) (*model.Session, error) {
-	oldSession, err := h.deps.SessionRepo.GetByID(ctx, oldSessionID)
+	oldSession, err := h.deps.Deps.SessionRepo.GetByID(ctx, oldSessionID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			return nil, &APIError{Code: ErrorCodeSessionNotFound, Message: fmt.Sprintf("old session %s not found", oldSessionID)}

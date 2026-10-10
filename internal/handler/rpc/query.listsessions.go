@@ -23,7 +23,7 @@ func (h *Handler) ListSessions(ctx context.Context, req *protocol.ListSessionsRe
 		return nil, apiErr
 	}
 
-	sessions, err := h.deps.SessionRepo.GetByUser(ctx, userID, req.Cursor, limit)
+	sessions, err := h.deps.Deps.SessionRepo.GetByUser(ctx, userID, req.Cursor, limit)
 	if err != nil {
 		return nil, h.internalError(ctx, "session.list_failed", "internal error", err)
 	}

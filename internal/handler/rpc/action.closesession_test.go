@@ -94,9 +94,8 @@ func mockDependencies(t *testing.T, sessionRepo *mockSessionRepo, memoryRepo *mo
 	metrics := &turnagent.PrometheusMetrics{}
 
 	return &Dependencies{
-		Deps:        usecaseDeps,
-		SessionRepo: sessionRepo,
-		Metrics:     metrics,
+		Deps:    usecaseDeps,
+		Metrics: metrics,
 	}
 }
 

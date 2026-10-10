@@ -16,6 +16,7 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
@@ -53,7 +54,9 @@ func (m *mockScriptExecutionRepo) ListByUser(_ context.Context, _ uuid.UUID, _, 
 func newTestRecorder(t *testing.T, repo *mockScriptExecutionRepo) *scriptExecutionRecorder {
 	t.Helper()
 	deps := &Dependencies{
-		ScriptExecutionRepo: repo,
+		Deps: &usecase.Dependencies{
+			ScriptExecutionRepo: repo,
+		},
 		// Metrics intentionally nil — processTask has a nil check.
 	}
 	r := newScriptExecutionRecorder(deps, 2, 10)
@@ -382,7 +385,7 @@ func TestRecorder_ChannelFullDropsTask(t *testing.T) {
 			return nil
 		},
 	}
-	deps := &Dependencies{ScriptExecutionRepo: repo}
+	deps := &Dependencies{Deps: &usecase.Dependencies{ScriptExecutionRepo: repo}}
 	r := newScriptExecutionRecorder(deps, 1, 1)
 	t.Cleanup(func() {
 		close(blocker)
@@ -426,7 +429,7 @@ func TestRecorder_ShutdownDrainsTasks(t *testing.T) {
 		},
 	}
 
-	deps := &Dependencies{ScriptExecutionRepo: repo}
+	deps := &Dependencies{Deps: &usecase.Dependencies{ScriptExecutionRepo: repo}}
 	r := newScriptExecutionRecorder(deps, 2, 100)
 
 	ctx := testContext(t)
@@ -494,7 +497,7 @@ func TestRecorder_ConcurrentSubmit(t *testing.T) {
 		},
 	}
 	// Use large buffer to ensure all 100 tasks can be queued without dropping.
-	deps := &Dependencies{ScriptExecutionRepo: repo}
+	deps := &Dependencies{Deps: &usecase.Dependencies{ScriptExecutionRepo: repo}}
 	r := newScriptExecutionRecorder(deps, 2, 200)
 	t.Cleanup(r.shutdown)
 
