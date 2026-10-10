@@ -384,6 +384,24 @@ func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 		}
 	}
 
+	// Validate aud if configured.
+	if issuerCfg.ExpectedAudience != "" {
+		aud, _ := claims["aud"].([]interface{})
+		if len(aud) == 0 {
+			return nil, fmt.Errorf("jwt missing aud claim")
+		}
+		found := false
+		for _, a := range aud {
+			if audStr, ok := a.(string); ok && audStr == issuerCfg.ExpectedAudience {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("jwt aud claim does not match expected audience")
+		}
+	}
+
 	return claims, nil
 }
 

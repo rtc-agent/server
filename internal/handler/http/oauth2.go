@@ -353,8 +353,9 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// 1. Validate refresh token (lookup + check + revoke) via Usecase.
-	rtInfo, err := h.authUsecase.ValidateRefreshToken(ctx, req.RefreshToken)
+	// Validate refresh token and issue new token pair atomically.
+	// This operation is wrapped in a transaction to prevent concurrent refresh race conditions.
+	resp, err := h.authUsecase.RefreshTokenPair(ctx, req.RefreshToken)
 	if err != nil {
 		switch err {
 		case usecase.ErrInvalidRefreshToken:
@@ -366,21 +367,13 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		case usecase.ErrAccountBanned:
 			httputil.WriteError(w, http.StatusForbidden, "access_denied", "account has been banned")
 		default:
-			logger.Error(ctx, "failed to validate refresh_token", zap.Error(err))
+			logger.Error(ctx, "failed to refresh token pair", zap.Error(err))
 			httputil.WriteError(w, http.StatusInternalServerError, "server_error", "internal error")
 		}
 		return
 	}
 
-	// 2. Issue new token pair (access_token + new refresh_token).
-	resp, err := h.authUsecase.IssueTokenPair(ctx, rtInfo.UserID, rtInfo.DeviceID)
-	if err != nil {
-		logger.Error(ctx, "failed to issue new token pair", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to issue token")
-		return
-	}
-
-	logger.Info(ctx, "refresh_token rotation succeeded", zap.String("user_id", rtInfo.UserID.String()))
+	logger.Info(ctx, "refresh_token rotation succeeded", zap.String("user_id", resp.UserID.String()))
 	// Return the new token pair. The response includes both access_token and refresh_token.
 	httputil.WriteJSON(w, http.StatusOK, protocol.OAuth2TokenExchangeResponse{
 		AccessToken:  resp.AccessToken,

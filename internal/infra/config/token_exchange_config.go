@@ -20,4 +20,6 @@ type ExternalIssuerConfig struct {
 	CacheTTL int `mapstructure:"cache_ttl"`
 	// ClaimsMapping maps standard claim names to custom claim names in the JWT
 	ClaimsMapping map[string]string `mapstructure:"claims_mapping"`
+	// ExpectedAudience expected value of the JWT aud claim (optional, if empty aud is not validated)
+	ExpectedAudience string `mapstructure:"expected_audience"`
 }

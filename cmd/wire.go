@@ -672,6 +672,7 @@ func provideOAuth2Handler(
 	cfg *config.Config,
 ) *httphandler.OAuth2Handler {
 	authUC := usecase.NewAuthUsecase(
+		svcCtx.DB,
 		svcCtx.OAuth2UserRepo,
 		svcCtx.DeviceRepo,
 		svcCtx.RefreshTokenRepo,

@@ -65,6 +65,7 @@ func (s *JWTSigner) SignAccessToken(userID uuid.UUID, deviceID string) (string, 
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    "rtc-agent",
+			Audience:  jwt.ClaimStrings{"rtc-agent"},
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -93,7 +94,7 @@ func (s *JWTSigner) ParseAccessToken(tokenString string) (*Claims, error) {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return s.secret, nil
-	})
+	}, jwt.WithAudience("rtc-agent"))
 	if err != nil {
 		// Classify the error reason for metrics
 		reason := classifyJWTError(err)

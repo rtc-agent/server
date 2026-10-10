@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/agent/stringutil"
 	"github.com/rtc-agent/server/internal/model"
@@ -28,6 +29,7 @@ type TokenSigner interface {
 
 // AuthUsecase handles authentication and authorization operations.
 type AuthUsecase struct {
+	db               *gorm.DB
 	oauth2UserRepo   repo.OAuth2UserRepo
 	deviceRepo       repo.DeviceRepo
 	refreshTokenRepo repo.RefreshTokenRepo
@@ -37,6 +39,7 @@ type AuthUsecase struct {
 
 // NewAuthUsecase creates a new AuthUsecase.
 func NewAuthUsecase(
+	db *gorm.DB,
 	oauth2UserRepo repo.OAuth2UserRepo,
 	deviceRepo repo.DeviceRepo,
 	refreshTokenRepo repo.RefreshTokenRepo,
@@ -44,6 +47,7 @@ func NewAuthUsecase(
 	refreshTokenTTL time.Duration,
 ) *AuthUsecase {
 	return &AuthUsecase{
+		db:               db,
 		oauth2UserRepo:   oauth2UserRepo,
 		deviceRepo:       deviceRepo,
 		refreshTokenRepo: refreshTokenRepo,
@@ -144,34 +148,7 @@ type TokenPairResult struct {
 
 // IssueTokenPair issues an access_token + refresh_token pair.
 func (uc *AuthUsecase) IssueTokenPair(ctx context.Context, userID uuid.UUID, deviceID string) (*TokenPairResult, error) {
-	accessToken, expiresAt, err := uc.signer.SignAccessToken(userID, deviceID)
-	if err != nil {
-		return nil, fmt.Errorf("sign access token: %w", err)
-	}
-
-	rtPlain, err := generateRefreshToken()
-	if err != nil {
-		return nil, fmt.Errorf("generate refresh token: %w", err)
-	}
-	rtHash := hashRefreshToken(rtPlain)
-
-	rt := &model.RefreshToken{
-		TokenHash: rtHash,
-		UserID:    userID,
-		DeviceID:  deviceID,
-		ExpiresAt: expiresAt.Add(uc.refreshTokenTTL),
-		Revoked:   false,
-	}
-	if err := uc.refreshTokenRepo.Create(ctx, rt); err != nil {
-		return nil, fmt.Errorf("store refresh token: %w", err)
-	}
-
-	return &TokenPairResult{
-		AccessToken:  accessToken,
-		RefreshToken: rtPlain,
-		ExpiresIn:    int64(uc.signer.AccessTTL().Seconds()),
-		UserID:       userID,
-	}, nil
+	return uc.issueTokenPairInTx(ctx, userID, deviceID)
 }
 
 // RefreshTokenInfo holds the result of ValidateRefreshToken.
@@ -188,7 +165,43 @@ type RefreshTokenInfo struct {
 // Note: This operation is not wrapped in a transaction because the underlying
 // repo layer uses atomic UPDATE with WHERE clause to prevent double-revocation.
 // The Revoke operation uses optimistic locking via the revoked flag.
+// For atomic refresh operations, use RefreshTokenPair instead.
 func (uc *AuthUsecase) ValidateRefreshToken(ctx context.Context, plainToken string) (*RefreshTokenInfo, error) {
+	return uc.validateRefreshTokenInTx(ctx, plainToken)
+}
+
+// RefreshTokenPair validates a refresh token and issues a new token pair atomically.
+// This operation is wrapped in a transaction to prevent concurrent refresh race conditions.
+func (uc *AuthUsecase) RefreshTokenPair(ctx context.Context, plainToken string) (*TokenPairResult, error) {
+	var result *TokenPairResult
+
+	err := uc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txCtx := repo.WithTx(ctx, tx)
+
+		// 1. Validate and revoke the old refresh token.
+		rtInfo, err := uc.validateRefreshTokenInTx(txCtx, plainToken)
+		if err != nil {
+			return err
+		}
+
+		// 2. Issue new token pair within the same transaction.
+		result, err = uc.issueTokenPairInTx(txCtx, rtInfo.UserID, rtInfo.DeviceID)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// validateRefreshTokenInTx is the transactional version of ValidateRefreshToken.
+func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken string) (*RefreshTokenInfo, error) {
 	rtHash := hashRefreshToken(plainToken)
 	rt, err := uc.refreshTokenRepo.FindByHash(ctx, rtHash)
 	if err != nil {
@@ -201,6 +214,8 @@ func (uc *AuthUsecase) ValidateRefreshToken(ctx context.Context, plainToken stri
 	if rt.Revoked {
 		// Potential token reuse detection: if a revoked token is used, it may indicate
 		// that the token was stolen.
+		logger.Warn(ctx, "auth.refresh_token_reuse_detected",
+			zap.String("token_hash_prefix", rtHash[:16]))
 		return nil, ErrRefreshTokenRevoked
 	}
 	if time.Now().After(rt.ExpiresAt) {
@@ -226,6 +241,38 @@ func (uc *AuthUsecase) ValidateRefreshToken(ctx context.Context, plainToken stri
 		ID:       rt.ID,
 		UserID:   rt.UserID,
 		DeviceID: rt.DeviceID,
+	}, nil
+}
+
+// issueTokenPairInTx is the transactional version of IssueTokenPair.
+func (uc *AuthUsecase) issueTokenPairInTx(ctx context.Context, userID uuid.UUID, deviceID string) (*TokenPairResult, error) {
+	accessToken, _, err := uc.signer.SignAccessToken(userID, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("sign access token: %w", err)
+	}
+
+	rtPlain, err := generateRefreshToken()
+	if err != nil {
+		return nil, fmt.Errorf("generate refresh token: %w", err)
+	}
+	rtHash := hashRefreshToken(rtPlain)
+
+	rt := &model.RefreshToken{
+		TokenHash: rtHash,
+		UserID:    userID,
+		DeviceID:  deviceID,
+		ExpiresAt: time.Now().Add(uc.refreshTokenTTL),
+		Revoked:   false,
+	}
+	if err := uc.refreshTokenRepo.Create(ctx, rt); err != nil {
+		return nil, fmt.Errorf("store refresh token: %w", err)
+	}
+
+	return &TokenPairResult{
+		AccessToken:  accessToken,
+		RefreshToken: rtPlain,
+		ExpiresIn:    int64(uc.signer.AccessTTL().Seconds()),
+		UserID:       userID,
 	}, nil
 }
 

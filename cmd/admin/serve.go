@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -606,7 +607,7 @@ func setupRouter(deps routerDeps) *gin.Engine {
 			// If production and empty, allowed stays false — no CORS headers sent.
 		} else {
 			for _, o := range deps.cors.allowedOrigins {
-				if o == origin {
+				if strings.EqualFold(o, origin) {
 					allowed = true
 					break
 				}
