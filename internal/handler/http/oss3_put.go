@@ -17,11 +17,116 @@ import (
 	"go.uber.org/zap"
 )
 
+// handleInstantUploadResult processes the result of CheckInstantUpload.
+// Returns true if the request was fully handled (caller should return),
+// or false if the caller should continue with normal upload flow.
+func (h *OSS3Handler) handleInstantUploadResult(
+	w http.ResponseWriter, r *http.Request,
+	bucket, key, userID string,
+	instantResult *usecase.InstantUploadResult,
+	span trace.Span,
+) bool {
+	if instantResult.Hit {
+		if instantResult.ConsistencyViolation {
+			return h.handleMinIORepair(w, r, bucket, key, userID, instantResult, span)
+		}
+		// Both DB and MinIO have the file → instant upload hit
+		span.SetAttributes(attribute.String("oss.upload_source", "db_hit"))
+		logger.Info(r.Context(), "instant upload: DB and MinIO hit",
+			zap.String("user_id", userID),
+			zap.String("key", key),
+			zap.Int64("size", instantResult.FileMeta.Size))
+		RecordInstantUpload("db_hit")
+		w.Header().Set("ETag", instantResult.FileMeta.ETag)
+		w.WriteHeader(http.StatusOK)
+		return true
+	}
+
+	if instantResult.ConsistencyViolation {
+		// DB has record but MinIO missing → consistency violation, fall through to normal upload
+		span.SetAttributes(attribute.Bool("db.consistency_violation", true))
+		RecordConsistencyViolation(instantResult.ViolationType)
+		logger.Warn(r.Context(), "instant upload: DB record exists but MinIO file missing, re-uploading",
+			zap.String("user_id", userID),
+			zap.String("key", key))
+	}
+	return false
+}
+
+// handleMinIORepair handles the case where MinIO has a file but DB is missing.
+// It validates content-type and size before repairing the DB record.
+// Returns true (request handled) in all cases.
+func (h *OSS3Handler) handleMinIORepair(
+	w http.ResponseWriter, r *http.Request,
+	bucket, key, userID string,
+	instantResult *usecase.InstantUploadResult,
+	span trace.Span,
+) bool {
+	ctx := r.Context()
+
+	// Validate content-type (prevents presigned URL bypass attacks)
+	if !rtcoss3.IsAllowedContentType(instantResult.FileMeta.ContentType) {
+		span.SetAttributes(attribute.String("oss.upload_source", "minio_repair_rejected"))
+		span.SetStatus(codes.Error, "content_type_violation")
+		logger.Warn(ctx, "instant upload: MinIO file has disallowed content-type, deleting",
+			zap.String("user_id", userID),
+			zap.String("key", key),
+			zap.String("content_type", instantResult.FileMeta.ContentType))
+		if delErr := h.oss3UC.Backend().DeleteObject(ctx, bucket, key); delErr != nil {
+			logger.Error(ctx, "instant upload: failed to delete invalid MinIO file",
+				zap.String("user_id", userID),
+				zap.String("key", key),
+				zap.Error(delErr))
+		}
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrUnsupportedContentType, r.URL.Path, "")
+		return true
+	}
+
+	// Validate file size
+	if h.maxFileSizeBytes > 0 && instantResult.FileMeta.Size > h.maxFileSizeBytes {
+		span.SetAttributes(attribute.String("oss.upload_source", "minio_repair_rejected"))
+		span.SetStatus(codes.Error, "size_violation")
+		logger.Warn(ctx, "instant upload: MinIO file exceeds max size, deleting",
+			zap.String("user_id", userID),
+			zap.String("key", key),
+			zap.Int64("size", instantResult.FileMeta.Size),
+			zap.Int64("max_size", h.maxFileSizeBytes))
+		if delErr := h.oss3UC.Backend().DeleteObject(ctx, bucket, key); delErr != nil {
+			logger.Error(ctx, "instant upload: failed to delete oversized MinIO file",
+				zap.String("user_id", userID),
+				zap.String("key", key),
+				zap.Error(delErr))
+		}
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrEntityTooLarge, r.URL.Path, "")
+		return true
+	}
+
+	// Repair DB record
+	span.SetAttributes(attribute.String("oss.upload_source", "minio_repair"))
+	RecordConsistencyViolation(instantResult.ViolationType)
+	logger.Info(ctx, "instant upload: MinIO hit, repairing DB record",
+		zap.String("user_id", userID),
+		zap.String("key", key),
+		zap.Int64("size", instantResult.FileMeta.Size))
+	RecordInstantUpload("minio_repair")
+	if repairErr := h.oss3UC.CreateFileRecord(ctx, instantResult.FileMeta); repairErr != nil {
+		span.RecordError(repairErr)
+		RecordInstantUploadRepairError()
+		logger.Warn(ctx, "instant upload: DB repair failed",
+			zap.String("user_id", userID),
+			zap.String("key", key),
+			zap.Error(repairErr))
+	}
+	w.Header().Set("ETag", instantResult.FileMeta.ETag)
+	w.WriteHeader(http.StatusOK)
+	return true
+}
+
 // handlePutObject handles PUT /{bucket}/{key} — upload object.
 //
-// The function is intentionally linear (not deeply decomposed) because it
-// implements a compensation flow: quota reservation -> backend upload ->
-// quota commit -> DB record. Splitting it would hide the data flow.
+// The function implements a compensation flow: quota reservation -> backend upload ->
+// quota commit -> DB record. Helper functions handle instant upload checks and
+// consistency repairs to keep this function readable.
 func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	ctx, span := otel.GetTracerProvider().Tracer("oss3").Start(r.Context(), "oss3.put_object",
 		trace.WithAttributes(
@@ -84,85 +189,8 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 		return
 	}
 
-	if instantResult.Hit {
-		if instantResult.ConsistencyViolation {
-			// MinIO has file but DB missing → consistency repair
-			// OSS3-28 fix: Validate content-type and size before repairing DB record.
-			// This prevents presigned URL bypass attacks where malicious clients upload
-			// disallowed content directly to MinIO, then trigger instant upload to create DB record.
-			if !rtcoss3.IsAllowedContentType(instantResult.FileMeta.ContentType) {
-				span.SetAttributes(attribute.String("oss.upload_source", "minio_repair_rejected"))
-				span.SetStatus(codes.Error, "content_type_violation")
-				logger.Warn(ctx, "instant upload: MinIO file has disallowed content-type, deleting",
-					zap.String("user_id", userID),
-					zap.String("key", key),
-					zap.String("content_type", instantResult.FileMeta.ContentType))
-				// Delete the invalid file from MinIO
-				if delErr := h.oss3UC.Backend().DeleteObject(ctx, bucket, key); delErr != nil {
-					logger.Error(ctx, "instant upload: failed to delete invalid MinIO file",
-						zap.String("user_id", userID),
-						zap.String("key", key),
-						zap.Error(delErr))
-				}
-				rtcoss3.WriteS3Error(w, rtcoss3.ErrUnsupportedContentType, r.URL.Path, "")
-				return
-			}
-			if h.maxFileSizeBytes > 0 && instantResult.FileMeta.Size > h.maxFileSizeBytes {
-				span.SetAttributes(attribute.String("oss.upload_source", "minio_repair_rejected"))
-				span.SetStatus(codes.Error, "size_violation")
-				logger.Warn(ctx, "instant upload: MinIO file exceeds max size, deleting",
-					zap.String("user_id", userID),
-					zap.String("key", key),
-					zap.Int64("size", instantResult.FileMeta.Size),
-					zap.Int64("max_size", h.maxFileSizeBytes))
-				// Delete the oversized file from MinIO
-				if delErr := h.oss3UC.Backend().DeleteObject(ctx, bucket, key); delErr != nil {
-					logger.Error(ctx, "instant upload: failed to delete oversized MinIO file",
-						zap.String("user_id", userID),
-						zap.String("key", key),
-						zap.Error(delErr))
-				}
-				rtcoss3.WriteS3Error(w, rtcoss3.ErrEntityTooLarge, r.URL.Path, "")
-				return
-			}
-
-			span.SetAttributes(attribute.String("oss.upload_source", "minio_repair"))
-			RecordConsistencyViolation(instantResult.ViolationType)
-			logger.Info(ctx, "instant upload: MinIO hit, repairing DB record",
-				zap.String("user_id", userID),
-				zap.String("key", key),
-				zap.Int64("size", instantResult.FileMeta.Size))
-			RecordInstantUpload("minio_repair")
-			if repairErr := h.oss3UC.CreateFileRecord(ctx, instantResult.FileMeta); repairErr != nil {
-				// Repair failed, log but continue (MinIO file exists)
-				span.RecordError(repairErr)
-				RecordInstantUploadRepairError()
-				logger.Warn(ctx, "instant upload: DB repair failed",
-					zap.String("user_id", userID),
-					zap.String("key", key),
-					zap.Error(repairErr))
-			}
-		} else {
-			// Both DB and MinIO have the file → instant upload hit
-			span.SetAttributes(attribute.String("oss.upload_source", "db_hit"))
-			logger.Info(ctx, "instant upload: DB and MinIO hit",
-				zap.String("user_id", userID),
-				zap.String("key", key),
-				zap.Int64("size", instantResult.FileMeta.Size))
-			RecordInstantUpload("db_hit")
-		}
-		w.Header().Set("ETag", instantResult.FileMeta.ETag)
-		w.WriteHeader(http.StatusOK)
+	if h.handleInstantUploadResult(w, r, bucket, key, userID, instantResult, span) {
 		return
-	}
-
-	if instantResult.ConsistencyViolation {
-		// DB has record but MinIO missing → consistency violation, fall through to normal upload
-		span.SetAttributes(attribute.Bool("db.consistency_violation", true))
-		RecordConsistencyViolation(instantResult.ViolationType)
-		logger.Warn(ctx, "instant upload: DB record exists but MinIO file missing, re-uploading",
-			zap.String("user_id", userID),
-			zap.String("key", key))
 	}
 
 	// Reserve quota; release on any subsequent failure unless committed.

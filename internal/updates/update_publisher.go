@@ -92,6 +92,140 @@ func buildRepoResolver[T any, P any](
 	}
 }
 
+// readChunksWithRetry reads streaming message chunks with retry logic.
+// It verifies completeness by checking if chunks stabilize between reads.
+// Returns the merged content string, or empty string if chunks are unavailable.
+func readChunksWithRetry(ctx context.Context, ss StreamStoreAccessor, messageID string) string {
+	const maxRetries = 3
+	const retryDelay = 100 * time.Millisecond
+
+	var chunks []string
+	var chunksErr error
+	var content string
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		chunks, chunksErr = ss.GetAllChunks(messageID)
+		if chunksErr != nil {
+			logger.Warn(ctx, "[UpdatePublisher] get chunks for streaming message failed",
+				zap.String("message_id", messageID),
+				zap.Int("attempt", attempt+1),
+				zap.Error(chunksErr),
+			)
+			break
+		}
+
+		if len(chunks) == 0 {
+			// No chunks yet, use DB content
+			break
+		}
+
+		content = strings.Join(chunks, "")
+
+		// Verify completeness: check if chunks are stable (no new chunks arriving).
+		// Skip verification on the last attempt.
+		if attempt < maxRetries-1 {
+			time.Sleep(retryDelay)
+
+			newChunks, newErr := ss.GetAllChunks(messageID)
+			if newErr != nil {
+				logger.Warn(ctx, "[UpdatePublisher] re-read chunks failed",
+					zap.String("message_id", messageID),
+					zap.Error(newErr),
+				)
+				break
+			}
+
+			if chunksStable(chunks, newChunks) {
+				break
+			}
+			// Chunks changed, continue retrying
+			chunks = newChunks
+			content = strings.Join(chunks, "")
+		}
+	}
+
+	if chunksErr != nil {
+		logger.Warn(ctx, "[UpdatePublisher] get chunks failed after retries, using DB data",
+			zap.String("message_id", messageID),
+			zap.Int("retries", maxRetries),
+		)
+		return ""
+	}
+	return content
+}
+
+// chunksStable reports whether two chunk slices are identical.
+func chunksStable(old, new []string) bool {
+	if len(old) != len(new) {
+		return false
+	}
+	for i := range old {
+		if old[i] != new[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeStreamingContent reads chunks from StreamStore and merges them into the
+// message content. If chunks are unavailable or an error occurs, the message
+// retains its original DB content.
+func mergeStreamingContent(ctx context.Context, ss StreamStoreAccessor, m *model.Message) {
+	content := readChunksWithRetry(ctx, ss, m.ID.String())
+	if content == "" {
+		return
+	}
+
+	v := &protocol.ContentData{}
+	if e := json.Unmarshal([]byte(m.Content), v); e != nil {
+		logger.Warn(ctx, "[UpdatePublisher] unmarshal content failed", zap.Error(e))
+		m.Content = content
+		return
+	}
+
+	v.Data = content
+	tmp, marshalErr := json.Marshal(v)
+	if marshalErr != nil {
+		logger.Warn(ctx, "[UpdatePublisher] marshal content with chunks failed", zap.Error(marshalErr))
+		// Fallback: preserve ContentData structure with raw chunk text as Data.
+		// Bare strings break the protocol contract.
+		fallback := protocol.ContentData{Type: v.Type, Data: v.Data}
+		if fb, fbErr := json.Marshal(fallback); fbErr == nil {
+			m.Content = string(fb)
+		} else {
+			m.Content = content
+		}
+		return
+	}
+	m.Content = string(tmp)
+}
+
+// registerMessageResolver registers the message entity resolver.
+// Streaming messages are enriched with chunks from Redis.
+func (u *UpdatePublisher) registerMessageResolver(messageRepo repo.MessageRepo) {
+	u.resolvers[string(protocol.EntityMessage)] = func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
+		messages, err := messageRepo.GetByIDs(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+
+		// Capture streamStore reference under RLock to avoid holding the lock
+		// during the entire resolution duration (which includes Redis calls and retries).
+		u.mu.RLock()
+		ss := u.streamStore
+		u.mu.RUnlock()
+
+		result := make(map[uuid.UUID]any, len(messages))
+		for id, m := range messages {
+			if ss != nil && protocol.MessageStreamingStatus(m.StreamingStatus) == protocol.MessageStreamingStreaming {
+				mergeStreamingContent(ctx, ss, m)
+			}
+			result[id] = toProtocolMessage(m)
+		}
+		return result, nil
+	}
+}
+
 // NewUpdatePublisher creates a new UpdatePublisher.
 func NewUpdatePublisher(
 	db *gorm.DB,
@@ -122,131 +256,8 @@ func NewUpdatePublisher(
 		}
 		return result, nil
 	}
-	u.resolvers[string(protocol.EntityMessage)] = func(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]any, error) {
-		messages, err := messageRepo.GetByIDs(ctx, ids)
-		if err != nil {
-			return nil, err
-		}
 
-		// Streaming messages: read chunks from Redis and append to content.
-		// Race condition: chunks may not be fully written yet; we use a retry
-		// mechanism to verify completeness and retry if inconsistent.
-		//
-		// Design decision on StreamStore access: We read streamStore once under RLock
-		// and use the captured reference throughout this function. This is safe because:
-		//   1. If SetStreamStore is called concurrently, we continue using the old reference
-		//      (consistent behavior within a single resolution pass)
-		//   2. The old StreamStore remains valid until all in-flight operations complete
-		//   3. Future calls will see the new StreamStore
-		// This avoids holding the lock for the entire resolution duration (which could
-		// include multiple Redis calls and retries), reducing contention.
-		u.mu.RLock()
-		ss := u.streamStore
-		u.mu.RUnlock()
-
-		result := make(map[uuid.UUID]any, len(messages))
-		for id, m := range messages {
-			if ss != nil && protocol.MessageStreamingStatus(m.StreamingStatus) == protocol.MessageStreamingStreaming {
-				// Retry mechanism: read chunks, verify completeness, retry if inconsistent
-				const maxRetries = 3
-				const retryDelay = 100 * time.Millisecond
-
-				var chunks []string
-				var chunksErr error
-				var content string
-
-				for attempt := 0; attempt < maxRetries; attempt++ {
-					chunks, chunksErr = ss.GetAllChunks(m.ID.String())
-					if chunksErr != nil {
-						// Error reading chunks, fallback to DB data
-						logger.Warn(ctx, "[UpdatePublisher] get chunks for streaming message failed",
-							zap.String("message_id", m.ID.String()),
-							zap.Int("attempt", attempt+1),
-							zap.Error(chunksErr),
-						)
-						break
-					}
-
-					// Build content from chunks
-					if len(chunks) > 0 {
-						content = strings.Join(chunks, "")
-
-						// Verify completeness: check if the last chunk ends with a finish marker
-						// or if the content length is stable (no new chunks arriving)
-						// For now, we accept eventual consistency but log warnings
-						// A more robust solution would require the writer to set a completion flag
-						if attempt < maxRetries-1 {
-							// Wait briefly to see if more chunks arrive
-							time.Sleep(retryDelay)
-
-							// Re-read to check if content changed
-							newChunks, newErr := ss.GetAllChunks(m.ID.String())
-							if newErr != nil {
-								logger.Warn(ctx, "[UpdatePublisher] re-read chunks failed",
-									zap.String("message_id", m.ID.String()),
-									zap.Error(newErr),
-								)
-								break
-							}
-
-							// If chunks are the same, we're done
-							if len(newChunks) == len(chunks) {
-								same := true
-								for i := range chunks {
-									if i >= len(newChunks) || chunks[i] != newChunks[i] {
-										same = false
-										break
-									}
-								}
-								if same {
-									break
-								}
-							}
-							// Otherwise, continue retrying
-							chunks = newChunks
-							content = strings.Join(chunks, "")
-						}
-					} else {
-						// No chunks yet, use DB content
-						break
-					}
-				}
-
-				if chunksErr != nil || len(chunks) == 0 {
-					// Fallback: return raw DB data
-					if chunksErr != nil {
-						logger.Warn(ctx, "[UpdatePublisher] get chunks failed after retries, using DB data",
-							zap.String("message_id", m.ID.String()),
-							zap.Int("retries", maxRetries),
-						)
-					}
-				} else if content != "" {
-					v := &protocol.ContentData{}
-					if e := json.Unmarshal([]byte(m.Content), v); e != nil {
-						logger.Warn(ctx, "[UpdatePublisher] unmarshal content failed", zap.Error(e))
-						m.Content = content
-					} else {
-						v.Data = content
-						if tmp, marshalErr := json.Marshal(v); marshalErr != nil {
-							logger.Warn(ctx, "[UpdatePublisher] marshal content with chunks failed", zap.Error(marshalErr))
-							// Fallback: preserve ContentData structure with raw chunk
-							// text as Data. Bare strings break the protocol contract.
-							fallback := protocol.ContentData{Type: v.Type, Data: v.Data}
-							if fb, fbErr := json.Marshal(fallback); fbErr == nil {
-								m.Content = string(fb)
-							} else {
-								m.Content = content
-							}
-						} else {
-							m.Content = string(tmp)
-						}
-					}
-				}
-			}
-			result[id] = toProtocolMessage(m)
-		}
-		return result, nil
-	}
+	u.registerMessageResolver(messageRepo)
 	u.resolvers[string(protocol.EntityTurn)] = buildRepoResolver(turnRepo.GetByIDs, toProtocolTurn)
 	u.resolvers[string(protocol.EntityRtc)] = buildRepoResolver(rtcRepo.GetByIDs, toProtocolRtc)
 

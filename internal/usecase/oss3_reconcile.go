@@ -123,18 +123,6 @@ func (uc *OSS3Usecase) setRedisQuota(ctx context.Context, userID string, value i
 	return nil
 }
 
-// hasPendingQuotaReservations checks if a user has any pending quota reservations.
-// Pending reservations are stored with keys matching pattern "oss3:quota:pending:{userID}:*".
-// Returns true if any pending reservations exist, false otherwise.
-func (uc *OSS3Usecase) hasPendingQuotaReservations(ctx context.Context, userID string) (bool, error) {
-	pattern := cache.PrefixOSS3QuotaPending + userID + ":*"
-	iter := uc.redis.Scan(ctx, 0, pattern, 100).Iterator()
-	if iter.Err() != nil {
-		return false, fmt.Errorf("scan pending reservations for user %s: %w", userID, iter.Err())
-	}
-	return iter.Next(ctx), nil
-}
-
 // getPendingQuotaTotal calculates the total amount of pending quota reservations for a user.
 // Uses the pending aggregation ZSET (OSS3QuotaPendingAgg) which stores all pending reservations
 // with their amounts as scores. Returns the sum of all pending amounts.

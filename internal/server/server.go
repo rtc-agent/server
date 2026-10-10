@@ -60,6 +60,9 @@ type Server struct {
 	// OSS3 cleanup scheduler
 	cleanupCancel context.CancelFunc // cancels the cleanup goroutine
 
+	// Refresh token cleanup scheduler
+	refreshTokenCleanupCancel context.CancelFunc // cancels the refresh token cleanup goroutine
+
 	// IP rate limiter cleanup
 	ipRateLimiterCancel context.CancelFunc // cancels the IP rate limiter cleanup goroutine
 
@@ -116,28 +119,52 @@ func BuildProviderClients(cfg *config.Config) []*oauth.ProviderConfig {
 	return list
 }
 
-// Start starts the server.
-func (s *Server) Start() error {
-	// Start goroutine metrics collection (samples goroutine count and state distribution every 10s).
-	// Always enabled to provide better observability in all environments.
-	s.goroutineCancel = middleware.StartGoroutineCollector(s.cfg.Debug.GoroutineLeakThreshold)
-
-	// Recover stale turns from previous crash/restart BEFORE starting worker.
-	// This ensures that turns left in running/pending state are marked as
-	// interrupted and have resume work items published.
-	// Create a root span with timeout to provide trace context for all downstream operations.
-	{
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		ctx, span := otel.Tracer("server").Start(ctx, "server.recoverStaleTurns",
-			trace.WithAttributes(
-				attribute.String("instance_id", s.instanceID),
-			),
-		)
-		defer span.End()
-		s.recoverStaleTurns(ctx)
+// startConfigSubscriber starts the Redis config subscriber for multi-instance
+// cache invalidation. It listens for config update events and invalidates the
+// local CachedConfigProvider cache.
+func (s *Server) startConfigSubscriber() {
+	if s.svcCtx.Redis == nil || s.configSubscriberCancel != nil {
+		return
+	}
+	cachedProvider, ok := s.configProvider.(*config.CachedConfigProvider)
+	if !ok {
+		logger.Warn(context.Background(), "[Server] ConfigProvider is not a CachedConfigProvider, config subscriber not started")
+		return
 	}
 
+	configSubscriber := usecase.NewRedisConfigSubscriber(s.svcCtx.Redis)
+	configSubscriber.RegisterHandler(func(event model.ConfigUpdateEvent) {
+		var userIDPtr *uuid.UUID
+		if event.UserID != nil {
+			if parsedUID, err := uuid.Parse(*event.UserID); err == nil {
+				userIDPtr = &parsedUID
+			}
+		}
+		cachedProvider.InvalidateCache(event.Key, userIDPtr)
+		logger.Debug(context.Background(), "config.cache_invalidated",
+			zap.String("key", event.Key),
+			zap.String("operation", event.Operation),
+			zap.Int("version", event.Version),
+			zap.String("source", event.Source))
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.configSubscriberCancel = cancel
+	subscriberStop := configSubscriber.Start(ctx)
+
+	// Wrap the subscriber stop function to be called on shutdown
+	go func() {
+		<-ctx.Done()
+		subscriberStop()
+	}()
+
+	logger.Info(context.Background(), "[Server] Config subscriber started",
+		zap.String("channel", model.ConfigChannel))
+}
+
+// startBackgroundServices starts all background goroutines: stale turn scanner,
+// OSS3 cleanup, refresh token cleanup, ban watcher, and config subscriber.
+func (s *Server) startBackgroundServices() {
 	// Start periodic stale turn scanner goroutine.
 	// Uses a Redis distributed lock to ensure only one Server instance scans
 	// at a time (see §13.6.2).
@@ -172,6 +199,17 @@ func (s *Server) Start() error {
 		}
 	}
 
+	// Start refresh token periodic cleanup goroutine.
+	// Removes expired tokens from the database to prevent unbounded growth.
+	if s.refreshTokenCleanupCancel == nil && s.svcCtx.RefreshTokenRepo != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.refreshTokenCleanupCancel = cancel
+		logger.SafeGo("refresh-token-cleanup", func() {
+			s.refreshTokenCleanupLoop(ctx)
+		})
+		logger.Info(ctx, "[Server] refresh token cleanup scheduler started")
+	}
+
 	// Start BanWatcher for distributed user ban synchronization.
 	// Listens to Redis Pub/Sub for ban events and disconnects banned users.
 	if s.svcCtx.Redis != nil && s.banWatcher == nil {
@@ -184,44 +222,34 @@ func (s *Server) Start() error {
 		}
 	}
 
-	// Start RedisConfigSubscriber for multi-instance config cache invalidation.
-	// When any instance updates a config, it publishes an event to Redis Pub/Sub.
-	// This subscriber receives the event and invalidates the local CachedConfigProvider cache.
-	if s.svcCtx.Redis != nil && s.configSubscriberCancel == nil {
-		// Get the CachedConfigProvider (if it's a cached provider)
-		if cachedProvider, ok := s.configProvider.(*config.CachedConfigProvider); ok {
-			configSubscriber := usecase.NewRedisConfigSubscriber(s.svcCtx.Redis)
-			configSubscriber.RegisterHandler(func(event model.ConfigUpdateEvent) {
-				var userIDPtr *uuid.UUID
-				if event.UserID != nil {
-					if parsedUID, err := uuid.Parse(*event.UserID); err == nil {
-						userIDPtr = &parsedUID
-					}
-				}
-				cachedProvider.InvalidateCache(event.Key, userIDPtr)
-				logger.Debug(context.Background(), "config.cache_invalidated",
-					zap.String("key", event.Key),
-					zap.String("operation", event.Operation),
-					zap.Int("version", event.Version),
-					zap.String("source", event.Source))
-			})
+	// Start Redis config subscriber for multi-instance cache invalidation.
+	s.startConfigSubscriber()
+}
 
-			ctx, cancel := context.WithCancel(context.Background())
-			s.configSubscriberCancel = cancel
-			subscriberStop := configSubscriber.Start(ctx)
+// Start starts the server.
+func (s *Server) Start() error {
+	// Start goroutine metrics collection (samples goroutine count and state distribution every 10s).
+	// Always enabled to provide better observability in all environments.
+	s.goroutineCancel = middleware.StartGoroutineCollector(s.cfg.Debug.GoroutineLeakThreshold)
 
-			// Wrap the subscriber stop function to be called on shutdown
-			go func() {
-				<-ctx.Done()
-				subscriberStop()
-			}()
-
-			logger.Info(context.Background(), "[Server] Config subscriber started",
-				zap.String("channel", model.ConfigChannel))
-		} else {
-			logger.Warn(context.Background(), "[Server] ConfigProvider is not a CachedConfigProvider, config subscriber not started")
-		}
+	// Recover stale turns from previous crash/restart BEFORE starting worker.
+	// This ensures that turns left in running/pending state are marked as
+	// interrupted and have resume work items published.
+	// Create a root span with timeout to provide trace context for all downstream operations.
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ctx, span := otel.Tracer("server").Start(ctx, "server.recoverStaleTurns",
+			trace.WithAttributes(
+				attribute.String("instance_id", s.instanceID),
+			),
+		)
+		defer span.End()
+		s.recoverStaleTurns(ctx)
 	}
+
+	// Start all background services (scanners, cleanup, watchers, subscribers).
+	s.startBackgroundServices()
 
 	// Start rtc-queue Worker (distributed turn execution).
 	if logger.IsDebugMode() {
@@ -338,6 +366,11 @@ func (s *Server) Stop() {
 	// Stop OSS3 cleanup goroutine
 	if s.cleanupCancel != nil {
 		s.cleanupCancel()
+	}
+
+	// Stop refresh token cleanup goroutine
+	if s.refreshTokenCleanupCancel != nil {
+		s.refreshTokenCleanupCancel()
 	}
 
 	// Stop IP rate limiter cleanup goroutine
@@ -678,4 +711,49 @@ func (s *Server) oss3CleanupLoop(ctx context.Context, uc *usecase.OSS3Usecase, i
 			}
 		}
 	}
+}
+
+// refreshTokenCleanupLoop periodically removes expired refresh tokens from the database.
+// Runs every hour and deletes tokens that expired more than 7 days ago,
+// providing a safety buffer before permanent deletion.
+func (s *Server) refreshTokenCleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+
+	// Run once immediately on startup (after a short delay to let the server settle).
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(time.Minute):
+		if err := s.runRefreshTokenCleanup(ctx); err != nil {
+			logger.Error(ctx, "[Server] refresh token cleanup failed", zap.Error(err))
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info(ctx, "[Server] refresh token cleanup scheduler stopped")
+			return
+		case <-ticker.C:
+			if err := s.runRefreshTokenCleanup(ctx); err != nil {
+				logger.Error(ctx, "[Server] refresh token cleanup failed", zap.Error(err))
+			}
+		}
+	}
+}
+
+// runRefreshTokenCleanup performs a single cleanup cycle for expired refresh tokens.
+func (s *Server) runRefreshTokenCleanup(ctx context.Context) error {
+	// Delete tokens that expired more than 7 days ago (safety buffer)
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	deleted, err := s.svcCtx.RefreshTokenRepo.DeleteExpired(ctx, cutoff)
+	if err != nil {
+		return err
+	}
+	if deleted > 0 {
+		logger.Info(ctx, "[Server] refresh token cleanup completed",
+			zap.Int64("deleted", deleted))
+	}
+	return nil
 }
