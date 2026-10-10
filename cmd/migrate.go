@@ -131,20 +131,97 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
 	serverConfigUsecase := usecase.NewServerConfigUsecase(configRepo, auditLogRepo, oauth2UserRepo, db)
 	if err := serverConfigUsecase.BootstrapDynamicConfigs(ctx, uuid.Nil); err != nil {
-		logger.Warn(ctx, "bootstrap_dynamic_configs_failed", zap.Error(err))
+		return fmt.Errorf("bootstrap dynamic configs: %w", err)
 	}
 
-	// Run owner migration stages
-	if err := model.MigrateOwnerStages1And2(db); err != nil {
-		return fmt.Errorf("migrate owner stages 1+2: %w", err)
+	// Run owner migration stages with checkpoint checks to avoid re-running completed work.
+	// Check if stages 1+2 are already done by looking for backfilled data.
+	var hasBackfilledData bool
+	if err := db.Raw(`
+		SELECT EXISTS (
+			SELECT 1 FROM sessions
+			WHERE owner_kind IS NOT NULL AND owner_ref_id IS NOT NULL
+			LIMIT 1
+		)
+	`).Scan(&hasBackfilledData).Error; err != nil {
+		return fmt.Errorf("check owner migration checkpoint: %w", err)
+	}
+	if !hasBackfilledData {
+		logger.Info(ctx, "owner.migration.running_stages_1_and_2")
+		if err := model.MigrateOwnerStages1And2(db); err != nil {
+			return fmt.Errorf("migrate owner stages 1+2: %w", err)
+		}
+	} else {
+		logger.Info(ctx, "owner.migration.stages_1_and_2_already_completed")
 	}
 
-	if err := model.MigrateOwnerStage3(db); err != nil {
-		return fmt.Errorf("migrate owner stage 3: %w", err)
+	// Verify backfill completeness before Stage 3 (setting NOT NULL constraints).
+	// If Stage 2 partially succeeded then crashed, we must ensure all rows are backfilled
+	// before attempting to add NOT NULL constraints, otherwise Stage 3 will fail.
+	var sessionNullCount int64
+	if err := db.Raw(`
+		SELECT COUNT(*) FROM sessions
+		WHERE owner_kind IS NULL OR owner_ref_id IS NULL
+	`).Scan(&sessionNullCount).Error; err != nil {
+		return fmt.Errorf("verify session backfill completeness: %w", err)
 	}
 
-	if err := model.MigrateOwnerStage4(db); err != nil {
-		return fmt.Errorf("migrate owner stage 4: %w", err)
+	var messageNullCount int64
+	if err := db.Raw(`
+		SELECT COUNT(*) FROM messages
+		WHERE creator_kind IS NULL OR creator_ref_id IS NULL
+	`).Scan(&messageNullCount).Error; err != nil {
+		return fmt.Errorf("verify message backfill completeness: %w", err)
+	}
+
+	if sessionNullCount > 0 || messageNullCount > 0 {
+		// Backfill is incomplete, run Stages 1+2 again to complete it.
+		// This is safe because the backfill uses WHERE ... IS NULL conditions,
+		// so it only affects rows that haven't been backfilled yet.
+		logger.Info(ctx, "owner.migration.backfill_incomplete_rerunning",
+			zap.Int64("sessions_null_count", sessionNullCount),
+			zap.Int64("messages_null_count", messageNullCount))
+		if err := model.MigrateOwnerStages1And2(db); err != nil {
+			return fmt.Errorf("complete owner backfill: %w", err)
+		}
+	}
+
+	// Check if stage 3 is done by checking if NOT NULL constraint exists.
+	var hasNotNullConstraint bool
+	if err := db.Raw(`
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'sessions' AND column_name = 'owner_kind' AND is_nullable = 'NO'
+		)
+	`).Scan(&hasNotNullConstraint).Error; err != nil {
+		return fmt.Errorf("check owner migration stage 3 checkpoint: %w", err)
+	}
+	if !hasNotNullConstraint {
+		logger.Info(ctx, "owner.migration.running_stage_3")
+		if err := model.MigrateOwnerStage3(db); err != nil {
+			return fmt.Errorf("migrate owner stage 3: %w", err)
+		}
+	} else {
+		logger.Info(ctx, "owner.migration.stage_3_already_completed")
+	}
+
+	// Check if stage 4 is done by checking if legacy user_id column still exists.
+	var hasLegacyColumn bool
+	if err := db.Raw(`
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'sessions' AND column_name = 'user_id'
+		)
+	`).Scan(&hasLegacyColumn).Error; err != nil {
+		return fmt.Errorf("check owner migration stage 4 checkpoint: %w", err)
+	}
+	if hasLegacyColumn {
+		logger.Info(ctx, "owner.migration.running_stage_4")
+		if err := model.MigrateOwnerStage4(db); err != nil {
+			return fmt.Errorf("migrate owner stage 4: %w", err)
+		}
+	} else {
+		logger.Info(ctx, "owner.migration.stage_4_already_completed")
 	}
 
 	logger.Info(context.Background(), "Database migration completed successfully")
