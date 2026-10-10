@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 
 	httphandler "github.com/rtc-agent/server/internal/handler/http"
 	rpchandler "github.com/rtc-agent/server/internal/handler/rpc"
@@ -112,9 +113,8 @@ func BuildProviderClients(cfg *config.Config) []*oauth.ProviderConfig {
 // Start starts the server.
 func (s *Server) Start() error {
 	// Start goroutine metrics collection (samples goroutine count and state distribution every 10s).
-	if s.cfg.Debug.Enabled {
-		s.goroutineCancel = middleware.StartGoroutineCollector(s.cfg.Debug.GoroutineLeakThreshold)
-	}
+	// Always enabled to provide better observability in all environments.
+	s.goroutineCancel = middleware.StartGoroutineCollector(s.cfg.Debug.GoroutineLeakThreshold)
 
 	// Recover stale turns from previous crash/restart BEFORE starting worker.
 	// This ensures that turns left in running/pending state are marked as
@@ -214,13 +214,22 @@ func (s *Server) Start() error {
 	s.registerRoutes(mux)
 
 	// Mount middleware (Chain mode: first is outermost, last is closest to handler).
+	// Order: Recovery → RequestID → SecurityHeaders → CORS → HTTPMetrics → RateLimit → RequestLogger → CSP
 	isDev := s.cfg.Server.Env == "development"
-	rateLimiter := middleware.NewRateLimiter(50, 100) // 50 req/s per user, burst 100
+	// Use configurable rate limiting parameters
+	rateLimiter := middleware.NewRateLimiter(
+		rate.Limit(s.cfg.API.RateLimit.RequestsPerSecond),
+		s.cfg.API.RateLimit.BurstSize,
+	)
 	handler := middleware.Chain(
+		middleware.Recovery,
+		middleware.RequestID,
+		middleware.SecurityHeaders,
 		middleware.CORS(s.cfg.CORS.AllowOrigins, isDev),
 		middleware.HTTPMetrics(),
 		rateLimiter.Middleware(),
 		middleware.RequestLogger,
+		middleware.CSP(&s.cfg.Security.CSP),
 	)(mux)
 
 	addr := fmt.Sprintf("%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
@@ -231,6 +240,9 @@ func (s *Server) Start() error {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		// Security: limit request header size to prevent DoS attacks via oversized headers.
+		// 1MB is sufficient for most legitimate requests including large JWT tokens.
+		MaxHeaderBytes: 1 << 20, // 1 MB
 	}
 
 	logger.Info(ctx, "HTTP server listening", zap.String("addr", addr))
@@ -324,6 +336,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.httpHandler.Healthz)
 	mux.HandleFunc("GET /readyz", s.httpHandler.Readyz)
 
+	// CSP violation report endpoint (POST only, no auth required).
+	// Browsers send violation reports to this endpoint when CSP is enabled.
+	if s.cfg.Security.CSP.Enabled && s.cfg.Security.CSP.ReportURI != "" {
+		mux.HandleFunc("POST "+s.cfg.Security.CSP.ReportURI, httphandler.HandleCSPReport)
+	}
+
 	// Prometheus metrics endpoint (optional basic auth).
 	metricsHandler := promhttp.Handler()
 	if s.cfg.Metrics.User != "" && s.cfg.Metrics.Password != "" {
@@ -344,8 +362,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	}
 
 	// OAuth2 endpoints - protect public endpoints with IP rate limiting.
-	// 5 req/s per IP, burst 10, 1 hour TTL for limiter entries.
-	ipRateLimiter := middleware.NewIPRateLimiter(5, 10, time.Hour)
+	// Use configurable rate limiting parameters from config.
+	ipRateLimiter := middleware.NewIPRateLimiter(
+		rate.Limit(s.cfg.API.IPRateLimit.RequestsPerSecond),
+		s.cfg.API.IPRateLimit.BurstSize,
+		time.Duration(s.cfg.API.IPRateLimit.LimiterTTLSec)*time.Second,
+	)
 	s.oauth2Handler.SetIPRateLimiter(ipRateLimiter)
 	s.oauth2Handler.RegisterRoutes(mux)
 
@@ -565,6 +587,9 @@ func basicAuth(next http.Handler, user, password string) http.Handler {
 		if !ok ||
 			subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 ||
 			subtle.ConstantTimeCompare([]byte(p), []byte(password)) != 1 {
+			// Log authentication failure for security monitoring
+			logger.Warn(r.Context(), "metrics_auth_failed",
+				zap.String("remote_addr", r.RemoteAddr))
 			w.Header().Set("WWW-Authenticate", `Basic realm="metrics"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
