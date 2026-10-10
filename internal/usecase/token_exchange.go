@@ -385,6 +385,9 @@ func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 	}
 
 	// Validate aud if configured.
+	// SECURITY: When ExpectedAudience is not configured, skip audience validation but log
+	// a warning. Without audience restriction, any JWT from this issuer can be exchanged,
+	// which increases the risk if the JWT is intended for a different service.
 	if issuerCfg.ExpectedAudience != "" {
 		aud, _ := claims["aud"].([]interface{})
 		if len(aud) == 0 {
@@ -400,6 +403,10 @@ func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 		if !found {
 			return nil, fmt.Errorf("jwt aud claim does not match expected audience")
 		}
+	} else {
+		logger.Warn(ctx, "token_exchange.audience_validation_skipped",
+			zap.String("issuer", issuerCfg.Issuer),
+			zap.String("reason", "expected_audience_not_configured"))
 	}
 
 	return claims, nil

@@ -260,7 +260,15 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 
 	// Validate redirect_uri matches the one from authorization request (RFC 6749 Section 10.6).
 	// This prevents authorization code injection attacks.
-	if storedRedirectURI != "" && req.RedirectUri != storedRedirectURI {
+	// SECURITY: When storedRedirectURI is empty, always require the token request to also
+	// omit redirect_uri. This ensures an attacker cannot inject a redirect_uri when the
+	// authorization request did not include one.
+	if storedRedirectURI == "" {
+		if req.RedirectUri != "" {
+			httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri must not be present when not set during authorization")
+			return
+		}
+	} else if req.RedirectUri != storedRedirectURI {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri does not match authorization request")
 		return
 	}

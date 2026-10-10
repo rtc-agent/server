@@ -149,7 +149,11 @@ func (c *JWKSClient) FetchJWKS(ctx context.Context, jwksURI string) (jwk.Set, er
 
 	// Validate Content-Type to prevent response smuggling.
 	ct := resp.Header.Get("Content-Type")
-	if ct != "" && !strings.HasPrefix(ct, "application/json") {
+	if ct == "" {
+		// Strict: require Content-Type header to be present
+		return nil, fmt.Errorf("%w: missing content-type header", ErrJWKSInvalidResponse)
+	}
+	if !strings.HasPrefix(ct, "application/json") && !strings.HasPrefix(ct, "application/jwk-set+json") {
 		return nil, fmt.Errorf("%w: unexpected content-type %q", ErrJWKSInvalidResponse, ct)
 	}
 
@@ -162,12 +166,58 @@ func (c *JWKSClient) FetchJWKS(ctx context.Context, jwksURI string) (jwk.Set, er
 		return nil, fmt.Errorf("%w: read body: %w", ErrJWKSInvalidResponse, err)
 	}
 
+	// SECURITY: Validate JWKS schema before parsing to prevent cache poisoning.
+	// The response must be a valid JSON object with a "keys" array.
+	if !validateJWKSSchema(data) {
+		return nil, fmt.Errorf("%w: invalid JWKS schema", ErrJWKSInvalidResponse)
+	}
+
 	set, err := jwk.Parse(data)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrJWKSInvalidResponse, err)
 	}
 
 	return set, nil
+}
+
+// validateJWKSSchema validates the basic structure of a JWKS response.
+// SECURITY: This prevents cache poisoning attacks where a malicious endpoint
+// returns a non-JWKS JSON response that could be parsed as valid keys.
+func validateJWKSSchema(data []byte) bool {
+	var jwks struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := json.Unmarshal(data, &jwks); err != nil {
+		return false
+	}
+	// JWKS must have a "keys" array (can be empty but must be present)
+	if jwks.Keys == nil {
+		return false
+	}
+	// Validate each key has required fields
+	for _, keyData := range jwks.Keys {
+		var key struct {
+			Kty string `json:"kty"`
+			Kid string `json:"kid"`
+			Use string `json:"use"`
+		}
+		if err := json.Unmarshal(keyData, &key); err != nil {
+			return false
+		}
+		// kty (key type) is required per RFC 7517
+		if key.Kty == "" {
+			return false
+		}
+		// kid (key ID) is required for JWKS key matching
+		if key.Kid == "" {
+			return false
+		}
+		// use must be "sig" (signature) if present
+		if key.Use != "" && key.Use != "sig" {
+			return false
+		}
+	}
+	return true
 }
 
 // GetKey retrieves a specific key by issuer and key ID.

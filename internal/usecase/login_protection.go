@@ -62,6 +62,13 @@ func NewLoginProtection(cfg LoginProtectionConfig) *LoginProtection {
 		lockDuration:    cfg.LockDuration,
 		stopCh:          make(chan struct{}),
 	}
+	// SECURITY WARNING: In-memory login protection state is lost on process restart.
+	// An attacker could reset brute-force counters by triggering a server restart.
+	// For production deployments, use a Redis-backed implementation instead.
+	logger.Warn(context.Background(), "login_protection.using_in_memory_storage",
+		zap.String("warning", "attack_counters_reset_on_restart"),
+		zap.Int("max_attempts", cfg.MaxAttempts),
+		zap.Duration("lock_duration", cfg.LockDuration))
 	go lp.cleanupLoop()
 	return lp
 }

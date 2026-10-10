@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // Validate checks required configuration fields, returning the first error found.
@@ -181,6 +182,14 @@ func (c *Config) validateAuth() error {
 	// Security: enforce redirect URI whitelist in production to prevent open redirect attacks.
 	if c.Server.Env == "production" && len(c.Auth.AllowedRedirectURIs) == 0 {
 		return fmt.Errorf("auth.allowed_redirect_uris is required in production environment")
+	}
+	// Security: validate OAuth2 state TTL to prevent CSRF protection bypass.
+	// TTL must be between 5 and 30 minutes to balance security and usability.
+	// Too short: legitimate users may fail; too long: increases CSRF attack window.
+	if c.Auth.OAuth2StateTTL > 0 {
+		if c.Auth.OAuth2StateTTL < 5*time.Minute || c.Auth.OAuth2StateTTL > 30*time.Minute {
+			return fmt.Errorf("auth.oauth2_state_ttl must be between 5 and 30 minutes, got %v", c.Auth.OAuth2StateTTL)
+		}
 	}
 	return nil
 }

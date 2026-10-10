@@ -94,7 +94,7 @@ func (s *JWTSigner) ParseAccessToken(tokenString string) (*Claims, error) {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return s.secret, nil
-	}, jwt.WithAudience("rtc-agent"))
+	}, jwt.WithAudience("rtc-agent"), jwt.WithIssuer("rtc-agent"))
 	if err != nil {
 		// Classify the error reason for metrics
 		reason := classifyJWTError(err)

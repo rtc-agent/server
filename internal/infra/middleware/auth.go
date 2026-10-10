@@ -234,6 +234,8 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool, banChecker UserBanChec
 							zap.String("user_id", userID.String()),
 							zap.String("remote_addr", r.RemoteAddr),
 							zap.Bool("bypass_applied", true))
+						// Record Prometheus metric for security monitoring
+						auth.RecordSecurityEvent("ban_check_fail_open")
 						// Continue processing - err != nil means we couldn't verify, so we allow
 					} else {
 						// Successfully checked ban status, cache it

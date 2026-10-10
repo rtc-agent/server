@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/agent/stringutil"
+	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/repo"
@@ -216,6 +217,8 @@ func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken 
 		// that the token was stolen.
 		logger.Warn(ctx, "auth.refresh_token_reuse_detected",
 			zap.String("token_hash_prefix", rtHash[:16]))
+		// Record Prometheus metric for security monitoring and alerting
+		auth.RecordSecurityEvent("refresh_token_reuse")
 		return nil, ErrRefreshTokenRevoked
 	}
 	if time.Now().After(rt.ExpiresAt) {
