@@ -52,6 +52,15 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("connect database: %w", err)
 	}
 
+	// Disable statement_timeout for migration operations.
+	// Production DBAs often set statement_timeout (e.g., 30s) to prevent long-running queries,
+	// but CREATE INDEX CONCURRENTLY on large tables can legitimately take longer.
+	// Setting it to 0 (unlimited) ensures migration completes without artificial timeout.
+	// This only affects the current session/connection.
+	if err := db.Exec("SET statement_timeout = 0").Error; err != nil {
+		logger.Warn(context.Background(), "migrate.set_statement_timeout_failed", zap.Error(err))
+	}
+
 	// Ensure pgvector extension is created (pgvector/pgvector:pg17 image has it installed, but it must be explicitly enabled).
 	// This is a hard error because subsequent migrations may depend on vector types.
 	if err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector").Error; err != nil {
@@ -142,10 +151,13 @@ func createMigrationIndexes(db *gorm.DB) error {
 		return fmt.Errorf("create unique index for user configs: %w", err)
 	}
 
-	// Composite index for admin session listing and token aggregation stats.
+	// Composite index for admin session listing, token aggregation stats, and queries
+	// filtering by owner_kind + owner_ref_id with ordering/limit by created_at.
+	// This single 3-column index replaces the previous 2-column idx_sessions_owner
+	// and idx_sessions_owner_created indexes, reducing index maintenance overhead.
 	if err := db.Exec(`
 		CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sessions_owner_created
-		ON sessions(owner_ref_id, created_at)
+		ON sessions(owner_kind, owner_ref_id, created_at)
 	`).Error; err != nil {
 		return fmt.Errorf("create index for sessions: %w", err)
 	}

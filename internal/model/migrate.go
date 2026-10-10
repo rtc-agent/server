@@ -60,9 +60,27 @@ func AutoMigrate(db *gorm.DB) error {
 
 	// Migrate user_memories.tags from text[] to jsonb (matches StringArray JSON serialization).
 	// to_jsonb() converts a PostgreSQL array into a JSON array — direct cast text[]->jsonb is not allowed.
-	// Silently ignored if the column is already jsonb or doesn't exist.
-	if err := db.Exec("ALTER TABLE user_memories ALTER COLUMN tags TYPE jsonb USING to_jsonb(tags)").Error; err != nil {
-		logger.Warn(context.Background(), "migrate.user_memories_tags_type_change_failed",
+	// Check column existence and current type to avoid errors on repeated runs.
+	var columnExists bool
+	var isAlreadyJSONB bool
+	if err := db.Raw(`
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'user_memories' AND column_name = 'tags'
+		)
+	`).Scan(&columnExists).Error; err == nil && columnExists {
+		if err := db.Raw(`
+			SELECT data_type = 'jsonb' FROM information_schema.columns
+			WHERE table_name = 'user_memories' AND column_name = 'tags'
+		`).Scan(&isAlreadyJSONB).Error; err == nil && !isAlreadyJSONB {
+			// Column exists but is not jsonb, perform the conversion
+			if err := db.Exec("ALTER TABLE user_memories ALTER COLUMN tags TYPE jsonb USING to_jsonb(tags)").Error; err != nil {
+				logger.Warn(context.Background(), "migrate.user_memories_tags_type_change_failed",
+					zap.Error(err))
+			}
+		}
+	} else if err != nil {
+		logger.Warn(context.Background(), "migrate.user_memories_tags_check_failed",
 			zap.Error(err))
 	}
 
@@ -71,9 +89,8 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_messages_session_offset ON messages(session_id, global_offset)").Error; err != nil {
 		return fmt.Errorf("create index idx_messages_session_offset: %w", err)
 	}
-	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sessions_owner ON sessions(owner_kind, owner_ref_id)").Error; err != nil {
-		return fmt.Errorf("create index idx_sessions_owner: %w", err)
-	}
+	// Note: idx_sessions_owner (owner_kind, owner_ref_id) was merged into idx_sessions_owner_created
+	// (owner_kind, owner_ref_id, created_at) in cmd/migrate.go to reduce index redundancy.
 	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_admin_audit_logs_operator_time ON admin_audit_logs(operator_id, created_at)").Error; err != nil {
 		return fmt.Errorf("create index idx_admin_audit_logs_operator_time: %w", err)
 	}

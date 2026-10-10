@@ -17,7 +17,24 @@ import (
 //  4. Set id as NOT NULL and add primary key constraint
 //  5. Make user_id column nullable
 //
-// The entire migration runs in a transaction for atomicity.
+// IMPORTANT: Production Deployment Considerations
+//
+// This migration performs DDL operations (ALTER COLUMN SET NOT NULL, ADD PRIMARY KEY)
+// that require ACCESS EXCLUSIVE locks on the table. On large tables, this can:
+//
+//   - Block all reads and writes during migration
+//   - Take significant time if many rows need backfilling
+//   - Conflict with other ongoing operations
+//
+// For production environments with large server_configs tables:
+//  1. Schedule during low-traffic maintenance windows
+//  2. Consider using pg_repack for online table reorganization
+//  3. Monitor pg_stat_activity for lock contention
+//  4. Ensure statement_timeout is disabled (see migrate command)
+//
+// The migration runs in a transaction for atomicity, but this also means the lock
+// is held for the entire duration. For tables with >1M rows, consider breaking
+// this into multiple smaller migrations.
 func MigrateServerConfigTable(db *gorm.DB) error {
 	// Check if table exists
 	var tableExists bool
@@ -90,26 +107,57 @@ func MigrateServerConfigTable(db *gorm.DB) error {
 		}
 
 		// Step 3: Drop the old composite primary key constraint (if exists)
-		// Query the constraint name dynamically
-		var constraintName string
+		// Query the constraint name dynamically and verify it's a composite key
+		// before dropping to avoid accidentally removing a single-column PK.
+		type pkInfo struct {
+			ConstraintName string
+			ColumnCount    int
+		}
+		var pk pkInfo
 		if err := tx.Raw(`
-			SELECT tc.constraint_name
+			SELECT tc.constraint_name as constraint_name, COUNT(kcu.column_name) as column_count
 			FROM information_schema.table_constraints tc
 			JOIN information_schema.key_column_usage kcu
 			  ON tc.constraint_name = kcu.constraint_name
 			WHERE tc.table_name = 'server_configs'
 			  AND tc.constraint_type = 'PRIMARY KEY'
-		`).Scan(&constraintName).Error; err != nil {
+			GROUP BY tc.constraint_name
+		`).Scan(&pk).Error; err != nil {
 			return fmt.Errorf("query primary key constraint: %w", err)
 		}
 
-		if constraintName != "" {
-			// Drop the constraint using dynamic SQL
-			if err := tx.Exec(fmt.Sprintf(
-				`ALTER TABLE server_configs DROP CONSTRAINT IF EXISTS %s`,
-				constraintName,
-			)).Error; err != nil {
-				return fmt.Errorf("drop primary key constraint %s: %w", constraintName, err)
+		if pk.ConstraintName != "" {
+			// Only drop if it's a composite primary key (multiple columns)
+			// This protects against accidentally removing the new surrogate PK
+			if pk.ColumnCount > 1 {
+				// Drop the constraint using dynamic SQL
+				if err := tx.Exec(fmt.Sprintf(
+					`ALTER TABLE server_configs DROP CONSTRAINT IF EXISTS %s`,
+					pk.ConstraintName,
+				)).Error; err != nil {
+					return fmt.Errorf("drop primary key constraint %s: %w", pk.ConstraintName, err)
+				}
+			} else {
+				// Single-column PK exists, check if it's already on 'id'
+				// If so, migration is already complete
+				var pkColumnName string
+				if err := tx.Raw(`
+					SELECT column_name FROM information_schema.key_column_usage
+					WHERE constraint_name = ? AND table_name = 'server_configs'
+				`, pk.ConstraintName).Scan(&pkColumnName).Error; err != nil {
+					return fmt.Errorf("query pk column: %w", err)
+				}
+				if pkColumnName == "id" {
+					// Already migrated, nothing more to do
+					return nil
+				}
+				// Otherwise, drop the single-column PK (it's not on 'id' yet)
+				if err := tx.Exec(fmt.Sprintf(
+					`ALTER TABLE server_configs DROP CONSTRAINT IF EXISTS %s`,
+					pk.ConstraintName,
+				)).Error; err != nil {
+					return fmt.Errorf("drop primary key constraint %s: %w", pk.ConstraintName, err)
+				}
 			}
 		}
 

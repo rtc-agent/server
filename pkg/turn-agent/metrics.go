@@ -80,6 +80,14 @@ type Metrics interface {
 
 	// RecordMessageSent records a message send event with the message type.
 	RecordMessageSent(ctx context.Context, msgType string)
+
+	// IncBackgroundGoroutine increments the active goroutine count for the given type.
+	// Called when a background goroutine is spawned using context.WithoutCancel.
+	IncBackgroundGoroutine(goroutineType string)
+
+	// DecBackgroundGoroutine decrements the active goroutine count for the given type.
+	// Called when a background goroutine exits (typically deferred).
+	DecBackgroundGoroutine(goroutineType string)
 }
 
 // TurnMetricsAttrs contains attributes for a turn event.

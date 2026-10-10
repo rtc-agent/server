@@ -66,6 +66,16 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 	// Use context.WithoutCancel to detach from the parent context, so extraction
 	// continues even if the turn completes and the parent context is canceled.
 	go func() {
+		// Track active goroutine for monitoring (P1 concurrency issue #6)
+		if h.metrics != nil {
+			h.metrics.IncBackgroundGoroutine("session_memory_extraction")
+		}
+		defer func() {
+			if h.metrics != nil {
+				h.metrics.DecBackgroundGoroutine("session_memory_extraction")
+			}
+		}()
+
 		// Panic recovery: prevent a single panic from crashing the entire server.
 		defer func() {
 			if r := recover(); r != nil {

@@ -10,6 +10,16 @@ import (
 	"go.uber.org/zap"
 )
 
+// maskAccessKeyID masks an access key ID for safe logging.
+// Shows only the first 8 characters followed by "..." to prevent credential leakage.
+// If the key is shorter than 8 characters, returns "..." to avoid revealing the full value.
+func maskAccessKeyID(key string) string {
+	if len(key) < 8 {
+		return "..."
+	}
+	return key[:8] + "..."
+}
+
 // SigV4Middleware wraps an HTTP handler with SigV4 signature verification.
 type SigV4Middleware struct {
 	oss3UC *usecase.OSS3Usecase
@@ -56,8 +66,10 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	credValue, err := m.oss3UC.LookupCredential(r.Context(), cred.AccessKeyID)
 	if err != nil {
 		// Actual DB/cache error — return 500 (not 403) so the client can retry
+		// Mask access key ID in logs (show only first 8 chars) to prevent credential leakage
+		maskedKey := maskAccessKeyID(cred.AccessKeyID)
 		logger.Error(r.Context(), "SigV4: credential lookup failed",
-			zap.String("access_key_id", cred.AccessKeyID),
+			zap.String("access_key_id", maskedKey),
 			zap.Error(err))
 		rtcoss3.WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
 		return
@@ -70,8 +82,10 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Verify signature
 	if err := rtcoss3.VerifySigV4Request(r, credValue.SecretAccessKey, m.region, "s3"); err != nil {
+		// Mask access key ID in logs (show only first 8 chars)
+		maskedKey := maskAccessKeyID(cred.AccessKeyID)
 		logger.Error(r.Context(), "SigV4: signature verification failed",
-			zap.String("access_key_id", cred.AccessKeyID),
+			zap.String("access_key_id", maskedKey),
 			zap.Error(err))
 		rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
@@ -80,8 +94,10 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Decrypt SessionToken to extract user_id
 	payload, err := m.oss3UC.DecryptSessionToken(credValue.SessionToken)
 	if err != nil {
+		// Mask access key ID in logs (show only first 8 chars)
+		maskedKey := maskAccessKeyID(cred.AccessKeyID)
 		logger.Error(r.Context(), "SigV4: session token decryption failed",
-			zap.String("access_key_id", cred.AccessKeyID),
+			zap.String("access_key_id", maskedKey),
 			zap.Error(err))
 		rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return

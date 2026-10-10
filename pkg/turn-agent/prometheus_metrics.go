@@ -42,6 +42,9 @@ type PrometheusMetrics struct {
 	sessionCreatedTotal *prometheus.CounterVec
 	sessionClosedTotal  *prometheus.CounterVec
 	messagesSentTotal   *prometheus.CounterVec
+
+	// Background goroutine tracking metrics (for monitoring context.WithoutCancel usage)
+	activeGoroutines *prometheus.GaugeVec
 }
 
 // NewPrometheusMetrics creates and registers all Prometheus metrics.
@@ -211,6 +214,15 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name:      "sent_total",
 			Help:      "Total number of messages sent.",
 		}, []string{"type"}), // type: "user", "assistant", "system"
+
+		// Background goroutine tracking for monitoring detached context usage.
+		// Helps detect goroutine leaks from context.WithoutCancel operations.
+		activeGoroutines: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "rtc",
+			Subsystem: "goroutine",
+			Name:      "active",
+			Help:      "Number of active background goroutines (context.WithoutCancel).",
+		}, []string{"type"}), // type: "session_memory_extraction", "stream_drain"
 	}
 }
 
@@ -359,4 +371,22 @@ func (m *PrometheusMetrics) RecordMessageSent(ctx context.Context, msgType strin
 		msgType = "unknown"
 	}
 	m.messagesSentTotal.WithLabelValues(msgType).Inc()
+}
+
+// IncBackgroundGoroutine increments the active goroutine count for the given type.
+// Called when a background goroutine is spawned using context.WithoutCancel.
+func (m *PrometheusMetrics) IncBackgroundGoroutine(goroutineType string) {
+	if goroutineType == "" {
+		goroutineType = "unknown"
+	}
+	m.activeGoroutines.WithLabelValues(goroutineType).Inc()
+}
+
+// DecBackgroundGoroutine decrements the active goroutine count for the given type.
+// Called when a background goroutine exits (typically deferred).
+func (m *PrometheusMetrics) DecBackgroundGoroutine(goroutineType string) {
+	if goroutineType == "" {
+		goroutineType = "unknown"
+	}
+	m.activeGoroutines.WithLabelValues(goroutineType).Dec()
 }

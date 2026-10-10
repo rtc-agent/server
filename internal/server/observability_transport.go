@@ -5,6 +5,24 @@
 // The transport ALWAYS wraps the HTTP client regardless of payload logging,
 // guaranteeing 100% coverage for metrics (request count, latency, token usage).
 //
+// SECURITY WARNING: Payload Logging (payloadLog=true)
+//
+// When payloadLog is enabled, the FULL request and response bodies are logged,
+// including:
+//   - System prompts (may contain proprietary instructions)
+//   - User messages (may contain sensitive user data, PII, secrets)
+//   - Model outputs (may contain generated sensitive content)
+//   - All parameters and metadata
+//
+// Production Deployment Guidelines:
+//   - DO NOT enable payloadLog in production unless required for debugging
+//   - If enabled, ensure logs are stored securely with restricted access
+//   - Rotate logs frequently and apply retention policies
+//   - Consider redacting specific fields if only partial logging is needed
+//   - Monitor log volume - full payload logging can generate significant storage
+//
+// For routine observability, use metrics and structured logging instead.
+//
 // When payload logging is enabled (payloadLog=true), it captures:
 //   - Full request body: system prompt, tools, messages, all parameters
 //   - Full response body: model output, token usage, finish reason
@@ -77,6 +95,13 @@ type observabilityTransport struct {
 func newObservabilityTransport(base http.RoundTripper, payloadLog bool, observer LLMResponseObserver) *observabilityTransport {
 	if base == nil {
 		base = http.DefaultTransport
+	}
+	// Log a warning when payload logging is enabled to alert operators about
+	// potential sensitive data exposure (P1 observability issue #9)
+	if payloadLog {
+		pkglogger.LLMPayload().Warn("LLM payload logging ENABLED - full request/response bodies will be logged. " +
+			"Ensure logs are stored securely and access is restricted. " +
+			"Consider disabling in production unless debugging.")
 	}
 	return &observabilityTransport{
 		base:       base,

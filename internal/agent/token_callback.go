@@ -98,13 +98,22 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 			// Use WithoutCancel to decouple from the parent context lifecycle:
 			// the goroutine must complete stream draining and token reporting
 			// even if the eino framework cancels ctx after callback returns.
-			// WithTimeout (60s) prevents the goroutine from hanging indefinitely
+			// WithTimeout (10min) prevents the goroutine from hanging indefinitely
 			// if the stream stalls.
 			OnEndWithStreamOutput: func(ctx context.Context, info *callbacks.RunInfo, output *schema.StreamReader[*model.CallbackOutput]) context.Context {
 				startTime := startTimeFromContext(ctx)
 				bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+
+				// Track active goroutine for monitoring (P1 concurrency issue #7)
+				if h.metrics != nil {
+					h.metrics.IncBackgroundGoroutine("stream_drain")
+				}
+
 				go func() {
 					defer cancel()
+					if h.metrics != nil {
+						defer h.metrics.DecBackgroundGoroutine("stream_drain")
+					}
 					// Defensive recover: drainStreamAndReport has its own recover
 					// internally, but adding one here protects against future refactors
 					// that remove the inner recover. A panic in a goroutine crashes the
