@@ -121,12 +121,14 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 	}
 
 	// Ensure quota is released on failure unless committed.
-	// quotaCommitted tracks whether quota has been charged to the user.
+	// quotaCommitAttempted tracks whether we've attempted to commit quota.
 	// If false at function exit, the defer releases the pending reservation.
-	quotaCommitted := false
+	// Set to true after commit attempt (regardless of success) to prevent
+	// double-release: failed commits leave the pending key to expire via TTL.
+	quotaCommitAttempted := false
 	// Bug #15 fix: Use WithoutCancel to preserve tracing context while avoiding cancellation.
 	defer func() {
-		if !quotaCommitted && quotaRequestID != "" {
+		if !quotaCommitAttempted && quotaRequestID != "" {
 			h.oss3UC.ReleaseQuota(context.WithoutCancel(r.Context()), userID, quotaRequestID)
 		}
 	}()
@@ -156,9 +158,9 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 				zap.Error(err))
 			RecordOrphanedQuotaCommit()
 		}
-		quotaCommitted = true // Mark as committed regardless of success — avoid double-release
+		quotaCommitAttempted = true // Mark as attempted regardless of success — avoid double-release
 	} else {
-		quotaCommitted = true
+		quotaCommitAttempted = true
 	}
 
 	w.Header().Set("ETag", etag)

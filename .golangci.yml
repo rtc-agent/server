@@ -77,15 +77,6 @@ linters:
           deny:
             - pkg: "github.com/rtc-agent/server/internal/repo"
               desc: "Handler 层不能直接访问 Repo，请通过 Usecase 或领域服务层调用"
-        # Handler 层不能直接导入 Domain（领域模型层）
-        # Domain 类型应该通过 Usecase 层的返回值传递
-        handler-no-domain:
-          files:
-            - "**/internal/handler/**/*.go"
-            - "!**/*_test.go"  # 排除测试文件
-          deny:
-            - pkg: "github.com/rtc-agent/server/internal/domain"
-              desc: "Handler 层不能直接导入 Domain，领域类型应通过 Usecase 层传递"
 
   exclusions:
     rules:

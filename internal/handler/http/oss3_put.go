@@ -302,7 +302,18 @@ func commitQuotaWithRetry(
 }
 
 // isTransientRedisError reports whether the error is a transient Redis failure
-// that is safe to retry (connection reset, I/O timeout, NOSCRIPT).
+// that is safe to retry.
+//
+// Detection strategy:
+//   - "connection reset" / "i/o timeout": Network-level errors from the Redis client.
+//     These indicate temporary connectivity issues that typically resolve on retry.
+//     The go-redis client does not expose a public IsRetryableError() API, so we
+//     match the error message text that the underlying net package produces.
+//   - "NOSCRIPT": Redis Lua script not loaded (e.g., after a failover or restart).
+//     The script will be re-loaded on the next EVALSHA call, making this safe to retry.
+//
+// This approach is fragile but pragmatic. If go-redis adds a retryable-error API,
+// we should migrate to it.
 func isTransientRedisError(err error) bool {
 	if err == nil {
 		return false

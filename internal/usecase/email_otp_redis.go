@@ -141,10 +141,18 @@ return count
 func (s *RedisOTPStore) RecordVerifyFailure(ctx context.Context, emailAddr string) {
 	failKey := fmt.Sprintf("admin:otp:verify:%s", emailAddr)
 	lockKey := fmt.Sprintf("admin:otp:lock:%s", emailAddr)
-	_, _ = recordVerifyFailureScript.Run(ctx, s.rdb,
+	_, err := recordVerifyFailureScript.Run(ctx, s.rdb,
 		[]string{failKey, lockKey},
 		s.maxVerifyAttempts, int(s.lockDuration.Seconds()),
 	).Result()
+	if err != nil {
+		// Log but don't fail: verification failure recording is best-effort.
+		// The lockout mechanism is a security feature, but transient Redis errors
+		// shouldn't block the verification flow.
+		logger.Warn(ctx, "record_verify_failure_script_failed",
+			zap.String("email", emailAddr),
+			zap.Error(err))
+	}
 }
 
 // ResetVerifyFailures resets the failure counter for the email.

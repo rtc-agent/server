@@ -153,10 +153,10 @@ func (s *Server) startConfigSubscriber() {
 	subscriberStop := configSubscriber.Start(ctx)
 
 	// Wrap the subscriber stop function to be called on shutdown
-	go func() {
+	logger.SafeGo("config-subscriber-shutdown", func() {
 		<-ctx.Done()
 		subscriberStop()
-	}()
+	})
 
 	logger.Info(context.Background(), "[Server] Config subscriber started",
 		zap.String("channel", model.ConfigChannel))
