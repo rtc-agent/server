@@ -70,8 +70,12 @@ func (bw *BanWatcher) subscribe() error {
 	if bw.sub != nil {
 		_ = bw.sub.Close()
 	}
-	sub := bw.rdb.Subscribe(bw.baseCtx, model.BanChannel)
-	_, err := sub.Receive(bw.baseCtx)
+	// Use a timeout for the subscribe operation to prevent blocking indefinitely
+	// if the Redis connection hangs.
+	subCtx, subCancel := context.WithTimeout(bw.baseCtx, 10*time.Second)
+	defer subCancel()
+	sub := bw.rdb.Subscribe(subCtx, model.BanChannel)
+	_, err := sub.Receive(subCtx)
 	if err != nil {
 		return fmt.Errorf("subscribe to ban channel: %w", err)
 	}

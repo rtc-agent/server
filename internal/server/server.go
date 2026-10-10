@@ -695,7 +695,9 @@ func (s *Server) oss3CleanupLoop(ctx context.Context, uc *usecase.OSS3Usecase, i
 	case <-ctx.Done():
 		return
 	case <-time.After(30 * time.Second):
-		if err := uc.RunCleanup(ctx); err != nil {
+		opCtx, opCancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer opCancel()
+		if err := uc.RunCleanup(opCtx); err != nil {
 			logger.Error(ctx, "[Server] OSS3 cleanup cycle failed", zap.Error(err))
 		}
 	}
@@ -706,9 +708,11 @@ func (s *Server) oss3CleanupLoop(ctx context.Context, uc *usecase.OSS3Usecase, i
 			logger.Info(ctx, "[Server] OSS3 cleanup scheduler stopped")
 			return
 		case <-ticker.C:
-			if err := uc.RunCleanup(ctx); err != nil {
+			opCtx, opCancel := context.WithTimeout(ctx, 5*time.Minute)
+			if err := uc.RunCleanup(opCtx); err != nil {
 				logger.Error(ctx, "[Server] OSS3 cleanup cycle failed", zap.Error(err))
 			}
+			opCancel()
 		}
 	}
 }
@@ -747,7 +751,9 @@ func (s *Server) refreshTokenCleanupLoop(ctx context.Context) {
 func (s *Server) runRefreshTokenCleanup(ctx context.Context) error {
 	// Delete tokens that expired more than 7 days ago (safety buffer)
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
-	deleted, err := s.svcCtx.RefreshTokenRepo.DeleteExpired(ctx, cutoff)
+	opCtx, opCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer opCancel()
+	deleted, err := s.svcCtx.RefreshTokenRepo.DeleteExpired(opCtx, cutoff)
 	if err != nil {
 		return err
 	}
