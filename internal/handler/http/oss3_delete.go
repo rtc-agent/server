@@ -127,10 +127,21 @@ func (h *OSS3Handler) handleDeleteObjects(w http.ResponseWriter, r *http.Request
 
 	// Delete file records from DB with retry logic for compensation.
 	// This ensures consistency between backend storage and DB records.
+	// OSS3-28 fix: Release quota for each successfully deleted file to prevent quota leaks.
 	for i, result := range results {
 		if result.Code == "" {
-			// Successful deletion — delete DB record with retry
+			// Get file size before deletion for quota release
+			var fileSize int64
+			file, _ := h.oss3UC.GetFileRecord(r.Context(), userID, keys[i])
+			if file != nil {
+				fileSize = file.Size
+			}
+
+			// Delete DB record with retry
 			h.deleteFileRecordWithRetry(r.Context(), userID, keys[i])
+
+			// Release quota for deleted file
+			h.oss3UC.ReleaseQuotaForDeletedFile(r.Context(), userID, keys[i], fileSize)
 		}
 	}
 

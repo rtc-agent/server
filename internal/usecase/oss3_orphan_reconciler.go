@@ -183,6 +183,9 @@ func (uc *OSS3Usecase) deleteOrphanBatch(
 
 // identifyOrphanKeys identifies orphan keys from a batch and updates result counters.
 // Returns the list of orphan keys that should be deleted (after applying cooldown).
+// OSS3-28 fix: Also validates content-type and size for orphaned files.
+// Files that violate policies are always deleted (even during cooldown) to prevent
+// presigned URL bypass attacks where malicious clients upload disallowed content.
 func (uc *OSS3Usecase) identifyOrphanKeys(
 	ctx context.Context,
 	keys []string,
@@ -195,6 +198,29 @@ func (uc *OSS3Usecase) identifyOrphanKeys(
 	for _, key := range keys {
 		if !existingKeys[key] {
 			obj := keyMeta[key]
+
+			// OSS3-28 fix: Validate content-type and size for orphaned files.
+			// This catches files uploaded via presigned URLs that bypassed validation.
+			// Policy-violating files are deleted immediately (skip cooldown).
+			if !rtcoss3.IsAllowedContentType(obj.ContentType) {
+				logger.Warn(ctx, "orphan reconciler: deleting file with disallowed content-type",
+					zap.String("key", key),
+					zap.String("content_type", obj.ContentType),
+					zap.Int64("size", obj.Size))
+				orphanKeys = append(orphanKeys, key)
+				result.OrphansFound++
+				continue
+			}
+			if uc.cfg.Quota.MaxFileSizeBytes > 0 && obj.Size > uc.cfg.Quota.MaxFileSizeBytes {
+				logger.Warn(ctx, "orphan reconciler: deleting oversized file",
+					zap.String("key", key),
+					zap.Int64("size", obj.Size),
+					zap.Int64("max_size", uc.cfg.Quota.MaxFileSizeBytes))
+				orphanKeys = append(orphanKeys, key)
+				result.OrphansFound++
+				continue
+			}
+
 			result.OrphansFound++
 
 			// Apply cooldown: skip recently created objects.

@@ -87,6 +87,45 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 	if instantResult.Hit {
 		if instantResult.ConsistencyViolation {
 			// MinIO has file but DB missing → consistency repair
+			// OSS3-28 fix: Validate content-type and size before repairing DB record.
+			// This prevents presigned URL bypass attacks where malicious clients upload
+			// disallowed content directly to MinIO, then trigger instant upload to create DB record.
+			if !rtcoss3.IsAllowedContentType(instantResult.FileMeta.ContentType) {
+				span.SetAttributes(attribute.String("oss.upload_source", "minio_repair_rejected"))
+				span.SetStatus(codes.Error, "content_type_violation")
+				logger.Warn(ctx, "instant upload: MinIO file has disallowed content-type, deleting",
+					zap.String("user_id", userID),
+					zap.String("key", key),
+					zap.String("content_type", instantResult.FileMeta.ContentType))
+				// Delete the invalid file from MinIO
+				if delErr := h.oss3UC.Backend().DeleteObject(ctx, bucket, key); delErr != nil {
+					logger.Error(ctx, "instant upload: failed to delete invalid MinIO file",
+						zap.String("user_id", userID),
+						zap.String("key", key),
+						zap.Error(delErr))
+				}
+				rtcoss3.WriteS3Error(w, rtcoss3.ErrUnsupportedContentType, r.URL.Path, "")
+				return
+			}
+			if h.maxFileSizeBytes > 0 && instantResult.FileMeta.Size > h.maxFileSizeBytes {
+				span.SetAttributes(attribute.String("oss.upload_source", "minio_repair_rejected"))
+				span.SetStatus(codes.Error, "size_violation")
+				logger.Warn(ctx, "instant upload: MinIO file exceeds max size, deleting",
+					zap.String("user_id", userID),
+					zap.String("key", key),
+					zap.Int64("size", instantResult.FileMeta.Size),
+					zap.Int64("max_size", h.maxFileSizeBytes))
+				// Delete the oversized file from MinIO
+				if delErr := h.oss3UC.Backend().DeleteObject(ctx, bucket, key); delErr != nil {
+					logger.Error(ctx, "instant upload: failed to delete oversized MinIO file",
+						zap.String("user_id", userID),
+						zap.String("key", key),
+						zap.Error(delErr))
+				}
+				rtcoss3.WriteS3Error(w, rtcoss3.ErrEntityTooLarge, r.URL.Path, "")
+				return
+			}
+
 			span.SetAttributes(attribute.String("oss.upload_source", "minio_repair"))
 			RecordConsistencyViolation(instantResult.ViolationType)
 			logger.Info(ctx, "instant upload: MinIO hit, repairing DB record",
@@ -169,7 +208,7 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 			rtcoss3.WriteS3Error(w, rtcoss3.ErrEntityTooLarge, r.URL.Path, "")
 			return
 		}
-		RecordBackendError("PutObject", err.Error())
+		RecordBackendError("PutObject", "upload_failed")
 		rtcoss3.WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return // uploadSucceeded=false -> defer releases quota
 	}
