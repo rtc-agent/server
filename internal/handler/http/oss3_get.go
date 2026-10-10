@@ -183,6 +183,11 @@ func parseRangeHeader(rangeHeader string) (start, end int64, hasRange bool, err 
 			// Reject "-0" and negative values.
 			return 0, 0, false, fmt.Errorf("suffix length must be positive")
 		}
+		// Validate upper bound to prevent excessive memory allocation (max 100MB).
+		const maxSuffixLength = 100 * 1024 * 1024 // 100MB
+		if suffixLen > maxSuffixLength {
+			return 0, 0, false, fmt.Errorf("suffix length exceeds maximum allowed size of 100MB")
+		}
 		// Negative offset from end — resolved against file size in handleGetObject.
 		return -suffixLen, -1, true, nil
 	}

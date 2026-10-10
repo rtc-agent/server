@@ -21,19 +21,21 @@ import (
 // Endpoints:
 //   - POST /api/presigned-url — generate a presigned PUT or GET URL
 type STSPresignHandler struct {
-	oss3UC     *usecase.OSS3Usecase
-	signer     *auth.JWTSigner
-	isDev      bool
-	banChecker middleware.UserBanChecker
+	oss3UC      *usecase.OSS3Usecase
+	signer      *auth.JWTSigner
+	isDev       bool
+	banChecker  middleware.UserBanChecker
+	rateLimiter RateLimiterInterface
 }
 
 // NewSTSPresignHandler creates a new presigned URL handler.
-func NewSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool, banChecker middleware.UserBanChecker) *STSPresignHandler {
+func NewSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool, banChecker middleware.UserBanChecker, rateLimiter RateLimiterInterface) *STSPresignHandler {
 	return &STSPresignHandler{
-		oss3UC:     oss3UC,
-		signer:     signer,
-		isDev:      isDev,
-		banChecker: banChecker,
+		oss3UC:      oss3UC,
+		signer:      signer,
+		isDev:       isDev,
+		banChecker:  banChecker,
+		rateLimiter: rateLimiter,
 	}
 }
 
@@ -47,7 +49,12 @@ func (h *STSPresignHandler) RegisterRoutes(mux *http.ServeMux) {
 	authMiddleware := middleware.JWTAuth(h.signer, h.isDev, h.banChecker)
 
 	// POST /api/presigned-url — generate a presigned URL
-	mux.Handle("POST /api/presigned-url", authMiddleware(http.HandlerFunc(h.GeneratePresignedURL)))
+	// Rate limiting is applied before authentication to prevent DoS attacks
+	var handler http.Handler = authMiddleware(http.HandlerFunc(h.GeneratePresignedURL))
+	if h.rateLimiter != nil {
+		handler = STSRateLimitMiddleware(h.rateLimiter, handler)
+	}
+	mux.Handle("POST /api/presigned-url", handler)
 }
 
 // presignRequest is the JSON body for presigned URL generation.

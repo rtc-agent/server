@@ -146,8 +146,12 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 		return nil, err
 	}
 	oss3Handler := provideOSS3Handler(oss3Usecase, cfg)
-	stsHandler := provideSTSHandler(oss3Usecase, jwtSigner, cfg, serviceContext)
-	stsPresignHandler := provideSTSPresignHandler(oss3Usecase, jwtSigner, cfg, serviceContext)
+
+	// Create rate limiter for STS endpoints (100 requests/minute/IP)
+	stsRateLimiter := provideSTSRateLimiter(rdb, cfg)
+
+	stsHandler := provideSTSHandler(oss3Usecase, jwtSigner, cfg, serviceContext, stsRateLimiter)
+	stsPresignHandler := provideSTSPresignHandler(oss3Usecase, jwtSigner, cfg, serviceContext, stsRateLimiter)
 	agent, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics, backend)
 	if err != nil {
 		return nil, err
@@ -841,20 +845,36 @@ func provideOSS3Handler(oss3UC *usecase.OSS3Usecase, cfg *config.Config) *httpha
 	return httphandler.NewOSS3Handler(oss3UC, cfg.Storage.MinIO.Bucket, cfg.Storage.Quota.MaxFileSizeBytes)
 }
 
-func provideSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config, svcCtx *svc.ServiceContext) *httphandler.STSHandler {
-	if oss3UC == nil {
-		return nil
+// provideSTSRateLimiter creates a rate limiter for STS endpoints.
+// Uses Redis if available for distributed rate limiting, otherwise falls back to memory-based.
+// Rate limit: 100 requests/minute/IP to prevent credential exhaustion and DoS attacks.
+func provideSTSRateLimiter(rdb *redis.Client, cfg *config.Config) httphandler.RateLimiterInterface {
+	const stsRateLimitPerMinute = 100
+
+	if rdb != nil {
+		return httphandler.NewRedisRateLimiter(rdb, stsRateLimitPerMinute)
 	}
-	isDev := cfg.Server.Env == "development"
-	return httphandler.NewSTSHandler(oss3UC, signer, isDev, svcCtx.OAuth2UserRepo)
+
+	memLimiter := httphandler.NewRateLimiter(httphandler.RateLimitConfig{
+		MaxRequestsPerMinute: stsRateLimitPerMinute,
+	})
+	return memLimiter
 }
 
-func provideSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config, svcCtx *svc.ServiceContext) *httphandler.STSPresignHandler {
+func provideSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config, svcCtx *svc.ServiceContext, rateLimiter httphandler.RateLimiterInterface) *httphandler.STSHandler {
 	if oss3UC == nil {
 		return nil
 	}
 	isDev := cfg.Server.Env == "development"
-	return httphandler.NewSTSPresignHandler(oss3UC, signer, isDev, svcCtx.OAuth2UserRepo)
+	return httphandler.NewSTSHandler(oss3UC, signer, isDev, svcCtx.OAuth2UserRepo, rateLimiter)
+}
+
+func provideSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config, svcCtx *svc.ServiceContext, rateLimiter httphandler.RateLimiterInterface) *httphandler.STSPresignHandler {
+	if oss3UC == nil {
+		return nil
+	}
+	isDev := cfg.Server.Env == "development"
+	return httphandler.NewSTSPresignHandler(oss3UC, signer, isDev, svcCtx.OAuth2UserRepo, rateLimiter)
 }
 
 func provideServer(

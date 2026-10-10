@@ -17,19 +17,21 @@ import (
 // These endpoints are authenticated via JWT and allow users to:
 //   - Issue temporary S3 credentials (POST /api/credentials/temporary)
 type STSHandler struct {
-	oss3UC     *usecase.OSS3Usecase
-	signer     *auth.JWTSigner
-	isDev      bool
-	banChecker middleware.UserBanChecker
+	oss3UC      *usecase.OSS3Usecase
+	signer      *auth.JWTSigner
+	isDev       bool
+	banChecker  middleware.UserBanChecker
+	rateLimiter RateLimiterInterface
 }
 
 // NewSTSHandler creates a new STS handler.
-func NewSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool, banChecker middleware.UserBanChecker) *STSHandler {
+func NewSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool, banChecker middleware.UserBanChecker, rateLimiter RateLimiterInterface) *STSHandler {
 	return &STSHandler{
-		oss3UC:     oss3UC,
-		signer:     signer,
-		isDev:      isDev,
-		banChecker: banChecker,
+		oss3UC:      oss3UC,
+		signer:      signer,
+		isDev:       isDev,
+		banChecker:  banChecker,
+		rateLimiter: rateLimiter,
 	}
 }
 
@@ -43,7 +45,12 @@ func (h *STSHandler) RegisterRoutes(mux *http.ServeMux) {
 	authMiddleware := middleware.JWTAuth(h.signer, h.isDev, h.banChecker)
 
 	// POST /api/credentials/temporary — issue temporary S3 credentials
-	mux.Handle("POST /api/credentials/temporary", authMiddleware(http.HandlerFunc(h.IssueTemporaryCredentials)))
+	// Rate limiting is applied before authentication to prevent credential exhaustion attacks
+	var handler http.Handler = authMiddleware(http.HandlerFunc(h.IssueTemporaryCredentials))
+	if h.rateLimiter != nil {
+		handler = STSRateLimitMiddleware(h.rateLimiter, handler)
+	}
+	mux.Handle("POST /api/credentials/temporary", handler)
 }
 
 // IssueTemporaryCredentials generates temporary S3 credentials for the authenticated user.

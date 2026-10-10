@@ -62,6 +62,13 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate AccessKeyID length to prevent cache key exhaustion attacks.
+	// AWS AccessKeyID is always exactly 20 characters (uppercase alphanumeric).
+	if len(cred.AccessKeyID) != 20 {
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
+		return
+	}
+
 	// Lookup credential from cache or DB
 	credValue, err := m.oss3UC.LookupCredential(r.Context(), cred.AccessKeyID)
 	if err != nil {

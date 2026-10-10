@@ -3,7 +3,9 @@ package httphandler
 
 import (
 	"context"
+	"encoding/json"
 	"hash/fnv"
+	"net/http"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -88,8 +90,10 @@ func NewRateLimiter(cfg RateLimitConfig) *RateLimiter {
 		stopCh:    make(chan struct{}),
 	}
 
-	// Start periodic cleanup
-	go rl.cleanupLoop()
+	// Start periodic cleanup with panic-safe goroutine
+	logger.SafeGo("rate-limiter-cleanup", func() {
+		rl.cleanupLoop()
+	})
 	return rl
 }
 
@@ -195,4 +199,30 @@ func AdminRateLimitMiddleware(limiter RateLimiterInterface) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// STSRateLimitMiddleware creates a standard HTTP middleware for rate limiting STS endpoints.
+// Rate limiting is based on IP address to prevent credential exhaustion attacks.
+func STSRateLimitMiddleware(limiter RateLimiterInterface, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := r.RemoteAddr
+		// Extract IP from X-Forwarded-For or X-Real-IP if present (for proxied requests)
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			ip = forwarded
+		} else if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+			ip = realIP
+		}
+
+		if !limiter.Allow(ip) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			resp := map[string]string{
+				"error":             "rate_limit_exceeded",
+				"error_description": "Too many requests. Please try again later.",
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
