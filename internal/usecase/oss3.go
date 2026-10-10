@@ -32,6 +32,10 @@ var (
 	ErrUnsupportedPresignOperation = errors.New("unsupported operation")
 	// ErrExpiryExceeded indicates the requested expiry exceeds the maximum allowed.
 	ErrExpiryExceeded = errors.New("expires_in must not exceed maximum")
+	// ErrMissingContentType indicates content_type was not provided for a put operation.
+	ErrMissingContentType = errors.New("content_type is required for put operation")
+	// ErrUnsupportedContentType indicates the content_type is not in the allowed list.
+	ErrUnsupportedContentType = errors.New("content_type is not allowed")
 	// ErrUploadNotFound is returned when a multipart upload does not exist
 	// or does not belong to the requesting user.
 	ErrUploadNotFound = errors.New("multipart upload not found")
@@ -340,39 +344,46 @@ func (uc *OSS3Usecase) ValidateUploadOwnership(ctx context.Context, userID, uplo
 
 // GeneratePresignedURL generates a presigned URL for the given operation.
 // Users can only generate presigned URLs for keys under their own prefix (user-{userID}/).
-func (uc *OSS3Usecase) GeneratePresignedURL(ctx context.Context, userID, operation, key string, expiresIn time.Duration) (string, time.Time, error) {
+// For "put" operations, contentType is required and enforced via POST policy to prevent
+// clients from bypassing Content-Type validation.
+func (uc *OSS3Usecase) GeneratePresignedURL(ctx context.Context, userID, operation, key string, expiresIn time.Duration, contentType string) (url string, expiresAt time.Time, fields map[string]string, err error) {
 	// Validate key prefix — user can only access their own prefix
 	expectedPrefix := rtcoss3.BuildUserPrefix(userID)
 	if !strings.HasPrefix(key, expectedPrefix) {
-		return "", time.Time{}, fmt.Errorf("%w: key must start with %q", ErrKeyPrefixViolation, expectedPrefix)
+		return "", time.Time{}, nil, fmt.Errorf("%w: key must start with %q", ErrKeyPrefixViolation, expectedPrefix)
 	}
 
 	// Validate expiry
 	maxExpiry := 7 * 24 * time.Hour // 7 days
 	if expiresIn <= 0 {
-		expiresIn = time.Hour // default 1h
+		expiresIn = 15 * time.Minute // default 15min
 	}
 	if expiresIn > maxExpiry {
-		return "", time.Time{}, fmt.Errorf("%w: expires_in must not exceed %v", ErrExpiryExceeded, maxExpiry)
+		return "", time.Time{}, nil, fmt.Errorf("%w: expires_in must not exceed %v", ErrExpiryExceeded, maxExpiry)
 	}
 
 	bucket := uc.cfg.MinIO.Bucket
-	var url string
-	var err error
+	expiresAt = time.Now().Add(expiresIn)
 	switch operation {
 	case "put":
-		url, err = uc.backend.PresignPut(ctx, bucket, key, expiresIn)
+		// Use POST policy to enforce Content-Type, preventing bypass attacks
+		if contentType == "" {
+			return "", time.Time{}, nil, fmt.Errorf("%w: content_type is required for put operation", ErrMissingContentType)
+		}
+		if !rtcoss3.IsAllowedContentType(contentType) {
+			return "", time.Time{}, nil, fmt.Errorf("%w: %q", ErrUnsupportedContentType, contentType)
+		}
+		url, fields, err = uc.backend.PresignPostPolicy(ctx, bucket, key, expiresIn, contentType)
 	case "get":
 		url, err = uc.backend.PresignGet(ctx, bucket, key, expiresIn)
 	default:
-		return "", time.Time{}, fmt.Errorf("%w: %q (must be 'put' or 'get')", ErrUnsupportedPresignOperation, operation)
+		return "", time.Time{}, nil, fmt.Errorf("%w: %q (must be 'put' or 'get')", ErrUnsupportedPresignOperation, operation)
 	}
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("presign %s: %w", operation, err)
+		return "", time.Time{}, nil, fmt.Errorf("presign %s: %w", operation, err)
 	}
 
-	expiresAt := time.Now().Add(expiresIn)
-	return url, expiresAt, nil
+	return url, expiresAt, fields, nil
 }
 
 // DeleteMultipartUploadRecord deletes a multipart upload tracking record from the database.

@@ -291,6 +291,10 @@ func (m *mockBackend) PresignPut(ctx context.Context, bucket, key string, expiry
 	return "https://example.com/presigned", nil
 }
 
+func (m *mockBackend) PresignPostPolicy(ctx context.Context, bucket, key string, expiry time.Duration, contentType string) (string, map[string]string, error) {
+	return "https://example.com/presigned", map[string]string{"Content-Type": contentType}, nil
+}
+
 func (m *mockBackend) Close() error {
 	return nil
 }

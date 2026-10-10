@@ -147,16 +147,17 @@ func TestSTSPresign_KeyPrefixMismatch_Returns403(t *testing.T) {
 }
 
 // TestSTSPresign_ValidPut_Returns200 verifies that a well-formed "put"
-// presign request returns 200 OK with a non-empty URL and a sensible
-// expires_at timestamp.
+// presign request returns 200 OK with a non-empty URL, method POST, and
+// form fields that enforce the Content-Type via POST policy.
 func TestSTSPresign_ValidPut_Returns200(t *testing.T) {
 	handler := newTestPresignHandler(t)
 	uid := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
 	rec := doPresignRequest(t, handler, presignRequest{
-		Operation: "put",
-		Key:       "user-00000000-0000-0000-0000-000000000001/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
-		ExpiresIn: 3600,
+		Operation:   "put",
+		Key:         "user-00000000-0000-0000-0000-000000000001/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
+		ExpiresIn:   3600,
+		ContentType: "text/plain",
 	}, &uid)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -164,12 +165,52 @@ func TestSTSPresign_ValidPut_Returns200(t *testing.T) {
 	var resp presignResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	assert.NotEmpty(t, resp.URL)
+	assert.Equal(t, "POST", resp.Method)
 	assert.NotEmpty(t, resp.ExpiresAt)
+	assert.NotEmpty(t, resp.Fields)
 
 	// Verify expires_at is approximately 1h from now
 	expiresAt, err := time.Parse(time.RFC3339, resp.ExpiresAt)
 	require.NoError(t, err)
 	assert.WithinDuration(t, time.Now().Add(time.Hour), expiresAt, 5*time.Second)
+}
+
+// TestSTSPresign_PutMissingContentType_Returns400 verifies that a PUT request
+// without content_type is rejected with 400 Bad Request.
+func TestSTSPresign_PutMissingContentType_Returns400(t *testing.T) {
+	handler := newTestPresignHandler(t)
+	uid := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+	rec := doPresignRequest(t, handler, presignRequest{
+		Operation: "put",
+		Key:       "user-00000000-0000-0000-0000-000000000001/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
+	}, &uid)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var resp map[string]string
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "presign.invalid_request", resp["error"])
+	assert.Contains(t, resp["error_description"], "content_type")
+}
+
+// TestSTSPresign_PutDisallowedContentType_Returns400 verifies that a PUT request
+// with a disallowed Content-Type (e.g. application/octet-stream) is rejected.
+func TestSTSPresign_PutDisallowedContentType_Returns400(t *testing.T) {
+	handler := newTestPresignHandler(t)
+	uid := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+	rec := doPresignRequest(t, handler, presignRequest{
+		Operation:   "put",
+		Key:         "user-00000000-0000-0000-0000-000000000001/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
+		ContentType: "application/octet-stream",
+	}, &uid)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var resp map[string]string
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "presign.invalid_content_type", resp["error"])
 }
 
 // TestSTSPresign_ValidGet_Returns200 verifies that a well-formed "get"
@@ -212,18 +253,19 @@ func TestSTSPresign_ExpiryExceeded_Returns400(t *testing.T) {
 	assert.Contains(t, resp["error_description"], "must not exceed")
 }
 
-// TestSTSPresign_DefaultExpiry_IsOneHour verifies that omitting the ExpiresIn
+// TestSTSPresign_DefaultExpiry_Is15Minutes verifies that omitting the ExpiresIn
 // field (or setting it to 0) results in a presigned URL with a default
-// expiry of 1 hour.
-func TestSTSPresign_DefaultExpiry_IsOneHour(t *testing.T) {
+// expiry of 15 minutes.
+func TestSTSPresign_DefaultExpiry_Is15Minutes(t *testing.T) {
 	handler := newTestPresignHandler(t)
 	uid := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
-	// expiresIn=0 triggers the default (1h)
+	// expiresIn=0 triggers the default (15min)
 	rec := doPresignRequest(t, handler, presignRequest{
-		Operation: "put",
-		Key:       "user-00000000-0000-0000-0000-000000000001/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
-		ExpiresIn: 0,
+		Operation:   "put",
+		Key:         "user-00000000-0000-0000-0000-000000000001/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4.txt",
+		ExpiresIn:   0,
+		ContentType: "image/png",
 	}, &uid)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -233,8 +275,8 @@ func TestSTSPresign_DefaultExpiry_IsOneHour(t *testing.T) {
 
 	expiresAt, err := time.Parse(time.RFC3339, resp.ExpiresAt)
 	require.NoError(t, err)
-	// Default expiry should be approximately 1h from now
-	assert.WithinDuration(t, time.Now().Add(time.Hour), expiresAt, 5*time.Second)
+	// Default expiry should be approximately 15min from now
+	assert.WithinDuration(t, time.Now().Add(15*time.Minute), expiresAt, 5*time.Second)
 }
 
 // TestSTSPresign_InvalidJSON_Returns400 verifies that a malformed JSON

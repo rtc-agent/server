@@ -50,7 +50,7 @@ func (h *STSPresignHandler) RegisterRoutes(mux *http.ServeMux) {
 
 	// POST /api/presigned-url — generate a presigned URL
 	// Rate limiting is applied before authentication to prevent DoS attacks
-	var handler http.Handler = authMiddleware(http.HandlerFunc(h.GeneratePresignedURL))
+	handler := authMiddleware(http.HandlerFunc(h.GeneratePresignedURL))
 	if h.rateLimiter != nil {
 		handler = STSRateLimitMiddleware(h.rateLimiter, handler)
 	}
@@ -59,15 +59,18 @@ func (h *STSPresignHandler) RegisterRoutes(mux *http.ServeMux) {
 
 // presignRequest is the JSON body for presigned URL generation.
 type presignRequest struct {
-	Operation string `json:"operation"`  // "put" or "get"
-	Key       string `json:"key"`        // e.g. "user-123/file-id"
-	ExpiresIn int64  `json:"expires_in"` // seconds; default 3600; max 604800 (7 days)
+	Operation   string `json:"operation"`    // "put" or "get"
+	Key         string `json:"key"`          // e.g. "user-123/file-id"
+	ExpiresIn   int64  `json:"expires_in"`   // seconds; default 900 (15min); max 604800 (7 days)
+	ContentType string `json:"content_type"` // required for "put"; enforced via POST policy
 }
 
 // presignResponse is the JSON response for presigned URL generation.
 type presignResponse struct {
-	URL       string `json:"url"`
-	ExpiresAt string `json:"expires_at"`
+	URL       string            `json:"url"`
+	Method    string            `json:"method"` // "PUT" or "POST"
+	ExpiresAt string            `json:"expires_at"`
+	Fields    map[string]string `json:"fields,omitempty"` // POST form fields (for POST method)
 }
 
 // GeneratePresignedURL generates a presigned URL for upload or download.
@@ -78,14 +81,17 @@ type presignResponse struct {
 //	{
 //	  "operation": "put" | "get",
 //	  "key": "user-123/file-id",
-//	  "expires_in": 3600
+//	  "expires_in": 900,
+//	  "content_type": "image/png"   // required for "put"
 //	}
 //
 // Response: 200 OK with JSON body:
 //
 //	{
-//	  "url": "https://s3.rtc-agent.local/rtc-agent/user-123/file-id?...",
-//	  "expires_at": "2026-09-30T23:00:00Z"
+//	  "url": "https://s3.rtc-agent.local/rtc-agent",
+//	  "method": "POST",
+//	  "expires_at": "2026-09-30T23:00:00Z",
+//	  "fields": {"key": "user-123/file-id", "Content-Type": "image/png", ...}
 //	}
 func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.Request) {
 	userID, ok := contextx.GetUserID(r.Context())
@@ -122,10 +128,10 @@ func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Default expiry: 1 hour, max: 7 days (AWS S3 limit).
+	// Default expiry: 15 minutes, max: 7 days (AWS S3 limit).
 	expiresIn := time.Duration(req.ExpiresIn) * time.Second
 	if expiresIn <= 0 {
-		expiresIn = time.Hour
+		expiresIn = 15 * time.Minute
 	}
 	const maxPresignExpiry = 7 * 24 * time.Hour
 	if expiresIn > maxPresignExpiry {
@@ -133,11 +139,27 @@ func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.
 		return
 	}
 
-	url, expiresAt, err := h.oss3UC.GeneratePresignedURL(r.Context(), userID.String(), req.Operation, req.Key, expiresIn)
+	// Validate Content-Type for PUT operations
+	if req.Operation == "put" {
+		if req.ContentType == "" {
+			writePresignError(w, r, http.StatusBadRequest, "presign.invalid_request", "content_type is required for put operation")
+			return
+		}
+		if !rtcoss3.IsAllowedContentType(req.ContentType) {
+			writePresignError(w, r, http.StatusBadRequest, "presign.invalid_content_type", "content_type is not allowed. Only image/* and text/* types are permitted")
+			return
+		}
+	}
+
+	url, expiresAt, fields, err := h.oss3UC.GeneratePresignedURL(r.Context(), userID.String(), req.Operation, req.Key, expiresIn, req.ContentType)
 	if err != nil {
-		// Check if it's a permission error
+		// Check if it's a permission/validation error
 		if isPermissionError(err) {
 			writePresignError(w, r, http.StatusForbidden, "presign.forbidden", "Access denied")
+			return
+		}
+		if errors.Is(err, usecase.ErrMissingContentType) || errors.Is(err, usecase.ErrUnsupportedContentType) {
+			writePresignError(w, r, http.StatusBadRequest, "presign.invalid_content_type", err.Error())
 			return
 		}
 		logger.Error(r.Context(), "failed to generate presigned URL",
@@ -150,9 +172,16 @@ func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.
 		return
 	}
 
+	method := "GET"
+	if req.Operation == "put" {
+		method = "POST"
+	}
+
 	resp := presignResponse{
 		URL:       url,
+		Method:    method,
 		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
+		Fields:    fields,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

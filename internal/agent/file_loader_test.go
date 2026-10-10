@@ -92,6 +92,10 @@ func (m *mockOSSBackend) PresignPut(ctx context.Context, bucket, key string, exp
 	return "", nil
 }
 
+func (m *mockOSSBackend) PresignPostPolicy(ctx context.Context, bucket, key string, expiry time.Duration, contentType string) (string, map[string]string, error) {
+	return "", nil, nil
+}
+
 func (m *mockOSSBackend) Close() error {
 	return nil
 }

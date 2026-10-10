@@ -159,6 +159,9 @@ func (b *mockOrphanBackend) PresignGet(_ context.Context, _, _ string, _ time.Du
 func (b *mockOrphanBackend) PresignPut(_ context.Context, _, _ string, _ time.Duration) (string, error) {
 	panic("not implemented")
 }
+func (b *mockOrphanBackend) PresignPostPolicy(_ context.Context, _, _ string, _ time.Duration, _ string) (string, map[string]string, error) {
+	panic("not implemented")
+}
 func (b *mockOrphanBackend) Close() error                        { return nil }
 func (b *mockOrphanBackend) HealthCheck(_ context.Context) error { return nil }
 

@@ -219,6 +219,49 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 		}
 	}
 
+	// Validate minimum part size (S3 spec: all parts except the last must be >= 5MB).
+	// We query the backend for actual part sizes since the Complete request only
+	// contains part numbers and ETags.
+	if len(parts) > 1 {
+		uploadedParts, listErr := h.oss3UC.Backend().ListParts(ctx, bucket, key, uploadID)
+		if listErr != nil {
+			span.SetStatus(codes.Error, "list_parts_error")
+			span.RecordError(listErr)
+			rtcoss3.WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
+			return
+		}
+		// Build a map of part number -> size for quick lookup
+		partSizes := make(map[int]int64, len(uploadedParts))
+		for _, up := range uploadedParts {
+			partSizes[up.PartNumber] = up.Size
+		}
+		// Determine the last part number (the largest part number in the request)
+		maxPartNum := 0
+		for _, p := range parts {
+			if p.PartNumber > maxPartNum {
+				maxPartNum = p.PartNumber
+			}
+		}
+		// Validate all parts except the last are >= MinPartSize
+		for _, p := range parts {
+			if p.PartNumber == maxPartNum {
+				continue // last part has no minimum size requirement
+			}
+			if size, ok := partSizes[p.PartNumber]; ok && size < rtcoss3.MinPartSize {
+				logger.Warn(ctx, "complete multipart upload: part smaller than minimum 5MB",
+					zap.String("user_id", userID),
+					zap.String("key", key),
+					zap.String("upload_id", uploadID),
+					zap.Int("part_number", p.PartNumber),
+					zap.Int64("size", size),
+					zap.Int64("min_size", rtcoss3.MinPartSize),
+				)
+				rtcoss3.WriteS3Error(w, rtcoss3.ErrEntityTooSmall, r.URL.Path, "")
+				return
+			}
+		}
+	}
+
 	// Instant upload check: Since the key contains MD5, if the file already exists
 	// in both DB and MinIO, the upload has already completed successfully.
 	if existingMeta := h.checkInstantUploadValidity(ctx, w, r, bucket, key, uploadID, userID); existingMeta != nil {

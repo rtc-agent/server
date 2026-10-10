@@ -317,6 +317,37 @@ func (b *MinIOBackend) PresignPut(ctx context.Context, bucket, key string, expir
 	return u.String(), nil
 }
 
+// PresignPostPolicy generates a presigned POST URL with form fields that enforce
+// the given Content-Type via a POST policy.
+// If publicClient is configured, the returned URL uses the public endpoint.
+func (b *MinIOBackend) PresignPostPolicy(ctx context.Context, bucket, key string, expiry time.Duration, contentType string) (string, map[string]string, error) {
+	client := b.client
+	if b.publicClient != nil {
+		client = b.publicClient
+	}
+
+	policy := minio.NewPostPolicy()
+	if err := policy.SetBucket(bucket); err != nil {
+		return "", nil, fmt.Errorf("presign post policy: set bucket: %w", err)
+	}
+	if err := policy.SetKey(key); err != nil {
+		return "", nil, fmt.Errorf("presign post policy: set key: %w", err)
+	}
+	if err := policy.SetExpires(time.Now().Add(expiry)); err != nil {
+		return "", nil, fmt.Errorf("presign post policy: set expires: %w", err)
+	}
+	if err := policy.SetContentType(contentType); err != nil {
+		return "", nil, fmt.Errorf("presign post policy: set content-type: %w", err)
+	}
+
+	u, formData, err := client.PresignedPostPolicy(ctx, policy)
+	if err != nil {
+		return "", nil, fmt.Errorf("presign post policy: %w", err)
+	}
+
+	return u.String(), formData, nil
+}
+
 // Close closes the backend (no-op for MinIO).
 func (b *MinIOBackend) Close() error {
 	return nil

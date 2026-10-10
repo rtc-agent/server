@@ -102,6 +102,11 @@ type Backend interface {
 	// Presigned URLs
 	PresignGet(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
 	PresignPut(ctx context.Context, bucket, key string, expiry time.Duration) (string, error)
+	// PresignPostPolicy generates a presigned POST URL with form fields that enforce
+	// the given Content-Type via a POST policy. The client must POST to the returned URL
+	// with the returned form fields (including the Content-Type). This prevents clients
+	// from bypassing Content-Type validation via presigned URLs.
+	PresignPostPolicy(ctx context.Context, bucket, key string, expiry time.Duration, contentType string) (postURL string, fields map[string]string, err error)
 
 	// Lifecycle
 
