@@ -205,6 +205,21 @@ redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
 return len
 `)
 
+// GetAndDelChunks atomically reads all chunks from a Redis List and deletes the key.
+//
+//	KEYS[1] = message:stream:{messageID}
+//	Returns: list of chunks (empty list if key does not exist).
+//
+// Use case: finalization of streaming messages — read all buffered chunks and delete them atomically,
+// preventing race conditions where concurrent readers might see partial or inconsistent data.
+var GetAndDelChunks = redis.NewScript(`
+local chunks = redis.call('LRANGE', KEYS[1], 0, -1)
+if #chunks > 0 then
+    redis.call('DEL', KEYS[1])
+end
+return chunks
+`)
+
 // UpdateMaxStreamID atomically updates the Stream consumption position (only when new ID > current ID).
 //
 //	KEYS[1] = key storing lastID

@@ -119,6 +119,40 @@ func (s *StreamStore) DeleteChunks(messageID string) error {
 	return nil
 }
 
+// GetAndDeleteChunks atomically reads all buffered chunks and deletes them from Redis.
+// This prevents race conditions where concurrent readers might see partial data between
+// GetAllChunks and DeleteChunks operations.
+//
+// Returns the list of chunks (empty if no chunks exist).
+func (s *StreamStore) GetAndDeleteChunks(messageID string) ([]string, error) {
+	key := cache.MessageStream(messageID)
+	ctx, cancel := context.WithTimeout(context.Background(), streamStoreRedisTimeout)
+	defer cancel()
+
+	result, err := cache.GetAndDelChunks.Run(ctx, s.rdb, []string{key}).Result()
+	if err != nil {
+		return nil, fmt.Errorf("get and delete chunks: %w", err)
+	}
+
+	// Convert result to []string
+	if result == nil {
+		return []string{}, nil
+	}
+	chunks, ok := result.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type: %T", result)
+	}
+
+	result_strs := make([]string, len(chunks))
+	for i, chunk := range chunks {
+		if s, ok := chunk.(string); ok {
+			result_strs[i] = s
+		}
+	}
+
+	return result_strs, nil
+}
+
 // streamStateMap is a concurrent-safe map of turnID → *turnStreamState.
 // It uses sync.Map for lock-free reads in the common case (each turn writes
 // to its own key, so contention is minimal).

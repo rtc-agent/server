@@ -8,6 +8,27 @@ import (
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
+// assertToolCallsEqual compares two ToolCall slices and reports differences.
+// Extracted to reduce duplication across test functions.
+func assertToolCallsEqual(t *testing.T, msgIdx int, got, want []turnagent.ToolCall) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Errorf("message[%d].ToolCalls length = %d, want %d", msgIdx, len(got), len(want))
+		return
+	}
+	for j := range got {
+		if got[j].ID != want[j].ID {
+			t.Errorf("message[%d].ToolCalls[%d].ID = %q, want %q", msgIdx, j, got[j].ID, want[j].ID)
+		}
+		if got[j].Name != want[j].Name {
+			t.Errorf("message[%d].ToolCalls[%d].Name = %q, want %q", msgIdx, j, got[j].Name, want[j].Name)
+		}
+		if got[j].Arguments != want[j].Arguments {
+			t.Errorf("message[%d].ToolCalls[%d].Arguments = %q, want %q", msgIdx, j, got[j].Arguments, want[j].Arguments)
+		}
+	}
+}
+
 // testLogger is a no-op logger for tests.
 type testLogger struct{}
 
@@ -233,21 +254,7 @@ func TestGroupAssistantByResponse(t *testing.T) {
 				if got.TurnID != want.TurnID {
 					t.Errorf("message[%d].TurnID = %q, want %q", i, got.TurnID, want.TurnID)
 				}
-				if len(got.ToolCalls) != len(want.ToolCalls) {
-					t.Errorf("message[%d].ToolCalls length = %d, want %d", i, len(got.ToolCalls), len(want.ToolCalls))
-				} else {
-					for j := range got.ToolCalls {
-						if got.ToolCalls[j].ID != want.ToolCalls[j].ID {
-							t.Errorf("message[%d].ToolCalls[%d].ID = %q, want %q", i, j, got.ToolCalls[j].ID, want.ToolCalls[j].ID)
-						}
-						if got.ToolCalls[j].Name != want.ToolCalls[j].Name {
-							t.Errorf("message[%d].ToolCalls[%d].Name = %q, want %q", i, j, got.ToolCalls[j].Name, want.ToolCalls[j].Name)
-						}
-						if got.ToolCalls[j].Arguments != want.ToolCalls[j].Arguments {
-							t.Errorf("message[%d].ToolCalls[%d].Arguments = %q, want %q", i, j, got.ToolCalls[j].Arguments, want.ToolCalls[j].Arguments)
-						}
-					}
-				}
+				assertToolCallsEqual(t, i, got.ToolCalls, want.ToolCalls)
 			}
 		})
 	}

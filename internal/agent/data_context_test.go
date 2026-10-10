@@ -184,21 +184,7 @@ func TestMergeAssistantMessages(t *testing.T) {
 				if got.ReasoningContent != want.ReasoningContent {
 					t.Errorf("message[%d].ReasoningContent = %q, want %q", i, got.ReasoningContent, want.ReasoningContent)
 				}
-				if len(got.ToolCalls) != len(want.ToolCalls) {
-					t.Errorf("message[%d].ToolCalls length = %d, want %d", i, len(got.ToolCalls), len(want.ToolCalls))
-				} else {
-					for j := range got.ToolCalls {
-						if got.ToolCalls[j].ID != want.ToolCalls[j].ID {
-							t.Errorf("message[%d].ToolCalls[%d].ID = %q, want %q", i, j, got.ToolCalls[j].ID, want.ToolCalls[j].ID)
-						}
-						if got.ToolCalls[j].Name != want.ToolCalls[j].Name {
-							t.Errorf("message[%d].ToolCalls[%d].Name = %q, want %q", i, j, got.ToolCalls[j].Name, want.ToolCalls[j].Name)
-						}
-						if got.ToolCalls[j].Arguments != want.ToolCalls[j].Arguments {
-							t.Errorf("message[%d].ToolCalls[%d].Arguments = %q, want %q", i, j, got.ToolCalls[j].Arguments, want.ToolCalls[j].Arguments)
-						}
-					}
-				}
+				assertToolCallsEqual(t, i, got.ToolCalls, want.ToolCalls)
 			}
 
 			// Verify AbsorbedThinking marker is set for merged thinking cases.

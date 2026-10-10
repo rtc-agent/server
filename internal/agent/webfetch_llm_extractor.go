@@ -5,7 +5,6 @@ import (
 	_ "embed"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/rtc-agent/server/internal/agent/templateutil"
 	"github.com/rtc-agent/server/pkg/webfetch"
@@ -103,7 +102,8 @@ func (e *WebFetchLLMExtractor) checkQuota(sessionID string) bool {
 	if !ok {
 		return true // no count yet, first call
 	}
-	return atomic.LoadInt64(countPtr) < int64(e.maxPerSession)
+	// No need for atomic: we're holding the mutex
+	return *countPtr < int64(e.maxPerSession)
 }
 
 // incrementQuota increments the session's LLM extraction counter.
@@ -116,7 +116,8 @@ func (e *WebFetchLLMExtractor) incrementQuota(sessionID string) {
 		e.sessionCounts[sessionID] = &count
 		countPtr = &count
 	}
-	atomic.AddInt64(countPtr, 1)
+	// No need for atomic: we're holding the mutex
+	*countPtr++
 }
 
 // ResetSessionQuota clears the LLM extraction quota for a session.

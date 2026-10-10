@@ -235,7 +235,15 @@ func (d *DualBroker) PublishWithOffset(ctx context.Context, ch string, data []by
 
 // PublishEphemeral forces routing through liveBroker, pure PUB/SUB, no persistence to stream.
 // Used for transient events like typing: loss is acceptable, no offset or recovery needed.
+// IMPORTANT: This method is only intended for Live channels. Calling it with a Topic channel
+// will route to liveBroker anyway, which may cause unexpected behavior.
 func (d *DualBroker) PublishEphemeral(ctx context.Context, ch string, data []byte, opts centrifuge.PublishOptions) error {
+	// Validate that this is a Live channel (or unregistered, which defaults to Live)
+	if ct, err := d.getChannelType(ch); err == nil && ct == Topic {
+		// Topic channels should not use ephemeral publishing
+		return fmt.Errorf("PublishEphemeral called on Topic channel %q: ephemeral publishing is only supported for Live channels", ch)
+	}
+
 	_, span := d.tracer.Start(ctx, "centrifuge_plus.dual_broker.publish_ephemeral",
 		trace.WithAttributes(
 			AttributeChannel.String(ch),

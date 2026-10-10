@@ -222,7 +222,7 @@ func (h *helpers) publishLiveChunkUpdate(ctx context.Context, liveCh, msgIDStr s
 }
 
 // finalizeLastStreamChunk handles the last chunk of a streaming message:
-// reads all Redis chunks, builds final content, updates DB, and cleans up Redis.
+// reads all Redis chunks atomically, builds final content, and updates DB.
 func (h *helpers) finalizeLastStreamChunk(
 	ctx context.Context,
 	streamStore *StreamStore,
@@ -236,7 +236,8 @@ func (h *helpers) finalizeLastStreamChunk(
 	tokenUsage *turnagent.TokenUsage,
 	finalized *bool,
 ) error {
-	fullContent := h.readFullContent(ctx, streamStore, msgIDStr, chunkContent, isFirst, kind)
+	// Atomically read and delete chunks to prevent race conditions
+	fullContent := h.readAndDeleteFullContent(ctx, streamStore, msgIDStr, chunkContent, isFirst, kind)
 
 	finalContentData, contentErr := buildContent(fullContent)
 	if contentErr != nil {
@@ -255,29 +256,20 @@ func (h *helpers) finalizeLastStreamChunk(
 		}
 	}
 
-	if streamStore != nil {
-		if delErr := streamStore.DeleteChunks(msgIDStr); delErr != nil {
-			h.logger.Warn(ctx, "appendStreamChunk.redis_delete_failed", map[string]any{
-				"message_id": msgIDStr,
-				"error":      delErr.Error(),
-			})
-		}
-	}
-
 	*finalized = true
 	return nil
 }
 
-// readFullContent reads the full content from Redis chunks, or falls back to
-// the current chunkContent if no stream store is available.
-func (h *helpers) readFullContent(ctx context.Context, streamStore *StreamStore, msgIDStr, chunkContent string, isFirst bool, kind string) string {
+// readAndDeleteFullContent atomically reads the full content from Redis chunks and deletes them,
+// or falls back to the current chunkContent if no stream store is available.
+func (h *helpers) readAndDeleteFullContent(ctx context.Context, streamStore *StreamStore, msgIDStr, chunkContent string, isFirst bool, kind string) string {
 	if streamStore == nil {
 		return chunkContent
 	}
 
-	chunks, readErr := streamStore.GetAllChunks(msgIDStr)
+	chunks, readErr := streamStore.GetAndDeleteChunks(msgIDStr)
 	if readErr != nil {
-		h.logger.Warn(ctx, "appendStreamChunk.get_all_chunks_failed", map[string]any{
+		h.logger.Warn(ctx, "appendStreamChunk.get_and_delete_chunks_failed", map[string]any{
 			"message_id": msgIDStr,
 			"error":      readErr.Error(),
 		})

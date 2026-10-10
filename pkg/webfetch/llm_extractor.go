@@ -16,7 +16,8 @@ type LLMClient interface {
 }
 
 // LLMExtractor is the interface for LLM-based content extraction.
-// The implementation lives in internal/agent layer to centralize prompt management.
+// The implementation lives in internal/agent layer (see agent.NewWebFetchLLMExtractor)
+// to centralize prompt management and quota tracking.
 type LLMExtractor interface {
 	// Extract performs LLM-based content extraction.
 	// content: the markdown content to extract from

@@ -131,6 +131,15 @@ func NewUpdatePublisher(
 		// Streaming messages: read chunks from Redis and append to content.
 		// Race condition: chunks may not be fully written yet; we use a retry
 		// mechanism to verify completeness and retry if inconsistent.
+		//
+		// Design decision on StreamStore access: We read streamStore once under RLock
+		// and use the captured reference throughout this function. This is safe because:
+		//   1. If SetStreamStore is called concurrently, we continue using the old reference
+		//      (consistent behavior within a single resolution pass)
+		//   2. The old StreamStore remains valid until all in-flight operations complete
+		//   3. Future calls will see the new StreamStore
+		// This avoids holding the lock for the entire resolution duration (which could
+		// include multiple Redis calls and retries), reducing contention.
 		u.mu.RLock()
 		ss := u.streamStore
 		u.mu.RUnlock()
