@@ -179,6 +179,7 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 	for _, ch := range channels {
 		// Interface methods cannot accept context; use an internal context with timeout to prevent Redis commands from blocking indefinitely.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
 		_, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.subscribe",
 			trace.WithAttributes(AttributeChannel.String(ch)),
@@ -188,7 +189,6 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 		b.pubSubMu.Lock()
 		if err := b.ensurePubSubClient(); err != nil {
 			b.pubSubMu.Unlock()
-			cancel()
 			recordError(span, err)
 			span.End()
 			return fmt.Errorf("failed to create pubsub client: %w", err)
@@ -197,7 +197,6 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 		pubSubKey := b.pubSubKey(ch)
 		if b.subscribedChans[pubSubKey] {
 			b.pubSubMu.Unlock()
-			cancel()
 			span.End()
 			continue // Already subscribed
 		}
@@ -206,7 +205,6 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 
 		// Redis network operations execute outside the lock to avoid blocking other Subscribe/Unsubscribe.
 		if err := client.Do(ctx, client.B().Subscribe().Channel(pubSubKey).Build()).Error(); err != nil {
-			cancel()
 			recordError(span, err)
 			span.End()
 			return fmt.Errorf("failed to subscribe to %s: %w", pubSubKey, err)
@@ -216,7 +214,6 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 		b.pubSubMu.Lock()
 		b.subscribedChans[pubSubKey] = true
 		b.pubSubMu.Unlock()
-		cancel()
 		span.End()
 	}
 	return nil
@@ -226,6 +223,7 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 func (b *TopicBroker) Unsubscribe(channels ...string) error {
 	for _, ch := range channels {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
 		_, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.unsubscribe",
 			trace.WithAttributes(AttributeChannel.String(ch)),
@@ -235,7 +233,6 @@ func (b *TopicBroker) Unsubscribe(channels ...string) error {
 
 		if b.pubSubClient == nil {
 			b.pubSubMu.Unlock()
-			cancel()
 			span.End()
 			continue
 		}
@@ -243,7 +240,6 @@ func (b *TopicBroker) Unsubscribe(channels ...string) error {
 		pubSubKey := b.pubSubKey(ch)
 		if !b.subscribedChans[pubSubKey] {
 			b.pubSubMu.Unlock()
-			cancel()
 			span.End()
 			continue // Not subscribed
 		}
@@ -253,13 +249,11 @@ func (b *TopicBroker) Unsubscribe(channels ...string) error {
 
 		// Redis network operations execute outside the lock to avoid blocking other Subscribe/Unsubscribe.
 		if err := client.Do(ctx, client.B().Unsubscribe().Channel(pubSubKey).Build()).Error(); err != nil {
-			cancel()
 			recordError(span, err)
 			span.End()
 			return fmt.Errorf("failed to unsubscribe from %s: %w", pubSubKey, err)
 		}
 
-		cancel()
 		span.End()
 	}
 	return nil

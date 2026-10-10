@@ -143,14 +143,14 @@ func (s *StreamStore) GetAndDeleteChunks(messageID string) ([]string, error) {
 		return nil, fmt.Errorf("unexpected result type: %T", result)
 	}
 
-	result_strs := make([]string, len(chunks))
+	resultStrs := make([]string, len(chunks))
 	for i, chunk := range chunks {
 		if s, ok := chunk.(string); ok {
-			result_strs[i] = s
+			resultStrs[i] = s
 		}
 	}
 
-	return result_strs, nil
+	return resultStrs, nil
 }
 
 // streamStateMap is a concurrent-safe map of turnID → *turnStreamState.
