@@ -273,7 +273,7 @@ func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol
 			nil,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("create message failed")
+			return nil, fmt.Errorf("create message: %w", err)
 		}
 		createdMessage = msg
 
@@ -332,16 +332,16 @@ func (e *ErrPushAfterCommitSyncRequired) Unwrap() error {
 func (h *Handler) touchOrCreateSession(txCtx context.Context, session *model.Session, isNew bool) error {
 	if isNew {
 		if err := primitives.CreateSession(txCtx, h.deps.Deps, session); err != nil {
-			return fmt.Errorf("create session failed")
+			return fmt.Errorf("create session: %w", err)
 		}
 		// Record session creation metric
 		h.deps.Metrics.RecordSessionCreated(txCtx)
 	} else {
 		if err := primitives.TouchSession(txCtx, h.deps.Deps, session.ID); err != nil {
 			if errors.Is(err, primitives.ErrSessionClosedOrNotFound) {
-				return fmt.Errorf("session is closed")
+				return fmt.Errorf("session is closed: %w", err)
 			}
-			return fmt.Errorf("touch session failed")
+			return fmt.Errorf("touch session: %w", err)
 		}
 	}
 	return nil
@@ -375,7 +375,7 @@ func (h *Handler) createPromptMessageIfNeeded(txCtx context.Context, ctx context
 		nil,
 	)
 	if createErr != nil {
-		return nil, fmt.Errorf("create prompt message failed")
+		return nil, fmt.Errorf("create prompt message: %w", createErr)
 	}
 
 	logger.Info(ctx, "[SendMessage] created prompt message",

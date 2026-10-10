@@ -73,12 +73,12 @@ func (h *Handler) OpenSession(ctx context.Context, req *protocol.OpenSessionRequ
 	// Reopen the session: status -> idle, clear closed_at.
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		if err := primitives.UpdateSessionStatus(txCtx, h.deps.Deps, session.ID, protocol.SessionStatusIdle); err != nil {
-			return nil, fmt.Errorf("update session status failed")
+			return nil, fmt.Errorf("update session status: %w", err)
 		}
 
 		// Clear closed_at so the session is fully reopened.
 		if err := h.deps.Deps.RtcSessionUsecase.UpdateSession(txCtx, session.ID, map[string]any{"closed_at": nil}); err != nil {
-			return nil, fmt.Errorf("clear closed_at failed")
+			return nil, fmt.Errorf("clear closed_at: %w", err)
 		}
 
 		// Update in-memory session for event publishing.

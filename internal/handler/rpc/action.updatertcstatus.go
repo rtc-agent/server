@@ -114,7 +114,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		if err := primitives.UpdateRtcStatus(txCtx, h.deps.Deps, rtcUUID, req.Status); err != nil {
-			return nil, fmt.Errorf("update rtc status failed")
+			return nil, fmt.Errorf("update rtc status: %w", err)
 		}
 		// Use pre-loaded session for routing metadata. Do not reload inside
 		// the transaction — a transient DB error on reload must not abort

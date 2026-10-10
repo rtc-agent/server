@@ -184,20 +184,20 @@ func (h *Handler) checkIdempotentSubmit(ctx context.Context, rtc *model.Rtc, req
 // creates the toolcall_output message, and builds update items for event publishing.
 func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc, rtcUUID uuid.UUID, targetStatus protocol.RtcStatus, resultJSON *string, reqError *string, session *model.Session) ([]updates.UpdatePublishItem, error) {
 	if err := primitives.UpdateRtcResult(txCtx, h.deps.Deps, rtcUUID, targetStatus, resultJSON, model.DerefStr(reqError)); err != nil {
-		return nil, fmt.Errorf("update rtc result failed")
+		return nil, fmt.Errorf("update rtc result: %w", err)
 	}
 
 	inputMsg, err := h.deps.Deps.RtcSessionUsecase.GetMessage(txCtx, rtc.MessageID)
 	if err != nil {
-		return nil, fmt.Errorf("get input message failed")
+		return nil, fmt.Errorf("get input message: %w", err)
 	}
 	inputContentData, err := primitives.ParseContentData(inputMsg.Content)
 	if err != nil {
-		return nil, fmt.Errorf("parse input content failed")
+		return nil, fmt.Errorf("parse input content: %w", err)
 	}
 	inputToolCall, err := primitives.ParseContentDataToolCall(inputContentData.Data)
 	if err != nil {
-		return nil, fmt.Errorf("parse input tool call failed")
+		return nil, fmt.Errorf("parse input tool call: %w", err)
 	}
 
 	toolOutput := ""
@@ -244,7 +244,7 @@ func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *model.Rtc
 		&parentMsgID,
 	)
 	if createErr != nil {
-		return nil, fmt.Errorf("create output message failed")
+		return nil, fmt.Errorf("create output message: %w", createErr)
 	}
 
 	if err := h.deps.Deps.RtcRepo.UpdateOutputMessageID(txCtx, rtcUUID, outputMsg.ID); err != nil {

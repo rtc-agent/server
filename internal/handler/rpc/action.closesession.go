@@ -77,7 +77,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	// Once the session is closed, they are no longer needed and should be cleaned up.
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
 		if err := primitives.UpdateSessionStatus(txCtx, h.deps.Deps, session.ID, protocol.SessionStatusClosed); err != nil {
-			return nil, fmt.Errorf("update session status failed")
+			return nil, fmt.Errorf("update session status: %w", err)
 		}
 
 		// Record session close metric (normal close initiated by user)
