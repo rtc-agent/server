@@ -106,58 +106,27 @@ func MigrateServerConfigTable(db *gorm.DB) error {
 			return fmt.Errorf("backfill id column: %w", err)
 		}
 
-		// Step 3: Drop the old composite primary key constraint (if exists)
-		// Query the constraint name dynamically and verify it's a composite key
-		// before dropping to avoid accidentally removing a single-column PK.
-		type pkInfo struct {
-			ConstraintName string
-			ColumnCount    int
-		}
-		var pk pkInfo
+		// Step 3: Drop the old primary key constraint (if exists)
+		// Query the constraint name dynamically. We already verified outside the transaction
+		// that 'id' is not a PK, so any existing PK here is the old composite key.
+		var pkConstraintName string
 		if err := tx.Raw(`
-			SELECT tc.constraint_name as constraint_name, COUNT(kcu.column_name) as column_count
+			SELECT tc.constraint_name
 			FROM information_schema.table_constraints tc
-			JOIN information_schema.key_column_usage kcu
-			  ON tc.constraint_name = kcu.constraint_name
 			WHERE tc.table_name = 'server_configs'
 			  AND tc.constraint_type = 'PRIMARY KEY'
-			GROUP BY tc.constraint_name
-		`).Scan(&pk).Error; err != nil {
+		`).Scan(&pkConstraintName).Error; err != nil {
 			return fmt.Errorf("query primary key constraint: %w", err)
 		}
 
-		if pk.ConstraintName != "" {
-			// Only drop if it's a composite primary key (multiple columns)
-			// This protects against accidentally removing the new surrogate PK
-			if pk.ColumnCount > 1 {
-				// Drop the constraint using dynamic SQL
-				if err := tx.Exec(fmt.Sprintf(
-					`ALTER TABLE server_configs DROP CONSTRAINT IF EXISTS %s`,
-					pk.ConstraintName,
-				)).Error; err != nil {
-					return fmt.Errorf("drop primary key constraint %s: %w", pk.ConstraintName, err)
-				}
-			} else {
-				// Single-column PK exists, check if it's already on 'id'
-				// If so, migration is already complete
-				var pkColumnName string
-				if err := tx.Raw(`
-					SELECT column_name FROM information_schema.key_column_usage
-					WHERE constraint_name = ? AND table_name = 'server_configs'
-				`, pk.ConstraintName).Scan(&pkColumnName).Error; err != nil {
-					return fmt.Errorf("query pk column: %w", err)
-				}
-				if pkColumnName == "id" {
-					// Already migrated, nothing more to do
-					return nil
-				}
-				// Otherwise, drop the single-column PK (it's not on 'id' yet)
-				if err := tx.Exec(fmt.Sprintf(
-					`ALTER TABLE server_configs DROP CONSTRAINT IF EXISTS %s`,
-					pk.ConstraintName,
-				)).Error; err != nil {
-					return fmt.Errorf("drop primary key constraint %s: %w", pk.ConstraintName, err)
-				}
+		if pkConstraintName != "" {
+			// Drop the existing primary key constraint.
+			// We know it's not on 'id' because we checked earlier (lines 66-86).
+			if err := tx.Exec(fmt.Sprintf(
+				`ALTER TABLE server_configs DROP CONSTRAINT IF EXISTS %s`,
+				pkConstraintName,
+			)).Error; err != nil {
+				return fmt.Errorf("drop primary key constraint %s: %w", pkConstraintName, err)
 			}
 		}
 

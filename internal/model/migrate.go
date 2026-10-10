@@ -11,6 +11,19 @@ import (
 	"github.com/rtc-agent/server/pkg/memory"
 )
 
+// Index Naming Convention:
+//
+// Indexes should follow the pattern: idx_<table>_<column1>_<column2>...
+// where column names match the actual database column names (not abbreviated).
+//
+// Examples:
+//   - idx_messages_session_offset (session_id, global_offset)
+//   - idx_memory_links_from_relation (from_id, relation)
+//
+// Note: Some legacy indexes use abbreviated names (e.g., idx_sessions_owner_created,
+// idx_admin_audit_logs_operator_time) which don't follow this convention.
+// These are kept for backward compatibility but new indexes should follow the standard.
+
 // AutoMigrate runs GORM auto-migration for all models.
 func AutoMigrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(

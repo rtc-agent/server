@@ -1,9 +1,13 @@
 package model
 
 import (
+	"context"
 	"time"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
+
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // MigrateOwnerStages1And2 adds new columns and backfills from legacy user_id.
@@ -62,7 +66,10 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 		// (owner_kind may already have a default set by AutoMigrate).
 		// Use batched updates to avoid long locks and WAL bloat on large tables.
 		const batchSize = 1000
+		var totalSessionsBackfilled int64
+		var sessionBatchNum int
 		for {
+			sessionBatchNum++
 			result := db.Exec(`
 				UPDATE sessions
 				SET owner_kind = 'user', owner_ref_id = user_id::text
@@ -75,12 +82,27 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 			if result.RowsAffected == 0 {
 				break
 			}
+			totalSessionsBackfilled += result.RowsAffected
+			logger.Info(context.Background(), "backfill sessions batch completed",
+				zap.Int("batch_number", sessionBatchNum),
+				zap.Int64("rows_affected", result.RowsAffected),
+				zap.Int64("total_backfilled", totalSessionsBackfilled),
+			)
 			time.Sleep(100 * time.Millisecond)
+		}
+		if totalSessionsBackfilled > 0 {
+			logger.Info(context.Background(), "sessions backfill completed",
+				zap.Int64("total_rows_backfilled", totalSessionsBackfilled),
+				zap.Int("total_batches", sessionBatchNum-1),
+			)
 		}
 
 		// Backfill messages: creator_ref_id IS NULL means not yet backfilled.
 		// Use batched updates to avoid long locks and WAL bloat on large tables.
+		var totalMessagesBackfilled int64
+		var messageBatchNum int
 		for {
+			messageBatchNum++
 			result := db.Exec(`
 				UPDATE messages
 				SET creator_kind = 'user', creator_ref_id = s.owner_ref_id
@@ -99,7 +121,19 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 			if result.RowsAffected == 0 {
 				break
 			}
+			totalMessagesBackfilled += result.RowsAffected
+			logger.Info(context.Background(), "backfill messages batch completed",
+				zap.Int("batch_number", messageBatchNum),
+				zap.Int64("rows_affected", result.RowsAffected),
+				zap.Int64("total_backfilled", totalMessagesBackfilled),
+			)
 			time.Sleep(100 * time.Millisecond)
+		}
+		if totalMessagesBackfilled > 0 {
+			logger.Info(context.Background(), "messages backfill completed",
+				zap.Int64("total_rows_backfilled", totalMessagesBackfilled),
+				zap.Int("total_batches", messageBatchNum-1),
+			)
 		}
 	}
 	return nil
