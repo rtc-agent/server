@@ -145,6 +145,10 @@ func Init(level string, serverLogFile ...string) {
 		l = zap.New(zapcore.NewTee(l.Core(), fileCore))
 	}
 
+	// Wrap the final logger with a masking core that automatically redacts
+	// sensitive fields (user_id, email, etc.) before they reach any output.
+	l = wrapWithMasking(l)
+
 	log = l
 
 	// Replace the global logger so zap.L() / zap.S() across the project
