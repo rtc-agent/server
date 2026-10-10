@@ -13,6 +13,12 @@ import (
 )
 
 // ValueType enumerates the supported configuration value types.
+//
+// Note on ValueTypeJSON: JSON-typed values are stored as raw JSONB in the database
+// and unmarshaled to any Go type. Unlike other value types, JSON values do not have
+// automatic type constraints — the Validator function should enforce schema if needed.
+// Use ValueTypeJSON only when the value structure is too complex for simple types
+// (e.g., nested objects, arrays) and when schema validation is less critical.
 const (
 	ValueTypeString   = "string"
 	ValueTypeInt      = "int"

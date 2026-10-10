@@ -17,6 +17,14 @@ import (
 // with gap placeholder publications, ensuring the recovery result satisfies
 // centrifuge's continuity checks: first pub.Offset == sinceOffset+1,
 // last pub.Offset == latestOffset.
+//
+// Design notes:
+//   - Gap filling ensures clients can detect and handle missing history gracefully
+//   - maxGapFill (1000) prevents excessive memory allocation when offset difference
+//     is large (e.g., due to data cleanup or long disconnection)
+//   - Truncation with warning allows partial recovery instead of complete failure
+//   - Pre-allocation with estimated capacity minimizes slice reallocations
+//
 // When data is cleaned/trimmed causing incomplete history, the client receives
 // gaps and only advances the local offset without business processing.
 func fillGapPublications(ctx context.Context, sinceOffset uint32, latestOffset uint32, pubs []*centrifuge.Publication) []*centrifuge.Publication {
@@ -39,7 +47,14 @@ func fillGapPublications(ctx context.Context, sinceOffset uint32, latestOffset u
 		latest = since + uint64(maxGapFill)
 	}
 
-	out := make([]*centrifuge.Publication, 0, len(pubs)+2)
+	// Pre-allocate with a more precise capacity: existing pubs + estimated gap count.
+	// The gap count is bounded by (latest - since - len(pubs)), since each pub fills at least one slot.
+	// Adding 2 provides a small buffer for edge cases (head/tail gaps).
+	estimatedGaps := int(latest-since) - len(pubs)
+	if estimatedGaps < 0 {
+		estimatedGaps = 0
+	}
+	out := make([]*centrifuge.Publication, 0, len(pubs)+estimatedGaps+2)
 	cur := since + 1
 	for _, p := range pubs {
 		// Generate a gap for each missing offset in [cur, p.Offset-1]

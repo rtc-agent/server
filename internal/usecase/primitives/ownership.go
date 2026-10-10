@@ -29,10 +29,8 @@ func CheckSessionOwnership(
 		}
 		return fmt.Errorf("get session: %w", err)
 	}
-	if existing.OwnerKind != string(creator.Kind()) || existing.OwnerRefID != creator.ReferenceID() {
-		return fmt.Errorf("session %s: %w", sessionID, ErrPermissionDenied)
-	}
-	return nil
+	// Delegate to shared helper to avoid logic duplication with PrepareSession.
+	return assertCreatorOwns(existing, creator)
 }
 
 // ResolveTurnSessionID resolves a session ID from a turn ID.

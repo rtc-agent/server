@@ -12,6 +12,11 @@ import (
 )
 
 // Claims is the JWT payload.
+//
+// Note: Uses non-standard "user_id" claim (instead of standard "sub") for historical
+// compatibility with existing client code. The "sub" claim is reserved for future use
+// if we need to support standard JWT libraries that expect RFC 7519 compliance.
+// New code should use UserID field from this struct rather than accessing claims directly.
 type Claims struct {
 	UserID   uuid.UUID `json:"user_id"`
 	DeviceID string    `json:"device_id"`

@@ -64,6 +64,11 @@ func IsTopic(ch string) bool {
 }
 
 // IsUser reports whether ch is a user channel (topic:u={userID} or live:u={userID}).
+//
+// Note: IsUser and ParseUser share the same channel format logic. IsUser is a fast
+// predicate for channel type checking, while ParseUser extracts the userID. They are
+// kept separate for clarity and performance — IsUser avoids the string allocations
+// that ParseUser performs. If you need both checks, call ParseUser and check ok=true.
 func IsUser(ch string) bool {
 	return strings.HasPrefix(ch, TopicPrefix+"u=") || strings.HasPrefix(ch, LivePrefix+"u=")
 }

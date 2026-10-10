@@ -18,6 +18,17 @@ import (
 //  1. Abort the upload in the storage backend (best-effort)
 //  2. Delete upload record and parts from DB (within a single transaction)
 //  3. Release any pending quota (best-effort, TTL will handle it)
+//
+// TODO(config): Cleanup frequency and expiration threshold should be configurable
+// via ServerConfig rather than hardcoded in the loop task scheduler. This allows
+// operators to tune cleanup aggressiveness based on storage costs and usage patterns.
+//
+// TODO(metrics): Add Prometheus metrics for cleanup operations:
+//   - oss3_cleanup_runs_total (counter)
+//   - oss3_cleanup_uploads_removed_total (counter)
+//   - oss3_cleanup_duration_seconds (histogram)
+//
+// These metrics help operators monitor cleanup effectiveness and detect anomalies.
 func (uc *OSS3Usecase) CleanupExpiredUploads(ctx context.Context) (int, error) {
 	now := time.Now()
 	expired, err := uc.uploadRepo.FindExpired(ctx, now)

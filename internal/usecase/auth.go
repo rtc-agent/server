@@ -36,6 +36,9 @@ type AuthUsecase struct {
 	refreshTokenRepo repo.RefreshTokenRepo
 	signer           TokenSigner
 	refreshTokenTTL  time.Duration
+	// TODO(config): Consider making RefreshTokenTTL dynamically configurable via
+	// ServerConfig rather than startup-only. This would allow security policies
+	// to adjust token lifetimes without service restart.
 }
 
 // NewAuthUsecase creates a new AuthUsecase.

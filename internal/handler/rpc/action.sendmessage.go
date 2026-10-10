@@ -31,19 +31,25 @@ import (
 )
 
 // extractMessageContent extracts text content from ContentData.
+// Supports two content types:
+//   - ContentTypeText: raw text content (used for simple text messages)
+//   - ContentTypeUserMessage: structured user message with metadata (used for rich messages)
+//
+// Returns empty string for unsupported types or parsing errors.
+// Errors are logged but not propagated to avoid blocking the message send flow.
 func extractMessageContent(ctx context.Context, cd protocol.ContentData) string {
 	switch cd.Type {
 	case protocol.ContentTypeText:
 		s, err := primitives.ContentDataString(cd.Data)
 		if err != nil {
-			logger.Error(ctx, "[SendMessage] ContentDataString failed", zap.Error(err))
+			logger.Error(ctx, "rpc.send_message.content_data_string_failed", zap.Error(err))
 			return ""
 		}
 		return s
 	case protocol.ContentTypeUserMessage:
 		umc, err := primitives.ParseUserMessageContent(cd.Data)
 		if err != nil {
-			logger.Error(ctx, "[SendMessage] ParseUserMessageContent failed", zap.Error(err))
+			logger.Error(ctx, "rpc.send_message.parse_user_message_failed", zap.Error(err))
 			return ""
 		}
 		return umc.Text
@@ -68,12 +74,12 @@ func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Sessio
 		h.deps.Deps.TokenCallbackHandler,
 	)
 	detachedCtx := context.WithoutCancel(ctx)
-	logger.SafeGo("sendmessage.titleSummarize", func() {
+	logger.SafeGo("rpc.send_message.title_summarize", func() {
 		summarizeCtx, cancel := context.WithTimeout(detachedCtx, 30*time.Second)
 		defer cancel()
 		title, err := summarizer.SummarizeIfNeeded(summarizeCtx, session.ID)
 		if err != nil || title == "" {
-			logger.Warn(summarizeCtx, "[SendMessage] title summarization failed",
+			logger.Warn(summarizeCtx, "rpc.send_message.title_summarize_failed",
 				zap.String("session", session.ID.String()), zap.Error(err))
 			return
 		}
@@ -84,7 +90,7 @@ func (h *Handler) summarizeTitleAsync(ctx context.Context, session *model.Sessio
 			SessionId: session.ID.String(),
 			Title:     &title,
 		}); err != nil {
-			logger.Warn(updateCtx, "[SendMessage] UpdateSession title failed",
+			logger.Warn(updateCtx, "rpc.send_message.update_title_failed",
 				zap.String("session", session.ID.String()), zap.Error(err))
 		}
 	})
@@ -120,7 +126,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		attribute.Int("content.len", len(content)),
 	)
 
-	logger.Info(ctx, "[SendMessage]",
+	logger.Info(ctx, "rpc.send_message",
 		zap.String("user", userID.String()),
 		zap.String("device", deviceID),
 		zap.Int("content_len", len(content)),
@@ -294,7 +300,7 @@ func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol
 			return nil, err
 		}
 		if logger.IsDebugMode() {
-			logger.Debug(txCtx, "[SendMessage] Queue.Publish success",
+			logger.Debug(txCtx, "rpc.send_message.queue_publish_success",
 				zap.String("session", session.ID.String()),
 				zap.String("message", msg.ID.String()),
 				zap.String("work_id", workID))
@@ -311,7 +317,7 @@ func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol
 	})
 	if err != nil {
 		if errors.Is(err, updates.ErrPushAfterCommit) {
-			logger.Warn(ctx, "[SendMessage] push failed after commit (data safe)", zap.Error(err))
+			logger.Warn(ctx, "rpc.send_message.push_after_commit_failed", zap.Error(err))
 			// Mark that sync is required so the client knows to fetch latest state
 			// We'll set this in the response via a wrapper
 			return createdMessage, pushUpdates, &ErrPushAfterCommitSyncRequired{OriginalError: err}
@@ -365,7 +371,7 @@ func (h *Handler) createPromptMessageIfNeeded(txCtx context.Context, ctx context
 
 	promptContent, buildErr := buildPromptContent(req.ContentData)
 	if buildErr != nil {
-		logger.Warn(ctx, "[SendMessage] build prompt content failed", zap.Error(buildErr))
+		logger.Warn(ctx, "rpc.send_message.build_prompt_failed", zap.Error(buildErr))
 		// Degrade gracefully: continue without prompt message.
 		return nil, nil
 	}
@@ -385,10 +391,14 @@ func (h *Handler) createPromptMessageIfNeeded(txCtx context.Context, ctx context
 		nil,
 	)
 	if createErr != nil {
-		return nil, fmt.Errorf("create prompt message: %w", createErr)
+		// Degrade gracefully: the user message is the primary payload; a prompt
+		// message is supplementary. Log the failure and continue without it so
+		// that a transient DB error does not abort the whole SendMessage flow.
+		logger.Warn(ctx, "rpc.send_message.create_prompt_failed", zap.Error(createErr))
+		return nil, nil
 	}
 
-	logger.Info(ctx, "[SendMessage] created prompt message",
+	logger.Info(ctx, "rpc.send_message.prompt_message_created",
 		zap.String("prompt_msg_id", promptMsg.ID.String()))
 
 	return promptMsg, nil
@@ -414,7 +424,7 @@ func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string)
 	if existing != nil {
 		return &APIError{
 			Code:    ErrorCodeMessageClientIDConflict,
-			Message: fmt.Sprintf("client_id %s already used for message %s", clientID, existing.ID),
+			Message: "client_id already used",
 		}
 	}
 	return nil
@@ -424,7 +434,7 @@ func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string)
 // Uses exponential backoff with retry for transient Redis errors.
 func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, userID string) error {
 	if h.deps.Queue == nil {
-		logger.Error(txCtx, "[SendMessage] queue is nil, message will not be processed by agent",
+		logger.Error(txCtx, "rpc.send_message.queue_uninitialized",
 			zap.String("session", sessionID.String()))
 		return fmt.Errorf("queue not initialized")
 	}
@@ -448,7 +458,7 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 			if !isTransientRedisError(publishErr) {
 				return "", backoff.Permanent(publishErr)
 			}
-			logger.Warn(txCtx, "[SendMessage] Queue.Publish transient error, retrying",
+			logger.Warn(txCtx, "rpc.send_message.queue_publish_transient_error",
 				zap.String("session", sessionID.String()),
 				zap.Error(publishErr))
 			return "", publishErr

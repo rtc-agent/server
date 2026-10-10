@@ -18,6 +18,9 @@ import (
 // resolveEffectiveValue fetches the effective config value for a key.
 // Resolution order: user override > system default > yaml baseline.
 // userID=nil skips user-level overrides (background calls).
+//
+// Returns an error if the key is not registered in the config registry,
+// preventing silent failures when accessing undefined configuration.
 func resolveEffectiveValue(ctx context.Context, configRepo usecase.ServerConfigRepo, key string, userID *uuid.UUID) (any, error) {
 	if userID != nil {
 		cfg, err := configRepo.Get(ctx, key, userID)
@@ -38,7 +41,9 @@ func resolveEffectiveValue(ctx context.Context, configRepo usecase.ServerConfigR
 	if entry := config.GetRegistryEntry(key); entry != nil {
 		return entry.YamlDefault, nil
 	}
-	return nil, nil
+	// Key not found in DB and not registered in config registry.
+	// Return error to prevent silent failures when accessing undefined config.
+	return nil, fmt.Errorf("config key %q is not registered and has no value", key)
 }
 
 // resolveOverrides reads dynamic config values from the DB and builds ChatModelOverrides.

@@ -92,6 +92,12 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 		return "", fmt.Errorf("head object after complete: %w", err)
 	}
 
+	// TODO(integrity): Validate ETag from CompleteMultipartUpload response matches
+	// the ETag from HeadObject. This ensures the object was not corrupted during
+	// the completion process. Currently we trust the backend's atomic completion,
+	// but explicit validation provides defense-in-depth against backend bugs.
+	// Example: if etag != meta.ETag { return error }
+
 	// Step 3 & 4: DB operations
 	dbErr := uc.completeMultipartUploadDBOps(ctx, userID, bucket, key, uploadID, etag, meta.Size, meta.ContentType)
 	if dbErr != nil {

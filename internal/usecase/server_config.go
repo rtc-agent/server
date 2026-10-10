@@ -887,6 +887,10 @@ func (uc *ServerConfigUsecase) rollbackToV0(tx *gorm.DB, txCtx context.Context, 
 		return 0, fmt.Errorf("create rollback to v0 history: %w", err)
 	}
 
+	// TODO(refactor): TrimHistory is currently called inside the transaction (using txCtx),
+	// but at lines 315 and 670 it's called outside the transaction (using ctx). For consistency
+	// and to reduce lock hold time, this should be moved outside the transaction like the other
+	// callers. This requires restructuring to capture variables and call TrimHistory after commit.
 	if trimErr := uc.configRepo.TrimHistory(txCtx, key, userID, 100); trimErr != nil {
 		logger.Warn(ctx, "config.trim_history_failed", zap.Error(trimErr))
 	}
@@ -955,6 +959,8 @@ func (uc *ServerConfigUsecase) rollbackToHistoricalVersion(tx *gorm.DB, txCtx co
 		return nil, 0, fmt.Errorf("create rollback history: %w", err)
 	}
 
+	// TODO(refactor): TrimHistory should be moved outside the transaction for consistency
+	// with lines 315 and 670. See comment at line 895 for details.
 	if trimErr := uc.configRepo.TrimHistory(txCtx, key, userID, 100); trimErr != nil {
 		logger.Warn(ctx, "config.trim_history_failed", zap.Error(trimErr))
 	}

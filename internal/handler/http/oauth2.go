@@ -136,6 +136,10 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	redirectURI := r.URL.Query().Get("redirect_uri")
 
 	// PKCE parameters (RFC 7636)
+	// TODO(security): Consider enforcing PKCE for all OAuth2 flows to prevent
+	// authorization code interception attacks. Currently PKCE is optional for
+	// backward compatibility, but RFC 8252 recommends it for all OAuth2 clients.
+	// See: https://datatracker.ietf.org/doc/html/rfc8252#section-8.4
 	codeChallenge := r.URL.Query().Get("code_challenge")
 	codeChallengeMethod := r.URL.Query().Get("code_challenge_method")
 	if codeChallengeMethod == "" {

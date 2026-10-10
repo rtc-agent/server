@@ -73,7 +73,11 @@ func (q *Queue) Publish(ctx context.Context, sessionID, data string, priority in
 
 	span.SetAttributes(attribute.String("work.id", workID))
 
-	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	// Bound the Redis round-trip to 5s so an unresponsive broker cannot
+	// stall the caller's goroutine indefinitely. The caller
+	// (publishSubmitWork) applies its own exponential-backoff retry on
+	// top of this timeout, so a single slow Redis call will be retried
+	// rather than immediately failing the whole SendMessage request.
 	publishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -365,20 +369,20 @@ func (q *Queue) Cancel(ctx context.Context, workID, reason string) error {
 		Reason:    reason,
 		Timestamp: time.Now().Unix(),
 	}
-		payload, err := json.Marshal(msg)
-		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
-			return fmt.Errorf("rtcqueue: marshal cancel: %w", err)
-		}
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("rtcqueue: marshal cancel: %w", err)
+	}
 
-		// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-		cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
+	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
+	cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 
-		n, err := cancelScript.Run(cancelCtx, q.rdb, []string{keyWork(workID)},
-			msg.Timestamp,
-			string(payload),
-		).Int()
+	n, err := cancelScript.Run(cancelCtx, q.rdb, []string{keyWork(workID)},
+		msg.Timestamp,
+		string(payload),
+	).Int()
 	if err != nil {
 		globalQueueMetrics.recordCancel("error")
 		span.SetStatus(codes.Error, err.Error())

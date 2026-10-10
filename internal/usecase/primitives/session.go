@@ -33,6 +33,8 @@ func PrepareSession(
 			}
 			return nil, false, fmt.Errorf("get session: %w", err)
 		}
+		// Use internal assertCreatorOwns to avoid redundant DB fetch
+		// (CheckSessionOwnership would re-fetch the session we already have).
 		if err := assertCreatorOwns(existing, creator); err != nil {
 			return nil, false, err
 		}
@@ -58,10 +60,10 @@ func PrepareSession(
 }
 
 // assertCreatorOwns checks whether the session owner matches the creator.
+// Returns ErrPermissionDenied if the creator does not own the session.
 func assertCreatorOwns(session *model.Session, creator usecase.Creator) error {
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
-		return fmt.Errorf("session %s does not belong to %s/%s",
-			session.ID, creator.Kind(), creator.ReferenceID())
+		return fmt.Errorf("session %s: %w", session.ID, ErrPermissionDenied)
 	}
 	return nil
 }

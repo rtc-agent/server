@@ -50,6 +50,11 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 		return err
 	}
 
+	// Add early tracing attributes for observability before span creation.
+	// These help correlate work items with session/user even if errors occur early.
+	ctx = WithSessionID(ctx, p.SessionID)
+	ctx = WithUserID(ctx, p.UserID)
+
 	// 1.5. Fast path: compact work bypasses the turn loop entirely.
 	if p.Kind == WorkKindCompact {
 		return a.handleCompactWork(ctx, p)

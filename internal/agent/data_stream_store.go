@@ -55,6 +55,14 @@ const streamStoreRedisTimeout = 5 * time.Second
 // maxStreamChunks is the maximum number of chunks to read from Redis in a
 // single GetAllChunks call. This prevents blocking Redis with very large lists.
 // If a message exceeds this limit, the result is truncated and a warning is logged.
+//
+// Design rationale: 10000 chunks provides a good balance between:
+//   - Preventing Redis blocking from unbounded lists (e.g., runaway streaming)
+//   - Supporting large messages (typical messages are 10-100 chunks)
+//   - Allowing graceful degradation (truncation + warning) instead of hard failure
+//
+// This limit is intentionally hardcoded rather than configurable, as it represents
+// a safety bound rather than a tunable performance parameter.
 const maxStreamChunks = 10000
 
 // AppendChunk atomically appends a chunk to the Redis list and refreshes
@@ -69,6 +77,19 @@ func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error)
 	ttlSeconds := int(s.chunkTTL / time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), streamStoreRedisTimeout)
 	defer cancel()
+
+	// Check remaining TTL before appending. If the key already exists and its
+	// TTL has dropped below half of chunkTTL, it indicates the stream has been
+	// active for a long time without finalization. Log a warning to surface
+	// potential stuck streams or TTL consistency issues.
+	if remainingTTL, ttlErr := s.rdb.TTL(ctx, key).Result(); ttlErr == nil && remainingTTL > 0 && remainingTTL < s.chunkTTL/2 {
+		logger.Warn(ctx, "stream TTL approaching expiry",
+			zap.String("message_id", messageID),
+			zap.Duration("remaining_ttl", remainingTTL),
+			zap.Duration("chunk_ttl", s.chunkTTL),
+		)
+	}
+
 	result, err := cache.AppendChunk.Run(
 		ctx, s.rdb,
 		[]string{key},
