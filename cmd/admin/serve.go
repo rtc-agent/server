@@ -298,6 +298,17 @@ func runServe(cmd *cobra.Command, args []string) {
 	rtcSessionUsecase := usecase.NewRtcSessionUsecase(sessionRepo, messageRepo)
 	serverConfigUsecase := usecase.NewServerConfigUsecase(configRepo, auditLogRepo, oauth2UserRepo, db)
 
+	// Set up config publisher for multi-instance cache synchronization
+	// When this instance updates a config, it publishes an event to Redis Pub/Sub.
+	// All instances (including this one) receive the event and invalidate their caches.
+	if rdb != nil {
+		configPublisher := usecase.NewRedisConfigPublisher(rdb)
+		serverConfigUsecase.SetConfigPublisher(configPublisher)
+		logger.Info(ctx, "admin.config_publisher_enabled")
+	} else {
+		logger.Warn(ctx, "admin.config_publisher_disabled_redis_not_available")
+	}
+
 	// Set up ban publisher for distributed sync (requires Redis)
 	if rdb != nil {
 		banPublisher := usecase.NewRedisBanPublisher(rdb)
@@ -377,6 +388,9 @@ func runServe(cmd *cobra.Command, args []string) {
 		},
 		middleware: middlewareDeps{
 			rateLimiter: rateLimiter,
+		},
+		security: securityDeps{
+			cspConfig: cfg.Security.CSP,
 		},
 	})
 
@@ -463,6 +477,12 @@ type corsDeps struct {
 	env string
 }
 
+// securityDeps groups security-related configuration dependencies.
+type securityDeps struct {
+	// cspConfig holds Content Security Policy configuration.
+	cspConfig config.CSPConfig
+}
+
 // middlewareDeps groups middleware-related dependencies.
 type middlewareDeps struct {
 	rateLimiter httphandler.RateLimiterInterface
@@ -475,6 +495,7 @@ type routerDeps struct {
 	auth       authDeps
 	cors       corsDeps
 	middleware middlewareDeps
+	security   securityDeps
 }
 
 // setupRouter creates and configures the Gin router with all routes and middleware.
@@ -515,6 +536,11 @@ func setupRouter(deps routerDeps) *gin.Engine {
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
 		c.Next()
 	})
+
+	// CSP middleware (Content Security Policy)
+	// Note: CSP provides more granular control than X-Frame-Options.
+	// When CSP frame-ancestors is set, it takes precedence over X-Frame-Options.
+	router.Use(middleware.GinCSP(&deps.security.cspConfig))
 
 	// Rate limiting middleware (P0 #2) — applied globally
 	router.Use(httphandler.AdminRateLimitMiddleware(deps.middleware.rateLimiter))
@@ -587,6 +613,12 @@ func setupRouter(deps routerDeps) *gin.Engine {
 			"status": "ready",
 		})
 	})
+
+	// Register CSP violation report endpoint (no auth required).
+	// Browsers send violation reports to this endpoint when CSP is enabled.
+	if deps.security.cspConfig.Enabled && deps.security.cspConfig.ReportURI != "" {
+		router.POST(deps.security.cspConfig.ReportURI, httphandler.HandleGinCSPReport)
+	}
 
 	// Register admin auth routes (public + protected)
 	deps.handlers.adminAuth.RegisterRoutes(router)

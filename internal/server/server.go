@@ -65,6 +65,12 @@ type Server struct {
 
 	// Ban watcher for distributed user ban sync
 	banWatcher *svc.BanWatcher
+
+	// Config provider for multi-instance cache invalidation
+	configProvider config.ConfigProvider // may be *config.CachedConfigProvider
+
+	// Config subscriber for multi-instance cache invalidation
+	configSubscriberCancel func() // cancels the config subscriber goroutine
 }
 
 // BuildProviderClients constructs the Provider list from config.
@@ -175,6 +181,45 @@ func (s *Server) Start() error {
 		} else {
 			s.banWatcher = banWatcher
 			logger.Info(context.Background(), "[Server] Ban watcher started")
+		}
+	}
+
+	// Start RedisConfigSubscriber for multi-instance config cache invalidation.
+	// When any instance updates a config, it publishes an event to Redis Pub/Sub.
+	// This subscriber receives the event and invalidates the local CachedConfigProvider cache.
+	if s.svcCtx.Redis != nil && s.configSubscriberCancel == nil {
+		// Get the CachedConfigProvider (if it's a cached provider)
+		if cachedProvider, ok := s.configProvider.(*config.CachedConfigProvider); ok {
+			configSubscriber := usecase.NewRedisConfigSubscriber(s.svcCtx.Redis)
+			configSubscriber.RegisterHandler(func(event model.ConfigUpdateEvent) {
+				var userIDPtr *uuid.UUID
+				if event.UserID != nil {
+					if parsedUID, err := uuid.Parse(*event.UserID); err == nil {
+						userIDPtr = &parsedUID
+					}
+				}
+				cachedProvider.InvalidateCache(event.Key, userIDPtr)
+				logger.Debug(context.Background(), "config.cache_invalidated",
+					zap.String("key", event.Key),
+					zap.String("operation", event.Operation),
+					zap.Int("version", event.Version),
+					zap.String("source", event.Source))
+			})
+
+			ctx, cancel := context.WithCancel(context.Background())
+			s.configSubscriberCancel = cancel
+			subscriberStop := configSubscriber.Start(ctx)
+
+			// Wrap the subscriber stop function to be called on shutdown
+			go func() {
+				<-ctx.Done()
+				subscriberStop()
+			}()
+
+			logger.Info(context.Background(), "[Server] Config subscriber started",
+				zap.String("channel", model.ConfigChannel))
+		} else {
+			logger.Warn(context.Background(), "[Server] ConfigProvider is not a CachedConfigProvider, config subscriber not started")
 		}
 	}
 
@@ -305,6 +350,11 @@ func (s *Server) Stop() {
 		if err := s.banWatcher.Close(); err != nil {
 			logger.Error(ctx, "[Server] ban watcher close error", zap.Error(err))
 		}
+	}
+
+	// Stop Config subscriber
+	if s.configSubscriberCancel != nil {
+		s.configSubscriberCancel()
 	}
 
 	// Stop goroutine metrics collector
@@ -535,6 +585,7 @@ func NewWithDeps(
 	asynqMux *hibikenasynq.ServeMux,
 	recoveryCancel context.CancelFunc,
 	metrics *turnagent.PrometheusMetrics,
+	configProvider config.ConfigProvider,
 ) *Server {
 	instanceID := "server-" + uuid.Must(uuid.NewV7()).String()
 	return &Server{
@@ -555,6 +606,7 @@ func NewWithDeps(
 		recoveryCancel:    recoveryCancel,
 		instanceID:        instanceID,
 		metrics:           metrics,
+		configProvider:    configProvider,
 	}
 }
 

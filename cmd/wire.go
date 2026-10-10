@@ -237,6 +237,12 @@ func provideUsecaseDependencies(
 	webFetchManager *webfetch.WebFetchManager,
 	metrics *turnagent.PrometheusMetrics,
 ) *usecase.Dependencies {
+	// Create CachedConfigProvider for efficient config reads with TTL-based caching
+	// In multi-instance deployments, cache invalidation is handled via Redis Pub/Sub
+	// (see Server.Start() where RedisConfigSubscriber is started)
+	dbConfigProvider := config.NewDBConfigProvider(svcCtx.ServerConfigRepo)
+	cachedConfigProvider := config.NewCachedConfigProvider(dbConfigProvider, 60*time.Second)
+
 	deps := &usecase.Dependencies{
 		DB:                  svcCtx.DB,
 		Redis:               svcCtx.Redis,
@@ -250,7 +256,7 @@ func provideUsecaseDependencies(
 		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
 		FileRepo:            svcCtx.FileRepo,
 		ServerConfigRepo:    svcCtx.ServerConfigRepo,
-		ConfigProvider:      config.NewDBConfigProvider(svcCtx.ServerConfigRepo),
+		ConfigProvider:      cachedConfigProvider,
 		UpdatePublisher:     svcCtx.UpdatePublisher,
 		ChatModel:        chatModelResult.model,
 		LLMConfig:        cfg.LLM,
@@ -798,6 +804,7 @@ func provideServer(
 	asynqMux *hibikenasynq.ServeMux,
 	recoveryCancel context.CancelFunc,
 	metrics *turnagent.PrometheusMetrics,
+	deps *usecase.Dependencies,
 ) *server.Server {
 	// Inject stream store into UpdatePublisher
 	svcCtx.UpdatePublisher.SetStreamStore(streamStore)
@@ -819,6 +826,7 @@ func provideServer(
 		asynqMux,
 		recoveryCancel,
 		metrics,
+		deps.ConfigProvider,
 	)
 }
 

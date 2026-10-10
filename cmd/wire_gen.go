@@ -141,7 +141,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	if err != nil {
 		return nil, err
 	}
-	oss3Usecase, err := provideOSS3Usecase(backend, db, serviceContext.FileRepo, multipartUploadRepo, temporaryCredentialRepo, rdb, v, cfg)
+	oss3Usecase, err := provideOSS3Usecase(backend, db, fileRepo, multipartUploadRepo, temporaryCredentialRepo, rdb, v, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 	asynqServer := provideAsynqServer(cfg)
 	serveMux := provideAsynqMux(queue, loopRepo, dependencies)
 	cancelFunc := provideRecoveryCancel(cfg, loopRepo, taskScheduler)
-	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, memoriesHandler, oss3Handler, stsHandler, stsPresignHandler, worker, queue, streamStore, asynqServer, serveMux, cancelFunc, prometheusMetrics)
+	serverServer := provideServer(cfg, serviceContext, handler, httphandlerHandler, oAuth2Handler, interruptHandler, memoriesHandler, oss3Handler, stsHandler, stsPresignHandler, worker, queue, streamStore, asynqServer, serveMux, cancelFunc, prometheusMetrics, dependencies)
 	return serverServer, nil
 }
 
@@ -327,6 +327,10 @@ func provideUsecaseDependencies(
 	webFetchManager *webfetch.WebFetchManager,
 	metrics *turnagent.PrometheusMetrics,
 ) *usecase.Dependencies {
+
+	dbConfigProvider := config.NewDBConfigProvider(svcCtx.ServerConfigRepo)
+	cachedConfigProvider := config.NewCachedConfigProvider(dbConfigProvider, 60*time.Second)
+
 	deps := &usecase.Dependencies{
 		DB:                  svcCtx.DB,
 		Redis:               svcCtx.Redis,
@@ -340,16 +344,16 @@ func provideUsecaseDependencies(
 		ScriptExecutionRepo: svcCtx.ScriptExecutionRepo,
 		FileRepo:            svcCtx.FileRepo,
 		ServerConfigRepo:    svcCtx.ServerConfigRepo,
-		ConfigProvider:      config.NewDBConfigProvider(svcCtx.ServerConfigRepo),
+		ConfigProvider:      cachedConfigProvider,
 		UpdatePublisher:     svcCtx.UpdatePublisher,
-		ChatModel:        chatModelResult2.model,
-		LLMConfig:        cfg.LLM,
-		SystemPrompt:     cfg.Worker.SystemPrompt,
-		WorkerConfig:     cfg.Worker,
-		CommandRegistry:  command.NewCommandRegistry(),
-		TaskScheduler:    taskScheduler,
-		WebSearchManager: webSearchManager,
-		WebFetchManager:  webFetchManager,
+		ChatModel:           chatModelResult2.model,
+		LLMConfig:           cfg.LLM,
+		SystemPrompt:        cfg.Worker.SystemPrompt,
+		WorkerConfig:        cfg.Worker,
+		CommandRegistry:     command.NewCommandRegistry(),
+		TaskScheduler:       taskScheduler,
+		WebSearchManager:    webSearchManager,
+		WebFetchManager:     webFetchManager,
 	}
 
 	if chatModelResult2.model != nil {
@@ -863,6 +867,7 @@ func provideServer(
 	asynqMux *asynq.ServeMux,
 	recoveryCancel context.CancelFunc,
 	metrics *turnagent.PrometheusMetrics,
+	deps *usecase.Dependencies,
 ) *server.Server {
 
 	svcCtx.UpdatePublisher.SetStreamStore(streamStore)
@@ -884,6 +889,7 @@ func provideServer(
 		asynqMux,
 		recoveryCancel,
 		metrics,
+		deps.ConfigProvider,
 	)
 }
 
