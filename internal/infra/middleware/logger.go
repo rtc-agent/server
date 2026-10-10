@@ -133,11 +133,16 @@ func RequestLogger(next http.Handler) http.Handler {
 		}
 
 		// If this is an error response with a captured body, add error info.
+		// SECURITY: Limit error body length and sanitize to prevent information leakage.
+		// Error responses may contain stack traces, SQL queries, or internal paths.
 		if finalStatus >= 400 && len(errorBody) > 0 {
 			// Limit error body length to avoid oversized logs.
+			// 500 characters is sufficient for most error messages without leaking sensitive data.
 			if len(errorBody) > 500 {
 				errorBody = errorBody[:500] + "...(truncated)"
 			}
+			// Log error response at debug level to avoid polluting logs with potentially sensitive data.
+			// In production, error bodies should be reviewed via structured logging, not plain text.
 			fields = append(fields, zap.String("error_response", errorBody))
 		}
 

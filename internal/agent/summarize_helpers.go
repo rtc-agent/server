@@ -43,96 +43,116 @@ func formatMessagesForCompact(msgs []*schema.Message) string {
 	var sb strings.Builder
 
 	for i, msg := range msgs {
-		role := string(msg.Role)
-		if role == "" {
-			role = "unknown"
-		}
-
-		switch msg.Role {
-		case schema.Assistant:
-			// Write assistant message content.
-			if msg.Content != "" {
-				fmt.Fprintf(&sb, "## %s (turn %d)\n\n", role, i+1)
-				sb.WriteString(msg.Content)
-				sb.WriteString("\n\n")
-			}
-
-			// Write reasoning content if present.
-			if msg.ReasoningContent != "" {
-				fmt.Fprintf(&sb, "<thinking>\n%s\n</thinking>\n\n", msg.ReasoningContent)
-			}
-
-			// Write tool calls if present.
-			if len(msg.ToolCalls) > 0 {
-				sb.WriteString("### Tool Calls\n\n")
-				for _, tc := range msg.ToolCalls {
-					fmt.Fprintf(&sb, "- **%s** (id: `%s`)\n", tc.Function.Name, tc.ID)
-					if tc.Function.Arguments != "" {
-						// Format arguments as a code block for readability.
-						fmt.Fprintf(&sb, "  ```json\n  %s\n  ```\n", tc.Function.Arguments)
-					}
-				}
-				sb.WriteString("\n")
-			}
-
-		case schema.Tool:
-			// Write tool result.
-			fmt.Fprintf(&sb, "## %s (result for %s, id: `%s`)\n\n", role, msg.ToolName, msg.ToolCallID)
-			sb.WriteString(msg.Content)
-			sb.WriteString("\n\n")
-
-		case schema.User:
-			// User messages may have Content, UserInputMultiContent, or both.
-			// Note: toEinoMessage merges Content into UserInputMultiContent as
-			// the first Text part (see requirement 2.2). Therefore, when
-			// UserInputMultiContent is non-empty, msg.Content's text is already
-			// included in it — we must not write msg.Content separately to avoid
-			// duplicating the user's text.
-			hasContent := msg.Content != ""
-			hasMultiContent := len(msg.UserInputMultiContent) > 0
-
-			if hasContent || hasMultiContent {
-				fmt.Fprintf(&sb, "## %s (turn %d)\n\n", role, i+1)
-			}
-
-			if hasMultiContent {
-				// UserInputMultiContent already contains Content text (as the
-				// first Text part). Only iterate UserInputMultiContent; do not
-				// write msg.Content separately.
-				// Images/files are replaced with markers; text parts are
-				// written as-is.
-				for _, part := range msg.UserInputMultiContent {
-					switch part.Type {
-					case schema.ChatMessagePartTypeText:
-						if part.Text != "" {
-							sb.WriteString(part.Text)
-							sb.WriteString("\n\n")
-						}
-					case schema.ChatMessagePartTypeImageURL:
-						sb.WriteString("[image]\n\n")
-					case schema.ChatMessagePartTypeFileURL:
-						sb.WriteString("[document]\n\n")
-					default:
-						// Other types (audio, etc.) are not handled yet.
-					}
-				}
-			} else if hasContent {
-				// No multimodal content: use original logic, write msg.Content.
-				sb.WriteString(msg.Content)
-				sb.WriteString("\n\n")
-			}
-
-		case schema.System:
-			// Skip system messages in the summary (they're meta-instructions).
-			continue
-
-		default:
-			// Fallback for unknown roles.
-			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", role, msg.Content)
-		}
+		formatMessageForCompact(&sb, msg, i)
 	}
 
 	return sb.String()
+}
+
+// formatMessageForCompact formats a single message for the summarization prompt.
+func formatMessageForCompact(sb *strings.Builder, msg *schema.Message, index int) {
+	role := string(msg.Role)
+	if role == "" {
+		role = "unknown"
+	}
+
+	switch msg.Role {
+	case schema.Assistant:
+		formatAssistantMessage(sb, msg, role, index)
+	case schema.Tool:
+		formatToolMessage(sb, msg, role)
+	case schema.User:
+		formatUserMessage(sb, msg, role, index)
+	case schema.System:
+		// Skip system messages in the summary (they're meta-instructions).
+		return
+	default:
+		// Fallback for unknown roles.
+		fmt.Fprintf(sb, "## %s\n\n%s\n\n", role, msg.Content)
+	}
+}
+
+// formatAssistantMessage formats an assistant message for the summarization prompt.
+func formatAssistantMessage(sb *strings.Builder, msg *schema.Message, role string, index int) {
+	// Write assistant message content.
+	if msg.Content != "" {
+		fmt.Fprintf(sb, "## %s (turn %d)\n\n", role, index+1)
+		sb.WriteString(msg.Content)
+		sb.WriteString("\n\n")
+	}
+
+	// Write reasoning content if present.
+	if msg.ReasoningContent != "" {
+		fmt.Fprintf(sb, "<thinking>\n%s\n</thinking>\n\n", msg.ReasoningContent)
+	}
+
+	// Write tool calls if present.
+	if len(msg.ToolCalls) > 0 {
+		sb.WriteString("### Tool Calls\n\n")
+		for _, tc := range msg.ToolCalls {
+			fmt.Fprintf(sb, "- **%s** (id: `%s`)\n", tc.Function.Name, tc.ID)
+			if tc.Function.Arguments != "" {
+				// Format arguments as a code block for readability.
+				fmt.Fprintf(sb, "  ```json\n  %s\n  ```\n", tc.Function.Arguments)
+			}
+		}
+		sb.WriteString("\n")
+	}
+}
+
+// formatToolMessage formats a tool message for the summarization prompt.
+func formatToolMessage(sb *strings.Builder, msg *schema.Message, role string) {
+	fmt.Fprintf(sb, "## %s (result for %s, id: `%s`)\n\n", role, msg.ToolName, msg.ToolCallID)
+	sb.WriteString(msg.Content)
+	sb.WriteString("\n\n")
+}
+
+// formatUserMessage formats a user message for the summarization prompt.
+func formatUserMessage(sb *strings.Builder, msg *schema.Message, role string, index int) {
+	// User messages may have Content, UserInputMultiContent, or both.
+	// Note: toEinoMessage merges Content into UserInputMultiContent as
+	// the first Text part (see requirement 2.2). Therefore, when
+	// UserInputMultiContent is non-empty, msg.Content's text is already
+	// included in it — we must not write msg.Content separately to avoid
+	// duplicating the user's text.
+	hasContent := msg.Content != ""
+	hasMultiContent := len(msg.UserInputMultiContent) > 0
+
+	if hasContent || hasMultiContent {
+		fmt.Fprintf(sb, "## %s (turn %d)\n\n", role, index+1)
+	}
+
+	if hasMultiContent {
+		// UserInputMultiContent already contains Content text (as the
+		// first Text part). Only iterate UserInputMultiContent; do not
+		// write msg.Content separately.
+		// Images/files are replaced with markers; text parts are
+		// written as-is.
+		for _, part := range msg.UserInputMultiContent {
+			formatUserMessagePart(sb, part)
+		}
+	} else if hasContent {
+		// No multimodal content: use original logic, write msg.Content.
+		sb.WriteString(msg.Content)
+		sb.WriteString("\n\n")
+	}
+}
+
+// formatUserMessagePart formats a single part of a user message.
+func formatUserMessagePart(sb *strings.Builder, part schema.MessageInputPart) {
+	switch part.Type {
+	case schema.ChatMessagePartTypeText:
+		if part.Text != "" {
+			sb.WriteString(part.Text)
+			sb.WriteString("\n\n")
+		}
+	case schema.ChatMessagePartTypeImageURL:
+		sb.WriteString("[image]\n\n")
+	case schema.ChatMessagePartTypeFileURL:
+		sb.WriteString("[document]\n\n")
+	default:
+		// Other types (audio, etc.) are not handled yet.
+	}
 }
 
 // logSummarizeTokenUsage emits a structured log line for a summarization LLM

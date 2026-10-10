@@ -60,11 +60,23 @@ type AdminJWTConfig struct {
 	PublicKeyPath  string
 	AccessTTL      time.Duration
 	RefreshTTL     time.Duration
+	// KeyID is the unique identifier for the key pair. Used in JWT header "kid" field.
+	// If empty, defaults to "admin-key-{timestamp}" for production or "admin-key-dev" for development.
+	KeyID string
 	// Clock allows injecting a custom clock for testing. If nil, uses real time.
 	Clock Clock
+	// Environment is the runtime environment ("development" or "production").
+	// In production, private and public key paths are REQUIRED.
+	Environment string
 }
 
 // NewAdminJWTSigner creates an admin JWT signer from configuration.
+//
+// SECURITY REQUIREMENTS FOR PRODUCTION:
+//   - PrivateKeyPath and PublicKeyPath MUST be configured
+//   - Algorithm MUST be RS256, ES256, or EdDSA (asymmetric algorithms)
+//   - Keys MUST be at least 2048 bits (RSA) or P-256 (ECDSA)
+//   - Key files MUST have restricted permissions (0600 for private key)
 func NewAdminJWTSigner(cfg AdminJWTConfig) (*AdminJWTSigner, error) {
 	if cfg.Algorithm == "" {
 		cfg.Algorithm = "RS256"
@@ -79,25 +91,46 @@ func NewAdminJWTSigner(cfg AdminJWTConfig) (*AdminJWTSigner, error) {
 		cfg.Clock = realClock{}
 	}
 
+	// Default key ID generation
+	if cfg.KeyID == "" {
+		if cfg.Environment == "production" {
+			// Use timestamp-based key ID for production to support key rotation
+			cfg.KeyID = fmt.Sprintf("admin-key-%d", time.Now().Unix())
+		} else {
+			cfg.KeyID = "admin-key-dev"
+		}
+	}
+
+	// SECURITY: Enforce key file configuration in production environment
+	isProduction := cfg.Environment == "production"
+	hasKeyPaths := cfg.PrivateKeyPath != "" && cfg.PublicKeyPath != ""
+
+	if isProduction && !hasKeyPaths {
+		return nil, errors.New("admin JWT: private_key_path and public_key_path are REQUIRED in production environment")
+	}
+
 	var privateKey crypto.PrivateKey
 	var publicKey crypto.PublicKey
 	var keyID string
 	var err error
 
 	// Load or generate keys
-	if cfg.PrivateKeyPath != "" && cfg.PublicKeyPath != "" {
+	if hasKeyPaths {
 		privateKey, publicKey, err = loadKeys(cfg.PrivateKeyPath, cfg.PublicKeyPath, cfg.Algorithm)
 		if err != nil {
 			return nil, fmt.Errorf("load keys: %w", err)
 		}
-		keyID = "admin-key-1"
+		keyID = cfg.KeyID
 	} else {
-		// Generate ephemeral keys for development
+		// Generate ephemeral keys for development only
+		if isProduction {
+			return nil, errors.New("admin JWT: cannot use ephemeral keys in production")
+		}
 		privateKey, publicKey, err = generateKeys(cfg.Algorithm)
 		if err != nil {
 			return nil, fmt.Errorf("generate keys: %w", err)
 		}
-		keyID = "admin-key-dev"
+		keyID = cfg.KeyID
 	}
 
 	return &AdminJWTSigner{

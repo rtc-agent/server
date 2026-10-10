@@ -19,6 +19,11 @@ type Claims struct {
 }
 
 // JWTSigner is an HMAC-SHA256 based token signer implementation.
+//
+// SECURITY NOTE: HS256 is a symmetric signing algorithm suitable for single-service
+// deployments where the same service signs and verifies tokens. For multi-service
+// architectures or when tokens need to be verified by external services, consider
+// using AdminJWTSigner with asymmetric algorithms (RS256/ES256/EdDSA).
 type JWTSigner struct {
 	secret    []byte
 	accessTTL time.Duration
@@ -28,9 +33,18 @@ type JWTSigner struct {
 //
 // secret is the HMAC key (recommended >= 32 bytes random string);
 // accessTTL is the default validity period for access tokens.
+//
+// SECURITY REQUIREMENTS:
+//   - secret MUST be at least 32 bytes of cryptographically random data
+//   - In production, use strong asymmetric algorithms (RS256/ES256) instead
+//   - Rotate secrets regularly and store securely (e.g., AWS Secrets Manager, HashiCorp Vault)
 func NewJWTSigner(secret string, accessTTL time.Duration) (*JWTSigner, error) {
 	if secret == "" {
 		return nil, errors.New("auth: jwt secret is required")
+	}
+	// Enforce minimum secret strength for HMAC-SHA256
+	if len(secret) < 32 {
+		return nil, fmt.Errorf("auth: jwt secret must be at least 32 bytes, got %d", len(secret))
 	}
 	if accessTTL <= 0 {
 		return nil, errors.New("auth: access token TTL must be positive")

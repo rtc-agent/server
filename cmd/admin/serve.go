@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -62,23 +61,18 @@ var serveCmd = &cobra.Command{
 var bootstrapDegraded atomic.Bool
 
 func runServe(cmd *cobra.Command, args []string) {
-	// Load admin config
+	// Load and validate config
 	cfg, err := config.LoadAdminConfig(adminCfgFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load admin config: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Validate config
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Invalid admin config: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Populate dynamic config registry with yaml defaults so that the admin UI
-	// (via ServerConfigUsecase) displays actual yaml values as YamlDefault instead
-	// of the hardcoded registry fallbacks. The admin server shares the deployment
-	// with the main server and can read its config file from the default path.
+	// Populate dynamic config registry with yaml defaults
 	populateDynamicConfigDefaults()
 
 	// Init logger
@@ -88,10 +82,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	ctx := context.Background()
 	logger.Info(ctx, "admin.starting")
 
-	// Log deployment mode: detect multi-instance configuration via environment
-	// variable INSTANCE_COUNT. This helps operators verify that Redis-backed
-	// features (rate limiting, login protection, policy sync) are properly
-	// configured for the deployment topology.
+	// Log deployment mode
 	instanceCount := parseInstanceCount()
 	deploymentMode := "single-instance"
 	if instanceCount > 1 {
@@ -110,35 +101,10 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Fatal(ctx, "admin.database_connection_failed", zap.Error(err))
 	}
 
-	// Init Redis (optional -- JWKS caching, distributed rate limiting, and policy sync require it).
-	var rdb *redis.Client
-	if cfg.Redis.Addr != "" {
-		rdb = redis.NewClient(&redis.Options{
-			Addr:     cfg.Redis.Addr,
-			Password: cfg.Redis.Password,
-			DB:       cfg.Redis.DB,
-		})
-		defer func() {
-			if rdb != nil {
-				_ = rdb.Close()
-			}
-		}()
-		if err := rdb.Ping(ctx).Err(); err != nil {
-			logger.Warn(ctx, "admin.redis_unreachable_continuing_without_cache",
-				zap.String("addr", cfg.Redis.Addr), zap.Error(err))
-			rdb = nil
-		} else {
-			logger.Info(ctx, "admin.redis_connected",
-				zap.String("addr", cfg.Redis.Addr))
-		}
-	} else {
-		logger.Info(ctx, "admin.redis_not_configured_jwks_caching_disabled")
-	}
+	// Init Redis (optional)
+	rdb := initRedis(ctx, cfg)
 
-	// Warn if multi-instance deployment is configured but Redis is unavailable.
-	// Without Redis, rate limiting, login protection, OTP store, and policy sync
-	// fall back to per-instance memory stores, which are inconsistent across
-	// replicas.
+	// Warn if multi-instance deployment is configured but Redis is unavailable
 	if rdb == nil && instanceCount > 1 {
 		logger.Warn(ctx, "admin.multi_instance_without_redis_rate_limiting_and_policy_sync_disabled",
 			zap.Int("instance_count", instanceCount))
@@ -169,234 +135,33 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Fatal(ctx, "admin.casbin_enforcer_init_failed", zap.Error(err))
 	}
 
-	// Init Redis policy watcher for multi-instance sync (P0 #1)
-	var policyWatcher *auth.PolicyWatcher
-	if rdb != nil {
-		instanceID := uuid.New().String()
-		policyWatcher, err = auth.NewPolicyWatcher(enforcer, rdb, instanceID)
-		if err != nil {
-			// Policy watcher initialization failed - this is critical for multi-instance deployments
-			// Log as error but continue (degraded mode: single-instance behavior)
-			logger.Error(ctx, "admin.policy_watcher_init_failed_multi_instance_sync_disabled",
-				zap.String("instance_id", instanceID),
-				zap.Error(err))
-			// Don't set policyWatcher to nil explicitly, it's already nil from declaration
-		} else {
-			defer func() { _ = policyWatcher.Close() }()
-			logger.Info(ctx, "admin.policy_watcher_started", zap.String("instance_id", instanceID))
-		}
-	}
-
-	// Init repositories
-	adminUserRepo := repo.NewAdminUserRepo(db)
-	refreshTokenRepo := repo.NewAdminRefreshTokenRepo(db)
-	adminRoleRepo := repo.NewAdminRoleRepo(db)
-	adminUserRoleRepo := repo.NewAdminUserRoleRepo(db)
-	auditLogRepo := repo.NewAuditLogRepo(db)
-	oauth2UserRepo := repo.NewOAuth2UserRepo(db)
-	mainRefreshTokenRepo := repo.NewRefreshTokenRepo(db)
-	configRepo := repo.NewServerConfigRepo(db)
-	deviceRepo := repo.NewDeviceRepo(db)
-	sessionRepo := repo.NewSessionRepo(db)
-	messageRepo := repo.NewMessageRepo(db)
-
-	// Bootstrap default roles and policies (idempotent, transactional).
-	// If bootstrap fails, the server enters "degraded mode": it starts normally
-	// but default roles/permissions may be missing, causing authorization errors
-	// for admin operations. The readiness probe will report degraded status so
-	// load balancers can avoid routing traffic to this instance.
-	if err := usecase.BootstrapAdmin(ctx, db, adminRoleRepo, enforcer); err != nil {
-		bootstrapDegraded.Store(true)
-		logger.Error(ctx, "admin.bootstrap_failed_degraded_mode_default_roles_may_be_missing",
-			zap.Error(err))
-	} else {
-		logger.Info(ctx, "admin.bootstrap_completed")
-	}
-
-	// Init rate limiter — prefer Redis-backed for multi-instance deployments
-	var rateLimiter httphandler.RateLimiterInterface
-	if rdb != nil {
-		rateLimiter = httphandler.NewRedisRateLimiter(rdb, cfg.Security.RateLimitPerMinute)
-		logger.Info(ctx, "admin.redis_rate_limiter_enabled")
-	} else {
-		memLimiter := httphandler.NewRateLimiter(httphandler.RateLimitConfig{
-			MaxRequestsPerMinute: cfg.Security.RateLimitPerMinute,
-		})
-		defer memLimiter.Stop()
-		rateLimiter = memLimiter
-		logger.Info(ctx, "admin.memory_rate_limiter_enabled_single_instance_only")
-	}
-
-	// Init login protection — prefer Redis-backed for multi-instance deployments
-	var loginProtection usecase.LoginProtectionInterface
-	lpCfg := usecase.LoginProtectionConfig{
-		MaxAttempts:  cfg.Security.LoginMaxAttempts,
-		LockDuration: time.Duration(cfg.Security.LoginLockDuration) * time.Second,
-	}
-	if rdb != nil {
-		loginProtection = usecase.NewRedisLoginProtection(rdb, lpCfg)
-		logger.Info(ctx, "admin.redis_login_protection_enabled")
-	} else {
-		loginProtection = usecase.NewLoginProtection(lpCfg)
-		logger.Info(ctx, "admin.memory_login_protection_enabled_single_instance_only")
-	}
-	defer loginProtection.Stop()
-
-	// Init email sender (optional — required for email OTP login)
-	var emailSender email.Sender
-	if cfg.Email.SMTPHost != "" && cfg.Email.FromAddress != "" {
-		emailSender = email.NewSMTPSender(email.SMTPConfig{
-			Host:        cfg.Email.SMTPHost,
-			Port:        cfg.Email.SMTPPort,
-			User:        cfg.Email.SMTPUser,
-			Password:    cfg.Email.SMTPPassword,
-			FromAddress: cfg.Email.FromAddress,
-			FromName:    cfg.Email.FromName,
-		})
-		logger.Info(ctx, "admin.smtp_email_sender_configured",
-			zap.String("host", cfg.Email.SMTPHost),
-			zap.String("from", cfg.Email.FromAddress))
-	} else {
-		logger.Warn(ctx, "admin.email_not_configured_otp_login_disabled")
-	}
-
-	// Init OTP usecase (requires email sender)
-	var emailOTPUsecase *usecase.EmailOTPUsecase
-	if emailSender != nil {
-		otpCfg := usecase.EmailOTPConfig{
-			TTL:               time.Duration(cfg.OTP.TTL) * time.Second,
-			Length:            cfg.OTP.Length,
-			SendCooldown:      time.Duration(cfg.OTP.SendCooldown) * time.Second,
-			MaxSendPerIP:      cfg.OTP.MaxSendPerIP,
-			MaxVerifyAttempts: cfg.OTP.MaxVerifyAttempts,
-			LockDuration:      time.Duration(cfg.OTP.LockDuration) * time.Second,
-		}
-		var otpStore usecase.OTPStore
-		if rdb != nil {
-			otpStore = usecase.NewRedisOTPStore(rdb, cfg.OTP.MaxSendPerIP, cfg.OTP.MaxVerifyAttempts,
-				time.Duration(cfg.OTP.LockDuration)*time.Second,
-				time.Duration(cfg.OTP.SendCooldown)*time.Second)
-			logger.Info(ctx, "admin.redis_otp_store_enabled")
-		} else {
-			otpStore = usecase.NewMemoryOTPStore(cfg.OTP.MaxSendPerIP, cfg.OTP.MaxVerifyAttempts,
-				time.Duration(cfg.OTP.LockDuration)*time.Second,
-				time.Duration(cfg.OTP.SendCooldown)*time.Second)
-			logger.Info(ctx, "admin.memory_otp_store_enabled_single_instance_only")
-		}
-		emailOTPUsecase = usecase.NewEmailOTPUsecase(adminUserRepo, emailSender, otpStore, otpCfg)
-		logger.Info(ctx, "admin.email_otp_usecase_enabled")
-	}
-
-	// Init usecases
-	adminAuthUsecase := usecase.NewAdminAuthUsecase(db, adminUserRepo, refreshTokenRepo, jwtSigner)
-	adminAuthUsecase.SetLoginProtection(loginProtection)
-	adminRoleUsecase := usecase.NewAdminRoleUsecase(db, adminRoleRepo, adminUserRoleRepo, auditLogRepo, enforcer)
-	permissionUsecase := usecase.NewPermissionUsecase(adminRoleRepo, enforcer, auditLogRepo)
-	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(db, adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer, auditLogRepo)
-	adminUserUsecase := usecase.NewAdminUserUsecase(db, adminUserRepo, adminUserRoleRepo, adminRoleRepo, enforcer)
-	rtcUserUsecase := usecase.NewRtcUserUsecase(db, oauth2UserRepo, mainRefreshTokenRepo, auditLogRepo, deviceRepo)
-	rtcSessionUsecase := usecase.NewRtcSessionUsecase(sessionRepo, messageRepo)
-	serverConfigUsecase := usecase.NewServerConfigUsecase(configRepo, auditLogRepo, oauth2UserRepo, db)
-
-	// Set up config publisher for multi-instance cache synchronization
-	// When this instance updates a config, it publishes an event to Redis Pub/Sub.
-	// All instances (including this one) receive the event and invalidate their caches.
-	if rdb != nil {
-		configPublisher := usecase.NewRedisConfigPublisher(rdb)
-		serverConfigUsecase.SetConfigPublisher(configPublisher)
-		logger.Info(ctx, "admin.config_publisher_enabled")
-	} else {
-		logger.Warn(ctx, "admin.config_publisher_disabled_redis_not_available")
-	}
-
-	// Set up ban publisher for distributed sync (requires Redis)
-	if rdb != nil {
-		banPublisher := usecase.NewRedisBanPublisher(rdb)
-		rtcUserUsecase.SetBanPublisher(banPublisher)
-		logger.Info(ctx, "admin.ban_publisher_enabled")
-	} else {
-		logger.Warn(ctx, "admin.ban_publisher_disabled_redis_not_available")
-	}
-
-	// Inject policy publisher for multi-instance sync (P0 #1 fix)
-	if policyWatcher != nil {
-		adminRoleUsecase.SetPolicyPublisher(policyWatcher)
-		permissionUsecase.SetPolicyPublisher(policyWatcher)
-		adminUserRoleUsecase.SetPolicyPublisher(policyWatcher)
-		logger.Info(ctx, "admin.policy_publisher_enabled_for_all_usecases")
-	} else {
-		logger.Info(ctx, "admin.policy_publisher_disabled_single_instance_mode")
-	}
+	// Init repositories and usecases
+	repos := initRepositories(db)
+	usecases := initUsecases(ctx, db, cfg, rdb, repos, enforcer)
 
 	// Init handlers
-	adminAuthHandler := httphandler.NewAdminAuthHandler(adminAuthUsecase, jwtSigner, db)
-	adminRoleHandler := httphandler.NewAdminRoleHandler(adminRoleUsecase)
-	permissionHandler := httphandler.NewPermissionHandler(permissionUsecase)
-	adminUserRoleHandler := httphandler.NewAdminUserRoleHandler(adminUserRoleUsecase, adminUserRepo, adminRoleRepo, adminUserRoleRepo, enforcer)
-	auditLogHandler := httphandler.NewAuditLogHandler(auditLogRepo)
-	adminUserHandler := httphandler.NewAdminUserHandler(adminUserUsecase)
-	rtcUserHandler := httphandler.NewRtcUserHandler(rtcUserUsecase)
-	rtcSessionHandler := httphandler.NewRtcSessionHandler(rtcSessionUsecase)
-	serverConfigHandler := httphandler.NewServerConfigHandler(serverConfigUsecase)
-	userConfigHandler := httphandler.NewUserConfigHandler(serverConfigUsecase)
-	metricsProxyHandler := httphandler.NewMetricsProxyHandler(cfg.PrometheusURL)
-	grafanaProxyHandler := httphandler.NewGrafanaProxyHandler(cfg.GrafanaURL)
-	jaegerProxyHandler := httphandler.NewJaegerProxyHandler(cfg.JaegerURL)
-	pyroscopeProxyHandler := httphandler.NewPyroscopeProxyHandler(cfg.PyroscopeURL)
-
-	// Wire permission system deps to auth handler
-	permissionSystemEnabled := cfg.Features.PermissionSystem
-	adminAuthHandler.SetPermissionDeps(adminRoleRepo, adminUserRoleRepo, enforcer, permissionSystemEnabled)
-
-	// Wire email OTP usecase to auth handler (if configured)
-	if emailOTPUsecase != nil {
-		adminAuthHandler.SetEmailOTPUsecase(emailOTPUsecase)
-	}
-
-	// Wire password login configuration to auth handler
-	adminAuthHandler.SetPasswordEnabled(cfg.Features.PasswordEnabled)
-
-	// Wire cookie security configuration to auth handler.
-	// Enable Secure flag in production HTTPS deployments to prevent cookie leakage over HTTP.
-	adminAuthHandler.SetCookieSecure(cfg.Security.CookieSecure)
+	handlers := initHandlers(cfg, usecases, repos, enforcer, jwtSigner, db)
 
 	// Setup router
 	router := setupRouter(routerDeps{
-		handlers: handlerDeps{
-			adminAuth:      adminAuthHandler,
-			adminRole:      adminRoleHandler,
-			permission:     permissionHandler,
-			adminUserRole:  adminUserRoleHandler,
-			auditLog:       auditLogHandler,
-			adminUser:      adminUserHandler,
-			rtcSession:     rtcSessionHandler,
-			rtcUser:        rtcUserHandler,
-			serverConfig:   serverConfigHandler,
-			userConfig:     userConfigHandler,
-			metricsProxy:   metricsProxyHandler,
-			grafanaProxy:   grafanaProxyHandler,
-			jaegerProxy:    jaegerProxyHandler,
-			pyroscopeProxy: pyroscopeProxyHandler,
-		},
+		handlers: handlers,
 		auth: authDeps{
 			enforcer:          enforcer,
-			permissionEnabled: permissionSystemEnabled,
+			permissionEnabled: cfg.Features.PermissionSystem,
 		},
 		cors: corsDeps{
 			allowedOrigins: cfg.CORS.AllowedOrigins,
 			env:            cfg.Server.Env,
 		},
 		middleware: middlewareDeps{
-			rateLimiter: rateLimiter,
+			rateLimiter: initRateLimiter(ctx, cfg, rdb),
 		},
 		security: securityDeps{
 			cspConfig: cfg.Security.CSP,
 		},
 	})
 
-	// Create HTTP server with explicit timeouts to prevent resource exhaustion.
-	// Without these, the server uses zero values (no timeout), making it
-	// vulnerable to Slowloris attacks and connection leaks.
+	// Create HTTP server with explicit timeouts
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	srv := &http.Server{
 		Addr:         addr,
@@ -411,7 +176,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Info(ctx, "admin.server_listening",
 			zap.String("addr", addr),
 			zap.String("env", cfg.Server.Env),
-			zap.Bool("permission_system", permissionSystemEnabled),
+			zap.Bool("permission_system", cfg.Features.PermissionSystem),
 			zap.Bool("degraded_mode", bootstrapDegraded.Load()),
 			zap.Duration("read_timeout", httpReadTimeout),
 			zap.Duration("write_timeout", httpWriteTimeout),
@@ -437,6 +202,274 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 
 	logger.Info(ctx, "admin.server_exited")
+}
+
+// initRedis initializes Redis client if configured.
+func initRedis(ctx context.Context, cfg *config.AdminConfig) *redis.Client {
+	if cfg.Redis.Addr == "" {
+		logger.Info(ctx, "admin.redis_not_configured_jwks_caching_disabled")
+		return nil
+	}
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	defer func() {
+		if rdb != nil {
+			_ = rdb.Close()
+		}
+	}()
+
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		logger.Warn(ctx, "admin.redis_unreachable_continuing_without_cache",
+			zap.String("addr", cfg.Redis.Addr), zap.Error(err))
+		return nil
+	}
+
+	logger.Info(ctx, "admin.redis_connected", zap.String("addr", cfg.Redis.Addr))
+	return rdb
+}
+
+// repositories groups all repository dependencies.
+type repositories struct {
+	adminUserRepo        repo.AdminUserRepo
+	refreshTokenRepo     repo.AdminRefreshTokenRepo
+	adminRoleRepo        repo.AdminRoleRepo
+	adminUserRoleRepo    repo.AdminUserRoleRepo
+	auditLogRepo         repo.AuditLogRepo
+	oauth2UserRepo       repo.OAuth2UserRepo
+	mainRefreshTokenRepo repo.RefreshTokenRepo
+	configRepo           repo.ServerConfigRepo
+	deviceRepo           repo.DeviceRepo
+	sessionRepo          repo.SessionRepo
+	messageRepo          repo.MessageRepo
+}
+
+// initRepositories initializes all repository dependencies.
+func initRepositories(db *gorm.DB) repositories {
+	return repositories{
+		adminUserRepo:        repo.NewAdminUserRepo(db),
+		refreshTokenRepo:     repo.NewAdminRefreshTokenRepo(db),
+		adminRoleRepo:        repo.NewAdminRoleRepo(db),
+		adminUserRoleRepo:    repo.NewAdminUserRoleRepo(db),
+		auditLogRepo:         repo.NewAuditLogRepo(db),
+		oauth2UserRepo:       repo.NewOAuth2UserRepo(db),
+		mainRefreshTokenRepo: repo.NewRefreshTokenRepo(db),
+		configRepo:           repo.NewServerConfigRepo(db),
+		deviceRepo:           repo.NewDeviceRepo(db),
+		sessionRepo:          repo.NewSessionRepo(db),
+		messageRepo:          repo.NewMessageRepo(db),
+	}
+}
+
+// usecases groups all usecase dependencies.
+type usecases struct {
+	adminAuthUsecase     *usecase.AdminAuthUsecase
+	adminRoleUsecase     *usecase.AdminRoleUsecase
+	permissionUsecase    *usecase.PermissionUsecase
+	adminUserRoleUsecase *usecase.AdminUserRoleUsecase
+	adminUserUsecase     *usecase.AdminUserUsecase
+	rtcUserUsecase       *usecase.RtcUserUsecase
+	rtcSessionUsecase    *usecase.RtcSessionUsecase
+	serverConfigUsecase  *usecase.ServerConfigUsecase
+	loginProtection      usecase.LoginProtectionInterface
+	emailOTPUsecase      *usecase.EmailOTPUsecase
+}
+
+// initUsecases initializes all usecase dependencies.
+func initUsecases(ctx context.Context, db *gorm.DB, cfg *config.AdminConfig, rdb *redis.Client, repos repositories, enforcer *auth.CasbinEnforcer) usecases {
+	// Bootstrap default roles and policies
+	if err := usecase.BootstrapAdmin(ctx, db, repos.adminRoleRepo, enforcer); err != nil {
+		bootstrapDegraded.Store(true)
+		logger.Error(ctx, "admin.bootstrap_failed_degraded_mode_default_roles_may_be_missing", zap.Error(err))
+	} else {
+		logger.Info(ctx, "admin.bootstrap_completed")
+	}
+
+	// Init rate limiter
+	rateLimiter := initRateLimiter(ctx, cfg, rdb)
+	_ = rateLimiter // rateLimiter is used in router setup
+
+	// Init login protection
+	loginProtection := initLoginProtection(ctx, cfg, rdb)
+	defer loginProtection.Stop()
+
+	// Init email sender (optional)
+	emailSender := initEmailSender(ctx, cfg)
+
+	// Init OTP usecase (requires email sender)
+	var emailOTPUsecase *usecase.EmailOTPUsecase
+	if emailSender != nil {
+		emailOTPUsecase = initEmailOTPUsecase(ctx, cfg, rdb, repos.adminUserRepo, emailSender)
+	}
+
+	// Init usecases
+	adminAuthUsecase := usecase.NewAdminAuthUsecase(db, repos.adminUserRepo, repos.refreshTokenRepo, nil) // jwtSigner will be set later
+	adminAuthUsecase.SetLoginProtection(loginProtection)
+	adminRoleUsecase := usecase.NewAdminRoleUsecase(db, repos.adminRoleRepo, repos.adminUserRoleRepo, repos.auditLogRepo, enforcer)
+	permissionUsecase := usecase.NewPermissionUsecase(repos.adminRoleRepo, enforcer, repos.auditLogRepo)
+	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(db, repos.adminUserRepo, repos.adminRoleRepo, repos.adminUserRoleRepo, enforcer, repos.auditLogRepo)
+	adminUserUsecase := usecase.NewAdminUserUsecase(db, repos.adminUserRepo, repos.adminUserRoleRepo, repos.adminRoleRepo, enforcer)
+	rtcUserUsecase := usecase.NewRtcUserUsecase(db, repos.oauth2UserRepo, repos.mainRefreshTokenRepo, repos.auditLogRepo, repos.deviceRepo)
+	rtcSessionUsecase := usecase.NewRtcSessionUsecase(repos.sessionRepo, repos.messageRepo)
+	serverConfigUsecase := usecase.NewServerConfigUsecase(repos.configRepo, repos.auditLogRepo, repos.oauth2UserRepo, db)
+
+	// Set up config publisher for multi-instance cache synchronization
+	if rdb != nil {
+		configPublisher := usecase.NewRedisConfigPublisher(rdb)
+		serverConfigUsecase.SetConfigPublisher(configPublisher)
+		logger.Info(ctx, "admin.config_publisher_enabled")
+	} else {
+		logger.Warn(ctx, "admin.config_publisher_disabled_redis_not_available")
+	}
+
+	// Set up ban publisher for distributed sync (requires Redis)
+	if rdb != nil {
+		banPublisher := usecase.NewRedisBanPublisher(rdb)
+		rtcUserUsecase.SetBanPublisher(banPublisher)
+		logger.Info(ctx, "admin.ban_publisher_enabled")
+	} else {
+		logger.Warn(ctx, "admin.ban_publisher_disabled_redis_not_available")
+	}
+
+	return usecases{
+		adminAuthUsecase:     adminAuthUsecase,
+		adminRoleUsecase:     adminRoleUsecase,
+		permissionUsecase:    permissionUsecase,
+		adminUserRoleUsecase: adminUserRoleUsecase,
+		adminUserUsecase:     adminUserUsecase,
+		rtcUserUsecase:       rtcUserUsecase,
+		rtcSessionUsecase:    rtcSessionUsecase,
+		serverConfigUsecase:  serverConfigUsecase,
+		loginProtection:      loginProtection,
+		emailOTPUsecase:      emailOTPUsecase,
+	}
+}
+
+// initRateLimiter initializes the rate limiter (Redis-backed or memory-based).
+func initRateLimiter(ctx context.Context, cfg *config.AdminConfig, rdb *redis.Client) httphandler.RateLimiterInterface {
+	if rdb != nil {
+		logger.Info(ctx, "admin.redis_rate_limiter_enabled")
+		return httphandler.NewRedisRateLimiter(rdb, cfg.Security.RateLimitPerMinute)
+	}
+	memLimiter := httphandler.NewRateLimiter(httphandler.RateLimitConfig{
+		MaxRequestsPerMinute: cfg.Security.RateLimitPerMinute,
+	})
+	defer memLimiter.Stop()
+	logger.Info(ctx, "admin.memory_rate_limiter_enabled_single_instance_only")
+	return memLimiter
+}
+
+// initLoginProtection initializes login protection (Redis-backed or memory-based).
+func initLoginProtection(ctx context.Context, cfg *config.AdminConfig, rdb *redis.Client) usecase.LoginProtectionInterface {
+	lpCfg := usecase.LoginProtectionConfig{
+		MaxAttempts:  cfg.Security.LoginMaxAttempts,
+		LockDuration: time.Duration(cfg.Security.LoginLockDuration) * time.Second,
+	}
+	if rdb != nil {
+		logger.Info(ctx, "admin.redis_login_protection_enabled")
+		return usecase.NewRedisLoginProtection(rdb, lpCfg)
+	}
+	logger.Info(ctx, "admin.memory_login_protection_enabled_single_instance_only")
+	return usecase.NewLoginProtection(lpCfg)
+}
+
+// initEmailSender initializes the email sender if configured.
+func initEmailSender(ctx context.Context, cfg *config.AdminConfig) email.Sender {
+	if cfg.Email.SMTPHost == "" || cfg.Email.FromAddress == "" {
+		logger.Warn(ctx, "admin.email_not_configured_otp_login_disabled")
+		return nil
+	}
+	logger.Info(ctx, "admin.smtp_email_sender_configured",
+		zap.String("host", cfg.Email.SMTPHost),
+		zap.String("from", cfg.Email.FromAddress))
+	return email.NewSMTPSender(email.SMTPConfig{
+		Host:        cfg.Email.SMTPHost,
+		Port:        cfg.Email.SMTPPort,
+		User:        cfg.Email.SMTPUser,
+		Password:    cfg.Email.SMTPPassword,
+		FromAddress: cfg.Email.FromAddress,
+		FromName:    cfg.Email.FromName,
+	})
+}
+
+// initEmailOTPUsecase initializes the email OTP usecase.
+func initEmailOTPUsecase(ctx context.Context, cfg *config.AdminConfig, rdb *redis.Client, adminUserRepo repo.AdminUserRepo, emailSender email.Sender) *usecase.EmailOTPUsecase {
+	otpCfg := usecase.EmailOTPConfig{
+		TTL:               time.Duration(cfg.OTP.TTL) * time.Second,
+		Length:            cfg.OTP.Length,
+		SendCooldown:      time.Duration(cfg.OTP.SendCooldown) * time.Second,
+		MaxSendPerIP:      cfg.OTP.MaxSendPerIP,
+		MaxVerifyAttempts: cfg.OTP.MaxVerifyAttempts,
+		LockDuration:      time.Duration(cfg.OTP.LockDuration) * time.Second,
+	}
+
+	var otpStore usecase.OTPStore
+	if rdb != nil {
+		otpStore = usecase.NewRedisOTPStore(rdb, cfg.OTP.MaxSendPerIP, cfg.OTP.MaxVerifyAttempts,
+			time.Duration(cfg.OTP.LockDuration)*time.Second,
+			time.Duration(cfg.OTP.SendCooldown)*time.Second)
+		logger.Info(ctx, "admin.redis_otp_store_enabled")
+	} else {
+		otpStore = usecase.NewMemoryOTPStore(cfg.OTP.MaxSendPerIP, cfg.OTP.MaxVerifyAttempts,
+			time.Duration(cfg.OTP.LockDuration)*time.Second,
+			time.Duration(cfg.OTP.SendCooldown)*time.Second)
+		logger.Info(ctx, "admin.memory_otp_store_enabled_single_instance_only")
+	}
+
+	logger.Info(ctx, "admin.email_otp_usecase_enabled")
+	return usecase.NewEmailOTPUsecase(adminUserRepo, emailSender, otpStore, otpCfg)
+}
+
+// initHandlers initializes all HTTP handlers.
+func initHandlers(cfg *config.AdminConfig, usecases usecases, repos repositories, enforcer *auth.CasbinEnforcer, jwtSigner *auth.AdminJWTSigner, db *gorm.DB) handlerDeps {
+	adminAuthHandler := httphandler.NewAdminAuthHandler(usecases.adminAuthUsecase, jwtSigner, db)
+	adminRoleHandler := httphandler.NewAdminRoleHandler(usecases.adminRoleUsecase)
+	permissionHandler := httphandler.NewPermissionHandler(usecases.permissionUsecase)
+	adminUserRoleHandler := httphandler.NewAdminUserRoleHandler(usecases.adminUserRoleUsecase, repos.adminUserRepo, repos.adminRoleRepo, repos.adminUserRoleRepo, enforcer)
+	auditLogHandler := httphandler.NewAuditLogHandler(repos.auditLogRepo)
+	adminUserHandler := httphandler.NewAdminUserHandler(usecases.adminUserUsecase)
+	rtcUserHandler := httphandler.NewRtcUserHandler(usecases.rtcUserUsecase)
+	rtcSessionHandler := httphandler.NewRtcSessionHandler(usecases.rtcSessionUsecase)
+	serverConfigHandler := httphandler.NewServerConfigHandler(usecases.serverConfigUsecase)
+	userConfigHandler := httphandler.NewUserConfigHandler(usecases.serverConfigUsecase)
+	metricsProxyHandler := httphandler.NewMetricsProxyHandler(cfg.PrometheusURL)
+	grafanaProxyHandler := httphandler.NewGrafanaProxyHandler(cfg.GrafanaURL)
+	jaegerProxyHandler := httphandler.NewJaegerProxyHandler(cfg.JaegerURL)
+	pyroscopeProxyHandler := httphandler.NewPyroscopeProxyHandler(cfg.PyroscopeURL)
+
+	// Wire permission system deps to auth handler
+	adminAuthHandler.SetPermissionDeps(repos.adminRoleRepo, repos.adminUserRoleRepo, enforcer, cfg.Features.PermissionSystem)
+
+	// Wire email OTP usecase to auth handler (if configured)
+	if usecases.emailOTPUsecase != nil {
+		adminAuthHandler.SetEmailOTPUsecase(usecases.emailOTPUsecase)
+	}
+
+	// Wire password login configuration to auth handler
+	adminAuthHandler.SetPasswordEnabled(cfg.Features.PasswordEnabled)
+
+	// Wire cookie security configuration to auth handler
+	adminAuthHandler.SetCookieSecure(cfg.Security.CookieSecure)
+
+	return handlerDeps{
+		adminAuth:      adminAuthHandler,
+		adminRole:      adminRoleHandler,
+		permission:     permissionHandler,
+		adminUserRole:  adminUserRoleHandler,
+		auditLog:       auditLogHandler,
+		adminUser:      adminUserHandler,
+		rtcSession:     rtcSessionHandler,
+		rtcUser:        rtcUserHandler,
+		serverConfig:   serverConfigHandler,
+		userConfig:     userConfigHandler,
+		metricsProxy:   metricsProxyHandler,
+		grafanaProxy:   grafanaProxyHandler,
+		jaegerProxy:    jaegerProxyHandler,
+		pyroscopeProxy: pyroscopeProxyHandler,
+	}
 }
 
 // handlerDeps groups all HTTP handler dependencies by functional module.

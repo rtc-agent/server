@@ -42,6 +42,16 @@ func LoadAdminConfig(cfgFile string) (*AdminConfig, error) {
 
 // setDefaults sets default values for AdminConfig.
 func (c *AdminConfig) setDefaults(v *viper.Viper) {
+	c.setServerDefaults()
+	c.setJWTDefaults()
+	c.setSecurityDefaults(v)
+	c.setEmailDefaults()
+	c.setOTPDefaults()
+	c.setCSPDefaults(v)
+}
+
+// setServerDefaults sets default values for server configuration.
+func (c *AdminConfig) setServerDefaults() {
 	if c.Server.Host == "" {
 		c.Server.Host = "0.0.0.0"
 	}
@@ -51,6 +61,10 @@ func (c *AdminConfig) setDefaults(v *viper.Viper) {
 	if c.Server.Env == "" {
 		c.Server.Env = "development"
 	}
+}
+
+// setJWTDefaults sets default values for JWT configuration.
+func (c *AdminConfig) setJWTDefaults() {
 	if c.JWT.Algorithm == "" {
 		c.JWT.Algorithm = "RS256"
 	}
@@ -66,7 +80,11 @@ func (c *AdminConfig) setDefaults(v *viper.Viper) {
 	if c.JWT.RefreshTokenTTL == 0 {
 		c.JWT.RefreshTokenTTL = 604800 // 7 days
 	}
-	// Security defaults
+}
+
+// setSecurityDefaults sets default values for security configuration.
+func (c *AdminConfig) setSecurityDefaults(v *viper.Viper) {
+	// Rate limiting and login protection defaults
 	if c.Security.RateLimitPerMinute <= 0 {
 		c.Security.RateLimitPerMinute = 100
 	}
@@ -91,14 +109,20 @@ func (c *AdminConfig) setDefaults(v *viper.Viper) {
 	if !v.IsSet("features.password_enabled") {
 		c.Features.PasswordEnabled = false
 	}
-	// Email defaults
+}
+
+// setEmailDefaults sets default values for email configuration.
+func (c *AdminConfig) setEmailDefaults() {
 	if c.Email.SMTPPort == 0 {
 		c.Email.SMTPPort = 587
 	}
 	if c.Email.FromName == "" {
 		c.Email.FromName = "RTC Agent"
 	}
-	// OTP defaults
+}
+
+// setOTPDefaults sets default values for OTP configuration.
+func (c *AdminConfig) setOTPDefaults() {
 	if c.OTP.TTL == 0 {
 		c.OTP.TTL = 300 // 5 minutes
 	}
@@ -116,6 +140,32 @@ func (c *AdminConfig) setDefaults(v *viper.Viper) {
 	}
 	if c.OTP.LockDuration == 0 {
 		c.OTP.LockDuration = 900 // 15 minutes
+	}
+}
+
+// setCSPDefaults sets default values for Content Security Policy configuration.
+func (c *AdminConfig) setCSPDefaults(v *viper.Viper) {
+	// Enable CSP by default for admin server (security best practice)
+	if !v.IsSet("security.csp.enabled") {
+		c.Security.CSP.Enabled = true
+	}
+	if !v.IsSet("security.csp.report_only") {
+		c.Security.CSP.ReportOnly = true // Report-only by default for development
+	}
+	if c.Security.CSP.ReportURI == "" {
+		c.Security.CSP.ReportURI = "/api/csp-report"
+	}
+	if len(c.Security.CSP.DefaultSrc) == 0 {
+		c.Security.CSP.DefaultSrc = []string{"'self'"}
+	}
+	if len(c.Security.CSP.FrameAncestors) == 0 {
+		c.Security.CSP.FrameAncestors = []string{"'none'"}
+	}
+	if len(c.Security.CSP.BaseURI) == 0 {
+		c.Security.CSP.BaseURI = []string{"'self'"}
+	}
+	if len(c.Security.CSP.FormAction) == 0 {
+		c.Security.CSP.FormAction = []string{"'self'"}
 	}
 }
 

@@ -201,7 +201,7 @@ func (h *UserConfigHandler) handleUserUpdateError(c *gin.Context, err error) {
 	case errors.Is(err, usecase.ErrOptimisticLock):
 		Error(c, "OPTIMISTIC_LOCK_CONFLICT", "Config has been modified by another admin, please reload and retry")
 	case errors.Is(err, usecase.ErrValidation):
-		Error(c, "VALIDATION_ERROR", err.Error())
+		Error(c, "VALIDATION_ERROR", "User configuration value validation failed")
 	default:
 		Error(c, "server_error", "Failed to update user config")
 	}

@@ -39,9 +39,13 @@ func UserLive(uid string) string {
 }
 
 // ToLive converts a Topic channel name to its Live counterpart.
+// Returns empty string if the input is not a valid Topic channel.
 //
 //	"topic:u=abc" -> "live:u=abc"
 func ToLive(topicCh string) string {
+	if !IsTopic(topicCh) {
+		return "" // 非 Topic 频道无法转换
+	}
 	return LivePrefix + strings.TrimPrefix(topicCh, TopicPrefix)
 }
 

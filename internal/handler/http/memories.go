@@ -43,12 +43,12 @@ func (h *MemoriesHandler) RegisterRoutes(mux *http.ServeMux, allowDevBypass bool
 
 // ExportRequest defines the JSON request body for memory export.
 type ExportRequest struct {
-	Scope      string   `json:"scope"`       // "session" | "user" | "global"
-	ScopeID    string   `json:"scope_id"`    // UUID string
-	Format     string   `json:"format"`      // "okf-bundle"
-	Types      []string `json:"types"`       // filter by types
-	Tags       []string `json:"tags"`        // filter by tags
-	IncludeLog bool     `json:"include_log"` // generate log.md
+	Scope      string   `json:"scope"`                  // "session" | "user" | "global"
+	ScopeID    string   `json:"scope_id"`               // UUID string
+	Format     string   `json:"format"`                 // "okf-bundle"
+	Types      []string `json:"types" binding:"max=50"` // filter by types (max 50)
+	Tags       []string `json:"tags" binding:"max=50"`  // filter by tags (max 50)
+	IncludeLog bool     `json:"include_log"`            // generate log.md
 }
 
 // ExportMemories handles POST /api/memories/export.

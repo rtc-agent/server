@@ -303,13 +303,19 @@ func (uc *OSS3Usecase) GetFileRecord(ctx context.Context, userID, key string) (*
 
 // CreateMultipartUploadRecord creates a multipart upload tracking record in the database.
 func (uc *OSS3Usecase) CreateMultipartUploadRecord(ctx context.Context, userID, bucket, key, uploadID string) error {
+	// Use configured multipart expiry, falling back to 24h if not set
+	expiry := uc.cfg.Cleanup.MultipartExpiry
+	if expiry <= 0 {
+		expiry = 24 * time.Hour
+	}
+
 	upload := &model.MultipartUpload{
 		UserID:    userID,
 		Bucket:    bucket,
 		Key:       key,
 		UploadID:  uploadID,
 		Status:    "uploading",
-		ExpiresAt: time.Now().Add(24 * time.Hour), // 24h expiry
+		ExpiresAt: time.Now().Add(expiry),
 	}
 	return uc.uploadRepo.Create(ctx, upload)
 }

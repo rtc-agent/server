@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/taskscheduler"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
@@ -30,7 +30,7 @@ func cleanupTracer() trace.Tracer {
 //  2. Cancel the asynq task (best-effort, ignore errors)
 //  3. Update loop status to cancelled
 //  4. Also cancels active Goals for the session (fixing an existing defect)
-func CancelAllForSession(ctx context.Context, loopRepo repo.LoopRepo, goalRepo repo.GoalRepo, inspector *hibikenasynq.Inspector, sessionID uuid.UUID) {
+func CancelAllForSession(ctx context.Context, loopRepo usecase.LoopRepo, goalRepo usecase.GoalRepo, inspector *hibikenasynq.Inspector, sessionID uuid.UUID) {
 	// Cancel active loop
 	cancelActiveLoop(ctx, loopRepo, inspector, sessionID)
 
@@ -39,7 +39,7 @@ func CancelAllForSession(ctx context.Context, loopRepo repo.LoopRepo, goalRepo r
 }
 
 // cancelActiveLoop finds and cancels the active loop for a session.
-func cancelActiveLoop(ctx context.Context, loopRepo repo.LoopRepo, inspector *hibikenasynq.Inspector, sessionID uuid.UUID) {
+func cancelActiveLoop(ctx context.Context, loopRepo usecase.LoopRepo, inspector *hibikenasynq.Inspector, sessionID uuid.UUID) {
 	ctx, span := cleanupTracer().Start(ctx, "loopCleanup.cancelActiveLoop",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID.String()),
@@ -93,7 +93,7 @@ func cancelActiveLoop(ctx context.Context, loopRepo repo.LoopRepo, inspector *hi
 
 // cancelActiveGoal cancels the active goal for a session.
 // This fixes an existing defect where goals were not cancelled on session close.
-func cancelActiveGoal(ctx context.Context, goalRepo repo.GoalRepo, sessionID uuid.UUID) {
+func cancelActiveGoal(ctx context.Context, goalRepo usecase.GoalRepo, sessionID uuid.UUID) {
 	if goalRepo == nil {
 		return
 	}

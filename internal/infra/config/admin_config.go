@@ -50,6 +50,8 @@ type AdminSecurityConfig struct {
 	// When true, cookies are only sent over HTTPS. Enable in production with TLS.
 	// Default: false (suitable for development). Set true for production HTTPS deployments.
 	CookieSecure bool `mapstructure:"cookie_secure"`
+	// CSP holds Content Security Policy configuration for admin-server.
+	CSP CSPConfig `mapstructure:"csp"`
 }
 
 // AdminFeaturesConfig controls feature flags for the admin server.

@@ -1,9 +1,4 @@
-// Package repo provides data access layer (Repository) implementations.
-//
-// All repo methods must obtain the database handle via DBFromContext to support
-// transparent transaction propagation. Sentinel errors are defined centrally
-// in errors.go; callers can use errors.Is to determine error types.
-package repo
+package dbutil
 
 import (
 	"errors"
@@ -12,6 +7,9 @@ import (
 )
 
 // Sentinel errors for callers to check via errors.Is.
+//
+// These are shared infrastructure errors used across the codebase.
+// Domain-specific repos may define more specific errors that wrap these.
 var (
 	// Generic
 	ErrNotFound      = errors.New("record not found")

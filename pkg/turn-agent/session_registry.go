@@ -63,10 +63,13 @@ func (r *SessionManagerRegistry) scheduleCleanupTracking(sessionID string, mgr *
 		}()
 		select {
 		case <-mgr.Done():
+			// Manager finished cleanup normally.
 		case <-time.After(5 * time.Minute):
 			mgr.log(context.Background(), LogLevelWarn, logPrefix+"_timeout", map[string]any{
 				"session_id": mgr.sessionID,
 			})
+			// Timeout: forcefully remove the entry to prevent memory leak.
+			// The manager may still be running cleanup, but we cannot wait indefinitely.
 		}
 		r.mu.Lock()
 		if r.removedManagers[sessionID] == mgr {

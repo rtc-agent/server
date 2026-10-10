@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
+
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // RedisOTPStore implements OTPStore using Redis.
@@ -94,7 +97,9 @@ func (s *RedisOTPStore) RecordSend(ctx context.Context, emailAddr, clientIP stri
 	pipe.Incr(ctx, ipKey)
 	pipe.Expire(ctx, ipKey, time.Minute)
 
-	_, _ = pipe.Exec(ctx)
+	if _, err := pipe.Exec(ctx); err != nil {
+		logger.Debug(ctx, "redis_otp_record_send_failed", zap.Error(err))
+	}
 }
 
 // CheckVerifyAllowed returns nil if verification is allowed for the email.
@@ -143,5 +148,7 @@ func (s *RedisOTPStore) ResetVerifyFailures(ctx context.Context, emailAddr strin
 	pipe := s.rdb.Pipeline()
 	pipe.Del(ctx, fmt.Sprintf("admin:otp:verify:%s", emailAddr))
 	pipe.Del(ctx, fmt.Sprintf("admin:otp:lock:%s", emailAddr))
-	_, _ = pipe.Exec(ctx)
+	if _, err := pipe.Exec(ctx); err != nil {
+		logger.Debug(ctx, "redis_otp_reset_verify_failures_failed", zap.Error(err))
+	}
 }

@@ -179,7 +179,7 @@ func (b *TopicBroker) getStreamPosition(ctx context.Context, ch string) centrifu
 	// Use MGET to read both keys in a single round-trip
 	result, err := b.redisClient.Do(ctx, b.redisClient.B().Mget().Key(offsetKey, epochKey).Build()).AsStrSlice()
 	if err != nil {
-		b.logger.Warn("getStreamPosition Redis query failed for channel %s: %v", ch, err)
+		b.logger.Error("getStreamPosition Redis query failed for channel %s: %v", ch, err)
 		return centrifuge.StreamPosition{}
 	}
 	if len(result) < 2 {

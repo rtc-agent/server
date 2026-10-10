@@ -8,8 +8,8 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"gorm.io/gorm"
 )
 
@@ -117,7 +117,7 @@ func (t *createLoopTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 
 	err = t.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
 		// Create loop within transaction
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 		if err := t.helpers.deps.LoopRepo.Create(txCtx, loop); err != nil {
 			return err
 		}

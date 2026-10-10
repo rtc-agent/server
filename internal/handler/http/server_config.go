@@ -65,7 +65,7 @@ func (h *ServerConfigHandler) Get(c *gin.Context) {
 type updateConfigRequest struct {
 	Value      any    `json:"value" binding:"required"`
 	Version    *int   `json:"version" binding:"omitempty,gte=0"`
-	ChangeNote string `json:"change_note"`
+	ChangeNote string `json:"change_note" binding:"max=500"`
 }
 
 // Update updates a system config value.
@@ -150,7 +150,7 @@ func (h *ServerConfigHandler) GetHistory(c *gin.Context) {
 type rollbackRequest struct {
 	TargetVersion int    `json:"target_version" binding:"required,gte=1"`
 	Version       int    `json:"version" binding:"required,gte=1"`
-	ChangeNote    string `json:"change_note"`
+	ChangeNote    string `json:"change_note" binding:"max=500"`
 }
 
 // Rollback rolls back a config to a historical version.
@@ -192,7 +192,7 @@ func (h *ServerConfigHandler) handleUpdateError(c *gin.Context, err error) {
 	case errors.Is(err, usecase.ErrOptimisticLock):
 		h.respondOptimisticLock(c, "配置已被其他管理员修改，请重新加载后重试")
 	case errors.Is(err, usecase.ErrValidation):
-		Error(c, "VALIDATION_ERROR", err.Error())
+		Error(c, "VALIDATION_ERROR", "Configuration value validation failed")
 	default:
 		Error(c, "server_error", "Failed to update config")
 	}

@@ -28,6 +28,30 @@ security:
   login_max_attempts: 5        # Max failed login attempts before lockout
   login_lock_duration: 900     # Lockout duration in seconds (15 minutes)
   cookie_secure: false         # Set true when served over HTTPS (production with TLS)
+  # Content Security Policy (CSP) configuration
+  csp:
+    enabled: true
+    report_only: true          # Report-only mode for development (won't block violations)
+    report_uri: "/api/csp-report"
+    default_src: ["'self'"]
+    script_src: ["'self'", "'unsafe-inline'", "'unsafe-eval"]  # Umi framework requires inline scripts
+    style_src: ["'self'", "'unsafe-inline'"]                    # Lit/antd-style requires inline styles
+    img_src: ["'self'", "data:", "blob:"]                      # Support data URIs and blob URLs
+    font_src: ["'self'", "data:"]                              # Inline fonts (e.g., base64 encoded)
+    connect_src:
+      - "'self'"
+      - "ws:"                                                  # WebSocket connections
+      - "wss:"                                                 # Secure WebSocket connections
+      - "http://localhost:*"                                   # Local development servers
+      - "https://api.anthropic.com"                            # Claude API
+      - "https://api.tavily.com"                               # Tavily search API
+    frame_src:
+      - "'self'"
+      - "http://localhost:3000"                                # Grafana
+      - "http://localhost:16686"                               # Jaeger
+    frame_ancestors: ["'none'"]                                # Prevent framing (replaces X-Frame-Options)
+    base_uri: ["'self'"]
+    form_action: ["'self'"]
 
 features:
   permission_system: true      # Enable Casbin RBAC permission system

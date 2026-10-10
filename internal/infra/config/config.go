@@ -24,6 +24,13 @@ type Config struct {
 	WebFetch      WebFetchConfig      `mapstructure:"web_fetch"`
 	Storage       StorageConfig       `mapstructure:"storage"`
 	TokenExchange TokenExchangeConfig `mapstructure:"token_exchange"`
+	Security      SecurityConfig      `mapstructure:"security"`
+}
+
+// SecurityConfig holds security-related configuration for the main server.
+type SecurityConfig struct {
+	// CSP holds Content Security Policy configuration.
+	CSP CSPConfig `mapstructure:"csp"`
 }
 
 // MetricsConfig holds Prometheus /metrics endpoint authentication configuration.
@@ -570,6 +577,33 @@ type APIConfig struct {
 
 	// QueryMaxLimit is the maximum page size for paginated queries. Default 100.
 	QueryMaxLimit int `mapstructure:"query_max_limit"`
+
+	// RateLimit holds per-user HTTP API rate limiting configuration.
+	RateLimit APIRateLimitConfig `mapstructure:"rate_limit"`
+
+	// IPRateLimit holds per-IP HTTP API rate limiting configuration.
+	IPRateLimit IPRateLimitConfig `mapstructure:"ip_rate_limit"`
+}
+
+// APIRateLimitConfig holds per-user rate limiting configuration.
+type APIRateLimitConfig struct {
+	// RequestsPerSecond is the allowed requests per second per user. Default 50.
+	RequestsPerSecond float64 `mapstructure:"requests_per_second"`
+
+	// BurstSize is the maximum burst size. Default 100.
+	BurstSize int `mapstructure:"burst_size"`
+}
+
+// IPRateLimitConfig holds per-IP rate limiting configuration.
+type IPRateLimitConfig struct {
+	// RequestsPerSecond is the allowed requests per second per IP. Default 5.
+	RequestsPerSecond float64 `mapstructure:"requests_per_second"`
+
+	// BurstSize is the maximum burst size. Default 10.
+	BurstSize int `mapstructure:"burst_size"`
+
+	// LimiterTTLSec is the TTL for limiter entries in seconds. Default 3600 (1 hour).
+	LimiterTTLSec int `mapstructure:"limiter_ttl_sec"`
 }
 
 // TracingConfig holds OpenTelemetry distributed tracing configuration.

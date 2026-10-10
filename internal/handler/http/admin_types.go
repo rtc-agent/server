@@ -1,19 +1,23 @@
 package httphandler
 
+// TimeFormatRFC3339 is the standard time format used in API responses.
+// Using a constant ensures consistency across all handlers.
+const TimeFormatRFC3339 = "2006-01-02T15:04:05Z07:00"
+
 // LoginRequest admin login request payload
 type LoginRequest struct {
 	// Email admin user email address
 	Email string `json:"email" binding:"required,email"`
-	// Password admin user password (minimum 6 characters)
-	Password string `json:"password" binding:"required,min=6"`
+	// Password admin user password (minimum 8 characters for security)
+	Password string `json:"password" binding:"required,min=8"`
 }
 
 // CreateAdminUserRequest request payload for creating a new admin user
 type CreateAdminUserRequest struct {
 	// Email admin user email address (must be unique)
 	Email string `json:"email" binding:"required,email"`
-	// Password admin user password (minimum 6 characters)
-	Password string `json:"password" binding:"required,min=6"`
+	// Password admin user password (minimum 8 characters for security)
+	Password string `json:"password" binding:"required,min=8"`
 	// Name admin user display name (optional)
 	Name string `json:"name" binding:"omitempty,max=100"`
 	// RoleIDs optional list of role IDs to assign after creation
@@ -24,8 +28,8 @@ type CreateAdminUserRequest struct {
 type UpdateAdminUserRequest struct {
 	// Name admin user display name (optional)
 	Name *string `json:"name" binding:"omitempty,max=100"`
-	// Password new password (optional, minimum 6 characters)
-	Password *string `json:"password" binding:"omitempty,min=6"`
+	// Password new password (optional, minimum 8 characters for security)
+	Password *string `json:"password" binding:"omitempty,min=8"`
 }
 
 // LoginResponse admin login success response

@@ -145,8 +145,16 @@ func (uc *OSS3Usecase) LookupCredential(ctx context.Context, accessKeyID string)
 
 // InvalidateCredentialCache removes a credential from the cache.
 // Called when credential is revoked or deleted.
+// Best-effort: logs warning on failure but does not return error to caller.
 func (uc *OSS3Usecase) InvalidateCredentialCache(ctx context.Context, accessKeyID string) {
 	cacheKey := cache.OSS3CredentialCache(accessKeyID)
-	_ = uc.redis.Del(ctx, cacheKey).Err()
-	// best-effort
+	if err := uc.redis.Del(ctx, cacheKey).Err(); err != nil {
+		// Log at Warn level so persistent Redis issues are visible in monitoring.
+		// The cached credential will eventually expire via TTL, but operators should
+		// be aware of ongoing failures that may delay invalidation.
+		logger.Warn(ctx, "credential_cache_invalidation_failed",
+			zap.String("cache_key", cacheKey),
+			zap.String("access_key_id", accessKeyID),
+			zap.Error(err))
+	}
 }

@@ -9,21 +9,21 @@ import (
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/google/uuid"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/config"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
 )
 
 // resolveEffectiveValue fetches the effective config value for a key.
 // Resolution order: user override > system default > yaml baseline.
 // userID=nil skips user-level overrides (background calls).
-func resolveEffectiveValue(ctx context.Context, configRepo repo.ServerConfigRepo, key string, userID *uuid.UUID) (any, error) {
+func resolveEffectiveValue(ctx context.Context, configRepo usecase.ServerConfigRepo, key string, userID *uuid.UUID) (any, error) {
 	if userID != nil {
 		cfg, err := configRepo.Get(ctx, key, userID)
 		if err == nil {
 			return unmarshalJSONBToNative(cfg.Value), nil
 		}
-		if !errors.Is(err, repo.ErrNotFound) {
+		if !errors.Is(err, dbutil.ErrNotFound) {
 			return nil, fmt.Errorf("get user config %q: %w", key, err)
 		}
 	}
@@ -31,7 +31,7 @@ func resolveEffectiveValue(ctx context.Context, configRepo repo.ServerConfigRepo
 	if err == nil {
 		return unmarshalJSONBToNative(cfg.Value), nil
 	}
-	if !errors.Is(err, repo.ErrNotFound) {
+	if !errors.Is(err, dbutil.ErrNotFound) {
 		return nil, fmt.Errorf("get system config %q: %w", key, err)
 	}
 	if entry := config.GetRegistryEntry(key); entry != nil {
@@ -43,7 +43,7 @@ func resolveEffectiveValue(ctx context.Context, configRepo repo.ServerConfigRepo
 // resolveOverrides reads dynamic config values from the DB and builds ChatModelOverrides.
 // Resolution order per key: user override > system default > yaml baseline.
 // userID=nil skips user-level overrides (background calls).
-func resolveOverrides(ctx context.Context, configRepo repo.ServerConfigRepo, userID *uuid.UUID) (usecase.ChatModelOverrides, error) {
+func resolveOverrides(ctx context.Context, configRepo usecase.ServerConfigRepo, userID *uuid.UUID) (usecase.ChatModelOverrides, error) {
 	overrides := usecase.ChatModelOverrides{}
 
 	// Table-driven resolution: each entry maps a config key to a setter.

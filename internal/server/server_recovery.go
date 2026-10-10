@@ -245,10 +245,24 @@ func (s *Server) cleanupGhostWorksAndLocks(ctx context.Context, sessionIDs map[s
 // during runtime (e.g., worker crash, network partition). Uses a Redis
 // distributed lock to ensure only one Server instance scans at a time.
 func (s *Server) staleTurnScanner(ctx context.Context) {
+	// Scanner configuration constants.
+	// These values are chosen to balance:
+	// - Frequent enough scanning to recover stuck turns quickly
+	// - Infrequent enough to avoid excessive Redis lock contention
+	// - Lock TTL slightly less than interval to prevent lock expiry during scanning
 	const (
+		// scannerInterval: how often to run the stale turn scan.
+		// 5 minutes provides timely recovery without excessive overhead.
 		scannerInterval = 5 * time.Minute
-		scannerLockKey  = "stale_turn_scanner_lock"
-		scannerLockTTL  = 4 * time.Minute // < 5min interval
+
+		// scannerLockKey: Redis key for the distributed lock.
+		// Only one Server instance can hold this lock at a time.
+		scannerLockKey = "stale_turn_scanner_lock"
+
+		// scannerLockTTL: how long the lock is held before auto-expiry.
+		// Set to 4 minutes (< 5min interval) to ensure lock expires before next scan
+		// if the holder crashes, preventing deadlocks.
+		scannerLockTTL = 4 * time.Minute
 	)
 
 	ticker := time.NewTicker(scannerInterval)
@@ -293,11 +307,26 @@ func (s *Server) periodicRecoverStaleTurns(ctx context.Context) {
 	ctx, span := otel.Tracer("server.recovery").Start(ctx, "periodicRecoverStaleTurns")
 	defer span.End()
 
+	// Time thresholds for stale turn detection.
+	// These values balance between:
+	// - Not waiting too long to recover stuck turns (user experience)
+	// - Not recovering turns that are still legitimately processing (false positives)
 	const (
-		runningThreshold     = 10 * time.Minute
-		pendingThreshold     = 2 * time.Minute
+		// runningThreshold: running turns older than this are considered stale.
+		// 10 minutes allows for long-running tool executions and network delays.
+		runningThreshold = 10 * time.Minute
+
+		// pendingThreshold: pending turns older than this are considered stale.
+		// 2 minutes is conservative since pending turns should be picked up quickly.
+		pendingThreshold = 2 * time.Minute
+
+		// interruptedThreshold: interrupted turns older than this are cancelled.
+		// 30 minutes allows time for external input (e.g., RTC result submission).
 		interruptedThreshold = 30 * time.Minute
-		scanLimit            = 100
+
+		// scanLimit: maximum number of stale turns to process per scan.
+		// Prevents memory issues during large-scale recovery scenarios.
+		scanLimit = 100
 	)
 
 	staleTurns, err := s.svcCtx.TurnRepo.FindStaleTurnsWithLimit(ctx, staleTurnStatuses, scanLimit)
@@ -386,7 +415,8 @@ func (s *Server) recoverSimpleStaleTurn(ctx context.Context, turn *model.Turn, n
 	if age < threshold {
 		return
 	}
-	logger.Warn(ctx, "[Server] periodicRecoverStaleTurns: recovering stale "+kind+" turn",
+	logger.Warn(ctx, "Server.periodicRecoverStaleTurns.recovering_stale_turn",
+		zap.String("kind", kind),
 		zap.String("turn_id", turn.ID.String()),
 		zap.Duration("age", age))
 	if err := s.svcCtx.TurnRepo.UpdateStatus(ctx, turn.ID, targetStatus, reason); err != nil {

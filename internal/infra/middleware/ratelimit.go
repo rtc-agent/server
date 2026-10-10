@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -75,6 +76,15 @@ func (rl *RateLimiter) getLimiter(userID string) *rate.Limiter {
 
 // cleanupLoop periodically removes limiters not seen in the last 10 minutes.
 func (rl *RateLimiter) cleanupLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error(context.Background(), "panic_recovered",
+				zap.Any("panic", r),
+				zap.String("goroutine", "ratelimiter.cleanupLoop"),
+				zap.String("stack", string(debug.Stack())))
+		}
+	}()
+
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
@@ -114,9 +124,13 @@ func (rl *RateLimiter) cleanup() {
 }
 
 // Stop stops the cleanup goroutine.
+//
+// Idempotent: calling Stop multiple times is safe and has no additional effect.
+// After Stop is called, the RateLimiter should not be reused.
 func (rl *RateLimiter) Stop() {
 	select {
 	case <-rl.stopCleanup:
+		// Already closed - no-op to ensure idempotency
 	default:
 		close(rl.stopCleanup)
 	}

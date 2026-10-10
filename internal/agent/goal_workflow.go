@@ -6,8 +6,8 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/rtc-agent/server/internal/agent/command"
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"go.opentelemetry.io/otel/attribute"
@@ -156,7 +156,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	if newTurns > goal.MaxTurns {
 		span.SetAttributes(attribute.String("goal.status", "exhausted"))
 		err = g.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
-			txCtx := repo.WithTx(ctx.Context, tx)
+			txCtx := dbutil.WithTx(ctx.Context, tx)
 			return g.helpers.deps.GoalRepo.Update(txCtx, goal.ID, map[string]any{
 				"status":          model.GoalStatusExhausted,
 				"completed_turns": newTurns,
@@ -182,7 +182,7 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 	}
 
 	err = g.helpers.deps.DB.Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx.Context, tx)
+		txCtx := dbutil.WithTx(ctx.Context, tx)
 		return g.helpers.deps.GoalRepo.Update(txCtx, goal.ID, map[string]any{
 			"completed_turns": newTurns,
 		})

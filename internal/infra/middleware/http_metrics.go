@@ -13,6 +13,12 @@ import (
 )
 
 // HTTP server Prometheus metrics, aligned with grafana/dashboards/http-server.json panels.
+//
+// NOTE: These metrics intentionally use `http_*` prefix (not `rtc_http_*`) for consistency
+// with the existing Grafana dashboard definitions in grafana/dashboards/http-server.json.
+// The `rtc_*` prefix is used for other RTC-specific metrics (e.g., rtc_websocket_connections_total),
+// but HTTP metrics follow the Prometheus community convention for HTTP instrumentation.
+// If you need to rename these, update the Grafana dashboard queries accordingly.
 var (
 	httpRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -53,6 +59,13 @@ var (
 			Help: "Number of HTTP requests currently being served.",
 		},
 	)
+
+	websocketConnectionsTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "rtc_websocket_connections_total",
+			Help: "Total number of WebSocket connection attempts.",
+		},
+	)
 )
 
 // HTTPMetrics returns a Prometheus HTTP metrics middleware.
@@ -79,7 +92,9 @@ func HTTPMetrics() func(http.Handler) http.Handler {
 			}
 
 			// Skip WebSocket upgrade requests (long-lived connections, should not be counted in HTTP metrics).
+			// However, we still record the connection attempt for observability.
 			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+				websocketConnectionsTotal.Inc()
 				next.ServeHTTP(w, r)
 				return
 			}

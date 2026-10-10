@@ -263,40 +263,40 @@ func (r *configRepo) GetHistoryByVersion(ctx context.Context, key string, userID
 }
 
 func (r *configRepo) TrimHistory(ctx context.Context, key string, userID *uuid.UUID, maxCount int) error {
-	db := DBFromContext(ctx, r.db).WithContext(ctx)
+	return DBFromContext(ctx, r.db).WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Count existing entries (inside transaction for atomicity).
+		countQuery := tx.Model(&model.ServerConfigHistory{}).Where("key = ?", key)
+		if userID == nil {
+			countQuery = countQuery.Where("user_id IS NULL")
+		} else {
+			countQuery = countQuery.Where("user_id = ?", *userID)
+		}
+		var total int64
+		if err := countQuery.Count(&total).Error; err != nil {
+			return fmt.Errorf("trim history count: %w", err)
+		}
+		if total <= int64(maxCount) {
+			return nil
+		}
 
-	// Count existing entries.
-	countQuery := db.Model(&model.ServerConfigHistory{}).Where("key = ?", key)
-	if userID == nil {
-		countQuery = countQuery.Where("user_id IS NULL")
-	} else {
-		countQuery = countQuery.Where("user_id = ?", *userID)
-	}
-	var total int64
-	if err := countQuery.Count(&total).Error; err != nil {
-		return fmt.Errorf("trim history count: %w", err)
-	}
-	if total <= int64(maxCount) {
+		// Delete the oldest entries beyond maxCount.
+		excess := int(total) - maxCount
+		subQuery := tx.Model(&model.ServerConfigHistory{}).
+			Select("id").
+			Where("key = ?", key)
+		if userID == nil {
+			subQuery = subQuery.Where("user_id IS NULL")
+		} else {
+			subQuery = subQuery.Where("user_id = ?", *userID)
+		}
+		subQuery = subQuery.Order("changed_at ASC").Limit(excess)
+
+		result := tx.Where("id IN (?)", subQuery).Delete(&model.ServerConfigHistory{})
+		if result.Error != nil {
+			return fmt.Errorf("trim history delete: %w", result.Error)
+		}
 		return nil
-	}
-
-	// Delete the oldest entries beyond maxCount.
-	excess := int(total) - maxCount
-	subQuery := db.Model(&model.ServerConfigHistory{}).
-		Select("id").
-		Where("key = ?", key)
-	if userID == nil {
-		subQuery = subQuery.Where("user_id IS NULL")
-	} else {
-		subQuery = subQuery.Where("user_id = ?", *userID)
-	}
-	subQuery = subQuery.Order("changed_at ASC").Limit(excess)
-
-	result := db.Where("id IN (?)", subQuery).Delete(&model.ServerConfigHistory{})
-	if result.Error != nil {
-		return fmt.Errorf("trim history delete: %w", result.Error)
-	}
-	return nil
+	})
 }
 
 // DeleteByUserID deletes all config overrides for a given user_id.

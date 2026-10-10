@@ -3,10 +3,11 @@ package turnagent
 import (
 	"context"
 	"fmt"
-	// "runtime/debug" // DISABLED: only used by commented-out renewal goroutine
 	"sync"
 	"sync/atomic"
 	"time"
+
+	// "runtime/debug" // DISABLED: only used by commented-out renewal goroutine
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
@@ -14,10 +15,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
-
-// sessionRenewalInterval is how often the session lock is renewed.
-// Must be well below DefaultLockTTLSeconds (120s) to prevent expiry.
-const sessionRenewalInterval = 30 * time.Second
 
 // SessionTurnManager manages the lifecycle of a single session's turn loop.
 //
@@ -76,12 +73,6 @@ type SessionTurnManager struct {
 	// because another worker may have already acquired a new lock at the same
 	// Redis key. Deleting it would cause a split-brain scenario.
 	lockLost atomic.Bool
-
-	// consecutiveRenewFailures counts consecutive Redis errors during lock renewal.
-	// Only when this reaches maxConsecutiveRenewFailures is lockLost set to true.
-	// Transient errors (network blips, connection pool exhaustion) are tolerated
-	// up to the threshold; only ok==false (definite lock loss) triggers immediately.
-	consecutiveRenewFailures atomic.Int64
 
 	// checkpointID is the eino checkpoint key for this session.
 	checkpointID string
@@ -488,54 +479,6 @@ func (mgr *SessionTurnManager) notifyPendingWork(ctx context.Context) {
 		"session_id":    mgr.sessionID,
 		"pending_count": count,
 	})
-}
-
-// runLockRenewal periodically renews the session lock TTL.
-func (mgr *SessionTurnManager) runLockRenewal(ctx context.Context) {
-	ticker := time.NewTicker(sessionRenewalInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			ok, err := mgr.queue.RenewLockWithCredential(ctx, mgr.sessionID, mgr.workerID, mgr.getCredential())
-			if err != nil {
-				// Transient Redis error: increment the failure counter but do not
-				// immediately mark lockLost. Only N consecutive failures indicate
-				// a genuine lock loss (guards against network jitter false positives).
-				mgr.consecutiveRenewFailures.Add(1)
-				failures := mgr.consecutiveRenewFailures.Load()
-				mgr.log(ctx, LogLevelWarn, "session_manager.renewal_redis_error_transient", map[string]any{
-					"session_id":           mgr.sessionID,
-					"consecutive_failures": failures,
-					"error":                err.Error(),
-				})
-				if failures >= rtcqueue.DefaultMaxConsecutiveRenewFailures {
-					mgr.log(ctx, LogLevelError, "session_manager.renewal_giving_up", map[string]any{
-						"session_id":           mgr.sessionID,
-						"consecutive_failures": failures,
-					})
-					mgr.lockLost.Store(true)
-					mgr.loop.Stop(adk.WithSkipCheckpoint())
-					return
-				}
-				continue // Continue to the next renewal attempt
-			}
-			// Redis responded successfully — reset the failure counter.
-			mgr.consecutiveRenewFailures.Store(0)
-			if !ok {
-				// Definite lock loss (preempted by another worker or TTL expired).
-				mgr.log(ctx, LogLevelWarn, "session_manager.lock_lost", map[string]any{
-					"session_id": mgr.sessionID,
-				})
-				mgr.lockLost.Store(true)
-				mgr.loop.Stop(adk.WithSkipCheckpoint())
-				return
-			}
-		}
-	}
 }
 
 // log calls the optional log function if set.

@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
+
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // loginAttemptScript atomically increments an attempt counter and sets its TTL on first increment.
@@ -98,7 +101,9 @@ func (lp *RedisLoginProtection) ResetLoginAttempts(ctx context.Context, ip, emai
 	pipe.Del(ctx, fmt.Sprintf("admin:login:attempts:email:%s", email))
 	pipe.Del(ctx, fmt.Sprintf("admin:login:lock:ip:%s", ip))
 	pipe.Del(ctx, fmt.Sprintf("admin:login:lock:email:%s", email))
-	_, _ = pipe.Exec(ctx)
+	if _, err := pipe.Exec(ctx); err != nil {
+		logger.Debug(ctx, "redis_login_protection_reset_failed", zap.Error(err))
+	}
 }
 
 // Stop is a no-op for Redis login protection (no background goroutines).

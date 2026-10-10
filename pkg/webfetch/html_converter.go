@@ -18,7 +18,7 @@ import (
 func htmlToMarkdown(htmlContent []byte) (string, error) {
 	md, err := htmltomarkdown.ConvertReader(bytes.NewReader(htmlContent))
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrConversionFailed, err)
+		return "", fmt.Errorf("%w: %w", ErrConversionFailed, err)
 	}
 	return string(md), nil
 }

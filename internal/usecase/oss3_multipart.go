@@ -65,7 +65,7 @@ func (uc *OSS3Usecase) ReleaseUploadPartLock(ctx context.Context, uploadID strin
 //
 // Flow:
 // 1. Complete multipart upload in backend (MinIO)
-// 2. HeadObject to get actual size (may differ from parts sum due to compression/dedup)
+// 2. HeadObject to get actual size and content type (may differ from parts sum due to compression/dedup)
 // 3. Create file record in DB
 // 4. Delete multipart upload record from DB
 // 5. If step 3 or 4 fails, attempt async deletion of the backend object (compensation)
@@ -83,7 +83,7 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 		return "", fmt.Errorf("complete multipart upload in backend: %w", err)
 	}
 
-	// Step 2: Get actual object size from backend
+	// Step 2: Get actual object size and content type from backend
 	// The size may differ from the sum of parts due to backend compression or deduplication
 	meta, err := uc.backend.HeadObject(ctx, bucket, key)
 	if err != nil {
@@ -93,7 +93,7 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 	}
 
 	// Step 3 & 4: DB operations
-	dbErr := uc.completeMultipartUploadDBOps(ctx, userID, bucket, key, uploadID, etag, meta.Size)
+	dbErr := uc.completeMultipartUploadDBOps(ctx, userID, bucket, key, uploadID, etag, meta.Size, meta.ContentType)
 	if dbErr != nil {
 		// Compensation: async delete the backend object (don't block on this)
 		uc.asyncCleanupBackendObject(bucket, key, "DB operations after CompleteMultipartUpload")
@@ -137,17 +137,19 @@ func (uc *OSS3Usecase) completeMultipartUploadDBOps(
 	ctx context.Context,
 	userID, bucket, key, uploadID, etag string,
 	size int64,
+	contentType string,
 ) error {
 	return uc.db.Transaction(func(tx *gorm.DB) error {
 		txCtx := repo.WithTx(ctx, tx)
 
-		// Create file record with actual size from backend (not calculated from parts)
+		// Create file record with actual size and content type from backend (not calculated from parts)
 		file := &model.File{
-			UserID: userID,
-			Bucket: bucket,
-			Key:    key,
-			Size:   size,
-			ETag:   etag,
+			UserID:      userID,
+			Bucket:      bucket,
+			Key:         key,
+			Size:        size,
+			ContentType: contentType,
+			ETag:        etag,
 		}
 		if err := uc.fileRepo.Create(txCtx, file); err != nil {
 			return fmt.Errorf("create file record: %w", err)

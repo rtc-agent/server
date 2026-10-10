@@ -116,7 +116,7 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if errors.Is(err, usecase.ErrInterruptStoreFailed) {
-			logger.Error(ctx, "[interrupt] SET+PUBLISH failed",
+			logger.Error(ctx, "interrupt.set_publish_failed",
 				zap.String("session", sessionID.String()),
 				zap.String("interrupt", interruptID),
 				zap.Error(err))
@@ -124,7 +124,7 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		// Unexpected error
-		logger.Error(ctx, "[interrupt] unexpected error",
+		logger.Error(ctx, "interrupt.unexpected_error",
 			zap.String("session", sessionID.String()),
 			zap.String("interrupt", interruptID),
 			zap.Error(err))

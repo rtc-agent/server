@@ -5,7 +5,7 @@ import (
 	"math"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/internal/usecase"
 )
 
 // TokenEstimate holds the token estimation result.
@@ -36,7 +36,7 @@ type TokenEstimate struct {
 // Uses EWMA (Exponentially Weighted Moving Average) to predict the next round's token usage.
 // EWMA is persisted in the Session.TokenEstimateEWMA field.
 type TokenEstimator struct {
-	sessionRepo      repo.SessionRepo
+	sessionRepo      usecase.SessionRepo
 	triggerThreshold int64   // actual trigger threshold (contextLimit - compactBuffer)
 	alpha            float64 // EWMA decay factor
 	defaultGrowth    float64 // default initial growth rate
@@ -46,7 +46,7 @@ type TokenEstimator struct {
 //   - contextLimit: model context window size
 //   - compactBuffer: compression buffer token count
 //   - sessionRepo: Session repository (for reading/writing EWMA)
-func NewTokenEstimator(contextLimit, compactBuffer int, sessionRepo repo.SessionRepo) *TokenEstimator {
+func NewTokenEstimator(contextLimit, compactBuffer int, sessionRepo usecase.SessionRepo) *TokenEstimator {
 	threshold := int64(contextLimit - compactBuffer)
 	if threshold <= 0 {
 		// Fallback to 80% of contextLimit when configuration is invalid

@@ -107,38 +107,9 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	deviceID, _ := contextx.GetDeviceID(ctx)
 	creator := usecase.UserCreator{UserID: userID, DeviceID: deviceID}
 
-	// Validate file attachments exist before creating the message.
-	// This prevents referencing non-existent files or files owned by other users.
-	if apiErr := h.validateFileAttachments(ctx, req.ContentData, userID, "SendMessage"); apiErr != nil {
-		span.SetStatus(codes.Error, apiErr.Code)
-		return nil, apiErr
-	}
-
-	// Validate content type: only user-facing types are allowed.
-	if req.ContentData.Type != protocol.ContentTypeText &&
-		req.ContentData.Type != protocol.ContentTypeUserMessage {
-		span.SetStatus(codes.Error, "validation_error")
-		return nil, &APIError{
-			Code:    ErrorCodeInvalidArgument,
-			Message: "invalid content_data type for user message",
-		}
-	}
-
-	content := extractMessageContent(ctx, req.ContentData)
-
-	if err := primitives.ValidateCreateMessageRequest(content); err != nil {
-		span.SetStatus(codes.Error, "validation_error")
-		return nil, &APIError{Code: ErrorCodeInvalidArgument, Message: "Message content validation failed"}
-	}
-
-	sessionUUIDPtr, apiErr := parseUUIDPtr(req.ServerSessionId, "server_session_id")
+	// Validate request and extract content
+	content, apiErr := h.validateSendMessageRequest(ctx, req, userID, span)
 	if apiErr != nil {
-		span.SetStatus(codes.Error, apiErr.Message)
-		return nil, apiErr
-	}
-
-	if apiErr := h.checkClientIdIdempotency(ctx, req.ClientId); apiErr != nil {
-		span.SetStatus(codes.Error, apiErr.Message)
 		return nil, apiErr
 	}
 
@@ -154,19 +125,95 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		zap.String("session_id", req.ClientSessionId),
 		zap.String("client_id", req.ClientId))
 
+	// Prepare session
+	sessionUUIDPtr, apiErr := parseUUIDPtr(req.ServerSessionId, "server_session_id")
+	if apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
+		return nil, apiErr
+	}
+
+	session, isNew, err := h.prepareSession(ctx, req, sessionUUIDPtr, creator, span)
+	if err != nil {
+		return nil, err
+	}
+
+	workID := uuid.Must(uuid.NewV7()).String()
+
+	// Create message and publish work
+	createdMessage, pushUpdates, err := h.createMessageAndPublishWork(ctx, req, session, isNew, creator, userID.String(), workID, span)
+	if err != nil {
+		return nil, err
+	}
+
+	span.SetAttributes(
+		attribute.Bool("session.is_new", isNew),
+		attribute.String("message.id", createdMessage.ID.String()),
+	)
+
+	if isNew {
+		h.summarizeTitleAsync(ctx, session)
+	}
+
+	return &protocol.SendMessageResponse{
+		Result: protocol.SendMessageResult{
+			SessionId: session.ID.String(),
+			TurnId:    "",
+			MessageId: createdMessage.ID.String(),
+		},
+		Updates: updates.DerefUpdates(pushUpdates),
+	}, nil
+}
+
+// validateSendMessageRequest validates the SendMessage request and extracts content.
+func (h *Handler) validateSendMessageRequest(ctx context.Context, req *protocol.SendMessageRequest, userID uuid.UUID, span trace.Span) (string, *APIError) {
+	// Validate file attachments exist before creating the message.
+	if apiErr := h.validateFileAttachments(ctx, req.ContentData, userID, "SendMessage"); apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Code)
+		return "", apiErr
+	}
+
+	// Validate content type: only user-facing types are allowed.
+	if req.ContentData.Type != protocol.ContentTypeText &&
+		req.ContentData.Type != protocol.ContentTypeUserMessage {
+		span.SetStatus(codes.Error, "validation_error")
+		return "", &APIError{
+			Code:    ErrorCodeInvalidArgument,
+			Message: "invalid content_data type for user message",
+		}
+	}
+
+	content := extractMessageContent(ctx, req.ContentData)
+
+	if err := primitives.ValidateCreateMessageRequest(content); err != nil {
+		span.SetStatus(codes.Error, "validation_error")
+		return "", &APIError{Code: ErrorCodeInvalidArgument, Message: "Message content validation failed"}
+	}
+
+	if apiErr := h.checkClientIdIdempotency(ctx, req.ClientId); apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Message)
+		return "", apiErr
+	}
+
+	return content, nil
+}
+
+// prepareSession prepares the session for message creation.
+func (h *Handler) prepareSession(ctx context.Context, req *protocol.SendMessageRequest, sessionUUIDPtr *uuid.UUID, creator usecase.UserCreator, span trace.Span) (*model.Session, bool, error) {
+	content := extractMessageContent(ctx, req.ContentData)
 	initialTitle := primitives.TruncateTitle(content, 50)
 	session, isNew, err := primitives.PrepareSession(ctx, h.deps.Deps, sessionUUIDPtr, req.ClientSessionId, creator, initialTitle)
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
-		return nil, h.internalError(ctx, "session.error", "internal error", err)
+		return nil, false, h.internalError(ctx, "session.error", "internal error", err)
 	}
+
 	const maxAgentPromptLength = 10 * 1024 // 10KB
 	span.SetAttributes(attribute.String("session.id", session.ID.String()))
 	if isNew && req.AgentPrompt != nil {
 		if len(*req.AgentPrompt) > maxAgentPromptLength {
 			span.SetStatus(codes.Error, "validation_error")
-			return nil, &APIError{
+			return nil, false, &APIError{
 				Code:    ErrorCodeInvalidArgument,
 				Message: fmt.Sprintf("agent_prompt too long: %d bytes (max %d)", len(*req.AgentPrompt), maxAgentPromptLength),
 			}
@@ -176,55 +223,25 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 	if !isNew {
 		if err := primitives.CheckSessionOwnership(ctx, h.deps.Deps, session.ID, creator); err != nil {
 			span.SetStatus(codes.Error, "permission_denied")
-			return nil, h.ownershipError(ctx, err)
+			return nil, false, h.ownershipError(ctx, err)
 		}
 	}
 
-	workID := uuid.Must(uuid.NewV7()).String()
+	return session, isNew, nil
+}
 
+// createMessageAndPublishWork creates the message and publishes work to the queue.
+func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol.SendMessageRequest, session *model.Session, isNew bool, creator usecase.UserCreator, userID string, workID string, span trace.Span) (*model.Message, []*protocol.Update, error) {
 	var createdMessage *model.Message
 	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
-		if isNew {
-			if err := primitives.CreateSession(txCtx, h.deps.Deps, session); err != nil {
-				return nil, fmt.Errorf("create session failed")
-			}
-			// Record session creation metric
-			h.deps.Metrics.RecordSessionCreated(txCtx)
-		} else {
-			if err := primitives.TouchSession(txCtx, h.deps.Deps, session.ID); err != nil {
-				if errors.Is(err, primitives.ErrSessionClosedOrNotFound) {
-					return nil, fmt.Errorf("session is closed")
-				}
-				return nil, fmt.Errorf("touch session failed")
-			}
+		if err := h.touchOrCreateSession(txCtx, session, isNew); err != nil {
+			return nil, err
 		}
 
 		// Create prompt message if needed (before user message to ensure correct global_offset).
-		// Prompt messages persist system-level instructions (e.g., scenarios) across turns.
-		var promptMsg *model.Message
-		if needsPromptMessage(req.ContentData) {
-			promptContent, buildErr := buildPromptContent(req.ContentData)
-			if buildErr != nil {
-				logger.Warn(ctx, "[SendMessage] build prompt content failed", zap.Error(buildErr))
-				// Degrade gracefully: continue without prompt message.
-			} else if promptContent.Type == protocol.ContentTypePrompt {
-				systemCreator := usecase.SystemCreator{}
-				var createErr error
-				promptMsg, createErr = primitives.CreateMessage(
-					txCtx, h.deps.Deps, session.ID, nil,
-					protocol.MessageRoleSystem,
-					systemCreator,
-					promptContent,
-					protocol.MessageStreamingCompleted, // Prompt messages are immediately complete.
-					"",                                 // Empty client_id; CreateMessage generates UUID.
-					nil,
-				)
-				if createErr != nil {
-					return nil, fmt.Errorf("create prompt message failed")
-				}
-				logger.Info(ctx, "[SendMessage] created prompt message",
-					zap.String("prompt_msg_id", promptMsg.ID.String()))
-			}
+		promptMsg, err := h.createPromptMessageIfNeeded(txCtx, ctx, req, session.ID)
+		if err != nil {
+			return nil, err
 		}
 
 		// Create message WITHOUT a turnID — the turn is created by turn-agent
@@ -244,7 +261,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		// Record message sent metrics
 		h.deps.Metrics.RecordMessageSent(txCtx, string(protocol.MessageRoleUser))
 
-		if err := h.publishSubmitWork(txCtx, session.ID, userID.String()); err != nil {
+		if err := h.publishSubmitWork(txCtx, session.ID, userID); err != nil {
 			return nil, err
 		}
 		if logger.IsDebugMode() {
@@ -269,27 +286,67 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		} else {
 			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
-			return nil, h.internalError(ctx, "send.error", "internal error", err)
+			return nil, nil, h.internalError(ctx, "send.error", "internal error", err)
 		}
 	}
 
-	span.SetAttributes(
-		attribute.Bool("session.is_new", isNew),
-		attribute.String("message.id", createdMessage.ID.String()),
-	)
+	return createdMessage, pushUpdates, nil
+}
 
+// touchOrCreateSession touches or creates the session within the transaction.
+func (h *Handler) touchOrCreateSession(txCtx context.Context, session *model.Session, isNew bool) error {
 	if isNew {
-		h.summarizeTitleAsync(ctx, session)
+		if err := primitives.CreateSession(txCtx, h.deps.Deps, session); err != nil {
+			return fmt.Errorf("create session failed")
+		}
+		// Record session creation metric
+		h.deps.Metrics.RecordSessionCreated(txCtx)
+	} else {
+		if err := primitives.TouchSession(txCtx, h.deps.Deps, session.ID); err != nil {
+			if errors.Is(err, primitives.ErrSessionClosedOrNotFound) {
+				return fmt.Errorf("session is closed")
+			}
+			return fmt.Errorf("touch session failed")
+		}
+	}
+	return nil
+}
+
+// createPromptMessageIfNeeded creates a prompt message if the content requires it.
+func (h *Handler) createPromptMessageIfNeeded(txCtx context.Context, ctx context.Context, req *protocol.SendMessageRequest, sessionID uuid.UUID) (*model.Message, error) {
+	if !needsPromptMessage(req.ContentData) {
+		return nil, nil
 	}
 
-	return &protocol.SendMessageResponse{
-		Result: protocol.SendMessageResult{
-			SessionId: session.ID.String(),
-			TurnId:    "",
-			MessageId: createdMessage.ID.String(),
-		},
-		Updates: updates.DerefUpdates(pushUpdates),
-	}, nil
+	promptContent, buildErr := buildPromptContent(req.ContentData)
+	if buildErr != nil {
+		logger.Warn(ctx, "[SendMessage] build prompt content failed", zap.Error(buildErr))
+		// Degrade gracefully: continue without prompt message.
+		return nil, nil
+	}
+
+	if promptContent.Type != protocol.ContentTypePrompt {
+		return nil, nil
+	}
+
+	systemCreator := usecase.SystemCreator{}
+	promptMsg, createErr := primitives.CreateMessage(
+		txCtx, h.deps.Deps, sessionID, nil,
+		protocol.MessageRoleSystem,
+		systemCreator,
+		promptContent,
+		protocol.MessageStreamingCompleted, // Prompt messages are immediately complete.
+		"",                                 // Empty client_id; CreateMessage generates UUID.
+		nil,
+	)
+	if createErr != nil {
+		return nil, fmt.Errorf("create prompt message failed")
+	}
+
+	logger.Info(ctx, "[SendMessage] created prompt message",
+		zap.String("prompt_msg_id", promptMsg.ID.String()))
+
+	return promptMsg, nil
 }
 
 // checkClientIdIdempotency checks if a client_id was already used.

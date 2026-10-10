@@ -79,7 +79,7 @@ func (h *AdminAuthHandler) LoginWithOTP(c *gin.Context) {
 			Error(c, "invalid_otp", "Invalid verification code")
 			return
 		case errors.Is(err, usecase.ErrOTPLocked):
-			Error(c, "locked", err.Error())
+			Error(c, "locked", "Verification temporarily locked due to too many failed attempts")
 			return
 		default:
 			logger.Error(ctx, "admin_auth.verify_otp_failed", zap.Error(err))

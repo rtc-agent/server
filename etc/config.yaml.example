@@ -353,3 +353,27 @@ storage:
   #   credential_expiry: 24h
   # encryption:
   #   session_token_key: "${OSS3_SESSION_TOKEN_KEY}"  # AES-256 密钥（32 字节 = 64 个十六进制字符）
+
+# ===========================================================================
+# 安全配置
+# ===========================================================================
+security:
+  # Content Security Policy (CSP) 配置
+  # CSP 是一个 HTTP 头，通过指定哪些内容源可以加载来帮助防止 XSS 和数据注入攻击
+  csp:
+    enabled: false               # 默认禁用，生产环境建议启用
+    report_only: true            # 报告模式（不阻止，只记录违规）
+    report_uri: "/api/csp-report"
+    default_src: ["'self'"]
+    script_src: ["'self'"]
+    style_src: ["'self'"]
+    img_src: ["'self'", "data:", "blob:"]
+    font_src: ["'self'", "data:"]
+    connect_src:
+      - "'self'"
+      - "ws:"                    # WebSocket 连接
+      - "wss:"                   # 安全 WebSocket 连接
+    frame_src: ["'none'"]
+    frame_ancestors: ["'none'"]  # 防止被嵌入 iframe（替代 X-Frame-Options）
+    base_uri: ["'self'"]
+    form_action: ["'self'"]

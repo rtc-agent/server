@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"github.com/redis/go-redis/v9"
@@ -101,6 +102,15 @@ func (pw *PolicyWatcher) PublishChange(ctx context.Context, sec, action string, 
 
 // listen processes incoming policy change notifications.
 func (pw *PolicyWatcher) listen() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error(context.Background(), "panic_recovered",
+				zap.Any("panic", r),
+				zap.String("goroutine", "policy_watcher.listen"),
+				zap.String("stack", string(debug.Stack())))
+		}
+	}()
+
 	ch := pw.sub.Channel()
 	for msg := range ch {
 		var change PolicyChange

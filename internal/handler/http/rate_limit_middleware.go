@@ -2,12 +2,17 @@
 package httphandler
 
 import (
+	"context"
 	"hash/fnv"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // RateLimiterInterface defines the contract for rate limiters.
@@ -131,6 +136,15 @@ func (rl *RateLimiter) Allow(ip string) bool {
 // cleanupLoop periodically removes expired buckets.
 // Each tick cleans only one shard (round-robin) to minimize lock hold time.
 func (rl *RateLimiter) cleanupLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error(context.Background(), "panic_recovered",
+				zap.Any("panic", r),
+				zap.String("goroutine", "rate_limiter.cleanupLoop"),
+				zap.String("stack", string(debug.Stack())))
+		}
+	}()
+
 	ticker := time.NewTicker(rl.cleanup)
 	defer ticker.Stop()
 

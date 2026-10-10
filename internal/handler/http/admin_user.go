@@ -114,8 +114,8 @@ func (h *AdminUserHandler) ListUsers(c *gin.Context) {
 			Email:     user.Email,
 			Name:      user.Name,
 			AvatarURL: user.AvatarURL,
-			CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			UpdatedAt: user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			CreatedAt: user.CreatedAt.Format(TimeFormatRFC3339),
+			UpdatedAt: user.UpdatedAt.Format(TimeFormatRFC3339),
 			Roles:     roleBriefs,
 		})
 	}
@@ -175,8 +175,8 @@ func (h *AdminUserHandler) CreateUser(c *gin.Context) {
 		Email:     user.Email,
 		Name:      user.Name,
 		AvatarURL: user.AvatarURL,
-		CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt: user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt: user.CreatedAt.Format(TimeFormatRFC3339),
+		UpdatedAt: user.UpdatedAt.Format(TimeFormatRFC3339),
 	})
 }
 
@@ -217,8 +217,8 @@ func (h *AdminUserHandler) UpdateUser(c *gin.Context) {
 		Email:     user.Email,
 		Name:      user.Name,
 		AvatarURL: user.AvatarURL,
-		CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt: user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt: user.CreatedAt.Format(TimeFormatRFC3339),
+		UpdatedAt: user.UpdatedAt.Format(TimeFormatRFC3339),
 	})
 }
 
@@ -266,7 +266,7 @@ func (h *AdminUserHandler) UpdateCurrentUser(c *gin.Context) {
 		Email:     user.Email,
 		Name:      user.Name,
 		AvatarURL: user.AvatarURL,
-		CreatedAt: user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt: user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt: user.CreatedAt.Format(TimeFormatRFC3339),
+		UpdatedAt: user.UpdatedAt.Format(TimeFormatRFC3339),
 	})
 }

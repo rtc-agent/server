@@ -263,7 +263,7 @@ func (d *safeNetDialer) DialContext(ctx context.Context, network, addr string) (
 	resolver := &net.Resolver{PreferGo: true}
 	ips, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrDNSFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrDNSFailed, err)
 	}
 	if len(ips) == 0 {
 		return nil, fmt.Errorf("%w: no IP addresses resolved for %q", ErrDNSFailed, host)

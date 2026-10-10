@@ -8,10 +8,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/internal/usecase"
 )
 
-// mockGoalRepo implements repo.GoalRepo for testing.
+// mockGoalRepo implements usecase.GoalRepo for testing.
 type mockGoalRepo struct {
 	mu      sync.Mutex
 	goals   map[uuid.UUID]*model.Goal
@@ -70,8 +70,8 @@ func (m *mockGoalRepo) ListBySession(_ context.Context, _ uuid.UUID, _ *string, 
 	return nil, nil
 }
 
-// Ensure mockGoalRepo implements repo.GoalRepo.
-var _ repo.GoalRepo = (*mockGoalRepo)(nil)
+// Ensure mockGoalRepo implements usecase.GoalRepo.
+var _ usecase.GoalRepo = (*mockGoalRepo)(nil)
 
 func TestCancelActiveGoal_NoActiveGoal(t *testing.T) {
 	mockRepo := newMockGoalRepo()
@@ -141,7 +141,7 @@ func TestCancelActiveGoal_OnlyCancelsActiveGoal(t *testing.T) {
 	}
 }
 
-// mockLoopRepo implements repo.LoopRepo for testing.
+// mockLoopRepo implements usecase.LoopRepo for testing.
 type mockLoopRepo struct {
 	mu      sync.Mutex
 	loops   map[uuid.UUID]*model.Loop
@@ -208,8 +208,8 @@ func (m *mockLoopRepo) FindExpiredLoops(_ context.Context) ([]*model.Loop, error
 	return nil, nil
 }
 
-// Ensure mockLoopRepo implements repo.LoopRepo.
-var _ repo.LoopRepo = (*mockLoopRepo)(nil)
+// Ensure mockLoopRepo implements usecase.LoopRepo.
+var _ usecase.LoopRepo = (*mockLoopRepo)(nil)
 
 func TestCancelActiveLoop_NoActiveLoop(t *testing.T) {
 	mockRepo := newMockLoopRepo()

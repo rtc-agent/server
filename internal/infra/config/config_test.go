@@ -114,8 +114,11 @@ func TestConfig_Validate_WithInvalidWorkerConfig(t *testing.T) {
 			Port: 8080,
 			Env:  "development",
 		},
+		Redis: RedisConfig{
+			Addr: "localhost:6379",
+		},
 		Auth: AuthConfig{
-			JWTSecret:             "test-secret",
+			JWTSecret:             "test-secret-key-32bytes-long!!!!",
 			AccessTokenTTLSeconds: 3600,
 		},
 		LLM: LLMConfig{
@@ -123,7 +126,9 @@ func TestConfig_Validate_WithInvalidWorkerConfig(t *testing.T) {
 		},
 		Providers: ProvidersConfig{
 			Mock: MockProviderConfig{
-				Enabled: true,
+				Enabled:      true,
+				ClientID:     "test-client-id",
+				ClientSecret: "test-client-secret",
 			},
 		},
 		Worker: WorkerConfig{
@@ -210,16 +215,21 @@ func TestConfig_Validate_EncryptionConfig(t *testing.T) {
 			Port: 8080,
 			Env:  "development",
 		},
+		Redis: RedisConfig{
+			Addr: "localhost:6379",
+		},
 		LLM: LLMConfig{
 			APIKey: "test-key",
 		},
 		Providers: ProvidersConfig{
 			Mock: MockProviderConfig{
-				Enabled: true,
+				Enabled:      true,
+				ClientID:     "test-client-id",
+				ClientSecret: "test-client-secret",
 			},
 		},
 		Auth: AuthConfig{
-			JWTSecret:             "test-secret",
+			JWTSecret:             "test-secret-key-32bytes-long!!!!",
 			AccessTokenTTLSeconds: 3600,
 		},
 		Storage: StorageConfig{

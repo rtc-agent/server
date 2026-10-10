@@ -14,6 +14,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // Credential represents the parsed credential from Authorization header.
@@ -513,5 +515,9 @@ func SignS3Request(r *http.Request, accessKeyID, secretAccessKey, sessionToken, 
 	// SignHTTP error is intentionally ignored: this function is called in test/client
 	// contexts where the inputs are always valid (we control credentials and region).
 	// The AWS SDK v4 signer only fails on malformed credentials, which cannot happen here.
-	_ = signer.SignHTTP(context.Background(), awsCreds, r, payloadHash, "s3", region, now)
+	if err := signer.SignHTTP(context.Background(), awsCreds, r, payloadHash, "s3", region, now); err != nil {
+		logger.Error(context.Background(), "failed to sign S3 request",
+			zap.String("region", region),
+			zap.Error(err))
+	}
 }

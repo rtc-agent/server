@@ -61,8 +61,12 @@ end
 
 -- Sum ALL pending amounts from the aggregation ZSET, with lazy cleanup of stale entries.
 -- A stale entry is one whose pending key has expired (TTL) but whose ZSET score remains.
+-- Limit cleanup to max 100 stale entries per call to avoid blocking Redis when there are
+-- many concurrent uploads with pending reservations.
 local totalPending = 0
 local cursor = "0"
+local maxClean = 100
+local cleaned = 0
 repeat
     local result = redis.call('ZSCAN', aggKey, cursor)
     cursor = result[1]
@@ -73,8 +77,11 @@ repeat
         local memberPendingKey = prefix .. member
         local memberVal = redis.call('GET', memberPendingKey)
         if not memberVal then
-            -- Stale entry: the pending key expired. Clean it up.
-            redis.call('ZREM', aggKey, member)
+            -- Stale entry: the pending key expired. Clean it up (with limit).
+            if cleaned < maxClean then
+                redis.call('ZREM', aggKey, member)
+                cleaned = cleaned + 1
+            end
         else
             -- Live entry: use the actual key value (authoritative source).
             totalPending = totalPending + tonumber(memberVal)

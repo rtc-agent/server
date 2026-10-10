@@ -64,7 +64,7 @@ func (uc *InterruptUsecase) SubmitAnswer(ctx context.Context, userID uuid.UUID, 
 		[]string{answerKey, channel},
 		answer, ttlSeconds,
 	).Err(); err != nil {
-		return fmt.Errorf("%w: %v", ErrInterruptStoreFailed, err)
+		return fmt.Errorf("%w: %w", ErrInterruptStoreFailed, err)
 	}
 
 	return nil

@@ -16,9 +16,8 @@ import (
 //
 // For each expired upload:
 //  1. Abort the upload in the storage backend (best-effort)
-//  2. Delete parts from DB
-//  3. Delete upload record from DB
-//  4. Release any pending quota (best-effort, TTL will handle it)
+//  2. Delete upload record and parts from DB (within a single transaction)
+//  3. Release any pending quota (best-effort, TTL will handle it)
 func (uc *OSS3Usecase) CleanupExpiredUploads(ctx context.Context) (int, error) {
 	now := time.Now()
 	expired, err := uc.uploadRepo.FindExpired(ctx, now)
@@ -41,15 +40,13 @@ func (uc *OSS3Usecase) CleanupExpiredUploads(ctx context.Context) (int, error) {
 			}
 		}
 
-		// Delete parts from DB
-		if err := uc.uploadRepo.DeleteParts(ctx, upload.ID); err != nil {
-			// Log error but continue
-			continue
-		}
-
-		// Delete upload record
-		if err := uc.uploadRepo.Delete(ctx, upload.ID); err != nil {
-			// Log error but continue
+		// Delete upload record and parts from DB within a single transaction.
+		// This prevents orphaned parts records if deletion fails midway.
+		if err := uc.DeleteMultipartUploadRecord(ctx, upload.UploadID); err != nil {
+			// Log error but continue to next upload
+			logger.Warn(ctx, "cleanup: failed to delete expired upload record",
+				zap.String("upload_id", upload.UploadID),
+				zap.Error(err))
 			continue
 		}
 

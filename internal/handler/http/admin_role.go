@@ -86,7 +86,7 @@ func (h *AdminRoleHandler) List(c *gin.Context) {
 			Description: r.Description,
 			IsSystem:    r.IsSystem,
 			IsEnabled:   r.IsEnabled,
-			CreatedAt:   r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			CreatedAt:   r.CreatedAt.Format(TimeFormatRFC3339),
 		})
 	}
 
@@ -125,7 +125,7 @@ func (h *AdminRoleHandler) Get(c *gin.Context) {
 		Description: role.Description,
 		IsSystem:    role.IsSystem,
 		IsEnabled:   role.IsEnabled,
-		CreatedAt:   role.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt:   role.CreatedAt.Format(TimeFormatRFC3339),
 	})
 }
 
@@ -178,7 +178,7 @@ func (h *AdminRoleHandler) Create(c *gin.Context) {
 		Description: role.Description,
 		IsSystem:    role.IsSystem,
 		IsEnabled:   role.IsEnabled,
-		CreatedAt:   role.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt:   role.CreatedAt.Format(TimeFormatRFC3339),
 	})
 }
 
@@ -234,7 +234,7 @@ func (h *AdminRoleHandler) Update(c *gin.Context) {
 		Description: role.Description,
 		IsSystem:    role.IsSystem,
 		IsEnabled:   role.IsEnabled,
-		CreatedAt:   role.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt:   role.CreatedAt.Format(TimeFormatRFC3339),
 	})
 }
 

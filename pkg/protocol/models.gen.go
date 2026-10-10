@@ -6,7 +6,54 @@ package protocol
 import (
 	"encoding/json"
 	"time"
+
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
+
+// Defines values for AdminErrorResponseSuccess.
+const (
+	False AdminErrorResponseSuccess = false
+)
+
+// Valid indicates whether the value is a known member of the AdminErrorResponseSuccess enum.
+func (e AdminErrorResponseSuccess) Valid() bool {
+	switch e {
+	case False:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminLoginResponseSuccess.
+const (
+	AdminLoginResponseSuccessTrue AdminLoginResponseSuccess = true
+)
+
+// Valid indicates whether the value is a known member of the AdminLoginResponseSuccess enum.
+func (e AdminLoginResponseSuccess) Valid() bool {
+	switch e {
+	case AdminLoginResponseSuccessTrue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminRefreshResponseSuccess.
+const (
+	AdminRefreshResponseSuccessTrue AdminRefreshResponseSuccess = true
+)
+
+// Valid indicates whether the value is a known member of the AdminRefreshResponseSuccess enum.
+func (e AdminRefreshResponseSuccess) Valid() bool {
+	switch e {
+	case AdminRefreshResponseSuccessTrue:
+		return true
+	default:
+		return false
+	}
+}
 
 // Defines values for ContentType.
 const (
@@ -125,6 +172,81 @@ func (e MessageStreamingStatus) Valid() bool {
 	case MessageStreamingPending:
 		return true
 	case MessageStreamingStreaming:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OAuth2TokenExchangeRFC8693RequestGrantType.
+const (
+	UrnIetfParamsOauthGrantTypeTokenExchange OAuth2TokenExchangeRFC8693RequestGrantType = "urn:ietf:params:oauth:grant-type:token-exchange"
+)
+
+// Valid indicates whether the value is a known member of the OAuth2TokenExchangeRFC8693RequestGrantType enum.
+func (e OAuth2TokenExchangeRFC8693RequestGrantType) Valid() bool {
+	switch e {
+	case UrnIetfParamsOauthGrantTypeTokenExchange:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OAuth2TokenExchangeRFC8693RequestSubjectTokenType.
+const (
+	OAuth2TokenExchangeRFC8693RequestSubjectTokenTypeUrnIetfParamsOauthTokenTypeAccessToken OAuth2TokenExchangeRFC8693RequestSubjectTokenType = "urn:ietf:params:oauth:token-type:access_token"
+)
+
+// Valid indicates whether the value is a known member of the OAuth2TokenExchangeRFC8693RequestSubjectTokenType enum.
+func (e OAuth2TokenExchangeRFC8693RequestSubjectTokenType) Valid() bool {
+	switch e {
+	case OAuth2TokenExchangeRFC8693RequestSubjectTokenTypeUrnIetfParamsOauthTokenTypeAccessToken:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OAuth2TokenExchangeRFC8693ResponseIssuedTokenType.
+const (
+	OAuth2TokenExchangeRFC8693ResponseIssuedTokenTypeUrnIetfParamsOauthTokenTypeAccessToken OAuth2TokenExchangeRFC8693ResponseIssuedTokenType = "urn:ietf:params:oauth:token-type:access_token"
+)
+
+// Valid indicates whether the value is a known member of the OAuth2TokenExchangeRFC8693ResponseIssuedTokenType enum.
+func (e OAuth2TokenExchangeRFC8693ResponseIssuedTokenType) Valid() bool {
+	switch e {
+	case OAuth2TokenExchangeRFC8693ResponseIssuedTokenTypeUrnIetfParamsOauthTokenTypeAccessToken:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OAuth2TokenExchangeRFC8693ResponseTokenType.
+const (
+	Bearer OAuth2TokenExchangeRFC8693ResponseTokenType = "Bearer"
+)
+
+// Valid indicates whether the value is a known member of the OAuth2TokenExchangeRFC8693ResponseTokenType enum.
+func (e OAuth2TokenExchangeRFC8693ResponseTokenType) Valid() bool {
+	switch e {
+	case Bearer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OAuth2TokenExchangeRequestGrantType.
+const (
+	AuthorizationCode OAuth2TokenExchangeRequestGrantType = "authorization_code"
+)
+
+// Valid indicates whether the value is a known member of the OAuth2TokenExchangeRequestGrantType enum.
+func (e OAuth2TokenExchangeRequestGrantType) Valid() bool {
+	switch e {
+	case AuthorizationCode:
 		return true
 	default:
 		return false
@@ -399,6 +521,117 @@ func (e GetOAuth2RedirectUrlParamsCodeChallengeMethod) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// AdminErrorResponse Admin-server 统一错误响应格式（Ant Design Pro 约定）。
+// HTTP 状态码始终为 200，客户端通过 `success=false` 和 `errorCode` 判断错误类型。
+type AdminErrorResponse struct {
+	// ErrorCode 错误码，可能的值：
+	// - `invalid_request`：请求参数校验失败
+	// - `invalid_credentials`：邮箱或密码错误
+	// - `invalid_grant`：refresh_token 无效/已撤销/已过期
+	// - `unauthorized`：JWT 认证失败
+	// - `user_not_found`：用户不存在
+	// - `server_error`：服务器内部错误
+	ErrorCode string `json:"errorCode"`
+
+	// ErrorMessage 人类可读的错误描述信息
+	ErrorMessage string `json:"errorMessage"`
+
+	// Success 始终为 false
+	Success AdminErrorResponseSuccess `json:"success"`
+}
+
+// AdminErrorResponseSuccess 始终为 false
+type AdminErrorResponseSuccess bool
+
+// AdminLoginRequest Admin 登录请求
+type AdminLoginRequest struct {
+	// Email 管理员邮箱
+	Email openapi_types.Email `json:"email"`
+
+	// Password 管理员密码（最少 6 个字符）
+	Password string `json:"password"`
+}
+
+// AdminLoginResponse Admin 登录成功响应（Ant Design Pro 统一格式）。
+// 成功时 `success` 为 `true`，业务数据在 `data` 字段内。
+type AdminLoginResponse struct {
+	// Data 登录成功数据
+	Data struct {
+		// AccessToken Admin JWT access token
+		AccessToken string `json:"access_token"`
+
+		// ExpiresIn access token 过期时间（秒）
+		ExpiresIn int `json:"expires_in"`
+
+		// RefreshToken Admin JWT refresh token（支持轮换）
+		RefreshToken string `json:"refresh_token"`
+
+		// TokenType 固定为 "Bearer"
+		TokenType string `json:"token_type"`
+
+		// User Admin 用户信息（作为 `data` 字段内嵌使用）
+		User AdminUserResponse `json:"user"`
+	} `json:"data"`
+
+	// Success 固定为 true
+	Success AdminLoginResponseSuccess `json:"success"`
+}
+
+// AdminLoginResponseSuccess 固定为 true
+type AdminLoginResponseSuccess bool
+
+// AdminLogoutRequest Admin 登出请求
+type AdminLogoutRequest struct {
+	// RefreshToken 要撤销的 refresh token
+	RefreshToken string `json:"refresh_token"`
+}
+
+// AdminRefreshRequest Admin 令牌刷新请求
+type AdminRefreshRequest struct {
+	// RefreshToken 之前签发的 refresh token
+	RefreshToken string `json:"refresh_token"`
+}
+
+// AdminRefreshResponse Admin 令牌刷新成功响应（Ant Design Pro 统一格式）。
+// 成功时 `success` 为 `true`，业务数据在 `data` 字段内。
+type AdminRefreshResponse struct {
+	// Data 刷新成功数据（refresh token 轮换）
+	Data struct {
+		// AccessToken 新的 JWT access token
+		AccessToken string `json:"access_token"`
+
+		// ExpiresIn 新 access token 过期时间（秒）
+		ExpiresIn int `json:"expires_in"`
+
+		// RefreshToken 新的 JWT refresh token（每次刷新都会轮换）
+		RefreshToken string `json:"refresh_token"`
+
+		// TokenType 固定为 "Bearer"
+		TokenType string `json:"token_type"`
+	} `json:"data"`
+
+	// Success 固定为 true
+	Success AdminRefreshResponseSuccess `json:"success"`
+}
+
+// AdminRefreshResponseSuccess 固定为 true
+type AdminRefreshResponseSuccess bool
+
+// AdminUserResponse Admin 用户信息（作为 `data` 字段内嵌使用）
+type AdminUserResponse struct {
+	// AvatarUrl 头像 URL
+	AvatarUrl *string `json:"avatar_url,omitempty"`
+
+	// Email 邮箱地址
+	Email string `json:"email"`
+
+	// Id 用户 UUID
+	Id string `json:"id"`
+
+	// Name 显示名称
+	Name *string `json:"name,omitempty"`
 }
 
 // CloseSessionRequest defines model for CloseSessionRequest.
@@ -676,15 +909,59 @@ type OAuth2Error struct {
 	// Error 错误码：
 	// - `invalid_request`: 请求参数无效
 	// - `invalid_client`: 客户端认证失败
-	// - `invalid_grant`: 授权码无效或已过期
+	// - `invalid_grant`: 授权码无效或已过期（Token Exchange 模式下也表示 JWT 签名验证失败或签发方不受信任）
 	// - `server_error`: 服务器内部错误
+	// - `temporarily_unavailable`: 身份提供方暂时不可用（RFC 8693 Token Exchange 模式下 JWKS 端点无法访问）
 	Error string `json:"error"`
 
 	// ErrorDescription 人类可读的错误描述，用于调试
 	ErrorDescription *string `json:"error_description,omitempty"`
 }
 
-// OAuth2TokenExchangeRequest OAuth2 授权码交换请求，使用 Authorization Code 换取 access_token
+// OAuth2TokenExchangeRFC8693Request RFC 8693 Token Exchange 请求，将外部 JWT（如 admin-server 签发的管理员 JWT）换取主服务器 access_token。
+// 主服务器需在 config.yaml 中配置 token_exchange.external_issuers 以信任对应的 JWT 签发方。
+type OAuth2TokenExchangeRFC8693Request struct {
+	// DeviceId RTC Agent 扩展字段，客户端设备 UUID（嵌入到签发的 JWT 中）
+	DeviceId string `json:"device_id"`
+
+	// GrantType 固定为 "urn:ietf:params:oauth:grant-type:token-exchange"
+	GrantType OAuth2TokenExchangeRFC8693RequestGrantType `json:"grant_type"`
+
+	// SubjectToken 外部 JWT（由受信任的签发方签发）
+	SubjectToken string `json:"subject_token"`
+
+	// SubjectTokenType 令牌类型，通常为 "urn:ietf:params:oauth:token-type:access_token"
+	SubjectTokenType OAuth2TokenExchangeRFC8693RequestSubjectTokenType `json:"subject_token_type"`
+}
+
+// OAuth2TokenExchangeRFC8693RequestGrantType 固定为 "urn:ietf:params:oauth:grant-type:token-exchange"
+type OAuth2TokenExchangeRFC8693RequestGrantType string
+
+// OAuth2TokenExchangeRFC8693RequestSubjectTokenType 令牌类型，通常为 "urn:ietf:params:oauth:token-type:access_token"
+type OAuth2TokenExchangeRFC8693RequestSubjectTokenType string
+
+// OAuth2TokenExchangeRFC8693Response RFC 8693 Token Exchange 成功响应
+type OAuth2TokenExchangeRFC8693Response struct {
+	// AccessToken RTC 主服务器签发的 JWT，有效期由 expires_in 指定
+	AccessToken string `json:"access_token"`
+
+	// ExpiresIn access token 过期时间（秒），通常为 3600（1 小时）
+	ExpiresIn int64 `json:"expires_in"`
+
+	// IssuedTokenType 固定为 "urn:ietf:params:oauth:token-type:access_token"
+	IssuedTokenType OAuth2TokenExchangeRFC8693ResponseIssuedTokenType `json:"issued_token_type"`
+
+	// TokenType 固定为 "Bearer"
+	TokenType OAuth2TokenExchangeRFC8693ResponseTokenType `json:"token_type"`
+}
+
+// OAuth2TokenExchangeRFC8693ResponseIssuedTokenType 固定为 "urn:ietf:params:oauth:token-type:access_token"
+type OAuth2TokenExchangeRFC8693ResponseIssuedTokenType string
+
+// OAuth2TokenExchangeRFC8693ResponseTokenType 固定为 "Bearer"
+type OAuth2TokenExchangeRFC8693ResponseTokenType string
+
+// OAuth2TokenExchangeRequest OAuth2 授权码交换请求（Authorization Code 模式），使用授权码换取 access_token + refresh_token
 type OAuth2TokenExchangeRequest struct {
 	// Code OAuth2 授权码，由授权回调 URL 的 query 参数携带
 	Code string `json:"code"`
@@ -698,6 +975,9 @@ type OAuth2TokenExchangeRequest struct {
 	// DeviceName 设备显示名称，如 "Chrome on Mac"
 	DeviceName *string `json:"device_name,omitempty"`
 
+	// GrantType 固定为 "authorization_code"（可省略，默认值）
+	GrantType *OAuth2TokenExchangeRequestGrantType `json:"grant_type,omitempty"`
+
 	// RedirectUri 必须与授权请求中的 redirect_uri 完全一致
 	RedirectUri string `json:"redirect_uri"`
 
@@ -707,6 +987,9 @@ type OAuth2TokenExchangeRequest struct {
 	// UserAgent 客户端 User-Agent 字符串，用于设备识别
 	UserAgent *string `json:"user_agent,omitempty"`
 }
+
+// OAuth2TokenExchangeRequestGrantType 固定为 "authorization_code"（可省略，默认值）
+type OAuth2TokenExchangeRequestGrantType string
 
 // OAuth2TokenExchangeResponse OAuth2 令牌交换成功响应
 type OAuth2TokenExchangeResponse struct {
@@ -1250,8 +1533,30 @@ type GetOAuth2RedirectUrlParams struct {
 // GetOAuth2RedirectUrlParamsCodeChallengeMethod defines parameters for GetOAuth2RedirectUrl.
 type GetOAuth2RedirectUrlParamsCodeChallengeMethod string
 
+// Oauth2TokenExchangeJSONBody defines parameters for Oauth2TokenExchange.
+type Oauth2TokenExchangeJSONBody struct {
+	union json.RawMessage
+}
+
+// Oauth2TokenExchangeFormdataBody defines parameters for Oauth2TokenExchange.
+type Oauth2TokenExchangeFormdataBody struct {
+	union json.RawMessage
+}
+
+// AdminLoginJSONRequestBody defines body for AdminLogin for application/json ContentType.
+type AdminLoginJSONRequestBody = AdminLoginRequest
+
+// AdminLogoutJSONRequestBody defines body for AdminLogout for application/json ContentType.
+type AdminLogoutJSONRequestBody = AdminLogoutRequest
+
+// AdminRefreshJSONRequestBody defines body for AdminRefresh for application/json ContentType.
+type AdminRefreshJSONRequestBody = AdminRefreshRequest
+
 // Oauth2TokenRefreshJSONRequestBody defines body for Oauth2TokenRefresh for application/json ContentType.
 type Oauth2TokenRefreshJSONRequestBody = OAuth2TokenRefreshRequest
 
 // Oauth2TokenExchangeJSONRequestBody defines body for Oauth2TokenExchange for application/json ContentType.
-type Oauth2TokenExchangeJSONRequestBody = OAuth2TokenExchangeRequest
+type Oauth2TokenExchangeJSONRequestBody Oauth2TokenExchangeJSONBody
+
+// Oauth2TokenExchangeFormdataRequestBody defines body for Oauth2TokenExchange for application/x-www-form-urlencoded ContentType.
+type Oauth2TokenExchangeFormdataRequestBody Oauth2TokenExchangeFormdataBody

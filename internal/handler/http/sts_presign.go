@@ -130,7 +130,7 @@ func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.
 	if err != nil {
 		// Check if it's a permission error
 		if isPermissionError(err) {
-			writePresignError(w, r, http.StatusForbidden, "presign.forbidden", err.Error())
+			writePresignError(w, r, http.StatusForbidden, "presign.forbidden", "Access denied")
 			return
 		}
 		logger.Error(r.Context(), "failed to generate presigned URL",

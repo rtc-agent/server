@@ -14,7 +14,7 @@ import (
 
 // maxSQLLength is the maximum length of SQL statement to log (in bytes).
 // SQL longer than this will be truncated to avoid excessive log output.
-const maxSQLLength = 100
+const maxSQLLength = 500
 
 // truncateSQL safely truncates a SQL string to maxLen bytes without breaking
 // multi-byte UTF-8 characters. If truncated, appends a marker.

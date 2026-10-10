@@ -282,6 +282,12 @@ func (w *Worker) processSession(globalCtx context.Context, sessionID string) {
 	// This prevents a race where two goroutines both call ClaimWithCredential
 	// with empty credentials, each creating a lock with different credentials,
 	// leading to lock-loss detection and unexpected turn cancellation.
+	//
+	// Lock granularity: sessionClaims is held only during map read/write operations
+	// (checking active status and marking as active). Context creation and other
+	// non-critical operations are performed outside the lock to minimize contention.
+	// TODO: Consider using sync.Map for w.sessions to further reduce lock contention
+	// if profiling shows this as a bottleneck under high concurrency.
 	w.sessionClaims.Lock()
 	w.mu.Lock()
 	_, active := w.sessions[sessionID]

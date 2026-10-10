@@ -52,18 +52,23 @@ func banCacheKey(userID uuid.UUID) string {
 
 // Get retrieves a cached ban status if it exists and hasn't expired.
 // Returns (banned, cached) where cached indicates if the value was found in cache.
+// Uses a 2-second timeout to prevent Redis operations from blocking indefinitely.
 func (c *BanCache) Get(ctx context.Context, userID uuid.UUID) (bool, bool) {
 	if c.rdb == nil {
 		return false, false
 	}
 
+	// Add timeout protection to prevent blocking Redis operations
+	getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
 	key := banCacheKey(userID)
-	val, err := c.rdb.Get(ctx, key).Result()
+	val, err := c.rdb.Get(getCtx, key).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return false, false
 		}
-		logger.Warn(ctx, "ban_cache.get_failed",
+		logger.Warn(getCtx, "ban_cache.get_failed",
 			zap.String("user_id", userID.String()),
 			zap.Error(err))
 		return false, false
@@ -75,10 +80,15 @@ func (c *BanCache) Get(ctx context.Context, userID uuid.UUID) (bool, bool) {
 }
 
 // Set stores a ban status in the cache with TTL.
+// Uses a 2-second timeout to prevent Redis operations from blocking indefinitely.
 func (c *BanCache) Set(ctx context.Context, userID uuid.UUID, banned bool) {
 	if c.rdb == nil {
 		return
 	}
+
+	// Add timeout protection to prevent blocking Redis operations
+	setCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 
 	key := banCacheKey(userID)
 	val := "0"
@@ -86,8 +96,8 @@ func (c *BanCache) Set(ctx context.Context, userID uuid.UUID, banned bool) {
 		val = "1"
 	}
 
-	if err := c.rdb.Set(ctx, key, val, c.ttl).Err(); err != nil {
-		logger.Warn(ctx, "ban_cache.set_failed",
+	if err := c.rdb.Set(setCtx, key, val, c.ttl).Err(); err != nil {
+		logger.Warn(setCtx, "ban_cache.set_failed",
 			zap.String("user_id", userID.String()),
 			zap.Bool("banned", banned),
 			zap.Error(err))
@@ -200,19 +210,33 @@ func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool, banChecker UserBanChec
 			// - If Redis is unavailable, Get returns (false, false) → falls through to DB check
 			// - If DB is also unavailable, the request is allowed to proceed (fail-open)
 			// This ensures system availability over strict security in extreme failure scenarios.
-			// The 30-second cache TTL limits the window where a banned user might slip through.
+			//
+			// TRADE-OFF: In rare cases where both cache and DB are unavailable, banned users
+			// may temporarily access the system. This is acceptable because:
+			// 1. Bans are typically for severe violations (spam, abuse)
+			// 2. The window of vulnerability is limited to the outage duration
+			// 3. Availability is critical for user experience
+			//
+			// MITIGATIONS:
+			// - 30-second cache TTL limits the window where a banned user might slip through
+			// - Failed ban checks are logged with WARN level for security monitoring
+			// - Consider implementing a local in-memory cache as a fallback layer
 			if banChecker != nil {
 				banned, cached := GetBanCache(r.Context(), userID)
 				if !cached {
 					var err error
 					banned, err = banChecker.IsUserBanned(r.Context(), userID)
 					if err != nil {
-						logger.Warn(r.Context(), "failed to check user ban status",
+						// Fail-open: log the error but allow the request to proceed
+						// This is a deliberate security trade-off for availability
+						logger.Warn(r.Context(), "failed to check user ban status - fail-open applied",
 							zap.Error(err),
-							zap.String("user_id", userID.String()))
-						// Fail-open: allow request to proceed when both cache and DB are unavailable
-						// This is a deliberate trade-off: availability > strict security
+							zap.String("user_id", userID.String()),
+							zap.String("remote_addr", r.RemoteAddr),
+							zap.Bool("bypass_applied", true))
+						// Continue processing - err != nil means we couldn't verify, so we allow
 					} else {
+						// Successfully checked ban status, cache it
 						SetBanCache(r.Context(), userID, banned)
 					}
 				}

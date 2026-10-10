@@ -19,10 +19,11 @@ func TestNewJWTSigner(t *testing.T) {
 		ttl       time.Duration
 		expectErr bool
 	}{
-		{"valid", "my-secret-key", 15 * time.Minute, false},
+		{"valid", "test-secret-key-that-is-32bytes!", 15 * time.Minute, false},
 		{"empty secret", "", 15 * time.Minute, true},
-		{"zero ttl", "my-secret-key", 0, true},
-		{"negative ttl", "my-secret-key", -1 * time.Minute, true},
+		{"too short", "short-secret", 15 * time.Minute, true},
+		{"zero ttl", "test-secret-key-that-is-32bytes!", 0, true},
+		{"negative ttl", "test-secret-key-that-is-32bytes!", -1 * time.Minute, true},
 	}
 
 	for _, tt := range tests {
@@ -44,7 +45,7 @@ func TestNewJWTSigner(t *testing.T) {
 func TestSignAndParseAccessToken(t *testing.T) {
 	t.Parallel()
 
-	signer, err := NewJWTSigner("test-secret-key-32bytes-long!!!", 15*time.Minute)
+	signer, err := NewJWTSigner("test-secret-key-32bytes-long!!!!", 15*time.Minute)
 	require.NoError(t, err)
 
 	userID := uuid.New()
@@ -70,7 +71,7 @@ func TestSignAndParseAccessToken(t *testing.T) {
 func TestParseAccessToken_Empty(t *testing.T) {
 	t.Parallel()
 
-	signer, err := NewJWTSigner("test-secret", time.Minute)
+	signer, err := NewJWTSigner("test-secret-key-32bytes-long!!!!", time.Minute)
 	require.NoError(t, err)
 
 	_, err = signer.ParseAccessToken("")
@@ -82,7 +83,7 @@ func TestParseAccessToken_Expired(t *testing.T) {
 	t.Parallel()
 
 	// Use a very short TTL so we can wait for expiry.
-	signer, err := NewJWTSigner("test-secret", 1*time.Millisecond)
+	signer, err := NewJWTSigner("test-secret-key-32bytes-long!!!!", 1*time.Millisecond)
 	require.NoError(t, err)
 
 	token, _, err := signer.SignAccessToken(uuid.New(), "dev")
@@ -99,10 +100,10 @@ func TestParseAccessToken_Expired(t *testing.T) {
 func TestParseAccessToken_WrongSecret(t *testing.T) {
 	t.Parallel()
 
-	signer1, err := NewJWTSigner("secret-one", 15*time.Minute)
+	signer1, err := NewJWTSigner("secret-one-12345678901234567890a", 15*time.Minute)
 	require.NoError(t, err)
 
-	signer2, err := NewJWTSigner("secret-two", 15*time.Minute)
+	signer2, err := NewJWTSigner("secret-two-12345678901234567890a", 15*time.Minute)
 	require.NoError(t, err)
 
 	// Sign with signer1, try to parse with signer2.
@@ -117,7 +118,7 @@ func TestParseAccessToken_WrongSecret(t *testing.T) {
 func TestParseAccessToken_AlgorithmConfusion(t *testing.T) {
 	t.Parallel()
 
-	signer, err := NewJWTSigner("test-secret", 15*time.Minute)
+	signer, err := NewJWTSigner("test-secret-key-32bytes-long!!!!", 15*time.Minute)
 	require.NoError(t, err)
 
 	// Create a token with a non-HMAC signing method (none algorithm).
@@ -142,7 +143,7 @@ func TestParseAccessToken_AlgorithmConfusion(t *testing.T) {
 func TestParseAccessToken_MalformedToken(t *testing.T) {
 	t.Parallel()
 
-	signer, err := NewJWTSigner("test-secret", 15*time.Minute)
+	signer, err := NewJWTSigner("test-secret-key-32bytes-long!!!!", 15*time.Minute)
 	require.NoError(t, err)
 
 	tests := []struct {

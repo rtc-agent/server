@@ -20,7 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/infra/config"
 	appmodel "github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"go.uber.org/zap"
@@ -36,8 +36,8 @@ const maxConversationText = 1000
 // SessionTitleSummarizer generates session title summaries.
 type SessionTitleSummarizer struct {
 	chatModel            einomodel.ToolCallingChatModel
-	sessionRepo          repo.SessionRepo
-	messageRepo          repo.MessageRepo
+	sessionRepo          usecase.SessionRepo
+	messageRepo          usecase.MessageRepo
 	configProvider       config.ConfigProvider
 	llmProviderFallback  string // static fallback when configProvider is nil or fails
 	maxMessages          int    // maximum messages for summary generation
@@ -49,8 +49,8 @@ type SessionTitleSummarizer struct {
 // configProvider may be nil; in that case llmProviderFallback is used.
 func NewSessionTitleSummarizer(
 	chatModel einomodel.ToolCallingChatModel,
-	sessionRepo repo.SessionRepo,
-	messageRepo repo.MessageRepo,
+	sessionRepo usecase.SessionRepo,
+	messageRepo usecase.MessageRepo,
 	configProvider config.ConfigProvider,
 	llmProviderFallback string,
 	tokenCallbackHandler callbacks.Handler,

@@ -64,6 +64,26 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 		return
 	}
 
+	// Validate parts count: S3 spec limits to 10000 parts maximum
+	if len(req.Parts) > 10000 {
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrMalformedXML, r.URL.Path, "")
+		return
+	}
+
+	// Validate part numbers: must be in range [1, 10000] and unique
+	seen := make(map[int]bool, len(req.Parts))
+	for _, p := range req.Parts {
+		if p.PartNumber < 1 || p.PartNumber > 10000 {
+			rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidPartNumber, r.URL.Path, "")
+			return
+		}
+		if seen[p.PartNumber] {
+			rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidPart, r.URL.Path, "")
+			return
+		}
+		seen[p.PartNumber] = true
+	}
+
 	// Convert to backend format
 	parts := make([]rtcoss3.CompletedPart, len(req.Parts))
 	for i, p := range req.Parts {

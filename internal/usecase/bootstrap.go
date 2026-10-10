@@ -24,6 +24,40 @@ const (
 	expectedViewerPolicies   = 6  // viewer role: admin_user(1) + rtc_user(1) + rtc_session(1) + rtc_message(1) + server_config(1) + dashboard(1)
 )
 
+// createRoleIfMissing creates a role if it doesn't exist, handling concurrent creation safely.
+// Uses ON CONFLICT DO NOTHING for concurrent safety: if another instance creates the same
+// role concurrently, the conflict is silently skipped and we re-fetch the existing role.
+func createRoleIfMissing(
+	ctx context.Context,
+	tx *gorm.DB,
+	name, displayName, description string,
+	isSystem bool,
+) (*model.AdminRole, error) {
+	role := &model.AdminRole{
+		Name:        name,
+		DisplayName: displayName,
+		Description: description,
+		IsSystem:    isSystem,
+		IsEnabled:   true,
+	}
+
+	if err := tx.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "name"}},
+		DoNothing: true,
+	}).Create(role).Error; err != nil {
+		return nil, fmt.Errorf("create %s role: %w", name, err)
+	}
+
+	// If DO NOTHING fired, role.ID may be zero; re-fetch by name
+	if role.ID == uuid.Nil {
+		if err := tx.WithContext(ctx).Where("name = ?", name).First(role).Error; err != nil {
+			return nil, fmt.Errorf("re-fetch %s role after conflict: %w", name, err)
+		}
+	}
+
+	return role, nil
+}
+
 // BootstrapAdmin initializes default roles and permissions if they don't already exist.
 //
 // This function is idempotent and handles partial failures:
@@ -73,65 +107,23 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, adminRoleRepo repo.AdminRo
 		// Uses ON CONFLICT DO NOTHING for concurrent safety: if another instance
 		// creates the same role concurrently, the conflict is silently skipped
 		// and we re-fetch the existing role.
+		var err error
 		if adminErr != nil {
-			adminRole = &model.AdminRole{
-				Name:        "admin",
-				DisplayName: "管理员",
-				Description: "系统管理员，拥有完整权限",
-				IsSystem:    true,
-				IsEnabled:   true,
-			}
-			if err := tx.WithContext(ctx).Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "name"}},
-				DoNothing: true,
-			}).Create(adminRole).Error; err != nil {
-				return fmt.Errorf("create admin role: %w", err)
-			}
-			// If DO NOTHING fired, adminRole.ID may be zero; re-fetch by name
-			if adminRole.ID == uuid.Nil {
-				if err := tx.WithContext(ctx).Where("name = ?", "admin").First(adminRole).Error; err != nil {
-					return fmt.Errorf("re-fetch admin role after conflict: %w", err)
-				}
+			adminRole, err = createRoleIfMissing(ctx, tx, "admin", "管理员", "系统管理员，拥有完整权限", true)
+			if err != nil {
+				return err
 			}
 		}
 		if operatorErr != nil {
-			operatorRole = &model.AdminRole{
-				Name:        "operator",
-				DisplayName: "运营",
-				Description: "运营人员，可管理用户和查看角色",
-				IsSystem:    false,
-				IsEnabled:   true,
-			}
-			if err := tx.WithContext(ctx).Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "name"}},
-				DoNothing: true,
-			}).Create(operatorRole).Error; err != nil {
-				return fmt.Errorf("create operator role: %w", err)
-			}
-			if operatorRole.ID == uuid.Nil {
-				if err := tx.WithContext(ctx).Where("name = ?", "operator").First(operatorRole).Error; err != nil {
-					return fmt.Errorf("re-fetch operator role after conflict: %w", err)
-				}
+			operatorRole, err = createRoleIfMissing(ctx, tx, "operator", "运营", "运营人员，可管理用户和查看角色", false)
+			if err != nil {
+				return err
 			}
 		}
 		if viewerErr != nil {
-			viewerRole = &model.AdminRole{
-				Name:        "viewer",
-				DisplayName: "观察者",
-				Description: "只读访问权限",
-				IsSystem:    false,
-				IsEnabled:   true,
-			}
-			if err := tx.WithContext(ctx).Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "name"}},
-				DoNothing: true,
-			}).Create(viewerRole).Error; err != nil {
-				return fmt.Errorf("create viewer role: %w", err)
-			}
-			if viewerRole.ID == uuid.Nil {
-				if err := tx.WithContext(ctx).Where("name = ?", "viewer").First(viewerRole).Error; err != nil {
-					return fmt.Errorf("re-fetch viewer role after conflict: %w", err)
-				}
+			viewerRole, err = createRoleIfMissing(ctx, tx, "viewer", "观察者", "只读访问权限", false)
+			if err != nil {
+				return err
 			}
 		}
 
@@ -364,13 +356,16 @@ func autoAssignAdminRole(
 		zap.String("user_email", firstUser.Email),
 		zap.String("admin_role_id", adminRoleID))
 
-	// 1. Create admin_user_roles record
+	// 1. Create admin_user_roles record (handle concurrent creation safely).
 	userRole := &model.AdminUserRole{
 		UserID:     firstUser.ID,
 		RoleID:     uuid.MustParse(adminRoleID),
 		AssignedAt: time.Now(),
 	}
-	if err := db.WithContext(ctx).Create(userRole).Error; err != nil {
+	if err := db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "user_id"}, {Name: "role_id"}},
+		DoNothing: true,
+	}).Create(userRole).Error; err != nil {
 		return fmt.Errorf("create admin_user_role record: %w", err)
 	}
 

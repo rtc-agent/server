@@ -31,7 +31,7 @@ func (h *PermissionHandler) RegisterRoutes(r *gin.RouterGroup) {
 
 // CreatePermissionRequest is the request body for POST /api/permissions.
 type CreatePermissionRequest struct {
-	RoleID   string `json:"role_id" binding:"required"`
+	RoleID   string `json:"role_id" binding:"required,uuid"`
 	Resource string `json:"resource" binding:"required,min=1,max=100"`
 	Action   string `json:"action" binding:"required,min=1,max=100"`
 }
@@ -42,7 +42,7 @@ type CreatePermissionRequest struct {
 
 // CheckPermissionRequest is the request body for POST /api/permissions/check.
 type CheckPermissionRequest struct {
-	UserID   string `json:"user_id" binding:"required"`
+	UserID   string `json:"user_id" binding:"required,uuid"`
 	Resource string `json:"resource" binding:"required"`
 	Action   string `json:"action" binding:"required"`
 }
@@ -104,12 +104,6 @@ func (h *PermissionHandler) Create(c *gin.Context) {
 	var req CreatePermissionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
-		return
-	}
-
-	// Validate UUID format
-	if _, err := uuid.Parse(req.RoleID); err != nil {
-		Error(c, "validation_error", "Invalid role ID format")
 		return
 	}
 
@@ -181,6 +175,7 @@ func (h *PermissionHandler) Check(c *gin.Context) {
 
 	userID, err := uuid.Parse(req.UserID)
 	if err != nil {
+		// This should never happen since binding validates UUID format
 		Error(c, "validation_error", "Invalid user ID format")
 		return
 	}

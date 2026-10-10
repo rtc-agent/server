@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -30,7 +31,7 @@ func (m *mockSessionRepo) GetByID(_ context.Context, id uuid.UUID) (*model.Sessi
 	if s, ok := m.sessions[id]; ok {
 		return s, nil
 	}
-	return nil, repo.ErrSessionNotFound
+	return nil, dbutil.ErrSessionNotFound
 }
 
 func (m *mockSessionRepo) AtomicUpdateEWMA(_ context.Context, sessionID uuid.UUID, ewma float64) error {
@@ -72,7 +73,7 @@ func (m *mockSessionRepo) ListByRoot(_ context.Context, _ uuid.UUID, _ string) (
 func (m *mockSessionRepo) FindActiveByParent(_ context.Context, _ uuid.UUID) ([]*model.Session, error) {
 	panic("not implemented")
 }
-func (m *mockSessionRepo) AtomicAddTokenUsage(_ context.Context, _ uuid.UUID, _ repo.TokenUsageDelta) error {
+func (m *mockSessionRepo) AtomicAddTokenUsage(_ context.Context, _ uuid.UUID, _ model.TokenUsageDelta) error {
 	panic("not implemented")
 }
 func (m *mockSessionRepo) ListForAdmin(_ context.Context, _ repo.SessionAdminFilter) ([]*model.Session, int64, error) {

@@ -72,86 +72,12 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		}
 	}
 
-	// Summary truncation: when LatestSummaryOffset was not set on the session
-	// (e.g., old sessions before this field was introduced), fall back to
-	// scanning for the most recent summary message.
-	//
-	// Exception: prompt-type messages are always preserved regardless of
-	// position, because they contain persistent system instructions that
-	// must survive compaction (design principle: "system prompts must
-	// always remain present in the context").
-	if session == nil || session.LatestSummaryOffset == 0 {
-		summaryIdx := -1
-		for i := len(dbMsgs) - 1; i >= 0; i-- {
-			if parsedOK[dbMsgs[i]] && parsedContents[dbMsgs[i]].Type == protocol.ContentTypeSummary {
-				summaryIdx = i
-				break
-			}
-		}
-
-		if summaryIdx > 0 {
-			// Collect prompt messages that are before the summary boundary.
-			// These would be lost by truncation but must be preserved.
-			var preservedPrompts []*model.Message
-			for i := 0; i < summaryIdx; i++ {
-				if parsedOK[dbMsgs[i]] && parsedContents[dbMsgs[i]].Type == protocol.ContentTypePrompt {
-					preservedPrompts = append(preservedPrompts, dbMsgs[i])
-				}
-			}
-			// Truncate to summary boundary, then prepend preserved prompt messages.
-			// preservedPrompts are in global_offset order (scanned left to right).
-			dbMsgs = append(preservedPrompts, dbMsgs[summaryIdx:]...)
-		} else if summaryIdx == 0 {
-			// Summary is the first message — keep all messages from summary onward.
-			// No messages before summary to preserve.
-			dbMsgs = dbMsgs[summaryIdx:]
-		}
-		// If summaryIdx < 0, no summary found — keep all messages as-is.
-	}
+	// Apply summary truncation for sessions without LatestSummaryOffset set.
+	dbMsgs = h.applySummaryTruncation(session, dbMsgs, parsedContents, parsedOK)
 
 	// Convert DB messages to turn-agent Messages.
-	// The conversion logic mirrors the old SchemaMessages method in context.go,
-	// but produces turnagent.Message instead of schema.Message.
-	//
-	// Prompt messages are included at their natural position (based on global_offset).
-	// Deduplication is handled by persistCommandPromptsIfNeeded when creating new prompts.
-	//
-	// convertDBMessageWithContent uses pre-parsed ContentData to avoid redundant parsing.
-	// It may return nil for unparseable or unrecognized content types; skip those to
-	// prevent nil entries from reaching the LLM adapter (which would produce nil
-	// schema.Message entries and risk a panic).
-	var messages []*turnagent.Message
-	var droppedCount int
-	for _, msg := range dbMsgs {
-		var cd protocol.ContentData
-		hasContent := parsedOK[msg]
-		if hasContent {
-			cd = parsedContents[msg]
-		}
-		converted, convErr := h.convertDBMessageWithContent(ctx, msg, cd, hasContent)
-		if convErr != nil {
-			// Log parse errors at Debug level for observability. The overall
-			// drop count is logged at Warn below; this adds per-message detail.
-			h.logger.Debug(ctx, "loadMessages.convert_failed", map[string]any{
-				"session_id": sid.String(),
-				"message_id": msg.ID.String(),
-				"error":      convErr.Error(),
-			})
-		}
-		if len(converted) == 0 {
-			// Only count as dropped if there was a parse error.
-			// Empty conversions (e.g., unrecognized content types) are skipped.
-			if convErr != nil {
-				droppedCount++
-			}
-			continue
-		}
-		for _, cm := range converted {
-			if cm != nil {
-				messages = append(messages, cm)
-			}
-		}
-	}
+	messages, droppedCount := h.convertMessages(ctx, sid, dbMsgs, parsedContents, parsedOK)
+
 	// Log dropped messages for observability. Without this, data loss from
 	// malformed content is invisible — operators cannot diagnose why the LLM
 	// sees fewer messages than expected.
@@ -244,67 +170,95 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 	}
 
 	// Filter out tool results for pending tool calls (checkpoint resume only).
-	//
-	// On checkpoint resume (genResume), the eino framework's ToolNode will re-invoke
-	// the interrupted tool's InvokableRun, which returns the result and causes the
-	// ToolNode to create a tool result message. If we also load the toolcall_output
-	// from DB, we get duplicate tool_result messages with the same tool_call_id.
-	//
-	// Instead of skipping ALL toolcall_output (which loses non-RTC tool results),
-	// we skip only the tool results whose tool_call_id matches a pending tool call
-	// in the checkpoint. Pending IDs are extracted by the HistoryModifier from the
-	// checkpoint's State.Messages and passed via context.
-	//
-	// Filtering happens AFTER normalizeMessagesForLLM so that repairToolPairing
-	// correctly validates the full message set before we surgically remove pending
-	// results. The assistant messages with pending tool calls are preserved because
-	// repairToolPairing already ran and validated them.
-	pendingIDs := turnagent.PendingToolCallIDsFromContext(ctx)
-	if len(pendingIDs) > 0 {
-		filtered := make([]*turnagent.Message, 0, len(messages))
-		var skippedCount int
-		for _, msg := range messages {
-			if msg.Role == turnagent.RoleTool && msg.ToolCallID != "" && pendingIDs[msg.ToolCallID] {
-				skippedCount++
-				continue
-			}
-			filtered = append(filtered, msg)
-		}
-		if skippedCount > 0 {
-			// Verification: check if any pending tool results remain after filtering.
-			// This should be 0; if > 0, it indicates the eino framework behavior has
-			// changed or there's a bug in extractPendingToolCallIDs.
-			var residualCount int
-			for _, msg := range filtered {
-				if msg.Role == turnagent.RoleTool && msg.ToolCallID != "" && pendingIDs[msg.ToolCallID] {
-					residualCount++
-				}
-			}
+	messages = h.filterPendingToolResults(sid, messages, ctx)
 
-			h.logger.Info(ctx, "loadMessages.filtered_pending_tool_results", map[string]any{
-				"session_id":     sid.String(),
-				"skipped_count":  skippedCount,
-				"pending_ids":    len(pendingIDs),
-				"residual_count": residualCount,
-			})
+	// Set strategic cache breakpoints to protect stable content from invalidation.
+	messages = h.applyStrategicCacheBreakpoints(ctx, messages)
 
-			if residualCount > 0 {
-				h.logger.Error(ctx, "loadMessages.pending_filter_verification_failed", map[string]any{
-					"session_id":     sid.String(),
-					"residual_count": residualCount,
-					"skipped_count":  skippedCount,
-					"pending_ids":    len(pendingIDs),
-					"message":        "Pending tool results still present after filtering - eino framework behavior may have changed or extractPendingToolCallIDs has a bug",
-				})
-			}
-		}
-		messages = filtered
+	// Trigger background Session Memory extraction (async, non-blocking).
+	h.triggerSessionMemoryIfNeeded(ctx, sid, messages, loadSource)
+
+	// Debug logging: record all loaded message previews.
+	h.logLoadedMessages(ctx, sid, messages)
+
+	return messages, nil
+}
+
+// filterPendingToolResults filters out tool results for pending tool calls (checkpoint resume only).
+//
+// On checkpoint resume (genResume), the eino framework's ToolNode will re-invoke
+// the interrupted tool's InvokableRun, which returns the result and causes the
+// ToolNode to create a tool result message. If we also load the toolcall_output
+// from DB, we get duplicate tool_result messages with the same tool_call_id.
+//
+// Instead of skipping ALL toolcall_output (which loses non-RTC tool results),
+// we skip only the tool results whose tool_call_id matches a pending tool call
+// in the checkpoint. Pending IDs are extracted by the HistoryModifier from the
+// checkpoint's State.Messages and passed via context.
+//
+// Filtering happens AFTER normalizeMessagesForLLM so that repairToolPairing
+// correctly validates the full message set before we surgically remove pending
+// results. The assistant messages with pending tool calls are preserved because
+// repairToolPairing already ran and validated them.
+func (h *helpers) filterPendingToolResults(sid uuid.UUID, messages []*turnagent.Message, logCtx context.Context) []*turnagent.Message {
+	pendingIDs := turnagent.PendingToolCallIDsFromContext(logCtx)
+	if len(pendingIDs) == 0 {
+		return messages
 	}
 
-	// Set strategic cache breakpoints to protect stable content from invalidation
-	// caused by microcompact or tool result budget modifications.
-	// MUST be called AFTER normalizeMessagesForLLM (which reorders system messages).
-	// Read dynamically from ConfigProvider to support runtime toggling.
+	filtered := make([]*turnagent.Message, 0, len(messages))
+	var skippedCount int
+	for _, msg := range messages {
+		if msg.Role == turnagent.RoleTool && msg.ToolCallID != "" && pendingIDs[msg.ToolCallID] {
+			skippedCount++
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+
+	if skippedCount > 0 {
+		// Verification: check if any pending tool results remain after filtering.
+		// This should be 0; if > 0, it indicates the eino framework behavior has
+		// changed or there's a bug in extractPendingToolCallIDs.
+		residualCount := h.countResidualPendingResults(filtered, pendingIDs)
+
+		h.logger.Info(logCtx, "loadMessages.filtered_pending_tool_results", map[string]any{
+			"session_id":     sid.String(),
+			"skipped_count":  skippedCount,
+			"pending_ids":    len(pendingIDs),
+			"residual_count": residualCount,
+		})
+
+		if residualCount > 0 {
+			h.logger.Error(logCtx, "loadMessages.pending_filter_verification_failed", map[string]any{
+				"session_id":     sid.String(),
+				"residual_count": residualCount,
+				"skipped_count":  skippedCount,
+				"pending_ids":    len(pendingIDs),
+				"message":        "Pending tool results still present after filtering - eino framework behavior may have changed or extractPendingToolCallIDs has a bug",
+			})
+		}
+	}
+
+	return filtered
+}
+
+// countResidualPendingResults counts pending tool results remaining after filtering.
+func (h *helpers) countResidualPendingResults(messages []*turnagent.Message, pendingIDs map[string]bool) int {
+	var count int
+	for _, msg := range messages {
+		if msg.Role == turnagent.RoleTool && msg.ToolCallID != "" && pendingIDs[msg.ToolCallID] {
+			count++
+		}
+	}
+	return count
+}
+
+// applyStrategicCacheBreakpoints sets strategic cache breakpoints to protect stable content
+// from invalidation caused by microcompact or tool result budget modifications.
+// MUST be called AFTER normalizeMessagesForLLM (which reorders system messages).
+// Read dynamically from ConfigProvider to support runtime toggling.
+func (h *helpers) applyStrategicCacheBreakpoints(ctx context.Context, messages []*turnagent.Message) []*turnagent.Message {
 	enableStrategic := h.enableStrategicCacheBreakpoints
 	if h.deps != nil && h.deps.ConfigProvider != nil {
 		userID := userIDFromContext(ctx)
@@ -313,49 +267,153 @@ func (h *helpers) loadMessages(ctx context.Context, sessionID string) ([]*turnag
 		}
 	}
 	if enableStrategic {
-		messages = h.setCacheBreakpoints(messages)
+		return h.setCacheBreakpoints(messages)
+	}
+	return messages
+}
+
+// triggerSessionMemoryIfNeeded triggers background Session Memory extraction (async, non-blocking).
+// The extractor checks whether extraction is needed based on token growth and tool call count.
+//
+// IMPORTANT: Skip extraction on checkpoint resume (genResume) to avoid redundant LLM calls.
+// The extraction was already triggered on the original genInput call for this turn. Resume is
+// just continuing the same turn, not a new conversation point that warrants re-extraction.
+// Extracting on resume wastes tokens without adding value (the token growth threshold already
+// accounts for the work done before interrupt).
+func (h *helpers) triggerSessionMemoryIfNeeded(ctx context.Context, sid uuid.UUID, messages []*turnagent.Message, loadSource turnagent.LoadSource) {
+	if len(messages) == 0 {
+		return
 	}
 
-	// Trigger background Session Memory extraction (async, non-blocking).
-	// The extractor checks whether extraction is needed based on token growth
-	// and tool call count.
-	//
-	// IMPORTANT: Skip extraction on checkpoint resume (genResume) to avoid
-	// redundant LLM calls. The extraction was already triggered on the original
-	// genInput call for this turn. Resume is just continuing the same turn,
-	// not a new conversation point that warrants re-extraction. Extracting on
-	// resume wastes tokens without adding value (the token growth threshold
-	// already accounts for the work done before interrupt).
-	if len(messages) > 0 && loadSource != turnagent.LoadSourceGenResume {
+	if loadSource != turnagent.LoadSourceGenResume {
 		h.triggerSessionMemoryExtraction(ctx, sid, messages)
-	} else if len(messages) > 0 {
+	} else {
 		h.logger.Debug(ctx, "loadMessages.skip_session_memory_extraction", map[string]any{
 			"session_id":  sid.String(),
 			"load_source": string(loadSource),
 		})
 	}
+}
 
-	// Debug logging: record all loaded message previews (Debug level to avoid production noise).
-	if len(messages) > 0 {
-		var preview []string
-		for i, msg := range messages {
-			content := msg.Content
-			if content == "" && msg.ReasoningContent != "" {
-				content = "[thinking]" + msg.ReasoningContent
-			}
-			if len(content) > 10 {
-				content = stringutil.TruncateByByte(content, 10)
-			}
-			preview = append(preview, fmt.Sprintf("[%d]%s:%s", i, msg.Role, content))
-		}
-		h.logger.Debug(ctx, "loadMessages.all_messages", map[string]any{
-			"session_id":    sid.String(),
-			"message_count": len(messages),
-			"messages":      preview,
-		})
+// logLoadedMessages logs all loaded message previews at Debug level to avoid production noise.
+func (h *helpers) logLoadedMessages(ctx context.Context, sid uuid.UUID, messages []*turnagent.Message) {
+	if len(messages) == 0 {
+		return
 	}
 
-	return messages, nil
+	preview := make([]string, 0, len(messages))
+	for i, msg := range messages {
+		content := msg.Content
+		if content == "" && msg.ReasoningContent != "" {
+			content = "[thinking]" + msg.ReasoningContent
+		}
+		if len(content) > 10 {
+			content = stringutil.TruncateByByte(content, 10)
+		}
+		preview = append(preview, fmt.Sprintf("[%d]%s:%s", i, msg.Role, content))
+	}
+
+	h.logger.Debug(ctx, "loadMessages.all_messages", map[string]any{
+		"session_id":    sid.String(),
+		"message_count": len(messages),
+		"messages":      preview,
+	})
+}
+
+// applySummaryTruncation handles summary truncation for sessions without LatestSummaryOffset.
+// It scans for the most recent summary message and truncates messages before it,
+// while preserving prompt-type messages that contain persistent system instructions.
+func (h *helpers) applySummaryTruncation(
+	session *model.Session,
+	dbMsgs []*model.Message,
+	parsedContents map[*model.Message]protocol.ContentData,
+	parsedOK map[*model.Message]bool,
+) []*model.Message {
+	// Skip if session already has LatestSummaryOffset set (new sessions).
+	if session != nil && session.LatestSummaryOffset > 0 {
+		return dbMsgs
+	}
+
+	// Find the most recent summary message by scanning backwards.
+	summaryIdx := -1
+	for i := len(dbMsgs) - 1; i >= 0; i-- {
+		if parsedOK[dbMsgs[i]] && parsedContents[dbMsgs[i]].Type == protocol.ContentTypeSummary {
+			summaryIdx = i
+			break
+		}
+	}
+
+	if summaryIdx > 0 {
+		// Collect prompt messages before the summary boundary that must be preserved.
+		var preservedPrompts []*model.Message
+		for i := 0; i < summaryIdx; i++ {
+			if parsedOK[dbMsgs[i]] && parsedContents[dbMsgs[i]].Type == protocol.ContentTypePrompt {
+				preservedPrompts = append(preservedPrompts, dbMsgs[i])
+			}
+		}
+		// Truncate to summary boundary, then prepend preserved prompt messages.
+		// preservedPrompts are in global_offset order (scanned left to right).
+		return append(preservedPrompts, dbMsgs[summaryIdx:]...)
+	} else if summaryIdx == 0 {
+		// Summary is the first message — keep all messages from summary onward.
+		return dbMsgs[summaryIdx:]
+	}
+	// If summaryIdx < 0, no summary found — keep all messages as-is.
+	return dbMsgs
+}
+
+// convertMessages converts DB messages to turn-agent Messages with error handling.
+// It returns the converted messages and the count of dropped (unparseable) messages.
+func (h *helpers) convertMessages(
+	ctx context.Context,
+	sid uuid.UUID,
+	dbMsgs []*model.Message,
+	parsedContents map[*model.Message]protocol.ContentData,
+	parsedOK map[*model.Message]bool,
+) ([]*turnagent.Message, int) {
+	// The conversion logic mirrors the old SchemaMessages method in context.go,
+	// but produces turnagent.Message instead of schema.Message.
+	//
+	// Prompt messages are included at their natural position (based on global_offset).
+	// Deduplication is handled by persistCommandPromptsIfNeeded when creating new prompts.
+	//
+	// convertDBMessageWithContent uses pre-parsed ContentData to avoid redundant parsing.
+	// It may return nil for unparseable or unrecognized content types; skip those to
+	// prevent nil entries from reaching the LLM adapter (which would produce nil
+	// schema.Message entries and risk a panic).
+	var messages []*turnagent.Message
+	var droppedCount int
+	for _, msg := range dbMsgs {
+		var cd protocol.ContentData
+		hasContent := parsedOK[msg]
+		if hasContent {
+			cd = parsedContents[msg]
+		}
+		converted, convErr := h.convertDBMessageWithContent(ctx, msg, cd, hasContent)
+		if convErr != nil {
+			// Log parse errors at Debug level for observability. The overall
+			// drop count is logged at Warn below; this adds per-message detail.
+			h.logger.Debug(ctx, "loadMessages.convert_failed", map[string]any{
+				"session_id": sid.String(),
+				"message_id": msg.ID.String(),
+				"error":      convErr.Error(),
+			})
+		}
+		if len(converted) == 0 {
+			// Only count as dropped if there was a parse error.
+			// Empty conversions (e.g., unrecognized content types) are skipped.
+			if convErr != nil {
+				droppedCount++
+			}
+			continue
+		}
+		for _, cm := range converted {
+			if cm != nil {
+				messages = append(messages, cm)
+			}
+		}
+	}
+	return messages, droppedCount
 }
 
 // prependAttachments builds system-role attachments (SessionMemory,

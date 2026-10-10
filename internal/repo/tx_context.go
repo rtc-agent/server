@@ -1,34 +1,102 @@
+// Package repo provides data access layer (Repository) implementations.
+//
+// All repo methods must obtain the database handle via DBFromContext to support
+// transparent transaction propagation. Sentinel errors are defined centrally
+// in errors.go; callers can use errors.Is to determine error types.
 package repo
 
 import (
 	"context"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"gorm.io/gorm"
 )
 
-// txContextKey is the private type used as context key for transactions.
-type txContextKey struct{}
+// Re-export transaction utilities from dbutil for backwards compatibility.
+// New code should import internal/dbutil directly.
+var (
+	WithTx        = dbutil.WithTx
+	TxFromContext = dbutil.TxFromContext
+	DBFromContext = dbutil.DBFromContext
+)
 
-// WithTx injects a transaction object into the context.
-// Repo methods automatically use the transaction via DBFromContext without
-// requiring interface signature changes.
-func WithTx(ctx context.Context, tx *gorm.DB) context.Context {
-	return context.WithValue(ctx, txContextKey{}, tx)
-}
+// Re-export sentinel errors from dbutil for backwards compatibility.
+// New code should import internal/dbutil directly.
+var (
+	// Generic
+	ErrNotFound      = dbutil.ErrNotFound
+	ErrAlreadyExists = dbutil.ErrAlreadyExists
 
-// TxFromContext extracts the transaction object from the context.
-// Returns nil if no transaction is present.
-func TxFromContext(ctx context.Context) *gorm.DB {
-	tx, _ := ctx.Value(txContextKey{}).(*gorm.DB)
-	return tx
-}
+	// Session
+	ErrSessionNotFound         = dbutil.ErrSessionNotFound
+	ErrSessionClosed           = dbutil.ErrSessionClosed
+	ErrSessionClosedOrNotFound = dbutil.ErrSessionClosedOrNotFound
 
-// DBFromContext returns the transactional *gorm.DB if the context carries a tx,
-// otherwise returns the fallback. All repos use this function uniformly,
-// eliminating duplicated txOrDB methods across individual repos.
-func DBFromContext(ctx context.Context, fallback *gorm.DB) *gorm.DB {
-	if tx := TxFromContext(ctx); tx != nil {
-		return tx
-	}
-	return fallback
+	// Turn
+	ErrTurnNotFound   = dbutil.ErrTurnNotFound
+	ErrTurnNotPending = dbutil.ErrTurnNotPending
+
+	// Message
+	ErrMessageNotFound = dbutil.ErrMessageNotFound
+
+	// Rtc
+	ErrRtcNotFound = dbutil.ErrRtcNotFound
+
+	// OAuth2User
+	ErrOAuth2UserNotFound = dbutil.ErrOAuth2UserNotFound
+
+	// Device
+	ErrDeviceNotFound = dbutil.ErrDeviceNotFound
+
+	// RefreshToken
+	ErrRefreshTokenNotFound = dbutil.ErrRefreshTokenNotFound
+
+	// Goal
+	ErrGoalNotFound = dbutil.ErrGoalNotFound
+
+	// Loop
+	ErrLoopNotFound = dbutil.ErrLoopNotFound
+
+	// ScriptExecution
+	ErrScriptExecutionNotFound = dbutil.ErrScriptExecutionNotFound
+
+	// File (OSS3)
+	ErrFileNotFound = dbutil.ErrFileNotFound
+
+	// MultipartUpload (OSS3)
+	ErrMultipartUploadNotFound = dbutil.ErrMultipartUploadNotFound
+
+	// Permission
+	ErrPermissionDenied = dbutil.ErrPermissionDenied
+	ErrPermissionExists = dbutil.ErrPermissionExists
+
+	// Role
+	ErrRoleNotFound           = dbutil.ErrRoleNotFound
+	ErrRoleNameExists         = dbutil.ErrRoleNameExists
+	ErrDuplicateName          = dbutil.ErrDuplicateName
+	ErrCannotDeleteSystemRole = dbutil.ErrCannotDeleteSystemRole
+	ErrCannotRemoveLastAdmin  = dbutil.ErrCannotRemoveLastAdmin
+	ErrCannotRemoveSelfAdmin  = dbutil.ErrCannotRemoveSelfAdmin
+	ErrRoleDisabled           = dbutil.ErrRoleDisabled
+
+	// Concurrency
+	ErrConflict = dbutil.ErrConflict
+)
+
+// Re-export helper functions from dbutil for backwards compatibility.
+var (
+	IsNotFound          = dbutil.IsNotFound
+	IsDuplicateKeyError = dbutil.IsDuplicateKeyError
+)
+
+// TxContextKey is exported for tests that need to verify transaction context propagation.
+// This is a type alias to dbutil's internal type.
+type TxContextKey = txContextKeyType
+
+// txContextKeyType matches dbutil's internal type for type alias compatibility.
+type txContextKeyType = struct{}
+
+// WithTxContext is an alias for WithTx for explicit clarity in transaction orchestration code.
+func WithTxContext(ctx context.Context, tx *gorm.DB) context.Context {
+	return dbutil.WithTx(ctx, tx)
 }

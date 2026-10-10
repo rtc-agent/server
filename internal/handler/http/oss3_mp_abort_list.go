@@ -46,6 +46,11 @@ func (h *OSS3MultipartHandler) handleAbortMultipartUpload(
 		return
 	}
 
+	// Release quota for already-uploaded parts (if any).
+	// This must happen after the backend abort, since the parts list is needed to calculate
+	// the total size. Uses background context internally to avoid cancellation issues.
+	h.oss3UC.ReleaseMultipartUploadQuota(r.Context(), userID, uploadID)
+
 	// Delete multipart upload record from DB
 	if err := h.oss3UC.DeleteMultipartUploadRecord(r.Context(), uploadID); err != nil {
 		logger.Warn(r.Context(), "failed to delete multipart upload record after abort",

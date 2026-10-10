@@ -21,11 +21,26 @@ import (
 // gaps and only advances the local offset without business processing.
 func fillGapPublications(ctx context.Context, sinceOffset uint32, latestOffset uint32, pubs []*centrifuge.Publication) []*centrifuge.Publication {
 	latest := uint64(latestOffset)
-	if latest == uint64(sinceOffset) && len(pubs) == 0 {
+	since := uint64(sinceOffset)
+
+	if latest == since && len(pubs) == 0 {
 		return pubs
 	}
+
+	// Prevent excessive memory allocation when offset difference is large.
+	// If the gap is too large (e.g., due to data cleanup), truncate to maxGapFill
+	// to avoid creating millions of gap objects.
+	const maxGapFill = 1000
+	if latest-since > uint64(maxGapFill) {
+		logger.Warn(ctx, "gap_fill_truncated",
+			zap.Uint32("since_offset", sinceOffset),
+			zap.Uint32("latest_offset", latestOffset),
+			zap.Int("max_fill", maxGapFill))
+		latest = since + uint64(maxGapFill)
+	}
+
 	out := make([]*centrifuge.Publication, 0, len(pubs)+2)
-	cur := uint64(sinceOffset) + 1
+	cur := since + 1
 	for _, p := range pubs {
 		// Generate a gap for each missing offset in [cur, p.Offset-1]
 		for p.Offset > cur {

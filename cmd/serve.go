@@ -14,6 +14,7 @@ import (
 	"github.com/rtc-agent/server/internal/infra/tracing"
 	"github.com/rtc-agent/server/pkg/logger"
 
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -69,7 +70,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		logger.Info(context.Background(), "LLM payload logging enabled — writing to logs/llm-payload.log")
 	}
 	if cfg.Log.ServerLogFile != "" {
-		logger.Info(context.Background(), "Server log file enabled — writing to "+cfg.Log.ServerLogFile)
+		logger.Info(context.Background(), "Server log file enabled", zap.String("log_file", cfg.Log.ServerLogFile))
 	}
 
 	// Init tracing (OpenTelemetry + Jaeger)
@@ -85,7 +86,8 @@ func runServe(cmd *cobra.Command, args []string) {
 		if err != nil {
 			logger.Fatal(context.Background(), "Failed to initialize tracing", zap.Error(err))
 		}
-		logger.Info(context.Background(), "Tracing enabled",
+		logger.Info(context.Background(), "Tracing enabled")
+		logger.Debug(context.Background(), "Tracing configuration",
 			zap.String("endpoint", cfg.Tracing.Endpoint),
 			zap.Float64("sample_rate", cfg.Tracing.SampleRate),
 		)
@@ -134,15 +136,31 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	// Init Redis
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
+		Addr:         cfg.Redis.Addr,
+		Password:     cfg.Redis.Password,
+		DB:           cfg.Redis.DB,
+		PoolSize:     100,             // 根据并发量调整，默认 10 在高并发下易成瓶颈
+		MinIdleConns: 10,              // 保持最小空闲连接，减少连接建立开销
+		MaxRetries:   3,               // 最大重试次数，提升网络抖动下的成功率
+		DialTimeout:  5 * time.Second, // 连接超时
+		ReadTimeout:  3 * time.Second, // 读超时，防止请求永久阻塞
+		WriteTimeout: 3 * time.Second, // 写超时，防止请求永久阻塞
+		PoolTimeout:  4 * time.Second, // 连接池超时，等待空闲连接的上限
 	})
+
+	// Integrate OpenTelemetry tracing and metrics for Redis
+	// This enables distributed tracing spans and Prometheus metrics for all Redis operations
+	if err := redisotel.InstrumentTracing(rdb); err != nil {
+		logger.Error(context.Background(), "Failed to instrument Redis tracing", zap.Error(err))
+	}
+	if err := redisotel.InstrumentMetrics(rdb); err != nil {
+		logger.Error(context.Background(), "Failed to instrument Redis metrics", zap.Error(err))
+	}
+
 	// Verify Redis connection at startup.
 	if err := rdb.Ping(context.Background()).Err(); err != nil {
 		logger.Fatal(context.Background(), "Failed to connect Redis", zap.Error(err))
 	}
-	defer func() { _ = rdb.Close() }()
 
 	// Init ban cache (Redis-backed, shared across all instances)
 	middleware.InitBanCache(rdb, 30*time.Second)
@@ -165,8 +183,38 @@ func runServe(cmd *cobra.Command, args []string) {
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	sig := <-quit
 
-	logger.Info(context.Background(), "Shutting down server...")
+	logger.Info(context.Background(), "Shutting down server...", zap.String("signal", sig.String()))
+
+	// Create a context with timeout for graceful shutdown.
+	// This ensures that even if some components fail to shut down cleanly,
+	// the process will eventually exit.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	// Shutdown sequence (in reverse order of startup):
+	// 1. Stop HTTP server (stops accepting new connections)
+	// 2. Stop Server (stops workers, centrifuge, etc.)
+	// 3. Close database connections
+	// 4. Close Redis connections
+	// Note: logger.Sync and tracing shutdown are handled by defer statements.
+
+	// Stop the main server (handles workers, centrifuge, asynq, etc.)
+	logger.Info(shutdownCtx, "shutdown: stopping server components")
 	srv.Stop()
+
+	// Close database connection pool
+	logger.Info(shutdownCtx, "shutdown: closing database connections")
+	if err := sqlDB.Close(); err != nil {
+		logger.Error(shutdownCtx, "shutdown: database close error", zap.Error(err))
+	}
+
+	// Close Redis connection
+	logger.Info(shutdownCtx, "shutdown: closing Redis connection")
+	if err := rdb.Close(); err != nil {
+		logger.Error(shutdownCtx, "shutdown: Redis close error", zap.Error(err))
+	}
+
+	logger.Info(shutdownCtx, "shutdown: complete")
 }

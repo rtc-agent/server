@@ -32,10 +32,17 @@ var (
 
 // ServerConfigUsecase handles dynamic configuration management.
 type ServerConfigUsecase struct {
-	configRepo     repo.ServerConfigRepo
-	auditLogRepo   repo.AuditLogRepo
-	oauth2UserRepo repo.OAuth2UserRepo
-	db             *gorm.DB
+	configRepo      repo.ServerConfigRepo
+	auditLogRepo    repo.AuditLogRepo
+	oauth2UserRepo  repo.OAuth2UserRepo
+	db              *gorm.DB
+	configPublisher ConfigPublisher // optional: publishes config update events for multi-instance cache sync
+}
+
+// ConfigPublisher publishes config update events (implemented by RedisConfigPublisher).
+// This interface allows the usecase to publish events without directly depending on Redis.
+type ConfigPublisher interface {
+	PublishConfigUpdate(ctx context.Context, key string, userID *uuid.UUID, version int, operation string) error
 }
 
 // NewServerConfigUsecase creates a new ServerConfigUsecase.
@@ -46,6 +53,13 @@ func NewServerConfigUsecase(configRepo repo.ServerConfigRepo, auditLogRepo repo.
 		oauth2UserRepo: oauth2UserRepo,
 		db:             db,
 	}
+}
+
+// SetConfigPublisher sets the optional config publisher for multi-instance cache synchronization.
+// When set, config updates will be published to Redis Pub/Sub, allowing other instances
+// to invalidate their caches and maintain consistency.
+func (uc *ServerConfigUsecase) SetConfigPublisher(publisher ConfigPublisher) {
+	uc.configPublisher = publisher
 }
 
 // SystemConfigItem represents a single system config entry in the list response.
@@ -198,113 +212,154 @@ func (uc *ServerConfigUsecase) GetSystemConfig(ctx context.Context, key string) 
 
 // UpdateSystemConfig updates a system-level dynamic config entry.
 // operatorID and operatorIP are used for audit logging.
-// input.Version < 0 means force overwrite (skip optimistic lock check).
+// input.Version < 0 means force overwrite (still uses optimistic lock with current version).
+//
+// Retry: On optimistic lock conflict, automatically retries up to 3 times.
+// This handles the common case of concurrent config updates from different admin users.
 func (uc *ServerConfigUsecase) UpdateSystemConfig(ctx context.Context, key string, input UpdateConfigInput, operatorID uuid.UUID, operatorIP string) (*SystemConfigItem, error) {
 	entry := config.GetRegistryEntry(key)
 	if entry == nil {
 		return nil, ErrConfigKeyNotFound
 	}
 
-	// Validate and marshal value.
+	// Validate and marshal value (outside retry loop — value doesn't change between retries).
 	jsonVal, err := marshalAndValidateValue(input.Value, entry)
 	if err != nil {
 		return nil, err
 	}
 
+	const maxConfigRetries = 3
 	now := time.Now()
 
-	// Execute in transaction: get old value + upsert config + history + audit log.
-	// getOldValue runs inside the transaction to avoid TOCTOU: the old value is read
-	// atomically with the write, ensuring history consistency.
-	err = uc.db.Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+	for attempt := 0; attempt < maxConfigRetries; attempt++ {
+		// Variables to capture from transaction for post-tx operations.
+		var (
+			oldValueJSON datatypes.JSON
+			newVersion   int
+		)
 
-		// Capture old value within the same transaction for history.
-		// Pass entry to provide yaml default when DB has no record (first write).
-		oldValueJSON := uc.getOldValue(txCtx, key, nil, entry)
+		// Execute core operations in transaction: get old value + upsert config + history.
+		// Non-core operations (TrimHistory, AuditLog) are moved outside to reduce lock hold time.
+		err = uc.db.Transaction(func(tx *gorm.DB) error {
+			txCtx := repo.WithTx(ctx, tx)
 
-		var newVersion, expectedVersion int
-		if input.Version < 0 {
-			// Force overwrite: skip version check.
-			currentVersion := 0
-			if oldValueJSON != nil {
-				currentCfg, getErr := uc.configRepo.Get(txCtx, key, nil)
-				if getErr == nil {
-					currentVersion = currentCfg.Version
-				} else {
-					// 获取当前版本号失败，从 0 开始递增，记录警告以便排查。
-					logger.Warn(ctx, "config.force_overwrite.get_version_failed",
+			// Capture old value within the same transaction for history.
+			// Pass entry to provide yaml default when DB has no record (first write).
+			oldValueJSON = uc.getOldValue(txCtx, key, nil, entry)
+
+			var expectedVersion int
+			if input.Version < 0 {
+				// Force overwrite: use current version for optimistic lock instead of skipping it.
+				// This prevents race conditions where concurrent writes could overwrite each other.
+				currentVersion := 0
+				if oldValueJSON != nil {
+					currentCfg, getErr := uc.configRepo.Get(txCtx, key, nil)
+					if getErr == nil {
+						currentVersion = currentCfg.Version
+					} else {
+						// Failed to get current version, start from 0 and log for investigation.
+						logger.Warn(ctx, "config.force_overwrite.get_version_failed",
+							zap.String("key", key),
+							zap.Error(getErr))
+					}
+				}
+				newVersion = currentVersion + 1
+				expectedVersion = currentVersion // Use currentVersion, not -1
+			} else {
+				newVersion = input.Version + 1
+				expectedVersion = input.Version
+			}
+
+			cfg := &model.ServerConfig{
+				Key:         key,
+				UserID:      nil,
+				Value:       datatypes.JSON(jsonVal),
+				ValueType:   entry.ValueType,
+				Category:    entry.Category,
+				Description: entry.Description,
+				Version:     newVersion,
+				UpdatedBy:   &operatorID,
+				UpdatedAt:   now,
+			}
+
+			if err := uc.configRepo.Upsert(txCtx, cfg, expectedVersion); err != nil {
+				if errors.Is(err, repo.ErrConflict) {
+					return ErrOptimisticLock
+				}
+				return fmt.Errorf("upsert config: %w", err)
+			}
+
+			// Write history (must be in tx for data consistency with config).
+			history := &model.ServerConfigHistory{
+				Key:        key,
+				UserID:     nil,
+				OldValue:   oldValueJSON,
+				NewValue:   datatypes.JSON(jsonVal),
+				Version:    newVersion,
+				ChangedBy:  operatorID,
+				ChangedAt:  now,
+				ChangeNote: input.ChangeNote,
+			}
+			if err := tx.WithContext(ctx).Create(history).Error; err != nil {
+				return fmt.Errorf("create config history: %w", err)
+			}
+
+			return nil
+		})
+
+		if err == nil {
+			// Transaction succeeded — proceed with post-tx operations.
+
+			// Trim history to 100 entries.
+			if trimErr := uc.configRepo.TrimHistory(ctx, key, nil, 100); trimErr != nil {
+				logger.Warn(ctx, "config.trim_history_failed", zap.Error(trimErr))
+			}
+
+			// Audit log (config key stored in details, ResourceID left as zero UUID).
+			auditDetails := map[string]any{
+				"key":         key,
+				"user_id":     nil,
+				"old_value":   unmarshalJSONB(oldValueJSON),
+				"new_value":   input.Value,
+				"version":     newVersion,
+				"change_note": input.ChangeNote,
+			}
+			auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.update", "server_config", uuid.Nil, auditDetails)
+			if auditErr := uc.auditLogRepo.Create(ctx, auditLog); auditErr != nil {
+				logger.Warn(ctx, "config.create_audit_log_failed", zap.Error(auditErr))
+			}
+
+			// Publish config update event for multi-instance cache synchronization.
+			// This allows other instances to invalidate their caches and stay in sync.
+			if uc.configPublisher != nil {
+				if pubErr := uc.configPublisher.PublishConfigUpdate(ctx, key, nil, newVersion, "update"); pubErr != nil {
+					logger.Warn(ctx, "config.publish_update_failed",
 						zap.String("key", key),
-						zap.Error(getErr))
+						zap.Error(pubErr))
 				}
 			}
-			newVersion = currentVersion + 1
-			expectedVersion = -1 // signal repo to skip CAS
-		} else {
-			newVersion = input.Version + 1
-			expectedVersion = input.Version
+
+			return uc.GetSystemConfig(ctx, key)
 		}
 
-		cfg := &model.ServerConfig{
-			Key:         key,
-			UserID:      nil,
-			Value:       datatypes.JSON(jsonVal),
-			ValueType:   entry.ValueType,
-			Category:    entry.Category,
-			Description: entry.Description,
-			Version:     newVersion,
-			UpdatedBy:   &operatorID,
-			UpdatedAt:   now,
+		// Transaction failed.
+		if !errors.Is(err, ErrOptimisticLock) {
+			// Non-retryable error — return immediately.
+			return nil, err
 		}
 
-		if err := uc.configRepo.Upsert(txCtx, cfg, expectedVersion); err != nil {
-			if errors.Is(err, repo.ErrConflict) {
-				return ErrOptimisticLock
-			}
-			return fmt.Errorf("upsert config: %w", err)
+		// Optimistic lock conflict — retry if attempts remaining.
+		if attempt < maxConfigRetries-1 {
+			logger.Warn(ctx, "optimistic_lock_conflict_retrying",
+				zap.String("key", key),
+				zap.Int("attempt", attempt+1),
+				zap.Int("max_retries", maxConfigRetries))
+			continue
 		}
-
-		// Write history.
-		history := &model.ServerConfigHistory{
-			Key:        key,
-			UserID:     nil,
-			OldValue:   oldValueJSON,
-			NewValue:   datatypes.JSON(jsonVal),
-			Version:    newVersion,
-			ChangedBy:  operatorID,
-			ChangedAt:  now,
-			ChangeNote: input.ChangeNote,
-		}
-		if err := tx.WithContext(ctx).Create(history).Error; err != nil {
-			return fmt.Errorf("create config history: %w", err)
-		}
-
-		// Trim history to 100 entries.
-		if err := uc.configRepo.TrimHistory(txCtx, key, nil, 100); err != nil {
-			logger.Warn(ctx, "config.trim_history_failed", zap.Error(err))
-		}
-
-		// Audit log (config key stored in details, ResourceID left as zero UUID).
-		auditDetails := map[string]any{
-			"key":         key,
-			"user_id":     nil,
-			"old_value":   unmarshalJSONB(oldValueJSON),
-			"new_value":   input.Value,
-			"version":     newVersion,
-			"change_note": input.ChangeNote,
-		}
-		auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.update", "server_config", uuid.Nil, auditDetails)
-		if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
-			return fmt.Errorf("create audit log: %w", err)
-		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 
-	return uc.GetSystemConfig(ctx, key)
+	// All retries exhausted.
+	return nil, fmt.Errorf("optimistic lock conflict: max retries (%d) exhausted for key %q", maxConfigRetries, key)
 }
 
 // DeleteSystemConfig deletes a system config (reverts to yaml default).
@@ -365,6 +420,15 @@ func (uc *ServerConfigUsecase) DeleteSystemConfig(ctx context.Context, key strin
 	})
 	if err != nil {
 		return nil, 0, err
+	}
+
+	// Publish config delete event for multi-instance cache synchronization.
+	if uc.configPublisher != nil {
+		if pubErr := uc.configPublisher.PublishConfigUpdate(ctx, key, nil, deletedVersion+1, "delete"); pubErr != nil {
+			logger.Warn(ctx, "config.publish_delete_failed",
+				zap.String("key", key),
+				zap.Error(pubErr))
+		}
 	}
 
 	return deletedValue, deletedVersion, nil
@@ -494,7 +558,7 @@ func (uc *ServerConfigUsecase) GetUserConfig(ctx context.Context, userID uuid.UU
 }
 
 // SetUserConfigOverride sets a user-level config override.
-// input.Version < 0 means force overwrite (skip optimistic lock check).
+// input.Version < 0 means force overwrite (still uses optimistic lock with current version).
 func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID uuid.UUID, key string, input UpdateConfigInput, operatorID uuid.UUID, operatorIP string) (*UserConfigItem, error) {
 	entry := config.GetRegistryEntry(key)
 	if entry == nil {
@@ -517,19 +581,25 @@ func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID
 
 	now := time.Now()
 
-	// Execute in transaction: get old value + upsert config + history + audit log.
-	// getOldValue runs inside the transaction to avoid TOCTOU: the old value is read
-	// atomically with the write, ensuring history consistency (P2-2 fix).
+	// Variables to capture from transaction for post-tx operations.
+	var (
+		oldValueJSON datatypes.JSON
+		newVersion   int
+	)
+
+	// Execute core operations in transaction: get old value + upsert config + history.
+	// Non-core operations (TrimHistory, AuditLog) are moved outside to reduce lock hold time.
 	err = uc.db.Transaction(func(tx *gorm.DB) error {
 		txCtx := repo.WithTx(ctx, tx)
 
 		// Capture old value within the same transaction for history.
 		// Pass entry to provide yaml default when DB has no record (first write).
-		oldValueJSON := uc.getOldValue(txCtx, key, &userID, entry)
+		oldValueJSON = uc.getOldValue(txCtx, key, &userID, entry)
 
-		var newVersion, expectedVersion int
+		var expectedVersion int
 		if input.Version < 0 {
-			// Force overwrite: skip version check.
+			// Force overwrite: use current version for optimistic lock instead of skipping it.
+			// This prevents race conditions where concurrent writes could overwrite each other.
 			currentVersion := 0
 			if oldValueJSON != nil {
 				currentCfg, getErr := uc.configRepo.Get(txCtx, key, &userID)
@@ -538,7 +608,7 @@ func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID
 				}
 			}
 			newVersion = currentVersion + 1
-			expectedVersion = -1 // signal repo to skip CAS
+			expectedVersion = currentVersion // Use currentVersion, not -1
 		} else {
 			newVersion = input.Version + 1
 			expectedVersion = input.Version
@@ -577,27 +647,40 @@ func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID
 			return fmt.Errorf("create user config history: %w", err)
 		}
 
-		if err := uc.configRepo.TrimHistory(txCtx, key, &userID, 100); err != nil {
-			logger.Warn(ctx, "config.trim_history_failed", zap.Error(err))
-		}
-
-		auditDetails := map[string]any{
-			"key":         key,
-			"user_id":     userID.String(),
-			"old_value":   unmarshalJSONB(oldValueJSON),
-			"new_value":   input.Value,
-			"version":     newVersion,
-			"change_note": input.ChangeNote,
-		}
-		auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.update", "server_config", uuid.Nil, auditDetails)
-		if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
-			return fmt.Errorf("create audit log: %w", err)
-		}
-
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Post-transaction operations (non-core, failures logged but don't fail the operation).
+
+	// Trim history to 100 entries.
+	if err := uc.configRepo.TrimHistory(ctx, key, &userID, 100); err != nil {
+		logger.Warn(ctx, "config.trim_history_failed", zap.Error(err))
+	}
+
+	auditDetails := map[string]any{
+		"key":         key,
+		"user_id":     userID.String(),
+		"old_value":   unmarshalJSONB(oldValueJSON),
+		"new_value":   input.Value,
+		"version":     newVersion,
+		"change_note": input.ChangeNote,
+	}
+	auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.update", "server_config", uuid.Nil, auditDetails)
+	if err := uc.auditLogRepo.Create(ctx, auditLog); err != nil {
+		logger.Warn(ctx, "config.create_audit_log_failed", zap.Error(err))
+	}
+
+	// Publish config update event for multi-instance cache synchronization.
+	if uc.configPublisher != nil {
+		if pubErr := uc.configPublisher.PublishConfigUpdate(ctx, key, &userID, newVersion, "update"); pubErr != nil {
+			logger.Warn(ctx, "config.publish_update_failed",
+				zap.String("key", key),
+				zap.String("user_id", userID.String()),
+				zap.Error(pubErr))
+		}
 	}
 
 	return uc.GetUserConfig(ctx, userID, key)
@@ -659,6 +742,16 @@ func (uc *ServerConfigUsecase) DeleteUserConfigOverride(ctx context.Context, use
 	})
 	if err != nil {
 		return nil, 0, err
+	}
+
+	// Publish config delete event for multi-instance cache synchronization.
+	if uc.configPublisher != nil {
+		if pubErr := uc.configPublisher.PublishConfigUpdate(ctx, key, &userID, deletedVersion+1, "delete"); pubErr != nil {
+			logger.Warn(ctx, "config.publish_delete_failed",
+				zap.String("key", key),
+				zap.String("user_id", userID.String()),
+				zap.Error(pubErr))
+		}
 	}
 
 	return deletedValue, deletedVersion, nil
@@ -846,6 +939,15 @@ func (uc *ServerConfigUsecase) RollbackConfig(ctx context.Context, key string, u
 		return nil, 0, err
 	}
 
+	// Publish config rollback event for multi-instance cache synchronization.
+	if uc.configPublisher != nil {
+		if pubErr := uc.configPublisher.PublishConfigUpdate(ctx, key, userID, newVersion, "rollback"); pubErr != nil {
+			logger.Warn(ctx, "config.publish_rollback_failed",
+				zap.String("key", key),
+				zap.Error(pubErr))
+		}
+	}
+
 	return unmarshalJSONB(rolledBackJSON), newVersion, nil
 }
 
@@ -908,19 +1010,19 @@ func marshalAndValidateValue(value any, entry *config.ConfigEntry) ([]byte, erro
 	// Type-specific conversion and validation.
 	converted, err := convertValueByType(value, entry.ValueType)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+		return nil, fmt.Errorf("%w: %w", ErrValidation, err)
 	}
 
 	// Run custom validator if present.
 	if entry.Validator != nil {
 		if vErr := entry.Validator(converted); vErr != nil {
-			return nil, fmt.Errorf("%w: %v", ErrValidation, vErr)
+			return nil, fmt.Errorf("%w: %w", ErrValidation, vErr)
 		}
 	}
 
 	jsonVal, err := json.Marshal(converted)
 	if err != nil {
-		return nil, fmt.Errorf("%w: marshal value: %v", ErrValidation, err)
+		return nil, fmt.Errorf("%w: marshal value: %w", ErrValidation, err)
 	}
 	return jsonVal, nil
 }

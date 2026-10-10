@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -15,6 +16,7 @@ import (
 // It records SQL statements, affected rows, and errors as span attributes.
 type TracingPlugin struct {
 	tracerName string
+	dbInstance string // database name for db.instance span attribute
 }
 
 // NewTracingPlugin creates a new GORM tracing plugin.
@@ -33,6 +35,9 @@ func (p *TracingPlugin) Name() string {
 func (p *TracingPlugin) Initialize(db *gorm.DB) error {
 	tracer := otel.Tracer(p.tracerName)
 
+	// Extract database name from the postgres DSN for db.instance attribute.
+	p.dbInstance = extractDBNameFromDSN(db)
+
 	// Helper to extract or create context
 	getCtx := func(db *gorm.DB) context.Context {
 		if db.Statement.Context != nil {
@@ -42,7 +47,7 @@ func (p *TracingPlugin) Initialize(db *gorm.DB) error {
 	}
 
 	// Create span before each operation, end it after
-	cb := &tracingCallbacks{tracer: tracer, getCtx: getCtx}
+	cb := &tracingCallbacks{tracer: tracer, getCtx: getCtx, dbInstance: p.dbInstance}
 
 	// Register callbacks for all CRUD operations
 	if err := db.Callback().Create().Before("gorm:create").Register("tracing:before_create", cb.before("gorm.create")); err != nil {
@@ -91,20 +96,24 @@ func (p *TracingPlugin) Initialize(db *gorm.DB) error {
 }
 
 type tracingCallbacks struct {
-	tracer trace.Tracer
-	getCtx func(*gorm.DB) context.Context
+	tracer     trace.Tracer
+	getCtx     func(*gorm.DB) context.Context
+	dbInstance string // database name for db.instance span attribute
 }
 
 func (cb *tracingCallbacks) before(operation string) func(*gorm.DB) {
 	return func(db *gorm.DB) {
 		ctx := cb.getCtx(db)
 
-		ctx, span := cb.tracer.Start(ctx, operation,
-			trace.WithAttributes(
-				attribute.String("db.system", "postgres"),
-				attribute.String("db.operation", strings.TrimPrefix(operation, "gorm.")),
-			),
-		)
+		attrs := []attribute.KeyValue{
+			attribute.String("db.system", "postgres"),
+			attribute.String("db.operation", strings.TrimPrefix(operation, "gorm.")),
+		}
+		if cb.dbInstance != "" {
+			attrs = append(attrs, attribute.String("db.instance", cb.dbInstance))
+		}
+
+		ctx, span := cb.tracer.Start(ctx, operation, trace.WithAttributes(attrs...))
 		// Store span in Statement.Settings for retrieval in after callback
 		db.Statement.Settings.Store("tracing:span", span)
 		// Update context with span
@@ -139,6 +148,35 @@ func (cb *tracingCallbacks) after(db *gorm.DB) {
 		span.RecordError(db.Error)
 		span.SetStatus(codes.Error, db.Error.Error())
 	}
+}
+
+// extractDBNameFromDSN extracts the database name from the GORM dialector config.
+// Returns empty string if the dialector is not postgres or the DSN cannot be parsed.
+func extractDBNameFromDSN(db *gorm.DB) string {
+	if db == nil || db.Config == nil || db.Dialector == nil {
+		return ""
+	}
+	pgDialector, ok := db.Dialector.(postgres.Dialector)
+	if !ok {
+		return ""
+	}
+	dsn := pgDialector.DSN
+	// Parse postgres DSN format: postgres://user:pass@host:port/dbname?params
+	// or key-value format: host=... user=... dbname=... password=...
+	if idx := strings.LastIndex(dsn, "/"); idx >= 0 {
+		rest := dsn[idx+1:]
+		if qIdx := strings.IndexByte(rest, '?'); qIdx >= 0 {
+			return rest[:qIdx]
+		}
+		return rest
+	}
+	// Key-value format
+	for _, part := range strings.Fields(dsn) {
+		if strings.HasPrefix(part, "dbname=") {
+			return strings.TrimPrefix(part, "dbname=")
+		}
+	}
+	return ""
 }
 
 // Ensure TracingPlugin implements gorm.Plugin interface.

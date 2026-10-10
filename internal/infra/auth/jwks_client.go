@@ -139,7 +139,7 @@ func (c *JWKSClient) FetchJWKS(ctx context.Context, jwksURI string) (jwk.Set, er
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrJWKSEndpointUnreachable, err)
+		return nil, fmt.Errorf("%w: %w", ErrJWKSEndpointUnreachable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -159,12 +159,12 @@ func (c *JWKSClient) FetchJWKS(ctx context.Context, jwksURI string) (jwk.Set, er
 	// Read all data
 	data, err := io.ReadAll(limitedReader)
 	if err != nil {
-		return nil, fmt.Errorf("%w: read body: %v", ErrJWKSInvalidResponse, err)
+		return nil, fmt.Errorf("%w: read body: %w", ErrJWKSInvalidResponse, err)
 	}
 
 	set, err := jwk.Parse(data)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrJWKSInvalidResponse, err)
+		return nil, fmt.Errorf("%w: %w", ErrJWKSInvalidResponse, err)
 	}
 
 	return set, nil

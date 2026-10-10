@@ -149,7 +149,7 @@ func (h *AdminAuthHandler) Login(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, usecase.ErrLoginLocked) {
-			Error(c, "login_locked", err.Error())
+			Error(c, "login_locked", "Login temporarily locked due to too many failed attempts")
 			return
 		}
 		logger.Error(ctx, "admin_auth.login_failed",

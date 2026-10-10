@@ -77,7 +77,7 @@ func TestCompleteMultipartUploadDBOps_AllSuccess(t *testing.T) {
 	}
 
 	// Act: run the transactional DB operations
-	err := uc.completeMultipartUploadDBOps(ctx, "user-test-1", "test-bucket", "user-test-1/file.txt", "test-upload-id-1", "test-etag", 2048)
+	err := uc.completeMultipartUploadDBOps(ctx, "user-test-1", "test-bucket", "user-test-1/file.txt", "test-upload-id-1", "test-etag", 2048, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestCompleteMultipartUploadDBOps_RollbackOnFileCreateFailure(t *testing.T) 
 	uc.fileRepo = &failingFileRepo{inner: uc.fileRepo}
 
 	// Act
-	err := uc.completeMultipartUploadDBOps(ctx, "user-test-2", "test-bucket", "user-test-2/file.txt", "test-upload-id-2", "new-etag", 2048)
+	err := uc.completeMultipartUploadDBOps(ctx, "user-test-2", "test-bucket", "user-test-2/file.txt", "test-upload-id-2", "new-etag", 2048, "")
 
 	// Assert: should have failed
 	if err == nil {
@@ -159,7 +159,7 @@ func TestCompleteMultipartUploadDBOps_UploadNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	// Act: call with a non-existent upload ID
-	err := uc.completeMultipartUploadDBOps(ctx, "user-test-3", "test-bucket", "user-test-3/file.txt", "nonexistent-upload-id", "test-etag", 512)
+	err := uc.completeMultipartUploadDBOps(ctx, "user-test-3", "test-bucket", "user-test-3/file.txt", "nonexistent-upload-id", "test-etag", 512, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestCompleteMultipartUploadDBOps_NoOrphanedRecordsOnDeleteFailure(t *testin
 	uc.uploadRepo = &failingUploadRepo{inner: uc.uploadRepo, failOnDelete: true}
 
 	// Act
-	err := uc.completeMultipartUploadDBOps(ctx, "user-test-4", "test-bucket", "user-test-4/file.txt", "test-upload-id-4", "test-etag", 1024)
+	err := uc.completeMultipartUploadDBOps(ctx, "user-test-4", "test-bucket", "user-test-4/file.txt", "test-upload-id-4", "test-etag", 1024, "")
 
 	// Assert: should have failed
 	if err == nil {
@@ -246,7 +246,7 @@ func TestCompleteMultipartUploadDBOps_MultiplePartsCleanup(t *testing.T) {
 	}
 
 	// Act
-	err := uc.completeMultipartUploadDBOps(ctx, "user-test-5", "test-bucket", "user-test-5/large-file.bin", "test-upload-id-5", "combined-etag", 15360)
+	err := uc.completeMultipartUploadDBOps(ctx, "user-test-5", "test-bucket", "user-test-5/large-file.bin", "test-upload-id-5", "combined-etag", 15360, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

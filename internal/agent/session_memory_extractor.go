@@ -493,5 +493,5 @@ func estimateMemoryTokens(s string) int {
 }
 
 func (e *SessionMemoryExtractor) log(ctx context.Context, event string, fields map[string]any) {
-	e.logger.Info(ctx, "[session_memory_extractor] "+event, fields)
+	e.logger.Info(ctx, "session_memory_extractor."+event, fields)
 }

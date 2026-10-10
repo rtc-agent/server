@@ -3,6 +3,7 @@ package middleware
 import (
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -116,6 +117,12 @@ func (rl *IPRateLimiter) Cleanup() {
 // It only trusts X-Forwarded-For and X-Real-IP headers if the request comes
 // from a trusted proxy (configured via SetTrustedProxies). Otherwise, it falls
 // back to RemoteAddr to prevent IP spoofing.
+//
+// SECURITY NOTES:
+// - X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
+// - We take the FIRST IP as the client IP (leftmost)
+// - Subsequent IPs are proxy chain, which we don't trust for rate limiting
+// - If X-Forwarded-For is malformed, we fall back to RemoteAddr
 func (rl *IPRateLimiter) extractClientIP(r *http.Request) string {
 	// Parse RemoteAddr to determine if the request comes from a trusted proxy.
 	remoteIP := parseRemoteIP(r)
@@ -123,25 +130,28 @@ func (rl *IPRateLimiter) extractClientIP(r *http.Request) string {
 	// Only trust forwarding headers if the request comes from a trusted proxy.
 	if rl.isTrustedProxy(remoteIP) {
 		// Check X-Forwarded-For first (may contain multiple IPs, take the first)
+		// Format: "client, proxy1, proxy2" or just "client"
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// X-Forwarded-For: client, proxy1, proxy2
-			if idx := net.ParseIP(xff); idx != nil {
-				return idx.String()
-			}
-			// Multiple IPs - take the first one
+			// Split by comma and take the first non-empty IP
 			for i := 0; i < len(xff); i++ {
 				if xff[i] == ',' {
-					if ip := net.ParseIP(xff[:i]); ip != nil {
+					// Found comma - parse everything before it
+					if ip := net.ParseIP(strings.TrimSpace(xff[:i])); ip != nil {
 						return ip.String()
 					}
+					// Malformed IP before comma - fall through to RemoteAddr
 					break
 				}
 			}
+			// No comma found - entire header is a single IP
+			if ip := net.ParseIP(strings.TrimSpace(xff)); ip != nil {
+				return ip.String()
+			}
 		}
 
-		// Check X-Real-IP
+		// Check X-Real-IP (single IP, simpler than X-Forwarded-For)
 		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			if ip := net.ParseIP(xri); ip != nil {
+			if ip := net.ParseIP(strings.TrimSpace(xri)); ip != nil {
 				return ip.String()
 			}
 		}

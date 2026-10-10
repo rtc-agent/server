@@ -37,10 +37,17 @@ func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint
 		Where("user_id = ? AND \"offset\" > ?", userID, sinceOffset).
 		Order("\"offset\" ASC")
 
-	// Apply limit if specified (0 means no limit).
-	if limit > 0 {
-		query = query.Limit(limit)
+	// Preserve original limit intent for later gap-filling logic.
+	// limit <= 0 means "no limit" from caller's perspective.
+	noLimit := limit <= 0
+
+	// Apply limit with hard cap to prevent unbounded queries.
+	// Even when noLimit is true, we enforce a maximum to avoid OOM on large datasets.
+	const maxHistoryLimit = 10000
+	if noLimit || limit > maxHistoryLimit {
+		limit = maxHistoryLimit
 	}
+	query = query.Limit(limit)
 
 	var updates []model.UserUpdate
 	err = query.Find(&updates).Error
@@ -50,7 +57,7 @@ func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint
 
 	if len(updates) == 0 {
 		// No data, but if no limit, fill gaps up to latestOffset
-		if limit <= 0 {
+		if noLimit {
 			return fillGapPublications(ctx, sinceOffset, latestOffset, nil), nil
 		}
 		// With limit, just return empty (client will request next batch)
@@ -92,7 +99,7 @@ func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint
 
 	// When limit is specified, don't fill tail gaps - client will request next batch.
 	// When no limit, fill gaps up to latestOffset for backward compatibility.
-	if limit <= 0 {
+	if noLimit {
 		return fillGapPublications(ctx, sinceOffset, latestOffset, pubs), nil
 	}
 

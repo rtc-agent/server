@@ -156,7 +156,7 @@ func (r *mockSessionRepo) FindActiveByParent(_ context.Context, _ uuid.UUID) ([]
 	return nil, nil
 }
 
-func (r *mockSessionRepo) AtomicAddTokenUsage(_ context.Context, _ uuid.UUID, _ repo.TokenUsageDelta) error {
+func (r *mockSessionRepo) AtomicAddTokenUsage(_ context.Context, _ uuid.UUID, _ model.TokenUsageDelta) error {
 	return nil
 }
 

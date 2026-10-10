@@ -125,7 +125,7 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 			ResourceType: l.ResourceType,
 			ResourceID:   l.ResourceID.String(),
 			Details:      json.RawMessage(l.Details),
-			CreatedAt:    l.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			CreatedAt:    l.CreatedAt.Format(TimeFormatRFC3339),
 		})
 	}
 
@@ -160,7 +160,7 @@ func (h *AuditLogHandler) Get(c *gin.Context) {
 		ResourceType: log.ResourceType,
 		ResourceID:   log.ResourceID.String(),
 		Details:      json.RawMessage(log.Details),
-		CreatedAt:    log.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt:    log.CreatedAt.Format(TimeFormatRFC3339),
 	}
 
 	Success(c, result)

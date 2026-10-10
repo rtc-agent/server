@@ -36,7 +36,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/util"
 	dbmodel "github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 	"go.uber.org/zap"
@@ -256,8 +255,8 @@ func (h *helpers) computeTokenEstimate(ctx context.Context, session *dbmodel.Ses
 }
 
 // buildTokenUsageDelta builds a TokenUsageDelta for the SQL atomic accumulate step.
-func (h *helpers) buildTokenUsageDelta(fullUsage *FullTokenUsage, costMicros int64, isCompress bool, session *dbmodel.Session, currentCtxTokens int64, estimate *TokenEstimate) repo.TokenUsageDelta {
-	delta := repo.TokenUsageDelta{
+func (h *helpers) buildTokenUsageDelta(fullUsage *FullTokenUsage, costMicros int64, isCompress bool, session *dbmodel.Session, currentCtxTokens int64, estimate *TokenEstimate) dbmodel.TokenUsageDelta {
+	delta := dbmodel.TokenUsageDelta{
 		InputDelta:              fullUsage.InputTokens,
 		OutputDelta:             fullUsage.OutputTokens,
 		TotalDelta:              fullUsage.TotalTokens,

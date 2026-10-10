@@ -15,10 +15,26 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 //go:embed templates/*.html
 var templateFS embed.FS
+
+// Prometheus metrics for cache analyzer
+var (
+	analysisRequestsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "cache_analyzer_analysis_requests_total",
+		Help: "Total number of analysis requests",
+	})
+	analysisDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "cache_analyzer_analysis_duration_seconds",
+		Help:    "Duration of analysis requests",
+		Buckets: prometheus.DefBuckets,
+	})
+)
 
 // Server represents the cache analyzer HTTP server.
 type Server struct {
@@ -65,6 +81,7 @@ func (s *Server) Run() error {
 	r.GET("/", s.handleConfigPage)
 	r.POST("/report", s.handleReportPage)
 	r.GET("/export/:session_id", s.handleExportMarkdown)
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	addr := ":" + strconv.Itoa(s.port)
 	return r.Run(addr)
@@ -77,6 +94,12 @@ func (s *Server) handleConfigPage(c *gin.Context) {
 }
 
 func (s *Server) handleReportPage(c *gin.Context) {
+	start := time.Now()
+	defer func() {
+		analysisDuration.Observe(time.Since(start).Seconds())
+	}()
+	analysisRequestsTotal.Inc()
+
 	sessionID := c.PostForm("session_id")
 	if sessionID == "" {
 		c.String(http.StatusBadRequest, "Session ID is required")

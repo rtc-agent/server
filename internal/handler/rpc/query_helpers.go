@@ -60,7 +60,7 @@ func getOwnedByID[T any](
 		return nil, uuid.Nil, err
 	}
 
-	logger.Info(ctx, "["+entityName+".get]",
+	logger.Info(ctx, entityName+".get",
 		zap.String("user", userID.String()),
 		zap.String(entityName, idStr))
 
@@ -125,7 +125,7 @@ func listBySessionCursor[T any, P any](
 		nextCursor = &last
 	}
 
-	logger.Info(ctx, "["+entityName+".list]",
+	logger.Info(ctx, entityName+".list",
 		zap.String("user", userID.String()),
 		zap.String("session", sessionID),
 		zap.Int("count", len(protoItems)),

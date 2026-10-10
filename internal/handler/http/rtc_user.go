@@ -32,6 +32,21 @@ func (h *RtcUserHandler) RegisterRoutes(r *gin.RouterGroup) {
 	r.POST("/rtc-users/:id/unban", h.UnbanUser)
 }
 
+// RtcUserResponse is the structured response for RTC user data.
+type RtcUserResponse struct {
+	ID           string  `json:"id"`
+	Provider     string  `json:"provider"`
+	Sub          string  `json:"sub"`
+	Email        string  `json:"email"`
+	Name         string  `json:"name"`
+	AvatarURL    string  `json:"avatar_url"`
+	Status       string  `json:"status"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
+	BannedAt     *string `json:"banned_at,omitempty"`
+	BannedReason *string `json:"banned_reason,omitempty"`
+}
+
 // ListUsers returns a paginated list of RTC users.
 // Query parameters: status (active/banned), search, page, page_size
 func (h *RtcUserHandler) ListUsers(c *gin.Context) {
@@ -78,29 +93,26 @@ func (h *RtcUserHandler) ListUsers(c *gin.Context) {
 		return
 	}
 
-	// Build response
-	items := make([]gin.H, 0, len(result.Users))
+	// Build response with structured type
+	items := make([]RtcUserResponse, 0, len(result.Users))
 	for _, user := range result.Users {
-		status := "active"
-		if user.BannedAt != nil {
-			status = "banned"
-		}
-
-		item := map[string]any{
-			"id":         user.ID,
-			"provider":   user.Provider,
-			"sub":        user.Sub,
-			"email":      user.Email,
-			"name":       user.Name,
-			"avatar_url": user.AvatarURL,
-			"status":     status,
-			"created_at": user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			"updated_at": user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		item := RtcUserResponse{
+			ID:        user.ID.String(),
+			Provider:  user.Provider,
+			Sub:       user.Sub,
+			Email:     user.Email,
+			Name:      user.Name,
+			AvatarURL: user.AvatarURL,
+			Status:    "active",
+			CreatedAt: user.CreatedAt.Format(TimeFormatRFC3339),
+			UpdatedAt: user.UpdatedAt.Format(TimeFormatRFC3339),
 		}
 
 		if user.BannedAt != nil {
-			item["banned_at"] = user.BannedAt.Format("2006-01-02T15:04:05Z07:00")
-			item["banned_reason"] = user.BannedReason
+			item.Status = "banned"
+			bannedAt := user.BannedAt.Format(TimeFormatRFC3339)
+			item.BannedAt = &bannedAt
+			item.BannedReason = &user.BannedReason
 		}
 
 		items = append(items, item)
@@ -130,26 +142,23 @@ func (h *RtcUserHandler) GetUser(c *gin.Context) {
 		return
 	}
 
-	status := "active"
-	if user.BannedAt != nil {
-		status = "banned"
-	}
-
-	result := map[string]any{
-		"id":         user.ID,
-		"provider":   user.Provider,
-		"sub":        user.Sub,
-		"email":      user.Email,
-		"name":       user.Name,
-		"avatar_url": user.AvatarURL,
-		"status":     status,
-		"created_at": user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		"updated_at": user.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	result := RtcUserResponse{
+		ID:        user.ID.String(),
+		Provider:  user.Provider,
+		Sub:       user.Sub,
+		Email:     user.Email,
+		Name:      user.Name,
+		AvatarURL: user.AvatarURL,
+		Status:    "active",
+		CreatedAt: user.CreatedAt.Format(TimeFormatRFC3339),
+		UpdatedAt: user.UpdatedAt.Format(TimeFormatRFC3339),
 	}
 
 	if user.BannedAt != nil {
-		result["banned_at"] = user.BannedAt.Format("2006-01-02T15:04:05Z07:00")
-		result["banned_reason"] = user.BannedReason
+		result.Status = "banned"
+		bannedAt := user.BannedAt.Format(TimeFormatRFC3339)
+		result.BannedAt = &bannedAt
+		result.BannedReason = &user.BannedReason
 	}
 
 	Success(c, result)
@@ -158,6 +167,14 @@ func (h *RtcUserHandler) GetUser(c *gin.Context) {
 // BanUserInput represents the input for banning a user.
 type BanUserInput struct {
 	Reason string `json:"reason" binding:"required,max=500"`
+}
+
+// BanUserResponse is the response for ban/unban operations.
+type BanUserResponse struct {
+	ID           string  `json:"id"`
+	Status       string  `json:"status"`
+	BannedAt     *string `json:"banned_at,omitempty"`
+	BannedReason *string `json:"banned_reason,omitempty"`
 }
 
 // BanUser bans a user.
@@ -195,12 +212,19 @@ func (h *RtcUserHandler) BanUser(c *gin.Context) {
 		return
 	}
 
-	Success(c, gin.H{
-		"id":            user.ID,
-		"status":        "banned",
-		"banned_at":     user.BannedAt.Format("2006-01-02T15:04:05Z07:00"),
-		"banned_reason": user.BannedReason,
+	bannedAt := user.BannedAt.Format(TimeFormatRFC3339)
+	Success(c, BanUserResponse{
+		ID:           user.ID.String(),
+		Status:       "banned",
+		BannedAt:     &bannedAt,
+		BannedReason: &user.BannedReason,
 	})
+}
+
+// UnbanUserResponse is the response for unban operation.
+type UnbanUserResponse struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
 }
 
 // UnbanUser unbans a user.
@@ -228,10 +252,22 @@ func (h *RtcUserHandler) UnbanUser(c *gin.Context) {
 		return
 	}
 
-	Success(c, gin.H{
-		"id":     user.ID,
-		"status": "active",
+	Success(c, UnbanUserResponse{
+		ID:     user.ID.String(),
+		Status: "active",
 	})
+}
+
+// DeviceResponse is the structured response for device data.
+type DeviceResponse struct {
+	ID           string `json:"id"`
+	UserID       string `json:"user_id"`
+	DeviceID     string `json:"device_id"`
+	Name         string `json:"name"`
+	UserAgent    string `json:"user_agent"`
+	LastActiveAt string `json:"last_active_at"`
+	CreatedAt    string `json:"created_at"`
+	IsOnline     bool   `json:"is_online"`
 }
 
 // ListUserDevices returns the list of devices for a user.
@@ -250,17 +286,17 @@ func (h *RtcUserHandler) ListUserDevices(c *gin.Context) {
 		return
 	}
 
-	items := make([]gin.H, 0, len(devices))
+	items := make([]DeviceResponse, 0, len(devices))
 	for _, d := range devices {
-		items = append(items, gin.H{
-			"id":             d.Device.ID,
-			"user_id":        d.Device.UserID,
-			"device_id":      d.Device.DeviceID,
-			"name":           d.Device.Name,
-			"user_agent":     d.Device.UserAgent,
-			"last_active_at": d.Device.LastActiveAt.Format("2006-01-02T15:04:05Z07:00"),
-			"created_at":     d.Device.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			"is_online":      d.IsOnline,
+		items = append(items, DeviceResponse{
+			ID:           d.Device.ID.String(),
+			UserID:       d.Device.UserID.String(),
+			DeviceID:     d.Device.DeviceID,
+			Name:         d.Device.Name,
+			UserAgent:    d.Device.UserAgent,
+			LastActiveAt: d.Device.LastActiveAt.Format(TimeFormatRFC3339),
+			CreatedAt:    d.Device.CreatedAt.Format(TimeFormatRFC3339),
+			IsOnline:     d.IsOnline,
 		})
 	}
 

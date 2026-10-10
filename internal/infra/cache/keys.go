@@ -242,17 +242,32 @@ const (
 // ========== Constructor functions ==========
 
 // OAuth2State returns the Redis key for an OAuth2 state.
+// Panics if state is empty (programming error).
 func OAuth2State(state string) string {
+	if state == "" {
+		panic("cache.OAuth2State: state parameter cannot be empty")
+	}
 	return PrefixOAuth2State + state
 }
 
 // Session returns the Redis key for a session.
+// Panics if sessionID is empty (programming error).
 func Session(sessionID string) string {
+	if sessionID == "" {
+		panic("cache.Session: sessionID parameter cannot be empty")
+	}
 	return PrefixSession + sessionID
 }
 
 // IDEMarker returns the Redis key for an idempotent marker.
+// Panics if domain or idempotencyKey is empty (programming error).
 func IDEMarker(domain, idempotencyKey string) string {
+	if domain == "" {
+		panic("cache.IDEMarker: domain parameter cannot be empty")
+	}
+	if idempotencyKey == "" {
+		panic("cache.IDEMarker: idempotencyKey parameter cannot be empty")
+	}
 	return fmt.Sprintf("%s%s:%s", PrefixIDEMarker, domain, idempotencyKey)
 }
 

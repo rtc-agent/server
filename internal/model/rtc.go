@@ -1,12 +1,15 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
+	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -84,10 +87,18 @@ func ToProtocolRtc(r *Rtc) protocol.Rtc {
 		result.OutputMessageId = &outMsgId
 	}
 	if r.Parameters != "" {
-		_ = json.Unmarshal([]byte(r.Parameters), &result.Parameters)
+		if err := json.Unmarshal([]byte(r.Parameters), &result.Parameters); err != nil {
+			logger.Warn(context.Background(), "failed to unmarshal rtc parameters",
+				zap.String("rtc_id", r.ID.String()),
+				zap.Error(err))
+		}
 	}
 	if r.Result != "" {
-		_ = json.Unmarshal([]byte(r.Result), &result.Result)
+		if err := json.Unmarshal([]byte(r.Result), &result.Result); err != nil {
+			logger.Warn(context.Background(), "failed to unmarshal rtc result",
+				zap.String("rtc_id", r.ID.String()),
+				zap.Error(err))
+		}
 	}
 	return result
 }

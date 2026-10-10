@@ -105,6 +105,9 @@ func setDefaults(v *viper.Viper) {
 
 	// Storage defaults
 	setStorageDefaults(v)
+
+	// Security defaults
+	setSecurityDefaults(v)
 }
 
 func setServerDefaults(v *viper.Viper) {
@@ -122,10 +125,13 @@ func setAuthDefaults(v *viper.Viper) {
 }
 
 func setProviderDefaults(v *viper.Viper) {
+	// Mock OAuth provider defaults.
+	// SECURITY: client_secret has no default value and MUST be configured explicitly.
+	// Even in development, avoid using hardcoded secrets.
 	v.SetDefault("providers.mock.enabled", true)
 	v.SetDefault("providers.mock.url", "http://localhost:10060")
 	v.SetDefault("providers.mock.client_id", "test-client")
-	v.SetDefault("providers.mock.client_secret", "test-client-secret")
+	v.SetDefault("providers.mock.client_secret", "")
 
 	v.SetDefault("providers.github.enabled", false)
 	v.SetDefault("providers.github.client_id", "")
@@ -187,6 +193,13 @@ func setLLMDefaults(v *viper.Viper) {
 func setAPIDefaults(v *viper.Viper) {
 	v.SetDefault("api.query_default_limit", 50)
 	v.SetDefault("api.query_max_limit", 100)
+
+	// Rate limiting defaults
+	v.SetDefault("api.rate_limit.requests_per_second", 50.0)
+	v.SetDefault("api.rate_limit.burst_size", 100)
+	v.SetDefault("api.ip_rate_limit.requests_per_second", 5.0)
+	v.SetDefault("api.ip_rate_limit.burst_size", 10)
+	v.SetDefault("api.ip_rate_limit.limiter_ttl_sec", 3600)
 }
 
 func setTracingDefaults(v *viper.Viper) {
@@ -299,4 +312,22 @@ func setStorageDefaults(v *viper.Viper) {
 
 	// Encryption defaults
 	v.SetDefault("storage.encryption.session_token_key", "")
+}
+
+func setSecurityDefaults(v *viper.Viper) {
+	// CSP defaults - disabled by default for backward compatibility
+	// Enable and configure in production environments
+	v.SetDefault("security.csp.enabled", false)
+	v.SetDefault("security.csp.report_only", true)
+	v.SetDefault("security.csp.report_uri", "/api/csp-report")
+	v.SetDefault("security.csp.default_src", []string{"'self'"})
+	v.SetDefault("security.csp.script_src", []string{"'self'"})
+	v.SetDefault("security.csp.style_src", []string{"'self'"})
+	v.SetDefault("security.csp.img_src", []string{"'self'"})
+	v.SetDefault("security.csp.font_src", []string{"'self'"})
+	v.SetDefault("security.csp.connect_src", []string{"'self'"})
+	v.SetDefault("security.csp.frame_src", []string{"'none'"})
+	v.SetDefault("security.csp.frame_ancestors", []string{"'none'"})
+	v.SetDefault("security.csp.base_uri", []string{"'self'"})
+	v.SetDefault("security.csp.form_action", []string{"'self'"})
 }

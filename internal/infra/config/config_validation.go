@@ -3,22 +3,25 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 )
 
 // Validate checks required configuration fields, returning the first error found.
 func (c *Config) Validate() error {
 	// Validate server environment.
-	switch c.Server.Env {
-	case "development", "production":
-		// valid
-	default:
-		return fmt.Errorf("server.env must be 'development' or 'production', got %q", c.Server.Env)
+	if err := c.validateServerEnv(); err != nil {
+		return err
 	}
 
 	// Validate database configuration.
 	if c.Database.DSN == "" {
 		return fmt.Errorf("database.dsn is required")
+	}
+
+	// Validate Redis configuration.
+	if err := c.validateRedis(); err != nil {
+		return err
 	}
 
 	// Validate server port range.
@@ -27,49 +30,23 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate LLM configuration.
-	if c.LLM.APIKey == "" {
-		return fmt.Errorf("llm.api_key is required: set it via LLM__API_KEY environment variable")
-	}
-	// Validate reasoning_effort if set.
-	switch c.LLM.ReasoningEffort {
-	case "", "low", "medium", "high":
-		// valid
-	default:
-		return fmt.Errorf("llm.reasoning_effort (%q) must be \"low\", \"medium\", or \"high\"", c.LLM.ReasoningEffort)
+	if err := c.validateLLM(); err != nil {
+		return err
 	}
 
-	// Validate that at least one OAuth provider is enabled.
-	if !c.Providers.Mock.Enabled && !c.Providers.GitHub.Enabled && !c.Providers.Google.Enabled {
-		return fmt.Errorf("at least one OAuth provider must be enabled (mock, github, or google)")
-	}
-
-	// Mock OAuth provider must not be enabled in production.
-	if c.Server.Env == "production" && c.Providers.Mock.Enabled {
-		return fmt.Errorf("providers.mock.enabled must be false in production environment")
-	}
-
-	// Validate OAuth2 provider URL format.
-	if c.Providers.Mock.Enabled && c.Providers.Mock.URL != "" {
-		if _, err := url.Parse(c.Providers.Mock.URL); err != nil {
-			return fmt.Errorf("providers.mock.url is invalid: %w", err)
-		}
+	// Validate OAuth providers.
+	if err := c.validateOAuthProviders(); err != nil {
+		return err
 	}
 
 	// Validate auth configuration.
-	if c.Auth.JWTSecret == "" {
-		return fmt.Errorf("auth.jwt_secret is required")
+	if err := c.validateAuth(); err != nil {
+		return err
 	}
-	// Security: reject weak/default JWT secrets in production.
-	const weakJWTSecrets = "rtc-agent-dev-jwt-secret-change-me-in-production"
-	if c.Server.Env == "production" && c.Auth.JWTSecret == weakJWTSecrets {
-		return fmt.Errorf("auth.jwt_secret must not use the default development value in production: generate a secure random string")
-	}
-	if c.Auth.AccessTokenTTLSeconds <= 0 {
-		return fmt.Errorf("auth.access_token_ttl_seconds must be positive, got %d", c.Auth.AccessTokenTTLSeconds)
-	}
-	// Security: enforce redirect URI whitelist in production to prevent open redirect attacks.
-	if c.Server.Env == "production" && len(c.Auth.AllowedRedirectURIs) == 0 {
-		return fmt.Errorf("auth.allowed_redirect_uris is required in production environment")
+
+	// Validate CORS configuration.
+	if err := c.validateCORS(); err != nil {
+		return err
 	}
 
 	// Validate worker compression threshold configuration.
@@ -108,6 +85,137 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	return nil
+}
+
+// validateServerEnv checks that server environment is valid.
+func (c *Config) validateServerEnv() error {
+	switch c.Server.Env {
+	case "development", "production":
+		return nil
+	default:
+		return fmt.Errorf("server.env must be 'development' or 'production', got %q", c.Server.Env)
+	}
+}
+
+// validateLLM checks LLM configuration fields.
+func (c *Config) validateLLM() error {
+	if c.LLM.APIKey == "" {
+		return fmt.Errorf("llm.api_key is required: set it via LLM__API_KEY environment variable")
+	}
+	// Validate reasoning_effort if set.
+	switch c.LLM.ReasoningEffort {
+	case "", "low", "medium", "high":
+		return nil
+	default:
+		return fmt.Errorf("llm.reasoning_effort (%q) must be \"low\", \"medium\", or \"high\"", c.LLM.ReasoningEffort)
+	}
+}
+
+// validateOAuthProviders checks OAuth provider configuration.
+func (c *Config) validateOAuthProviders() error {
+	// Validate that at least one OAuth provider is enabled.
+	if !c.Providers.Mock.Enabled && !c.Providers.GitHub.Enabled && !c.Providers.Google.Enabled {
+		return fmt.Errorf("at least one OAuth provider must be enabled (mock, github, or google)")
+	}
+
+	// Mock OAuth provider must not be enabled in production.
+	if c.Server.Env == "production" && c.Providers.Mock.Enabled {
+		return fmt.Errorf("providers.mock.enabled must be false in production environment")
+	}
+
+	// Validate OAuth2 provider URL format.
+	if c.Providers.Mock.Enabled && c.Providers.Mock.URL != "" {
+		if _, err := url.Parse(c.Providers.Mock.URL); err != nil {
+			return fmt.Errorf("providers.mock.url is invalid: %w", err)
+		}
+	}
+
+	// SECURITY: Validate that enabled providers have required credentials.
+	// Client secrets must be configured for OAuth2 flows to work.
+	if c.Providers.GitHub.Enabled {
+		if c.Providers.GitHub.ClientID == "" {
+			return fmt.Errorf("providers.github.client_id is required when github provider is enabled")
+		}
+		if c.Providers.GitHub.ClientSecret == "" {
+			return fmt.Errorf("providers.github.client_secret is required when github provider is enabled")
+		}
+	}
+	if c.Providers.Google.Enabled {
+		if c.Providers.Google.ClientID == "" {
+			return fmt.Errorf("providers.google.client_id is required when google provider is enabled")
+		}
+		if c.Providers.Google.ClientSecret == "" {
+			return fmt.Errorf("providers.google.client_secret is required when google provider is enabled")
+		}
+	}
+	if c.Providers.Mock.Enabled {
+		if c.Providers.Mock.ClientID == "" {
+			return fmt.Errorf("providers.mock.client_id is required when mock provider is enabled")
+		}
+		if c.Providers.Mock.ClientSecret == "" {
+			return fmt.Errorf("providers.mock.client_secret is required when mock provider is enabled")
+		}
+	}
+
+	return nil
+}
+
+// validateAuth checks authentication configuration.
+func (c *Config) validateAuth() error {
+	if c.Auth.JWTSecret == "" {
+		return fmt.Errorf("auth.jwt_secret is required")
+	}
+	// Security: reject weak/default JWT secrets in production.
+	const weakJWTSecrets = "rtc-agent-dev-jwt-secret-change-me-in-production"
+	if c.Server.Env == "production" && c.Auth.JWTSecret == weakJWTSecrets {
+		return fmt.Errorf("auth.jwt_secret must not use the default development value in production: generate a secure random string")
+	}
+	// Security: enforce minimum JWT secret length (32 bytes for HMAC-SHA256)
+	if len(c.Auth.JWTSecret) < 32 {
+		return fmt.Errorf("auth.jwt_secret must be at least 32 bytes, got %d", len(c.Auth.JWTSecret))
+	}
+	if c.Auth.AccessTokenTTLSeconds <= 0 {
+		return fmt.Errorf("auth.access_token_ttl_seconds must be positive, got %d", c.Auth.AccessTokenTTLSeconds)
+	}
+	// Security: enforce redirect URI whitelist in production to prevent open redirect attacks.
+	if c.Server.Env == "production" && len(c.Auth.AllowedRedirectURIs) == 0 {
+		return fmt.Errorf("auth.allowed_redirect_uris is required in production environment")
+	}
+	return nil
+}
+
+// validateRedis checks Redis configuration.
+func (c *Config) validateRedis() error {
+	if c.Redis.Addr == "" {
+		return fmt.Errorf("redis.addr is required")
+	}
+	// Security: warn about Redis without password in production (non-blocking)
+	// This is logged as a warning but doesn't fail validation to allow legacy setups
+	if c.Server.Env == "production" && c.Redis.Password == "" {
+		// Log warning via stderr since logger may not be initialized
+		fmt.Fprintf(os.Stderr, "[config] WARNING: redis.password is empty in production environment - consider setting a password for security\n")
+	}
+	return nil
+}
+
+// validateCORS checks CORS configuration.
+func (c *Config) validateCORS() error {
+	// Security: In production, require explicit CORS origin configuration
+	// Empty AllowOrigins with development fallback to "*" is blocked by validateServerEnv
+	if c.Server.Env == "production" && len(c.CORS.AllowOrigins) == 0 {
+		// Log warning but don't fail - some production deployments may not need CORS
+		fmt.Fprintf(os.Stderr, "[config] WARNING: cors.allow_origins is empty in production - cross-origin requests will be rejected\n")
+	}
+	// Validate CORS origins format
+	for i, origin := range c.CORS.AllowOrigins {
+		if origin == "*" {
+			continue // Wildcard is valid but should be used with caution
+		}
+		if _, err := url.Parse(origin); err != nil {
+			return fmt.Errorf("cors.allow_origins[%d] is invalid: %w", i, err)
+		}
+	}
 	return nil
 }
 

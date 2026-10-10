@@ -363,15 +363,21 @@ func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.Dua
 
 		ch := e.Channel
 
-		// User channel validation: userID must match the connected user.
-		if ownerIDStr, ok := channel.ParseUser(ch); ok {
-			if ownerIDStr != client.UserID() {
-				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
-				return
-			}
-			// Record user channel subscription
-			metrics.recordSubscription("user")
+		// Must be user channel format: topic:u={userID} or live:u={userID}
+		ownerIDStr, ok := channel.ParseUser(ch)
+		if !ok {
+			cb(centrifuge.SubscribeReply{}, centrifuge.ErrorBadRequest)
+			return
 		}
+
+		// Ownership validation: userID must match the connected user.
+		if ownerIDStr != client.UserID() {
+			cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
+			return
+		}
+
+		// Record user channel subscription
+		metrics.recordSubscription("user")
 
 		if channel.IsTopic(ch) {
 			broker.RegisterChannelType(ch, centrifugeplus.Topic)
@@ -386,8 +392,12 @@ func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.Dua
 		if channel.IsLive(ch) {
 			broker.RegisterChannelType(ch, centrifugeplus.Live)
 			metrics.recordSubscription("live")
+			cb(centrifuge.SubscribeReply{}, nil)
+			return
 		}
-		cb(centrifuge.SubscribeReply{}, nil)
+
+		// Reject non-standard channel formats
+		cb(centrifuge.SubscribeReply{}, centrifuge.ErrorBadRequest)
 	})
 }
 

@@ -18,19 +18,19 @@ func NewLogger() turnagent.Logger {
 }
 
 func (l *appLogger) Debug(ctx context.Context, msg string, fields map[string]any) {
-	logger.Debug(ctx, "[turnagent] "+msg, mapToFields(fields)...)
+	logger.Debug(ctx, "turnagent."+msg, mapToFields(fields)...)
 }
 
 func (l *appLogger) Info(ctx context.Context, msg string, fields map[string]any) {
-	logger.Info(ctx, "[turnagent] "+msg, mapToFields(fields)...)
+	logger.Info(ctx, "turnagent."+msg, mapToFields(fields)...)
 }
 
 func (l *appLogger) Warn(ctx context.Context, msg string, fields map[string]any) {
-	logger.Warn(ctx, "[turnagent] "+msg, mapToFields(fields)...)
+	logger.Warn(ctx, "turnagent."+msg, mapToFields(fields)...)
 }
 
 func (l *appLogger) Error(ctx context.Context, msg string, fields map[string]any) {
-	logger.Error(ctx, "[turnagent] "+msg, mapToFields(fields)...)
+	logger.Error(ctx, "turnagent."+msg, mapToFields(fields)...)
 }
 
 // mapToFields converts a map[string]any to []zap.Field for the structured logger.
