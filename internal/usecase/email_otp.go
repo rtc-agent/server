@@ -21,6 +21,7 @@ var (
 	ErrOTPInvalid         = errors.New("invalid verification code")
 	ErrOTPLocked          = errors.New("verification temporarily locked due to too many failed attempts")
 	ErrOTPRateLimited     = errors.New("too many send requests, please try again later")
+	ErrOTPCooldown        = errors.New("please wait before requesting another code")
 	ErrEmailNotRegistered = errors.New("email not registered")
 )
 

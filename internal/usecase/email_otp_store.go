@@ -3,7 +3,6 @@ package usecase
 
 import (
 	"context"
-	"errors"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -190,6 +189,10 @@ func (s *MemoryOTPStore) Delete(ctx context.Context, emailAddr string) {
 }
 
 // CheckSendAllowed returns nil if sending OTP is allowed for the email and IP.
+//
+// Errors returned are sentinel errors (ErrOTPCooldown, ErrOTPRateLimited) so
+// that callers can use errors.Is for detection. The usecase layer maps these
+// to user-facing errors (see EmailOTPUsecase.SendOTP).
 func (s *MemoryOTPStore) CheckSendAllowed(ctx context.Context, emailAddr, clientIP string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -197,14 +200,14 @@ func (s *MemoryOTPStore) CheckSendAllowed(ctx context.Context, emailAddr, client
 
 	// Check email cooldown
 	if lastSend, ok := s.sendCooldown[emailAddr]; ok && now.Before(lastSend.Add(s.sendCooldownDur)) {
-		return errors.New("please wait before requesting another code")
+		return ErrOTPCooldown
 	}
 
 	// Check IP rate limit
 	if entry, ok := s.sendRateIP[clientIP]; ok {
 		if now.Before(entry.resetTime) {
 			if entry.count >= s.maxSendPerIP {
-				return errors.New("too many requests from this IP")
+				return ErrOTPRateLimited
 			}
 		}
 	}
@@ -232,11 +235,14 @@ func (s *MemoryOTPStore) RecordSend(ctx context.Context, emailAddr, clientIP str
 }
 
 // CheckVerifyAllowed returns nil if verification is allowed for the email.
+//
+// Errors returned are sentinel errors (ErrOTPLocked) so that callers can use
+// errors.Is for detection.
 func (s *MemoryOTPStore) CheckVerifyAllowed(ctx context.Context, emailAddr string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if lockedUntil, ok := s.verifyLockout[emailAddr]; ok && time.Now().Before(lockedUntil) {
-		return errors.New("verification temporarily locked")
+		return ErrOTPLocked
 	}
 	return nil
 }

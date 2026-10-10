@@ -127,6 +127,8 @@ func MigrateServerConfigTable(db *gorm.DB) error {
 			zap.Int64("total_backfilled", totalBackfilled))
 
 		// Sleep between batches to reduce lock contention and allow other operations
+		// to proceed. Duration is a conservative default; see migrate.go for the
+		// configurability TODO.
 		time.Sleep(100 * time.Millisecond)
 	}
 

@@ -25,6 +25,10 @@ type AdminUserUsecase struct {
 }
 
 // ErrEmailAlreadyExists is returned when attempting to create a user with an email that already exists.
+//
+// TODO(error-handling): Consolidate with other admin sentinel errors
+// (ErrAdminUserNotFound, ErrInvalidCredentials, ErrLoginLocked) into a dedicated
+// admin_errors.go file for easier discovery.
 var ErrEmailAlreadyExists = errors.New("email already exists")
 
 // NewAdminUserUsecase creates a new AdminUserUsecase.
@@ -224,6 +228,97 @@ func (uc *AdminUserUsecase) CreateUser(ctx context.Context, input CreateUserInpu
 	}
 
 	return user, nil
+}
+
+// UserWithRolesResponse contains user information with roles and permissions.
+type UserWithRolesResponse struct {
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	Name        string `json:"name,omitempty"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
+	Roles       any    `json:"roles,omitempty"`
+	Permissions any    `json:"permissions,omitempty"`
+}
+
+// RoleBrief contains brief role information.
+type RoleBrief struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+}
+
+// PermBrief contains brief permission information.
+type PermBrief struct {
+	Resource string `json:"resource"`
+	Action   string `json:"action"`
+}
+
+// GetCurrentUserWithRoles returns user information with roles and permissions.
+// This method is used by the /api/auth/me endpoint to include roles and permissions.
+func (uc *AdminUserUsecase) GetCurrentUserWithRoles(
+	ctx context.Context,
+	user *model.AdminUser,
+) (*UserWithRolesResponse, error) {
+	resp := &UserWithRolesResponse{
+		ID:        user.ID.String(),
+		Email:     user.Email,
+		Name:      user.Name,
+		AvatarURL: user.AvatarURL,
+	}
+
+	// Get admin user roles
+	urs, err := uc.adminUserRoleRepo.ListByUserID(ctx, user.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list user roles: %w", err)
+	}
+
+	// Batch-fetch all roles in a single query to avoid N+1
+	roleIDs := make([]uuid.UUID, 0, len(urs))
+	for _, ur := range urs {
+		roleIDs = append(roleIDs, ur.RoleID)
+	}
+
+	var allRoles []*model.AdminRole
+	if len(roleIDs) > 0 {
+		allRoles, err = uc.roleRepo.GetByIDs(ctx, roleIDs)
+		if err != nil {
+			return nil, fmt.Errorf("batch get roles: %w", err)
+		}
+	}
+
+	roleMap := make(map[uuid.UUID]*model.AdminRole, len(allRoles))
+	for _, role := range allRoles {
+		roleMap[role.ID] = role
+	}
+
+	roles := make([]RoleBrief, 0, len(urs))
+	for _, ur := range urs {
+		role, ok := roleMap[ur.RoleID]
+		if !ok {
+			continue // role not found (may have been deleted)
+		}
+		if !role.IsEnabled {
+			continue // Skip disabled roles
+		}
+		roles = append(roles, RoleBrief{
+			ID:          role.ID.String(),
+			Name:        role.Name,
+			DisplayName: role.DisplayName,
+		})
+	}
+	resp.Roles = roles
+
+	// Get user permissions (aggregated from all roles)
+	policies := uc.enforcer.GetPermissionsForUser(user.ID.String())
+	perms := make([]PermBrief, 0, len(policies))
+	for _, p := range policies {
+		if len(p) >= 2 {
+			perms = append(perms, PermBrief{Resource: p[0], Action: p[1]})
+		}
+	}
+	resp.Permissions = perms
+
+	return resp, nil
 }
 
 // UpdateUserInput contains the input for updating an admin user.

@@ -22,6 +22,48 @@ import (
 // session lock credential, runs the eino TurnLoop with UntilIdleFor(100ms),
 // and handles work completion and cleanup.
 //
+// # Lifecycle State Diagram
+//
+//	NewSessionTurnManager() → [Created] → Run() → [Running] → loop exits → [Stopping] → Cleanup() → [Cleanup] → Done channel closed
+//	                              ↓
+//	                         Wait() can be called at any time after Run()
+//	                         (safe for concurrent use by multiple goroutines)
+//
+//	States:
+//	  Created:  Manager initialized, TurnLoop created, not yet running
+//	  Running:  TurnLoop.Run() executing, agents processing work items
+//	  Stopping: TurnLoop exited (idle timeout or explicit stop), cleanup pending
+//	  Cleanup:  Post-loop cleanup in progress (lock release, work completion)
+//	  Done:     Cleanup complete, done channel closed, manager is inert
+//
+// # Concurrency Model
+//
+// Multiple mutexes protect independent state domains:
+//   - credMu: protects lock credential updates
+//   - lastMsgMu: protects last message for Sub Agent support
+//   - renewCancelMu: protects lock renewal cancel function
+//   - loopExitMu + waitOnce: ensures loop.Wait() called exactly once
+//   - cancelMu: protects queue cancellation state
+//   - resumeCancelMu: protects resume context cancel function
+//
+// Design rationale: Fine-grained locking allows concurrent operations on
+// independent state (e.g., updating credential while reading last message).
+// This reduces lock contention and improves throughput under high concurrency.
+//
+// TODO(concurrency): Add stress tests to verify concurrency correctness:
+//   - Concurrent Wait() calls from multiple goroutines
+//   - Concurrent UpdateCredential() and getCredential() calls
+//   - Concurrent SetCancelledByQueue() and IsCancelledByQueue() calls
+//   - Cleanup() called concurrently with Wait()
+//   - High-frequency work item injection during shutdown
+//
+// TODO(observability): Add goroutine and lock metrics:
+//   - session_manager_goroutines: Gauge of active manager goroutines
+//   - session_manager_lock_hold_duration_seconds: Histogram of lock hold times
+//   - session_manager_cleanup_duration_seconds: Histogram of cleanup durations
+//   - session_manager_lock_contentions_total: Counter of lock contention events
+//     These metrics help identify concurrency bottlenecks and resource leaks.
+//
 // Lifecycle:
 //
 //	mgr, err := NewSessionTurnManager(...)

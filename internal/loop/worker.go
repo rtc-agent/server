@@ -2,6 +2,14 @@
 //
 // Worker handles asynq tasks for loop execution, Recovery monitors for stale
 // or expired loops, and Cleanup handles session close cleanup.
+//
+// TODO(observability): Add Prometheus metrics for loop worker operations:
+//   - loop_worker_tasks_total{status="success|failure"}: Counter of processed tasks
+//   - loop_worker_task_duration_seconds: Histogram of task processing duration
+//   - loop_worker_lock_acquisitions_total{status="acquired|skipped"}: Counter of lock attempts
+//   - loop_worker_lock_hold_duration_seconds: Histogram of lock hold duration
+//   - loop_worker_queue_publish_errors_total: Counter of queue publish failures
+//     These metrics enable monitoring of worker health, performance, and failure patterns.
 package loop
 
 import (
@@ -255,9 +263,11 @@ func parseLoopTaskPayload(ctx context.Context, t *hibikenasynq.Task) (sessionUUI
 	}
 
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+		// Security: Avoid logging raw payload to prevent sensitive data exposure.
+		// The payload structure is well-defined and should not contain secrets,
+		// but defensive logging prevents accidental leaks if the schema changes.
 		logger.Error(ctx, "[loop.Worker] unmarshal payload",
-			zap.Error(err),
-			zap.String("raw_payload", string(t.Payload())))
+			zap.Error(err))
 		return uuid.Nil, uuid.Nil, "", "", fmt.Errorf("unmarshal payload: %w", err)
 	}
 
@@ -282,6 +292,11 @@ func parseLoopTaskPayload(ctx context.Context, t *hibikenasynq.Task) (sessionUUI
 
 // acquireDistributedLock acquires a Redis distributed lock for loop task processing.
 // Returns the lock holder UUID and whether the lock was successfully acquired.
+//
+// Concurrency safety: SetNX is an atomic operation in Redis. If multiple workers
+// call SetNX simultaneously, only one will succeed (return true), and the others
+// will fail (return false). This atomicity eliminates the need for additional
+// locking mechanisms and ensures exactly-once lock acquisition semantics.
 func (w *Worker) acquireDistributedLock(ctx context.Context, loopUUID uuid.UUID) (string, bool, error) {
 	lockKey := cache.LoopLockKey(loopUUID.String())
 	holderUUID := uuid.Must(uuid.NewV7()).String()
@@ -389,23 +404,4 @@ Please proceed with this turn of the loop task.
 // RegisterHandlers registers asynq handlers.
 func (w *Worker) RegisterHandlers(mux *hibikenasynq.ServeMux) {
 	mux.HandleFunc(LoopTaskType, w.HandleLoopTask)
-}
-
-// StartAsynqServer starts the asynq server.
-func StartAsynqServer(redisAddr string, worker *Worker) error {
-	srv := hibikenasynq.NewServer(
-		hibikenasynq.RedisClientOpt{Addr: redisAddr},
-		hibikenasynq.Config{
-			Concurrency: 10,
-			Queues: map[string]int{
-				"loop":    6,
-				"default": 3,
-			},
-		},
-	)
-
-	mux := hibikenasynq.NewServeMux()
-	worker.RegisterHandlers(mux)
-
-	return srv.Run(mux)
 }

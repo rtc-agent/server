@@ -120,7 +120,10 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password, clientIP
 	}
 
 	// 4. Generate and store refresh token
-	refreshPlain := generateRefreshTokenPlain()
+	refreshPlain, err := generateRefreshTokenPlain()
+	if err != nil {
+		return nil, fmt.Errorf("admin auth generate refresh token: %w", err)
+	}
 	refreshHash := hashRefreshToken(refreshPlain)
 	refreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
 
@@ -174,7 +177,10 @@ func (uc *AdminAuthUsecase) LoginWithOTP(ctx context.Context, email string) (*Lo
 	}
 
 	// 3. Generate and store refresh token
-	refreshPlain := generateRefreshTokenPlain()
+	refreshPlain, err := generateRefreshTokenPlain()
+	if err != nil {
+		return nil, fmt.Errorf("admin auth generate refresh token: %w", err)
+	}
 	refreshHash := hashRefreshToken(refreshPlain)
 	refreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
 
@@ -269,7 +275,10 @@ func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain 
 		}
 
 		// 7. Generate and store new refresh token
-		newRefreshPlain := generateRefreshTokenPlain()
+		newRefreshPlain, err := generateRefreshTokenPlain()
+		if err != nil {
+			return fmt.Errorf("admin auth generate new refresh token: %w", err)
+		}
 		newRefreshHash := hashRefreshToken(newRefreshPlain)
 		newRefreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
 
@@ -346,6 +355,13 @@ func HashPassword(password string) (string, error) {
 }
 
 // Sentinel errors for admin authentication.
+//
+// TODO(error-handling): Consider consolidating admin sentinel errors into a
+// dedicated admin_errors.go file (similar to role_errors.go) to provide a
+// single source of truth. Currently they are scattered across admin_auth.go,
+// admin_user.go, and user_role.go. Additionally, repo.ErrDuplicateEmail is
+// not currently re-exported; if handlers need to detect duplicate email via
+// errors.Is, add a usecase-level alias here.
 var (
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrAdminUserNotFound  = errors.New("admin user not found")
@@ -369,13 +385,15 @@ var dummyPasswordHash = func() []byte {
 }()
 
 // generateRefreshTokenPlain generates an opaque refresh token.
-func generateRefreshTokenPlain() string {
+// Returns an error if random number generation fails (extremely rare in practice).
+func generateRefreshTokenPlain() (string, error) {
 	b := make([]byte, 32)
 	if _, err := randRead(b); err != nil {
-		// This should never happen in practice
-		panic(fmt.Sprintf("failed to generate random bytes: %v", err))
+		// This should never happen in practice, but we return an error instead of
+		// panicking to allow graceful error handling at the call site.
+		return "", fmt.Errorf("generate refresh token random bytes: %w", err)
 	}
-	return "rt_" + hex.EncodeToString(b)
+	return "rt_" + hex.EncodeToString(b), nil
 }
 
 // randRead is a variable for testing purposes.

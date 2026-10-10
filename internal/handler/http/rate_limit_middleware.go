@@ -26,6 +26,12 @@ type RateLimiterInterface interface {
 
 // bucketShard is a sharded bucket map with its own lock.
 // Reduces lock contention by partitioning IP addresses across multiple shards.
+//
+// TODO(observability): Add lock hold time metrics to identify contention hotspots:
+//   - rate_limiter_lock_hold_duration_seconds: Histogram per shard
+//   - rate_limiter_lock_acquisitions_total{status="acquired|contended"}: Counter
+//
+// These metrics help tune shard count and detect abnormal contention patterns.
 type bucketShard struct {
 	mu      sync.Mutex
 	buckets map[string]*bucket
@@ -203,6 +209,30 @@ func AdminRateLimitMiddleware(limiter RateLimiterInterface) gin.HandlerFunc {
 
 // STSRateLimitMiddleware creates a standard HTTP middleware for rate limiting STS endpoints.
 // Rate limiting is based on IP address to prevent credential exhaustion attacks.
+//
+// P1-7 fix: Current implementation uses IP-based rate limiting, which provides basic DoS protection.
+// For more granular control, consider adding user-based rate limiting AFTER authentication:
+//
+// Recommended enhancement (two-tier rate limiting):
+// 1. IP-based (current): Prevents DoS attacks from any single source IP.
+//   - Runs before authentication (fast fail)
+//   - Protects against credential stuffing from botnets
+//   - Limit: 100 requests/minute/IP (configurable)
+//
+// 2. User-based (future enhancement): Prevents abuse by authenticated users.
+//   - Runs after JWT authentication
+//   - Uses userID as the rate limit key
+//   - Limit: 10 requests/minute/user (configurable, stricter than IP-based)
+//   - Implementation: Create a new middleware that extracts userID from context
+//     and calls a separate user-based rate limiter (Redis-backed for distributed systems).
+//
+// Why IP-based is acceptable for now:
+// - STS credentials are short-lived and scoped to the user's own files
+// - Abuse is limited by the user's quota (can't upload beyond quota)
+// - IP-based limiting catches most automated attacks
+// - User-based limiting adds complexity (Redis dependency, distributed state)
+//
+// If abuse becomes an issue, implement user-based limiting as a second middleware layer.
 func STSRateLimitMiddleware(limiter RateLimiterInterface, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := r.RemoteAddr

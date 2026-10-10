@@ -89,6 +89,9 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 				zap.Int64("rows_affected", result.RowsAffected),
 				zap.Int64("total_backfilled", totalSessionsBackfilled),
 			)
+			// Sleep between batches to reduce lock contention and allow other operations
+			// to proceed. Duration is a conservative default; see migrate.go for the
+			// configurability TODO.
 			time.Sleep(100 * time.Millisecond)
 		}
 		if totalSessionsBackfilled > 0 {
@@ -128,6 +131,9 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 				zap.Int64("rows_affected", result.RowsAffected),
 				zap.Int64("total_backfilled", totalMessagesBackfilled),
 			)
+			// Sleep between batches to reduce lock contention and allow other operations
+			// to proceed. Duration is a conservative default; see migrate.go for the
+			// configurability TODO.
 			time.Sleep(100 * time.Millisecond)
 		}
 		if totalMessagesBackfilled > 0 {
