@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff/v5"
 	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/model"
@@ -182,6 +184,14 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 
 // validateSendMessageRequest validates the SendMessage request and extracts content.
 func (h *Handler) validateSendMessageRequest(ctx context.Context, req *protocol.SendMessageRequest, userID uuid.UUID, span trace.Span) (string, *APIError) {
+	// Validate server_session_id UUID format if present
+	if req.ServerSessionId != nil {
+		if _, apiErr := parseUUID(*req.ServerSessionId, "server_session_id"); apiErr != nil {
+			span.SetStatus(codes.Error, apiErr.Code)
+			return "", apiErr
+		}
+	}
+
 	// Validate file attachments exist before creating the message.
 	if apiErr := h.validateFileAttachments(ctx, req.ContentData, userID, "SendMessage"); apiErr != nil {
 		span.SetStatus(codes.Error, apiErr.Code)
@@ -411,6 +421,7 @@ func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string)
 }
 
 // publishSubmitWork publishes a submit work item inside the transaction.
+// Uses exponential backoff with retry for transient Redis errors.
 func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, userID string) error {
 	if h.deps.Queue == nil {
 		logger.Error(txCtx, "[SendMessage] queue is nil, message will not be processed by agent",
@@ -429,8 +440,44 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 	if err != nil {
 		return fmt.Errorf("marshal work payload: %w", err)
 	}
-	if _, err := h.deps.Queue.Publish(txCtx, sessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
+
+	bo := backoff.NewExponentialBackOff()
+	_, err = backoff.Retry(txCtx, func() (string, error) {
+		workID, publishErr := h.deps.Queue.Publish(txCtx, sessionID.String(), string(payload), rtcqueue.SubmitWorkPriority)
+		if publishErr != nil {
+			if !isTransientRedisError(publishErr) {
+				return "", backoff.Permanent(publishErr)
+			}
+			logger.Warn(txCtx, "[SendMessage] Queue.Publish transient error, retrying",
+				zap.String("session", sessionID.String()),
+				zap.Error(publishErr))
+			return "", publishErr
+		}
+		return workID, nil
+	},
+		backoff.WithBackOff(bo),
+		backoff.WithMaxTries(3),
+	)
+	if err != nil {
 		return fmt.Errorf("queue publish: %w", err)
 	}
 	return nil
+}
+
+// isTransientRedisError reports whether the error is a transient Redis failure
+// that is safe to retry.
+//
+// Detection strategy:
+//   - "connection reset" / "i/o timeout": Network-level errors from the Redis client.
+//     These indicate temporary connectivity issues that typically resolve on retry.
+//   - "NOSCRIPT": Redis Lua script not loaded (e.g., after a failover or restart).
+//     The script will be re-loaded on the next EVALSHA call, making this safe to retry.
+func isTransientRedisError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "NOSCRIPT")
 }

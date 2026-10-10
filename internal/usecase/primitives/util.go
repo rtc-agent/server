@@ -23,9 +23,14 @@ func TruncateTitle(content string, maxRunes int) string {
 }
 
 // ValidateCreateMessageRequest validates a SendMessage request.
+// Content must be non-empty and not exceed 100KB (102,400 bytes).
 func ValidateCreateMessageRequest(content string) error {
 	if content == "" {
 		return fmt.Errorf("content must not be empty")
+	}
+	const maxContentLength = 100 * 1024 // 100KB
+	if len(content) > maxContentLength {
+		return fmt.Errorf("content too long: %d bytes (max %d)", len(content), maxContentLength)
 	}
 	return nil
 }
