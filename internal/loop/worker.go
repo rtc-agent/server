@@ -87,227 +87,92 @@ const loopTaskTimeout = 30 * time.Second
 // Error handling: On failure, logs detailed context for debugging and traceability.
 // Failed tasks are archived by asynq and can be inspected via asynqmon or manually retried.
 func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error {
-	// Set overall timeout to prevent infinite blocking if downstream services hang.
 	ctx, cancel := context.WithTimeout(ctx, loopTaskTimeout)
 	defer cancel()
 
-	var payload struct {
-		SessionID string `json:"session_id"`
-		LoopID    string `json:"loop_id"`
-		TraceID   string `json:"trace_id,omitempty"`
-		SpanID    string `json:"span_id,omitempty"`
+	sessionUUID, loopUUID, traceID, spanID, err := parseLoopTaskPayload(ctx, t)
+	if err != nil {
+		return nil // Malformed payload or invalid UUIDs, don't retry
 	}
 
-	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
-		logger.Error(ctx, "[loop.Worker] unmarshal payload",
-			zap.Error(err),
-			zap.String("raw_payload", string(t.Payload())))
-		// Malformed payload will never succeed - log and discard (don't retry).
-		return nil
-	}
-
-	// Restore trace context from payload (if available).
-	// This preserves the original request's trace information across the asynq boundary.
-	if payload.TraceID != "" && payload.SpanID != "" {
-		ctx = turnagent.WithTraceContext(ctx, payload.TraceID, payload.SpanID)
+	if traceID != "" && spanID != "" {
+		ctx = turnagent.WithTraceContext(ctx, traceID, spanID)
 	}
 
 	ctx, span := workerTracer().Start(ctx, "loop.HandleLoopTask",
 		trace.WithAttributes(
-			attribute.String("session.id", payload.SessionID),
-			attribute.String("loop.id", payload.LoopID),
+			attribute.String("session.id", sessionUUID.String()),
+			attribute.String("loop.id", loopUUID.String()),
 		),
 	)
 	defer span.End()
 
-	sessionUUID, err := uuid.Parse(payload.SessionID)
-	if err != nil {
-		span.SetStatus(codes.Error, "internal_error")
-		span.RecordError(err)
-		logger.Error(ctx, "[loop.Worker] parse session ID",
-			zap.String("session_id", payload.SessionID),
-			zap.Error(err))
-		// Invalid UUID will never succeed - log and discard (don't retry).
-		return nil
-	}
-	loopUUID, err := uuid.Parse(payload.LoopID)
-	if err != nil {
-		span.SetStatus(codes.Error, "internal_error")
-		span.RecordError(err)
-		logger.Error(ctx, "[loop.Worker] parse loop ID",
-			zap.String("loop_id", payload.LoopID),
-			zap.Error(err))
-		// Invalid UUID will never succeed - log and discard (don't retry).
-		return nil
-	}
-
-	// Acquire distributed lock to prevent TOCTOU race condition.
-	// Multiple workers may read the same loop state simultaneously and both pass
-	// the idempotency check. The lock ensures only one worker processes the task at a time.
-	// Lock TTL = loopTaskTimeout + buffer to cover the entire processing duration.
+	// Acquire distributed lock
 	lockKey := cache.LoopLockKey(loopUUID.String())
-	holderUUID := uuid.Must(uuid.NewV7()).String()
-	lockTTL := loopTaskTimeout + 10*time.Second // buffer for lock overhead
-
-	acquired, err := w.redis.SetNX(ctx, lockKey, holderUUID, lockTTL).Result()
+	holderUUID, acquired, err := w.acquireDistributedLock(ctx, loopUUID)
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
-		logger.Error(ctx, "[loop.Worker] acquire distributed lock failed",
-			zap.String("loop_id", loopUUID.String()),
-			zap.Error(err))
-		// Redis failure: return error to trigger asynq retry.
-		return fmt.Errorf("acquire lock: %w", err)
+		return err
 	}
 	if !acquired {
-		// Another worker is already processing this loop task.
-		// This is expected in multi-instance deployment - log and return nil (no retry).
 		span.SetAttributes(attribute.String("outcome", "lock_not_acquired"))
 		logger.Debug(ctx, "[loop.Worker] another worker is processing this loop, skipping",
 			zap.String("loop_id", loopUUID.String()))
 		return nil
 	}
-
-	// Release the lock when done (only if we successfully acquired it).
-	// Use a Lua script to ensure we only delete our own lock, never another worker's.
 	defer func() {
-		releaseLua := `
-local holder = ARGV[1]
-local current = redis.call('GET', KEYS[1])
-if current ~= holder then
-    return 0
-end
-return redis.call('DEL', KEYS[1])
-`
-		if err := w.redis.Eval(ctx, releaseLua, []string{lockKey}, holderUUID).Err(); err != nil {
-			logger.Warn(ctx, "[loop.Worker] release distributed lock failed",
-				zap.String("loop_id", loopUUID.String()),
-				zap.Error(err))
-		}
+		w.releaseDistributedLock(ctx, lockKey, holderUUID)
 	}()
 
-	// 1. Validate loop still exists and is active
-	//
-	// Note: We use loop.ID as the asynq task ID (set in scheduleNextLoop via TaskID option).
-	// This provides idempotency: if this task crashes and Recovery re-enqueues it, asynq
-	// will reject the duplicate with ErrTaskIDConflict. The asynq_task_id field in the
-	// database is no longer maintained since it always equals loop.ID when scheduled.
-	loop, err := w.loopRepo.FindActive(ctx, sessionUUID)
+	// Validate loop state
+	loop, err := w.validateLoopState(ctx, sessionUUID, loopUUID, span)
 	if err != nil {
-		span.SetStatus(codes.Error, "internal_error")
-		span.RecordError(err)
-		logTaskFailure(ctx, "find active loop", payload.SessionID, payload.LoopID, err)
-		return fmt.Errorf("find active loop: %w", err)
+		return err
 	}
 	if loop == nil {
-		// Loop was cancelled/paused, no longer executing
-		span.SetAttributes(attribute.String("outcome", "loop_not_found"))
-		logger.Debug(ctx, "[loop.Worker] loop no longer active, skipping",
-			zap.String("session_id", sessionUUID.String()),
-			zap.String("loop_id", loopUUID.String()))
-		return nil
-	}
-	if loop.ID != loopUUID {
-		// Loop ID doesn't match (may have been replaced by a new loop)
-		span.SetAttributes(attribute.String("outcome", "loop_id_mismatch"))
-		logger.Debug(ctx, "[loop.Worker] loop ID mismatch, skipping",
-			zap.String("session_id", sessionUUID.String()),
-			zap.String("expected_loop_id", loopUUID.String()),
-			zap.String("active_loop_id", loop.ID.String()))
 		return nil
 	}
 
-	// Idempotency check: prevent duplicate processing if this turn was already handled.
-	// If LastRunAt is within the current interval, this turn has likely been processed.
-	// This protects against duplicate notification creation and work publishing when
-	// the same asynq task is executed multiple times (e.g., after crash recovery or asynq retry).
-	//
-	// Note: With the distributed lock above, this check is now a secondary safeguard.
-	// The lock prevents concurrent execution; this check handles edge cases like
-	// manual retries or lock expiration during long-running tasks.
-	if loop.LastRunAt != nil && time.Since(*loop.LastRunAt) < time.Duration(loop.IntervalSeconds)*time.Second {
-		span.SetAttributes(attribute.String("outcome", "already_processed"))
-		logger.Debug(ctx, "[loop.Worker] turn already processed, skipping",
-			zap.String("session_id", sessionUUID.String()),
-			zap.String("loop_id", loopUUID.String()),
-			zap.Time("last_run_at", *loop.LastRunAt),
-			zap.Int("interval_seconds", loop.IntervalSeconds))
+	// Idempotency check
+	alreadyProcessed := w.checkIdempotency(ctx, loop, sessionUUID, loopUUID, span)
+	if alreadyProcessed {
 		return nil
 	}
 
-	// Update LastRunAt atomically to mark this turn as being processed.
-	// This provides idempotency for concurrent/duplicate task execution.
-	// If two workers try to process the same task, only one will succeed in updating
-	// LastRunAt first; the other will see a recent LastRunAt and skip.
-	now := time.Now()
-	if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{
-		"last_run_at": now,
-	}); err != nil {
-		span.SetStatus(codes.Error, "internal_error")
-		span.RecordError(err)
-		logTaskFailure(ctx, "update last_run_at", payload.SessionID, payload.LoopID, err)
-		return fmt.Errorf("update last_run_at: %w", err)
-	}
-
-	// 2. Build the loop task prompt
+	// Build prompt and create notification
 	prompt := buildLoopTaskPrompt(loop)
-
-	// 3. Create user-role notification message (async sub-agent pattern)
 	if w.notificationCreator != nil {
 		if err := w.notificationCreator(ctx, sessionUUID, prompt); err != nil {
 			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
-			logTaskFailure(ctx, "create notification message", payload.SessionID, payload.LoopID, err)
+			logTaskFailure(ctx, "create notification message", sessionUUID.String(), loopUUID.String(), err)
 			return fmt.Errorf("create notification message: %w", err)
 		}
 	}
 
-	// 4. Submit to rtc-queue for execution (only SessionID, consistent with Goal pattern)
-	// Pass trace_id to maintain trace context across the rtcqueue boundary.
-	// Load session to get userID (OwnerRefID).
-	var userID string
-	if session, sessErr := w.sessionRepo.GetByID(ctx, sessionUUID); sessErr != nil {
-		// Log the error but continue - userID is optional for the work payload.
-		// The worker can still process the task without userID, but observability
-		// is reduced. This is a non-fatal error.
-		logger.Warn(ctx, "[loop.Worker] get session for userID failed",
-			zap.String("session_id", sessionUUID.String()),
-			zap.Error(sessErr))
-	} else if session != nil {
-		userID = session.OwnerRefID
+	// Get userID from session (optional, for observability)
+	userID := w.getUserIDFromSession(ctx, sessionUUID)
+
+	// Publish to rtc-queue
+	if err := w.publishToQueue(ctx, sessionUUID.String(), userID, traceID, spanID, span); err != nil {
+		logTaskFailure(ctx, "publish to rtc-queue", sessionUUID.String(), loopUUID.String(), err)
+		return err
 	}
 
-	workPayload, err := json.Marshal(turnagent.WorkPayload{
-		Kind:      turnagent.WorkKindSubmit,
-		SessionID: payload.SessionID,
-		UserID:    userID,
-		TraceID:   payload.TraceID,
-		SpanID:    payload.SpanID,
-	})
-	if err != nil {
+	// Update LastRunAt only after successful queue publish.
+	// This ensures idempotency check won't skip retries if worker crashes before publish.
+	now := time.Now()
+	if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{"last_run_at": now}); err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
-		logTaskFailure(ctx, "marshal work payload", payload.SessionID, payload.LoopID, err)
-		return fmt.Errorf("marshal work payload: %w", err)
+		logTaskFailure(ctx, "update last_run_at", sessionUUID.String(), loopUUID.String(), err)
+		return fmt.Errorf("update last_run_at: %w", err)
 	}
 
-	_, err = w.queue.Publish(ctx, payload.SessionID, string(workPayload), rtcqueue.SubmitWorkPriority)
-	if err != nil {
-		span.SetStatus(codes.Error, "internal_error")
-		span.RecordError(err)
-		logTaskFailure(ctx, "publish to rtc-queue", payload.SessionID, payload.LoopID, err)
-		return fmt.Errorf("publish to rtc-queue: %w", err)
-	}
-
-	// Reset recovery_attempts on successful processing.
-	// This prevents a loop from being incorrectly marked as exhausted after
-	// experiencing transient failures that required recovery.
+	// Reset recovery_attempts on success
 	if loop.RecoveryAttempts > 0 {
-		if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{
-			"recovery_attempts": 0,
-		}); err != nil {
-			// Non-fatal: log but continue. The loop will still function correctly,
-			// but recovery_attempts may accumulate over time.
+		if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{"recovery_attempts": 0}); err != nil {
 			logger.Warn(ctx, "[loop.Worker] reset recovery_attempts failed",
 				zap.String("loop_id", loopUUID.String()),
 				zap.Error(err))
@@ -326,6 +191,47 @@ return redis.call('DEL', KEYS[1])
 	return nil
 }
 
+// getUserIDFromSession retrieves the userID from the session for observability.
+// Returns empty string if session cannot be loaded (non-fatal).
+func (w *Worker) getUserIDFromSession(ctx context.Context, sessionUUID uuid.UUID) string {
+	session, err := w.sessionRepo.GetByID(ctx, sessionUUID)
+	if err != nil {
+		logger.Warn(ctx, "[loop.Worker] get session for userID failed",
+			zap.String("session_id", sessionUUID.String()),
+			zap.Error(err))
+		return ""
+	}
+	if session != nil {
+		return session.OwnerRefID
+	}
+	return ""
+}
+
+// publishToQueue publishes the work item to the rtc-queue.
+func (w *Worker) publishToQueue(ctx context.Context, sessionID, userID, traceID, spanID string, span trace.Span) error {
+	workPayload, err := json.Marshal(turnagent.WorkPayload{
+		Kind:      turnagent.WorkKindSubmit,
+		SessionID: sessionID,
+		UserID:    userID,
+		TraceID:   traceID,
+		SpanID:    spanID,
+	})
+	if err != nil {
+		span.SetStatus(codes.Error, "internal_error")
+		span.RecordError(err)
+		return fmt.Errorf("marshal work payload: %w", err)
+	}
+
+	_, err = w.queue.Publish(ctx, sessionID, string(workPayload), rtcqueue.SubmitWorkPriority)
+	if err != nil {
+		span.SetStatus(codes.Error, "internal_error")
+		span.RecordError(err)
+		return fmt.Errorf("publish to rtc-queue: %w", err)
+	}
+
+	return nil
+}
+
 // logTaskFailure logs a task failure with comprehensive context for debugging.
 // This ensures failed tasks are traceable even after asynq archives them.
 func logTaskFailure(ctx context.Context, errMsg string, sessionID, loopID string, err error) {
@@ -336,6 +242,122 @@ func logTaskFailure(ctx context.Context, errMsg string, sessionID, loopID string
 		zap.Error(err),
 		zap.Time("timestamp", time.Now()),
 		zap.String("task_type", LoopTaskType))
+}
+
+// parseLoopTaskPayload parses and validates the asynq task payload.
+// Returns parsed UUIDs and trace context, or an error if validation fails.
+func parseLoopTaskPayload(ctx context.Context, t *hibikenasynq.Task) (sessionUUID, loopUUID uuid.UUID, traceID, spanID string, err error) {
+	var payload struct {
+		SessionID string `json:"session_id"`
+		LoopID    string `json:"loop_id"`
+		TraceID   string `json:"trace_id,omitempty"`
+		SpanID    string `json:"span_id,omitempty"`
+	}
+
+	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+		logger.Error(ctx, "[loop.Worker] unmarshal payload",
+			zap.Error(err),
+			zap.String("raw_payload", string(t.Payload())))
+		return uuid.Nil, uuid.Nil, "", "", fmt.Errorf("unmarshal payload: %w", err)
+	}
+
+	sessionUUID, err = uuid.Parse(payload.SessionID)
+	if err != nil {
+		logger.Error(ctx, "[loop.Worker] parse session ID",
+			zap.String("session_id", payload.SessionID),
+			zap.Error(err))
+		return uuid.Nil, uuid.Nil, "", "", fmt.Errorf("parse session ID: %w", err)
+	}
+
+	loopUUID, err = uuid.Parse(payload.LoopID)
+	if err != nil {
+		logger.Error(ctx, "[loop.Worker] parse loop ID",
+			zap.String("loop_id", payload.LoopID),
+			zap.Error(err))
+		return uuid.Nil, uuid.Nil, "", "", fmt.Errorf("parse loop ID: %w", err)
+	}
+
+	return sessionUUID, loopUUID, payload.TraceID, payload.SpanID, nil
+}
+
+// acquireDistributedLock acquires a Redis distributed lock for loop task processing.
+// Returns the lock holder UUID and whether the lock was successfully acquired.
+func (w *Worker) acquireDistributedLock(ctx context.Context, loopUUID uuid.UUID) (string, bool, error) {
+	lockKey := cache.LoopLockKey(loopUUID.String())
+	holderUUID := uuid.Must(uuid.NewV7()).String()
+	lockTTL := loopTaskTimeout + 10*time.Second
+
+	acquired, err := w.redis.SetNX(ctx, lockKey, holderUUID, lockTTL).Result()
+	if err != nil {
+		logger.Error(ctx, "[loop.Worker] acquire distributed lock failed",
+			zap.String("loop_id", loopUUID.String()),
+			zap.Error(err))
+		return "", false, fmt.Errorf("acquire lock: %w", err)
+	}
+
+	return holderUUID, acquired, nil
+}
+
+// releaseDistributedLock releases the distributed lock using a Lua script for atomicity.
+func (w *Worker) releaseDistributedLock(ctx context.Context, lockKey, holderUUID string) {
+	releaseLua := `
+local holder = ARGV[1]
+local current = redis.call('GET', KEYS[1])
+if current ~= holder then
+    return 0
+end
+return redis.call('DEL', KEYS[1])
+`
+	if err := w.redis.Eval(ctx, releaseLua, []string{lockKey}, holderUUID).Err(); err != nil {
+		logger.Warn(ctx, "[loop.Worker] release distributed lock failed",
+			zap.Error(err))
+	}
+}
+
+// validateLoopState validates that the loop is still active and matches the expected ID.
+// Returns nil if the loop should be processed, or an error/skip indicator otherwise.
+func (w *Worker) validateLoopState(ctx context.Context, sessionUUID, loopUUID uuid.UUID, span trace.Span) (*model.Loop, error) {
+	loop, err := w.loopRepo.FindActive(ctx, sessionUUID)
+	if err != nil {
+		span.SetStatus(codes.Error, "internal_error")
+		span.RecordError(err)
+		logTaskFailure(ctx, "find active loop", sessionUUID.String(), loopUUID.String(), err)
+		return nil, fmt.Errorf("find active loop: %w", err)
+	}
+
+	if loop == nil {
+		span.SetAttributes(attribute.String("outcome", "loop_not_found"))
+		logger.Debug(ctx, "[loop.Worker] loop no longer active, skipping",
+			zap.String("session_id", sessionUUID.String()),
+			zap.String("loop_id", loopUUID.String()))
+		return nil, nil
+	}
+
+	if loop.ID != loopUUID {
+		span.SetAttributes(attribute.String("outcome", "loop_id_mismatch"))
+		logger.Debug(ctx, "[loop.Worker] loop ID mismatch, skipping",
+			zap.String("session_id", sessionUUID.String()),
+			zap.String("expected_loop_id", loopUUID.String()),
+			zap.String("active_loop_id", loop.ID.String()))
+		return nil, nil
+	}
+
+	return loop, nil
+}
+
+// checkIdempotency performs idempotency check to prevent duplicate processing.
+// Returns true if the task was already processed and should be skipped.
+func (w *Worker) checkIdempotency(ctx context.Context, loop *model.Loop, sessionUUID, loopUUID uuid.UUID, span trace.Span) bool {
+	if loop.LastRunAt != nil && time.Since(*loop.LastRunAt) < time.Duration(loop.IntervalSeconds)*time.Second {
+		span.SetAttributes(attribute.String("outcome", "already_processed"))
+		logger.Debug(ctx, "[loop.Worker] turn already processed, skipping",
+			zap.String("session_id", sessionUUID.String()),
+			zap.String("loop_id", loopUUID.String()),
+			zap.Time("last_run_at", *loop.LastRunAt),
+			zap.Int("interval_seconds", loop.IntervalSeconds))
+		return true
+	}
+	return false
 }
 
 // buildLoopTaskPrompt constructs the notification text for a loop task trigger.
