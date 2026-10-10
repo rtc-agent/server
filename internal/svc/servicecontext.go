@@ -84,9 +84,13 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	}
 
 	node, err := centrifuge.New(centrifuge.Config{
-		LogLevel:           centrifuge.LogLevelInfo,
-		LogHandler:         createCentrifugeLogHandler(),
-		ClientQueueMaxSize: clientQueueMaxSize,
+		LogLevel:                centrifuge.LogLevelInfo,
+		LogHandler:              createCentrifugeLogHandler(),
+		ClientQueueMaxSize:      clientQueueMaxSize,
+		ClientStaleCloseDelay:   15 * time.Second, // Timeout for authentication after connection
+		ChannelMaxLength:        256,              // Maximum channel name length to prevent abuse
+		ClientExpiredCloseDelay: 25 * time.Second, // Grace period for expired clients to reconnect
+		ClientChannelLimit:      128,              // Maximum channels per client
 	})
 	if err != nil {
 		logger.Fatal(context.Background(), "create centrifuge node", zap.Error(err))

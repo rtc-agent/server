@@ -156,9 +156,13 @@ func provideCentrifugeNode(cfg *config.Config) (*centrifuge.Node, error) {
 	}
 
 	return centrifuge.New(centrifuge.Config{
-		LogLevel:           centrifuge.LogLevelDebug, // elevated to Debug level
-		LogHandler:         newCentrifugeLogHandler(),
-		ClientQueueMaxSize: clientQueueMaxSize,
+		LogLevel:                centrifuge.LogLevelDebug, // elevated to Debug level
+		LogHandler:              newCentrifugeLogHandler(),
+		ClientQueueMaxSize:      clientQueueMaxSize,
+		ClientStaleCloseDelay:   15 * time.Second, // Timeout for authentication after connection
+		ChannelMaxLength:        256,              // Maximum channel name length to prevent abuse
+		ClientExpiredCloseDelay: 25 * time.Second, // Grace period for expired clients to reconnect
+		ClientChannelLimit:      128,              // Maximum channels per client
 	})
 }
 
@@ -258,14 +262,14 @@ func provideUsecaseDependencies(
 		ServerConfigRepo:    svcCtx.ServerConfigRepo,
 		ConfigProvider:      cachedConfigProvider,
 		UpdatePublisher:     svcCtx.UpdatePublisher,
-		ChatModel:        chatModelResult.model,
-		LLMConfig:        cfg.LLM,
-		SystemPrompt:     cfg.Worker.SystemPrompt,
-		WorkerConfig:     cfg.Worker,
-		CommandRegistry:  command.NewCommandRegistry(),
-		TaskScheduler:    taskScheduler,
-		WebSearchManager: webSearchManager,
-		WebFetchManager:  webFetchManager,
+		ChatModel:           chatModelResult.model,
+		LLMConfig:           cfg.LLM,
+		SystemPrompt:        cfg.Worker.SystemPrompt,
+		WorkerConfig:        cfg.Worker,
+		CommandRegistry:     command.NewCommandRegistry(),
+		TaskScheduler:       taskScheduler,
+		WebSearchManager:    webSearchManager,
+		WebFetchManager:     webFetchManager,
 	}
 
 	// Initialize RtcSessionUsecase for RPC handler session/message/turn operations.

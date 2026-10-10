@@ -171,8 +171,12 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 			// Check cache first to reduce DB load on frequent reconnections
 			banned, cached := middleware.GetBanCache(ctx, claims.UserID)
 			if !cached {
+				// Use independent 3s timeout for ban check to prevent DB query from blocking connection
+				banCtx, banCancel := stdcontext.WithTimeout(stdcontext.Background(), 3*time.Second)
+				defer banCancel()
+
 				var err error
-				banned, err = oauth2UserRepo.IsUserBanned(ctx, claims.UserID)
+				banned, err = oauth2UserRepo.IsUserBanned(banCtx, claims.UserID)
 				if err != nil {
 					metrics.recordConnecting("error", time.Since(start))
 					logger.Error(ctx, "[Centrifuge] Failed to check user ban status, rejecting connection",
