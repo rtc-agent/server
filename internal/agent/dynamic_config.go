@@ -107,7 +107,6 @@ func resolveOverrides(ctx context.Context, configRepo usecase.ServerConfigRepo, 
 	return overrides, nil
 }
 
-
 // toInt64 converts a numeric any to int64.
 func toInt64(v any) (int64, bool) {
 	switch n := v.(type) {
@@ -155,6 +154,12 @@ func ResolveChatModel(ctx context.Context, deps *usecase.Dependencies) einomodel
 
 	resolved, err := deps.ChatModelFactory.Create(overrides)
 	if err != nil {
+		// Log fallback reason for observability (P1-4 fix).
+		// Factory creation may fail due to invalid config, missing credentials, etc.
+		logger.Warn(ctx, "resolveChatModel.fallback",
+			zap.String("reason", "factory_create_failed"),
+			zap.Any("overrides", overrides),
+			zap.Error(err))
 		return deps.ChatModel
 	}
 	return resolved

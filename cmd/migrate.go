@@ -187,6 +187,16 @@ func createMigrationIndexes(db *gorm.DB) error {
 		return fmt.Errorf("create index for sessions: %w", err)
 	}
 
+	// Composite index for server_config_history to optimize queries by (key, user_id, version).
+	// Used by GetHistoryByVersion and other history queries.
+	// This index enables efficient lookups for specific config versions and audit trails.
+	if err := db.Exec(`
+		CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_server_config_history_key_user_version
+		ON server_config_history(key, user_id, version DESC)
+	`).Error; err != nil {
+		return fmt.Errorf("create index for server_config_history: %w", err)
+	}
+
 	return nil
 }
 

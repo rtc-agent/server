@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -1094,6 +1095,10 @@ func toInt(v any) (int, error) {
 	case int64:
 		return int(n), nil
 	case float64:
+		// Check for decimal part to prevent silent truncation
+		if n != math.Trunc(n) {
+			return 0, fmt.Errorf("float64 has decimal part, cannot convert to int: %v", n)
+		}
 		return int(n), nil
 	case json.Number:
 		i, err := n.Int64()
@@ -1124,7 +1129,6 @@ func toFloat(v any) (float64, error) {
 		return 0, fmt.Errorf("expected float, got %T", v)
 	}
 }
-
 
 func userIDString(uid *uuid.UUID) any {
 	if uid == nil {
@@ -1206,6 +1210,15 @@ func (uc *ServerConfigUsecase) BootstrapDynamicConfigs(ctx context.Context, oper
 			UpdatedAt:   now,
 		}
 		if err := uc.configRepo.Upsert(ctx, cfg, 0); err != nil {
+			// In multi-instance deployments, concurrent bootstrap attempts may cause
+			// unique constraint violations. If the config was already created by another
+			// instance, skip silently (idempotent behavior).
+			if errors.Is(err, repo.ErrConflict) {
+				logger.Debug(ctx, "bootstrap.config_already_exists",
+					zap.String("key", key),
+					zap.String("reason", "concurrent_bootstrap"))
+				continue
+			}
 			return fmt.Errorf("bootstrap config %q: %w", key, err)
 		}
 
@@ -1222,6 +1235,14 @@ func (uc *ServerConfigUsecase) BootstrapDynamicConfigs(ctx context.Context, oper
 			ChangeNote: "Initial bootstrap from yaml default",
 		}
 		if err := uc.db.WithContext(ctx).Create(history).Error; err != nil {
+			// History creation may also fail due to concurrent bootstrap or duplicate key.
+			// Log as warning but don't fail the entire bootstrap process.
+			if repo.IsDuplicateKeyError(err) {
+				logger.Warn(ctx, "bootstrap.history_already_exists",
+					zap.String("key", key),
+					zap.Error(err))
+				continue
+			}
 			return fmt.Errorf("create bootstrap history for %q: %w", key, err)
 		}
 
