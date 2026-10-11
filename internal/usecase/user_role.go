@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -162,7 +163,7 @@ func (uc *AdminUserRoleUsecase) AssignRoles(ctx context.Context, input AssignRol
 	// Wrap DB writes and Casbin policy additions in a transaction
 	// so that if Casbin fails, DB changes are rolled back.
 	return uc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 
 		// Create all assignments atomically in a transaction
 		if err := uc.adminUserRoleRepo.CreateBatch(txCtx, input.UserID, newRoleIDs); err != nil {

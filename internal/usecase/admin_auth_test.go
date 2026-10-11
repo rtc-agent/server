@@ -51,6 +51,17 @@ func (m *mockAdminRefreshTokenRepo) Revoke(ctx context.Context, id uuid.UUID) er
 	return repo.ErrRefreshTokenNotFound
 }
 
+func (m *mockAdminRefreshTokenRepo) RevokeAllByUserID(ctx context.Context, userID uuid.UUID) (int64, error) {
+	var count int64
+	for _, rt := range m.tokens {
+		if rt.UserID == userID && !rt.Revoked {
+			rt.Revoked = true
+			count++
+		}
+	}
+	return count, nil
+}
+
 // mockAdminUserRepo implements repo.AdminUserRepo for testing.
 type mockAdminUserRepo struct {
 	users map[string]*model.AdminUser // key = email or ID

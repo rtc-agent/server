@@ -97,6 +97,8 @@ return {work_id, cred}
 
 // publishScript atomically persists a Work item, enqueues it in the
 // session's priority queue, and notifies workers.
+// Supports idempotent publishing: if a work item with the same ID already
+// exists, it will not be overwritten (SETNX semantics).
 //
 // KEYS[1] = work hash key ("work:<work_id>")
 // KEYS[2] = session queue (zset)
@@ -108,7 +110,12 @@ return {work_id, cred}
 // ARGV[6]  = updated_at (unix seconds)
 // ARGV[7]  = channel name for notification
 // ARGV[8]  = session_id notification payload
+// Returns: 1 if published, 0 if work already exists (idempotent skip)
 var publishScript = redis.NewScript(`
+-- Idempotency check: if work already exists, skip publishing
+if redis.call("EXISTS", KEYS[1]) == 1 then
+    return 0
+end
 local work_id = KEYS[1]:sub(6)
 redis.call("HSET", KEYS[1],
     "id",         ARGV[1],

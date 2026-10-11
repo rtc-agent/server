@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rtc-agent/server/internal/channel"
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -346,7 +347,7 @@ func (u *UpdatePublisher) RunAndPublish(
 				zap.Any("panic", r))
 		}
 	}()
-	txCtx := repo.WithTx(ctx, tx)
+	txCtx := dbutil.WithTx(ctx, tx)
 
 	items, err := fn(txCtx)
 	if err != nil {
@@ -529,7 +530,7 @@ func (u *UpdatePublisher) save(ctx context.Context, items ...UpdatePublishItem) 
 		return nil, nil // nothing to persist — avoids gorm error on empty slice Create
 	}
 
-	if err := repo.DBFromContext(ctx, u.db).WithContext(ctx).Create(&userUpdates).Error; err != nil {
+	if err := dbutil.DBFromContext(ctx, u.db).WithContext(ctx).Create(&userUpdates).Error; err != nil {
 		logger.Error(ctx, "[UpdatePublisher] batch insert user_updates failed",
 			zap.Int("count", len(userUpdates)),
 			zap.Error(err))

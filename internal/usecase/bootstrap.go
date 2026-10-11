@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -97,7 +98,7 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, adminRoleRepo repo.AdminRo
 	var createdAdminID, createdOperatorID, createdViewerID string
 
 	txErr := db.Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 
 		// Create roles that don't exist yet.
 		// Uses ON CONFLICT DO NOTHING for concurrent safety: if another instance

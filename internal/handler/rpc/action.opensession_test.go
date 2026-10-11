@@ -156,14 +156,14 @@ func newTestOpenSessionHandler(t *testing.T, sessionRepo *mockSessionRepo, publi
 	scriptExecutionRepo := &noopScriptExecutionRepo{}
 
 	usecaseDeps := &usecase.Dependencies{
-		SessionRepo:       sessionRepo,
-		MessageRepo:       messageRepo,
-		TurnRepo:          turnRepo,
-		RtcRepo:           rtcRepo,
-		MemoryRepo:        memoryRepo,
+		SessionRepo:         sessionRepo,
+		MessageRepo:         messageRepo,
+		TurnRepo:            turnRepo,
+		RtcRepo:             rtcRepo,
+		MemoryRepo:          memoryRepo,
 		ScriptExecutionRepo: scriptExecutionRepo,
-		UpdatePublisher:   publisher,
-		RtcSessionUsecase: usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo, rtcRepo, memoryRepo, scriptExecutionRepo),
+		UpdatePublisher:     publisher,
+		RtcSessionUsecase:   usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo, rtcRepo, memoryRepo, scriptExecutionRepo),
 	}
 
 	deps := &Dependencies{

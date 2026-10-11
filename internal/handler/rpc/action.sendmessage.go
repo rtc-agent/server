@@ -437,12 +437,23 @@ func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string)
 
 // publishSubmitWork publishes a submit work item inside the transaction.
 // Uses exponential backoff with retry for transient Redis errors.
+// Implements idempotent publishing with deterministic work IDs to prevent
+// duplicate work items on retries.
 func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, userID string) error {
 	if h.deps.Queue == nil {
 		logger.Error(txCtx, "rpc.send_message.queue_uninitialized",
 			zap.String("session", sessionID.String()))
 		return h.internalError(txCtx, ErrorCodeSendQueueUninit, "queue not initialized", fmt.Errorf("queue dependency is nil"))
 	}
+
+	// Generate deterministic work ID based on session ID and current timestamp.
+	// This ensures retries of the same logical work produce the same work ID,
+	// preventing duplicate work items from being created.
+	// Note: We use session ID + timestamp because message ID is not yet available
+	// at this point (work is published before message creation completes).
+	// The timestamp provides uniqueness across different SendMessage calls.
+	workID := generateDeterministicWorkIDForSend(sessionID)
+
 	// Extract trace context from the transaction context for cross-process propagation.
 	traceID, spanID := turnagent.ExtractTraceFromCtx(txCtx)
 	payload, err := json.Marshal(turnagent.WorkPayload{
@@ -459,27 +470,70 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 	// Use exponential backoff with a maximum elapsed time to prevent
 	// indefinite retry attempts when Redis is persistently unavailable.
 	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = 100 * time.Millisecond // Faster initial retry (was 500ms default)
+	bo.MaxInterval = 2 * time.Second
+	bo.Multiplier = 2.0
+
+	attempt := 0
+	startTime := time.Now()
+
 	_, err = backoff.Retry(txCtx, func() (string, error) {
-		workID, publishErr := h.deps.Queue.Publish(txCtx, sessionID.String(), string(payload), rtcqueue.SubmitWorkPriority)
+		attempt++
+
+		// Check if client has already timed out
+		if txCtx.Err() != nil {
+			logger.Error(txCtx, "rpc.send_message.queue_publish_client_timeout",
+				zap.String("session", sessionID.String()),
+				zap.Int("attempt", attempt),
+				zap.Duration("elapsed", time.Since(startTime)))
+			return "", backoff.Permanent(txCtx.Err())
+		}
+
+		// Use PublishWithID for idempotent publishing
+		publishWorkID, publishErr := h.deps.Queue.PublishWithID(txCtx, sessionID.String(), workID, string(payload), rtcqueue.SubmitWorkPriority)
 		if publishErr != nil {
 			if !isTransientRedisError(publishErr) {
 				return "", backoff.Permanent(publishErr)
 			}
-			logger.Warn(txCtx, "rpc.send_message.queue_publish_transient_error",
+			logger.Warn(txCtx, "rpc.send_message.queue_publish_retry",
 				zap.String("session", sessionID.String()),
+				zap.String("work_id", publishWorkID),
+				zap.Int("attempt", attempt),
+				zap.Duration("elapsed", time.Since(startTime)),
 				zap.Error(publishErr))
 			return "", publishErr
 		}
-		return workID, nil
+
+		logger.Info(txCtx, "rpc.send_message.queue_published",
+			zap.String("session", sessionID.String()),
+			zap.String("work_id", publishWorkID),
+			zap.Int("attempts", attempt),
+			zap.Duration("elapsed", time.Since(startTime)))
+		return publishWorkID, nil
 	},
 		backoff.WithBackOff(bo),
 		backoff.WithMaxTries(3),
-		backoff.WithMaxElapsedTime(10*time.Second), // Hard limit on total retry duration
+		backoff.WithMaxElapsedTime(5*time.Second), // Reduced from 10s to 5s
 	)
 	if err != nil {
 		return h.internalError(txCtx, ErrorCodeSendQueuePublish, "failed to publish to queue", err)
 	}
 	return nil
+}
+
+// generateDeterministicWorkIDForSend generates a deterministic work ID for
+// SendMessage operations. Uses session ID and current timestamp to ensure
+// uniqueness across different calls while allowing retries to produce the
+// same ID.
+//
+// Note: This is a pragmatic solution. Ideally we would use message ID, but
+// the work is published before message creation completes. The timestamp
+// provides sufficient uniqueness for our use case.
+func generateDeterministicWorkIDForSend(sessionID uuid.UUID) string {
+	// Use microsecond precision timestamp for uniqueness
+	timestamp := time.Now().UnixMicro()
+	uniqueKey := fmt.Sprintf("send:%d", timestamp)
+	return rtcqueue.GenerateDeterministicWorkID(sessionID.String(), uniqueKey)
 }
 
 // isTransientRedisError reports whether the error is a transient Redis failure
@@ -490,12 +544,28 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 //     These indicate temporary connectivity issues that typically resolve on retry.
 //   - "NOSCRIPT": Redis Lua script not loaded (e.g., after a failover or restart).
 //     The script will be re-loaded on the next EVALSHA call, making this safe to retry.
+//   - "BUSY": Redis is currently running another script. The operation can be retried
+//     after a short delay.
+//   - "CLUSTERDOWN": Redis Cluster is down or reconfiguring. Clients should retry
+//     after a brief backoff.
+//   - "TRYAGAIN": Redis Cluster is redirecting the client to a different node.
+//     This is a transient state that resolves on retry.
+//
+// Context cancellation errors (context.Canceled, context.DeadlineExceeded) are
+// explicitly excluded because retrying a cancelled operation is pointless.
 func isTransientRedisError(err error) bool {
 	if err == nil {
+		return false
+	}
+	// Exclude context cancellation errors - retrying is pointless
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "connection reset") ||
 		strings.Contains(msg, "i/o timeout") ||
-		strings.Contains(msg, "NOSCRIPT")
+		strings.Contains(msg, "NOSCRIPT") ||
+		strings.Contains(msg, "BUSY") ||
+		strings.Contains(msg, "CLUSTERDOWN") ||
+		strings.Contains(msg, "TRYAGAIN")
 }

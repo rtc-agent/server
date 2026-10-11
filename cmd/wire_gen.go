@@ -146,12 +146,9 @@ func InitializeServer(cfg *config.Config, db *gorm.DB, rdb *redis.Client) (*serv
 		return nil, err
 	}
 	oss3Handler := provideOSS3Handler(oss3Usecase, cfg)
-
-	// Create rate limiter for STS endpoints (100 requests/minute/IP)
-	stsRateLimiter := provideSTSRateLimiter(rdb, cfg)
-
-	stsHandler := provideSTSHandler(oss3Usecase, jwtSigner, cfg, serviceContext, stsRateLimiter)
-	stsPresignHandler := provideSTSPresignHandler(oss3Usecase, jwtSigner, cfg, serviceContext, stsRateLimiter)
+	rateLimiterInterface := provideSTSRateLimiter(rdb, cfg)
+	stsHandler := provideSTSHandler(oss3Usecase, jwtSigner, cfg, serviceContext, rateLimiterInterface)
+	stsPresignHandler := provideSTSPresignHandler(oss3Usecase, jwtSigner, cfg, serviceContext, rateLimiterInterface)
 	agent, err := provideAgent(dependencies, universalClient, queue, cfg, prometheusMetrics, backend)
 	if err != nil {
 		return nil, err
@@ -218,6 +215,7 @@ var HandlerSet = wire.NewSet(
 	provideInterruptHandler,
 	provideMemoriesHandler,
 	provideOSS3Handler,
+	provideSTSRateLimiter,
 	provideSTSHandler,
 	provideSTSPresignHandler,
 )
@@ -244,9 +242,7 @@ func provideUpdatePublisher(
 
 func provideJWTSigner(cfg *config.Config) (*auth.JWTSigner, error) {
 	return auth.NewJWTSigner(
-		cfg.Auth.JWTSecret,
-		time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second,
-		cfg.Server.Env,
+		cfg.Auth.JWTSecret, time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second, cfg.Server.Env,
 	)
 }
 
@@ -258,9 +254,13 @@ func provideCentrifugeNode(cfg *config.Config) (*centrifuge.Node, error) {
 	}
 
 	return centrifuge.New(centrifuge.Config{
-		LogLevel:           centrifuge.LogLevelDebug,
-		LogHandler:         newCentrifugeLogHandler(),
-		ClientQueueMaxSize: clientQueueMaxSize,
+		LogLevel:                centrifuge.LogLevelDebug,
+		LogHandler:              newCentrifugeLogHandler(),
+		ClientQueueMaxSize:      clientQueueMaxSize,
+		ClientStaleCloseDelay:   15 * time.Second,
+		ChannelMaxLength:        256,
+		ClientExpiredCloseDelay: 25 * time.Second,
+		ClientChannelLimit:      128,
 	})
 }
 
@@ -364,7 +364,6 @@ func provideUsecaseDependencies(
 		WebFetchManager:     webFetchManager,
 	}
 
-	// Initialize RtcSessionUsecase for RPC handler session/message/turn operations.
 	deps.RtcSessionUsecase = usecase.NewRtcSessionUsecase(
 		svcCtx.SessionRepo,
 		svcCtx.MessageRepo,
@@ -454,8 +453,27 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 		return nil
 	}
 
-	// Build search providers from config.
-	var providers []websearch.WebSearchProvider
+	providers := buildWebSearchProviders(cfg)
+
+	if len(providers) == 0 {
+		logger.Warn(context.Background(), "web search enabled but no valid providers configured, web search will be disabled")
+		return nil
+	}
+
+	wsCfg := buildWebSearchConfig(cfg)
+
+	manager, err := websearch.NewWebSearchManager(wsCfg, providers, nil)
+	if err != nil {
+		logger.Error(context.Background(), "failed to create web search manager, web search will be disabled", zap.Error(err))
+		return nil
+	}
+	logger.Info(context.Background(), "web search manager initialized", zap.Int("providers", len(providers)), zap.Int("proxies", len(wsCfg.Proxies)))
+	return manager
+}
+
+// buildWebSearchProviders creates web search provider instances from config.
+func buildWebSearchProviders(cfg *config.Config) []websearch.WebSearchProvider {
+	providers := make([]websearch.WebSearchProvider, 0, len(cfg.WebSearch.Providers))
 	for _, p := range cfg.WebSearch.Providers {
 		if !p.Enabled {
 			continue
@@ -466,70 +484,13 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 
 		switch p.Type {
 		case "duckduckgo":
-			ddgCfg := websearch.DefaultDuckDuckGoConfig()
-			if p.Region != "" {
-				ddgCfg.Region = p.Region
-			}
-			if p.MaxResults > 0 {
-				ddgCfg.MaxResults = p.MaxResults
-			}
-			if p.Timeout > 0 {
-				ddgCfg.Timeout = p.Timeout
-			}
-			provider, err = websearch.NewDuckDuckGoProvider(ddgCfg)
-
+			provider, err = createDuckDuckGoProvider(p)
 		case "bing":
-			bingCfg := websearch.DefaultBingConfig()
-			if p.APIKey != "" {
-				bingCfg.APIKey = p.APIKey
-			}
-			if p.Endpoint != "" {
-				bingCfg.Endpoint = p.Endpoint
-			}
-			if p.Market != "" {
-				bingCfg.Market = p.Market
-			}
-			if p.MaxResults > 0 {
-				bingCfg.MaxResults = p.MaxResults
-			}
-			if p.Timeout > 0 {
-				bingCfg.Timeout = p.Timeout
-			}
-			provider, err = websearch.NewBingProvider(bingCfg)
-
+			provider, err = createBingProvider(p)
 		case "searxng":
-			searCfg := websearch.DefaultSearXNGConfig()
-			if p.BaseURL != "" {
-				searCfg.BaseURL = p.BaseURL
-			}
-			if p.Language != "" {
-				searCfg.Language = p.Language
-			}
-			if p.MaxResults > 0 {
-				searCfg.MaxResults = p.MaxResults
-			}
-			if p.Timeout > 0 {
-				searCfg.Timeout = p.Timeout
-			}
-			provider, err = websearch.NewSearXNGProvider(searCfg)
-
+			provider, err = createSearXNGProvider(p)
 		case "tavily":
-			tavilyCfg := websearch.DefaultTavilyConfig()
-			if p.APIKey != "" {
-				tavilyCfg.APIKey = p.APIKey
-			}
-			if p.SearchDepth != "" {
-				tavilyCfg.SearchDepth = p.SearchDepth
-			}
-			if p.MaxResults > 0 {
-				tavilyCfg.MaxResults = p.MaxResults
-			}
-			if p.Timeout > 0 {
-				tavilyCfg.Timeout = p.Timeout
-			}
-			tavilyCfg.IncludeAnswer = p.IncludeAnswer
-			provider, err = websearch.NewTavilyProvider(tavilyCfg)
-
+			provider, err = createTavilyProvider(p)
 		default:
 			logger.Error(context.Background(), "unknown web search provider type", zap.String("type", p.Type))
 			continue
@@ -541,17 +502,91 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 		}
 		providers = append(providers, provider)
 	}
+	return providers
+}
 
-	if len(providers) == 0 {
-		logger.Warn(context.Background(), "web search enabled but no valid providers configured, web search will be disabled")
-		return nil
+// createDuckDuckGoProvider creates a DuckDuckGo search provider from config.
+func createDuckDuckGoProvider(p config.WebSearchProviderConfig) (websearch.WebSearchProvider, error) {
+	ddgCfg := websearch.DefaultDuckDuckGoConfig()
+	if p.Region != "" {
+		ddgCfg.Region = p.Region
 	}
+	if p.MaxResults > 0 {
+		ddgCfg.MaxResults = p.MaxResults
+	}
+	if p.Timeout > 0 {
+		ddgCfg.Timeout = p.Timeout
+	}
+	return websearch.NewDuckDuckGoProvider(ddgCfg)
+}
 
+// createBingProvider creates a Bing search provider from config.
+func createBingProvider(p config.WebSearchProviderConfig) (websearch.WebSearchProvider, error) {
+	bingCfg := websearch.DefaultBingConfig()
+	if p.APIKey != "" {
+		bingCfg.APIKey = p.APIKey
+	}
+	if p.Endpoint != "" {
+		bingCfg.Endpoint = p.Endpoint
+	}
+	if p.Market != "" {
+		bingCfg.Market = p.Market
+	}
+	if p.MaxResults > 0 {
+		bingCfg.MaxResults = p.MaxResults
+	}
+	if p.Timeout > 0 {
+		bingCfg.Timeout = p.Timeout
+	}
+	return websearch.NewBingProvider(bingCfg)
+}
+
+// createSearXNGProvider creates a SearXNG search provider from config.
+func createSearXNGProvider(p config.WebSearchProviderConfig) (websearch.WebSearchProvider, error) {
+	searCfg := websearch.DefaultSearXNGConfig()
+	if p.BaseURL != "" {
+		searCfg.BaseURL = p.BaseURL
+	}
+	if p.Language != "" {
+		searCfg.Language = p.Language
+	}
+	if p.MaxResults > 0 {
+		searCfg.MaxResults = p.MaxResults
+	}
+	if p.Timeout > 0 {
+		searCfg.Timeout = p.Timeout
+	}
+	return websearch.NewSearXNGProvider(searCfg)
+}
+
+// createTavilyProvider creates a Tavily search provider from config.
+func createTavilyProvider(p config.WebSearchProviderConfig) (websearch.WebSearchProvider, error) {
+	tavilyCfg := websearch.DefaultTavilyConfig()
+	if p.APIKey != "" {
+		tavilyCfg.APIKey = p.APIKey
+	}
+	if p.SearchDepth != "" {
+		tavilyCfg.SearchDepth = p.SearchDepth
+	}
+	if p.MaxResults > 0 {
+		tavilyCfg.MaxResults = p.MaxResults
+	}
+	if p.Timeout > 0 {
+		tavilyCfg.Timeout = p.Timeout
+	}
+	tavilyCfg.IncludeAnswer = p.IncludeAnswer
+	return websearch.NewTavilyProvider(tavilyCfg)
+}
+
+// buildWebSearchConfig constructs the WebSearchConfig from the application config.
+func buildWebSearchConfig(cfg *config.Config) websearch.WebSearchConfig {
 	wsCfg := websearch.WebSearchConfig{
 		BalancerType:       cfg.WebSearch.BalancerType,
 		GlobalTimeout:      cfg.WebSearch.GlobalTimeout,
 		ProxyHealthURL:     cfg.WebSearch.ProxyHealthURL,
 		ProxyCheckInterval: cfg.WebSearch.ProxyCheckInterval,
+		Providers:          make([]websearch.ProviderConfig, 0, len(cfg.WebSearch.Providers)),
+		Proxies:            make([]proxy.ProxyConfig, 0, len(cfg.WebSearch.Proxies)),
 		CircuitBreaker: circuitbreaker.CircuitBreakerConfig{
 			FailureThreshold:    cfg.WebSearch.CircuitBreaker.FailureThreshold,
 			OpenTimeout:         cfg.WebSearch.CircuitBreaker.OpenTimeout,
@@ -591,13 +626,7 @@ func provideWebSearchManager(cfg *config.Config) *websearch.WebSearchManager {
 		})
 	}
 
-	manager, err := websearch.NewWebSearchManager(wsCfg, providers, nil)
-	if err != nil {
-		logger.Error(context.Background(), "failed to create web search manager, web search will be disabled", zap.Error(err))
-		return nil
-	}
-	logger.Info(context.Background(), "web search manager initialized", zap.Int("providers", len(providers)), zap.Int("proxies", len(wsCfg.Proxies)))
-	return manager
+	return wsCfg
 }
 
 // provideWebFetchManager creates the WebFetchManager if web fetch is enabled.
@@ -961,7 +990,7 @@ func provideAsynqServer(cfg *config.Config) *asynq.Server {
 func provideAsynqMux(queue *rtcqueue.Queue, loopRepo repo.LoopRepo, deps *usecase.Dependencies) *asynq.ServeMux {
 
 	notificationCreator := agent.CreateLoopNotification(deps)
-	worker := loop.NewWorker(queue, loopRepo, deps.SessionRepo, notificationCreator, deps.Redis)
+	worker := loop.NewWorker(queue, loopRepo, deps.SessionRepo, notificationCreator)
 	mux := asynq.NewServeMux()
 	worker.RegisterHandlers(mux)
 	return mux

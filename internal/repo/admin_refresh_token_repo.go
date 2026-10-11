@@ -19,6 +19,9 @@ type AdminRefreshTokenRepo interface {
 	FindByHash(ctx context.Context, hash string) (*model.AdminRefreshToken, error)
 	// Revoke marks an admin refresh token as revoked.
 	Revoke(ctx context.Context, id uuid.UUID) error
+	// RevokeAllByUserID revokes all admin refresh tokens for a user.
+	// This is used when token reuse is detected to invalidate all sessions.
+	RevokeAllByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
 }
 
 type adminRefreshTokenRepo struct {
@@ -61,4 +64,17 @@ func (r *adminRefreshTokenRepo) Revoke(ctx context.Context, id uuid.UUID) error 
 		return fmt.Errorf("revoke admin refresh token %s: %w", id, ErrNotFound)
 	}
 	return nil
+}
+
+// RevokeAllByUserID revokes all admin refresh tokens for a user.
+// This is used when token reuse is detected to invalidate all sessions.
+func (r *adminRefreshTokenRepo) RevokeAllByUserID(ctx context.Context, userID uuid.UUID) (int64, error) {
+	result := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.AdminRefreshToken{}).
+		Where("user_id = ? AND revoked = false", userID).
+		Update("revoked", true)
+	if result.Error != nil {
+		return 0, fmt.Errorf("revoke all admin refresh tokens for user %s: %w", userID, result.Error)
+	}
+	return result.RowsAffected, nil
 }

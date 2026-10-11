@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -120,21 +121,9 @@ func (uc *AdminAuthUsecase) Login(ctx context.Context, email, password, clientIP
 	}
 
 	// 4. Generate and store refresh token
-	refreshPlain, err := generateRefreshTokenPlain()
+	refreshPlain, _, err := createAndStoreRefreshToken(ctx, uc.refreshTokenRepo, user.ID, uc.signer.RefreshTTL())
 	if err != nil {
-		return nil, fmt.Errorf("admin auth generate refresh token: %w", err)
-	}
-	refreshHash := hashRefreshToken(refreshPlain)
-	refreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
-
-	rt := &model.AdminRefreshToken{
-		TokenHash: refreshHash,
-		UserID:    user.ID,
-		ExpiresAt: refreshExpiresAt,
-		Revoked:   false,
-	}
-	if err := uc.refreshTokenRepo.Create(ctx, rt); err != nil {
-		return nil, fmt.Errorf("admin auth store refresh token: %w", err)
+		return nil, err
 	}
 
 	// Reset login protection counters on success
@@ -177,21 +166,9 @@ func (uc *AdminAuthUsecase) LoginWithOTP(ctx context.Context, email string) (*Lo
 	}
 
 	// 3. Generate and store refresh token
-	refreshPlain, err := generateRefreshTokenPlain()
+	refreshPlain, _, err := createAndStoreRefreshToken(ctx, uc.refreshTokenRepo, user.ID, uc.signer.RefreshTTL())
 	if err != nil {
-		return nil, fmt.Errorf("admin auth generate refresh token: %w", err)
-	}
-	refreshHash := hashRefreshToken(refreshPlain)
-	refreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
-
-	rt := &model.AdminRefreshToken{
-		TokenHash: refreshHash,
-		UserID:    user.ID,
-		ExpiresAt: refreshExpiresAt,
-		Revoked:   false,
-	}
-	if err := uc.refreshTokenRepo.Create(ctx, rt); err != nil {
-		return nil, fmt.Errorf("admin auth store refresh token: %w", err)
+		return nil, err
 	}
 
 	logger.Info(ctx, "admin_auth.otp_login_succeeded",
@@ -233,7 +210,7 @@ func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain 
 	var result *RefreshTokenResult
 
 	err := uc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 
 		// 1. Hash the refresh token and look it up (within transaction)
 		refreshHash := hashRefreshToken(refreshTokenPlain)
@@ -247,8 +224,32 @@ func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain 
 
 		// 2. Check if token is revoked
 		if rt.Revoked {
-			logger.Warn(txCtx, "admin_auth.refresh_token_reuse_detected",
-				zap.String("token_hash_prefix", refreshHash[:16]))
+			// SECURITY CRITICAL: Refresh token reuse detected. This strongly indicates
+			// that the token has been stolen and is being used by an attacker.
+			// Immediate alerting and session revocation are required.
+			logger.Error(txCtx, "admin_auth.refresh_token_reuse_detected: potential token theft",
+				zap.String("token_id", rt.ID.String()),
+				zap.String("user_id", rt.UserID.String()),
+				zap.String("token_hash_prefix", refreshHash[:16]),
+				zap.Time("token_expires_at", rt.ExpiresAt),
+				zap.Time("detected_at", time.Now()))
+			// Record Prometheus metric for security monitoring and alerting.
+			auth.RecordSecurityEvent("refresh_token_reuse")
+
+			// SECURITY: Revoke all active refresh tokens for this user to invalidate
+			// potentially stolen sessions. This prevents an attacker from continuing to use
+			// any tokens obtained from the compromised device.
+			if revoked, revokeErr := uc.refreshTokenRepo.RevokeAllByUserID(txCtx, rt.UserID); revokeErr != nil {
+				logger.Error(txCtx, "admin_auth.revoke_all_tokens_failed",
+					zap.String("user_id", rt.UserID.String()),
+					zap.Error(revokeErr))
+			} else {
+				logger.Error(txCtx, "admin_auth.refresh_token_reuse_mitigated: all tokens revoked",
+					zap.String("token_id", rt.ID.String()),
+					zap.String("user_id", rt.UserID.String()),
+					zap.Int64("tokens_revoked", revoked))
+			}
+
 			return ErrRefreshTokenRevoked
 		}
 
@@ -275,21 +276,9 @@ func (uc *AdminAuthUsecase) RefreshToken(ctx context.Context, refreshTokenPlain 
 		}
 
 		// 7. Generate and store new refresh token
-		newRefreshPlain, err := generateRefreshTokenPlain()
+		newRefreshPlain, _, err := createAndStoreRefreshToken(txCtx, uc.refreshTokenRepo, user.ID, uc.signer.RefreshTTL())
 		if err != nil {
-			return fmt.Errorf("admin auth generate new refresh token: %w", err)
-		}
-		newRefreshHash := hashRefreshToken(newRefreshPlain)
-		newRefreshExpiresAt := time.Now().Add(uc.signer.RefreshTTL())
-
-		newRT := &model.AdminRefreshToken{
-			TokenHash: newRefreshHash,
-			UserID:    user.ID,
-			ExpiresAt: newRefreshExpiresAt,
-			Revoked:   false,
-		}
-		if err := uc.refreshTokenRepo.Create(txCtx, newRT); err != nil {
-			return fmt.Errorf("admin auth store new refresh token: %w", err)
+			return err
 		}
 
 		result = &RefreshTokenResult{
@@ -403,4 +392,33 @@ var randRead = randReadImpl
 
 func randReadImpl(b []byte) (int, error) {
 	return rand.Read(b)
+}
+
+// createAndStoreRefreshToken generates a new refresh token, hashes it, and stores it in the repository.
+// Returns the plain token (for returning to client), expiration time, and any error.
+//
+//nolint:unparam // expiresAt is returned for future use and API consistency, even though current callers don't use it
+func createAndStoreRefreshToken(
+	ctx context.Context,
+	repo repo.AdminRefreshTokenRepo,
+	userID uuid.UUID,
+	ttl time.Duration,
+) (plain string, expiresAt time.Time, err error) {
+	plain, err = generateRefreshTokenPlain()
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("generate refresh token: %w", err)
+	}
+	refreshHash := hashRefreshToken(plain)
+	expiresAt = time.Now().Add(ttl)
+
+	rt := &model.AdminRefreshToken{
+		TokenHash: refreshHash,
+		UserID:    userID,
+		ExpiresAt: expiresAt,
+		Revoked:   false,
+	}
+	if err := repo.Create(ctx, rt); err != nil {
+		return "", time.Time{}, fmt.Errorf("store refresh token: %w", err)
+	}
+	return plain, expiresAt, nil
 }

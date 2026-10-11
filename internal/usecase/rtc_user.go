@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -126,7 +127,7 @@ func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput, admin
 	var revokedCount int64
 	var revokedCredentialsCount int64
 	if err := uc.db.Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 
 		if err := uc.oauth2UserRepo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("update user: %w", err)

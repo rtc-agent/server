@@ -133,7 +133,7 @@ func (s *Server) startConfigSubscriber() {
 	}
 
 	configSubscriber := usecase.NewRedisConfigSubscriber(s.svcCtx.Redis)
-	configSubscriber.RegisterHandler(func(event model.ConfigUpdateEvent) {
+	configSubscriber.RegisterHandler("cache_invalidator", func(event model.ConfigUpdateEvent) {
 		var userIDPtr *uuid.UUID
 		if event.UserID != nil {
 			if parsedUID, err := uuid.Parse(*event.UserID); err == nil {

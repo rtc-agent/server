@@ -64,6 +64,13 @@ func (uc *AuditLogUsecase) List(ctx context.Context, filter AuditLogFilter, page
 		return nil, fmt.Errorf("pageSize %d exceeds maximum 100", pageSize)
 	}
 
+	// Validate time range filter
+	if filter.StartTime != nil && filter.EndTime != nil {
+		if filter.StartTime.After(*filter.EndTime) {
+			return nil, fmt.Errorf("startTime must be before or equal to endTime")
+		}
+	}
+
 	repoFilter := model.AuditLogFilter{
 		OperatorID:   filter.OperatorID,
 		ResourceType: filter.ResourceType,

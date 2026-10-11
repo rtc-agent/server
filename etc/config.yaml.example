@@ -75,6 +75,7 @@ token_exchange:
   #     jwks_uri: "https://admin.example.com/.well-known/jwks.json"  # JWKS 端点
   #     allowed_algorithms: ["RS256", "ES256"]  # 允许的签名算法
   #     cache_ttl: 3600                         # JWKS 公钥缓存时间（秒）
+  #     expected_audience: "rtc-agent"          # 期望的 JWT aud claim（可选，为空则不验证 aud）
   #     claims_mapping:                         # JWT claims 字段映射（可选）
   #       sub: "sub"
   #       email: "email"
@@ -172,6 +173,17 @@ api:
   query_default_limit: 50   # 分页查询默认页大小，默认 50
   query_max_limit: 100      # 分页查询最大页大小，默认 100
 
+  # Per-user HTTP API rate limiting（每用户限流）
+  rate_limit:
+    requests_per_second: 50.0    # 每用户每秒请求数，默认 50
+    burst_size: 100              # 突发容量，默认 100
+
+  # Per-IP HTTP API rate limiting（每 IP 限流）
+  ip_rate_limit:
+    requests_per_second: 5.0     # 每 IP 每秒请求数，默认 5
+    burst_size: 10               # 突发容量，默认 10
+    limiter_ttl_sec: 3600        # 限流器 TTL（秒），默认 3600（1 小时）
+
 # ===========================================================================
 # Debug 端点（pprof + goroutines）
 # 生产环境务必禁用或配置认证
@@ -198,6 +210,9 @@ tracing:
   enabled: false
   # endpoint: "localhost:4317"  # OTLP 端点
   # sample_rate: 1.0            # 采样率（0.0 - 1.0），默认 1.0（全采样）
+  # insecure: false             # 是否使用非加密连接（仅开发环境），默认 false
+  # service_version: "1.0.0"    # 服务版本（多版本部署识别），默认 "unknown"
+  # environment: "development"  # 部署环境（production/staging/development），默认取 server.env
 
 # ===========================================================================
 # Asynq 任务调度配置
@@ -335,7 +350,11 @@ storage:
   # s3_endpoint:
   #   host: "0.0.0.0"
   #   port: 9000
-  #   allowed_origins: ["*"]
+  #   allowed_origins:
+  #     - "http://localhost:23001"  # Grafana
+  #     - "http://localhost:5173"   # Vite dev server
+  #     - "http://localhost:8000"   # Admin UI dev server
+  #     - "http://localhost:8888"   # Main server
   # quota:
   #   max_file_size_bytes: 104857600     # 100MB
   #   max_user_quota_bytes: 1073741824   # 1GB
@@ -345,12 +364,17 @@ storage:
   #   requests_per_minute: 60
   # credential:
   #   access_token_ttl: 1h
-  #   session_token_ttl: 1h
+  #   session_token_ttl: 15m           # 默认 15m（代码默认值），大文件上传需确保客户端有刷新逻辑
   #   presigned_url_ttl: 1h
   # cleanup:
   #   interval: 1h
   #   multipart_expiry: 24h
   #   credential_expiry: 24h
+  #   orphan:
+  #     enabled: false                 # 是否启用孤儿文件清理，默认 false
+  #     batch_size: 500                # 每批清理数量，默认 500
+  #     cooldown_period: 24h           # 孤儿文件冷却期，默认 24h（大文件上传可能需数小时）
+  #     dry_run: true                  # 试运行模式，默认 true（不实际删除）
   # encryption:
   #   session_token_key: "${OSS3_SESSION_TOKEN_KEY}"  # AES-256 密钥（32 字节 = 64 个十六进制字符）
 

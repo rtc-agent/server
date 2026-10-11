@@ -42,6 +42,26 @@ var (
 	ErrUploadNotFound = errors.New("multipart upload not found")
 )
 
+// OSS3 constants to avoid magic numbers.
+const (
+	// maxPresignedURLExpiry is the maximum allowed expiry for presigned URLs (7 days).
+	maxPresignedURLExpiry = 7 * 24 * time.Hour
+	// defaultPresignedURLExpiry is the default expiry for presigned URLs (15 minutes).
+	defaultPresignedURLExpiry = 15 * time.Minute
+	// defaultMultipartExpiry is the default expiry for multipart uploads (24 hours).
+	defaultMultipartExpiry = 24 * time.Hour
+	// maxDeviceIDLength is the maximum allowed length for device IDs.
+	maxDeviceIDLength = 100
+	// maxDeviceNameLength is the maximum allowed length for device names.
+	maxDeviceNameLength = 100
+	// maxUserAgentLength is the maximum allowed length for user agents.
+	maxUserAgentLength = 500
+	// sessionTokenNonceSize is the size of the nonce for AES-GCM encryption (96 bits).
+	sessionTokenNonceSize = 12
+	// encryptionKeyHexLength is the required length of the hex-encoded encryption key (64 chars = 32 bytes).
+	encryptionKeyHexLength = 64
+)
+
 // OSS3Usecase encapsulates all OSS3 business logic.
 type OSS3Usecase struct {
 	backend    rtcoss3.Backend
@@ -83,8 +103,8 @@ func NewOSS3Usecase(
 	// Key is hex-encoded (64 chars = 32 bytes)
 	keyHex := cfg.Encryption.SessionTokenKey
 	if keyHex != "" {
-		if len(keyHex) != 64 {
-			return nil, fmt.Errorf("encryption key must be 64 hex chars (32 bytes), got %d", len(keyHex))
+		if len(keyHex) != encryptionKeyHexLength {
+			return nil, fmt.Errorf("encryption key must be %d hex chars (32 bytes), got %d", encryptionKeyHexLength, len(keyHex))
 		}
 		key, err := hex.DecodeString(keyHex)
 		if err != nil {
@@ -123,7 +143,7 @@ func (uc *OSS3Usecase) encryptSessionToken(payload SessionTokenPayload) (string,
 		return "", fmt.Errorf("marshal payload: %w", err)
 	}
 
-	nonce := make([]byte, 12) // 96-bit nonce
+	nonce := make([]byte, sessionTokenNonceSize) // 96-bit nonce
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}
@@ -143,11 +163,11 @@ func (uc *OSS3Usecase) decryptSessionToken(token string) (*SessionTokenPayload, 
 		return nil, fmt.Errorf("decode token: %w", err)
 	}
 
-	if len(sealed) < 12 {
+	if len(sealed) < sessionTokenNonceSize {
 		return nil, fmt.Errorf("invalid token: too short")
 	}
 
-	nonce, ciphertext := sealed[:12], sealed[12:]
+	nonce, ciphertext := sealed[:sessionTokenNonceSize], sealed[sessionTokenNonceSize:]
 	plaintext, err := uc.aesGCM.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt token: %w", err)
@@ -177,7 +197,7 @@ func (uc *OSS3Usecase) encryptString(plaintext string) (string, error) {
 		return "", fmt.Errorf("encryption not configured: session_token_key not set")
 	}
 
-	nonce := make([]byte, 12) // 96-bit nonce
+	nonce := make([]byte, sessionTokenNonceSize) // 96-bit nonce
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("generate nonce: %w", err)
 	}
@@ -197,11 +217,11 @@ func (uc *OSS3Usecase) decryptString(encoded string) (string, error) {
 		return "", fmt.Errorf("decode string: %w", err)
 	}
 
-	if len(sealed) < 12 {
+	if len(sealed) < sessionTokenNonceSize {
 		return "", fmt.Errorf("invalid encrypted string: too short")
 	}
 
-	nonce, ciphertext := sealed[:12], sealed[12:]
+	nonce, ciphertext := sealed[:sessionTokenNonceSize], sealed[sessionTokenNonceSize:]
 	plaintext, err := uc.aesGCM.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return "", fmt.Errorf("decrypt string: %w", err)
@@ -333,10 +353,10 @@ func (uc *OSS3Usecase) GetFileRecord(ctx context.Context, userID, key string) (*
 
 // CreateMultipartUploadRecord creates a multipart upload tracking record in the database.
 func (uc *OSS3Usecase) CreateMultipartUploadRecord(ctx context.Context, userID, bucket, key, uploadID string) error {
-	// Use configured multipart expiry, falling back to 24h if not set
+	// Use configured multipart expiry, falling back to default if not set
 	expiry := uc.cfg.Cleanup.MultipartExpiry
 	if expiry <= 0 {
-		expiry = 24 * time.Hour
+		expiry = defaultMultipartExpiry
 	}
 
 	upload := &model.MultipartUpload{
@@ -389,12 +409,11 @@ func (uc *OSS3Usecase) GeneratePresignedURL(ctx context.Context, userID, operati
 	}
 
 	// Validate expiry
-	maxExpiry := 7 * 24 * time.Hour // 7 days
 	if expiresIn <= 0 {
-		expiresIn = 15 * time.Minute // default 15min
+		expiresIn = defaultPresignedURLExpiry
 	}
-	if expiresIn > maxExpiry {
-		return "", time.Time{}, nil, fmt.Errorf("%w: expires_in must not exceed %v", ErrExpiryExceeded, maxExpiry)
+	if expiresIn > maxPresignedURLExpiry {
+		return "", time.Time{}, nil, fmt.Errorf("%w: expires_in must not exceed %v", ErrExpiryExceeded, maxPresignedURLExpiry)
 	}
 
 	bucket := uc.cfg.MinIO.Bucket

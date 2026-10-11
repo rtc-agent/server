@@ -100,6 +100,30 @@ func (h *helpers) createAndPublishMessage(
 // turnStreamState tracks the streaming message state for one turn.
 // Each turn may have up to two concurrent streams: one for markdown content
 // and one for thinking/reasoning content.
+//
+// CONCURRENCY MODEL:
+// This struct is accessed by event handlers (handleStreamChunk, handleStreamEnd,
+// handleMessage, handleEventError) for the same turn. No mutex is needed because
+// events for a single turn are processed sequentially by the turn-agent framework:
+//
+//  1. onAgentEvents() consumes events from an AsyncIterator in a single goroutine
+//     (pkg/turn-agent/event_dispatch.go:92). The for loop calls events.Next()
+//     synchronously, blocking until each event is fully dispatched.
+//
+//  2. dispatchEvents() calls consumeStream() for streaming events, which also
+//     runs in the same goroutine and blocks until the stream ends (the for loop
+//     in stream_consume.go:59 calls stream.Recv() synchronously).
+//
+//  3. Each stream chunk is published via PublishEvent(), which routes to the
+//     handlers in this package. Since the event loop is sequential, handlers
+//     for the same turnID cannot run concurrently.
+//
+// The streamStateMap (sync.Map) protects concurrent access to DIFFERENT turns
+// (different turnIDs), but for a single turn, all accesses to turnStreamState
+// are sequential and require no additional synchronization.
+//
+// If this assumption is violated (e.g., concurrent event processing for the same
+// turn), a mutex must be added to protect the finalized flags and msgID fields.
 type turnStreamState struct {
 	markdownMsgID     uuid.UUID
 	markdownFinalized bool
@@ -222,7 +246,8 @@ func (h *helpers) publishLiveChunkUpdate(ctx context.Context, liveCh, msgIDStr s
 }
 
 // finalizeLastStreamChunk handles the last chunk of a streaming message:
-// reads all Redis chunks atomically, builds final content, and updates DB.
+// reads all Redis chunks, builds final content, updates DB, and only then deletes chunks.
+// This ensures data consistency: if DB update fails, Redis chunks remain for retry or TTL cleanup.
 func (h *helpers) finalizeLastStreamChunk(
 	ctx context.Context,
 	streamStore *StreamStore,
@@ -236,9 +261,10 @@ func (h *helpers) finalizeLastStreamChunk(
 	tokenUsage *turnagent.TokenUsage,
 	finalized *bool,
 ) error {
-	// Atomically read and delete chunks to prevent race conditions
-	fullContent := h.readAndDeleteFullContent(ctx, streamStore, msgIDStr, chunkContent, isFirst, kind)
+	// 1. Read chunks first (no deletion) to prevent data loss if DB update fails
+	fullContent := h.readFullContent(ctx, streamStore, msgIDStr, chunkContent, isFirst, kind)
 
+	// 2. Build final content
 	finalContentData, contentErr := buildContent(fullContent)
 	if contentErr != nil {
 		return fmt.Errorf("appendStreamChunk: build final content: %w", contentErr)
@@ -248,11 +274,30 @@ func (h *helpers) finalizeLastStreamChunk(
 		return fmt.Errorf("appendStreamChunk: serialize final content: %w", serializeErr)
 	}
 
+	// 3. Update DB first
 	if pubErr := h.updateFinalMessage(ctx, *msgID, msgIDStr, topicCh, serializedContent, tokenUsage); pubErr != nil {
 		if errors.Is(pubErr, updates.ErrPushAfterCommit) {
 			h.logger.Info(ctx, "appendStreamChunk.push_after_commit", map[string]any{"error": pubErr.Error()})
 		} else {
+			// DB update failed - log error but keep Redis chunks for TTL cleanup or retry
+			h.logger.Error(ctx, "finalizeLastStreamChunk.db_update_failed", map[string]any{
+				"message_id": msgIDStr,
+				"kind":       kind,
+				"error":      pubErr.Error(),
+				"action":     "chunks_preserved_for_ttl_cleanup",
+			})
 			return fmt.Errorf("appendStreamChunk: run and publish: %w", pubErr)
+		}
+	}
+
+	// 4. DB update succeeded, now delete Redis chunks
+	if streamStore != nil {
+		if delErr := streamStore.DeleteChunks(msgIDStr); delErr != nil {
+			h.logger.Warn(ctx, "appendStreamChunk.redis_delete_failed", map[string]any{
+				"message_id": msgIDStr,
+				"error":      delErr.Error(),
+			})
+			// Don't return error - DB already succeeded, Redis will be cleaned by TTL
 		}
 	}
 
@@ -260,21 +305,35 @@ func (h *helpers) finalizeLastStreamChunk(
 	return nil
 }
 
-// readAndDeleteFullContent atomically reads the full content from Redis chunks and deletes them,
+// readFullContent reads the full content from Redis chunks without deleting them,
 // or falls back to the current chunkContent if no stream store is available.
-func (h *helpers) readAndDeleteFullContent(ctx context.Context, streamStore *StreamStore, msgIDStr, chunkContent string, isFirst bool, kind string) string {
+// Deletion is deferred until after DB update to prevent data loss on failure.
+func (h *helpers) readFullContent(ctx context.Context, streamStore *StreamStore, msgIDStr, chunkContent string, isFirst bool, kind string) string {
 	if streamStore == nil {
 		return chunkContent
 	}
 
-	chunks, readErr := streamStore.GetAndDeleteChunks(msgIDStr)
+	chunks, readErr := streamStore.GetAllChunks(msgIDStr)
 	if readErr != nil {
-		h.logger.Warn(ctx, "appendStreamChunk.get_and_delete_chunks_failed", map[string]any{
+		h.logger.Warn(ctx, "appendStreamChunk.get_all_chunks_failed", map[string]any{
 			"message_id": msgIDStr,
 			"error":      readErr.Error(),
 		})
 		return chunkContent
 	}
+
+	// If chunks are empty but we have chunkContent, use chunkContent as fallback
+	if len(chunks) == 0 {
+		if chunkContent != "" {
+			h.logger.Warn(ctx, "readFullContent.empty_chunks_fallback", map[string]any{
+				"message_id": msgIDStr,
+				"kind":       kind,
+			})
+			return chunkContent
+		}
+		return ""
+	}
+
 	fullContent := strings.Join(chunks, "")
 
 	h.logger.Info(ctx, "appendStreamChunk.finalize", map[string]any{

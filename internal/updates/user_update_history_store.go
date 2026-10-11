@@ -9,8 +9,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/channel"
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 
 	"github.com/google/uuid"
@@ -33,7 +33,7 @@ func (u *UpdatePublisher) Query(ctx context.Context, ch string, sinceOffset uint
 		return nil, fmt.Errorf("invalid user ID in channel: %s", ch)
 	}
 
-	query := repo.DBFromContext(ctx, u.db).WithContext(ctx).
+	query := dbutil.DBFromContext(ctx, u.db).WithContext(ctx).
 		Where("user_id = ? AND \"offset\" > ?", userID, sinceOffset).
 		Order("\"offset\" ASC")
 

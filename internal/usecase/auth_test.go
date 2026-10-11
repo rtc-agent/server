@@ -42,6 +42,10 @@ func (m *mockRefreshTokenRepo) FindByHash(ctx context.Context, hash string) (*mo
 	return rt, nil
 }
 
+func (m *mockRefreshTokenRepo) FindByHashForUpdate(ctx context.Context, hash string) (*model.RefreshToken, error) {
+	return m.FindByHash(ctx, hash)
+}
+
 func (m *mockRefreshTokenRepo) Revoke(ctx context.Context, id uuid.UUID) error {
 	if m.revoke != nil {
 		return m.revoke(ctx, id)

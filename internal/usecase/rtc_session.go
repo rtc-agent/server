@@ -46,11 +46,39 @@ func NewRtcSessionUsecase(
 // Session operations (used by RPC handlers)
 // ============================================================
 
+// ErrPermissionDenied is returned when a user attempts to access a resource
+// they do not own.
+var ErrPermissionDenied = fmt.Errorf("permission denied")
+
 // GetSession returns a session by ID.
 // Returns nil and an error if the session is not found.
+//
+// WARNING: This method does NOT perform ownership validation. Use
+// GetSessionOwned if you need to verify the session belongs to a specific user.
 func (uc *RtcSessionUsecase) GetSession(ctx context.Context, id uuid.UUID) (*model.Session, error) {
 	return uc.sessionRepo.GetByID(ctx, id)
 }
+
+// GetSessionOwned returns a session by ID after verifying ownership by the given user.
+// Returns ErrPermissionDenied if the session does not belong to the user.
+//
+// This is the preferred method for RPC handlers that need to ensure users
+// can only access their own sessions.
+func (uc *RtcSessionUsecase) GetSessionOwned(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*model.Session, error) {
+	session, err := uc.sessionRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// Validate ownership: session must belong to the requesting user
+	if session.OwnerKind != string(creatorKindUser) || session.OwnerRefID != userID.String() {
+		return nil, ErrPermissionDenied
+	}
+	return session, nil
+}
+
+// creatorKindUser is the string representation of user creator kind.
+// Defined here to avoid circular dependency with usecase package.
+const creatorKindUser = "user"
 
 // ListSessionsByUser returns sessions for a user with cursor pagination.
 func (uc *RtcSessionUsecase) ListSessionsByUser(ctx context.Context, userID uuid.UUID, cursor *string, limit int) ([]*model.Session, error) {
@@ -175,12 +203,10 @@ type ListMessagesResult struct {
 }
 
 // ListMessages returns a paginated list of messages for a session.
+//
+// Note: This method assumes the session exists and is accessible to the caller.
+// The caller should verify session ownership before calling this method if needed.
 func (uc *RtcSessionUsecase) ListMessages(ctx context.Context, sessionID uuid.UUID, filter ListMessagesFilter) (*ListMessagesResult, error) {
-	// Verify session exists before querying messages.
-	if _, err := uc.sessionRepo.GetByID(ctx, sessionID); err != nil {
-		return nil, fmt.Errorf("list messages: %w", err)
-	}
-
 	repoFilter := repo.MessageAdminFilter{
 		Role:          filter.Role,
 		CreatedAfter:  filter.CreatedAfter,

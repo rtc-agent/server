@@ -815,3 +815,62 @@ func TestMemoryRepo_GlobalScope(t *testing.T) {
 	assert.Len(t, results, 1)
 	assert.Equal(t, "API Docs", results[0].Title)
 }
+
+// ─── Update Optimistic Lock Tests ───
+
+func TestMemoryRepo_Update_OptimisticLock_Conflict(t *testing.T) {
+	t.Parallel()
+	db := setupMemoryTestDB(t)
+	repo := newTestMemoryRepo(db)
+	ctx := context.Background()
+
+	sessionID := uuid.New()
+	mem := newTestMemoryRecord(t, memory.ScopeSession, sessionID, "context")
+	require.NoError(t, repo.Create(ctx, mem))
+
+	// Record the original UpdatedAt from creation
+	originalUpdatedAt := mem.UpdatedAt
+
+	// Wait to ensure the next update produces a different updated_at
+	time.Sleep(1 * time.Second)
+
+	// Perform an update WITHOUT optimistic lock — this changes updated_at in the DB
+	err := repo.Update(ctx, mem.ID, map[string]any{"title": "first update"})
+	require.NoError(t, err)
+
+	// Now try to update using the stale original UpdatedAt — should conflict
+	err = repo.Update(ctx, mem.ID, map[string]any{"title": "second update"}, originalUpdatedAt)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, memory.ErrOptimisticLock), "expected memory.ErrOptimisticLock, got %v", err)
+}
+
+func TestMemoryRepo_Update_OptimisticLock_NotFound(t *testing.T) {
+	t.Parallel()
+	db := setupMemoryTestDB(t)
+	repo := newTestMemoryRepo(db)
+	ctx := context.Background()
+
+	// Use a non-existent ID with an arbitrary UpdatedAt
+	err := repo.Update(ctx, uuid.New(), map[string]any{"title": "updated"}, time.Now())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, memory.ErrNotFound), "expected memory.ErrNotFound, got %v", err)
+}
+
+func TestMemoryRepo_Update_OptimisticLock_Success(t *testing.T) {
+	t.Parallel()
+	db := setupMemoryTestDB(t)
+	repo := newTestMemoryRepo(db)
+	ctx := context.Background()
+
+	sessionID := uuid.New()
+	mem := newTestMemoryRecord(t, memory.ScopeSession, sessionID, "context")
+	require.NoError(t, repo.Create(ctx, mem))
+
+	// Use the correct UpdatedAt from creation
+	err := repo.Update(ctx, mem.ID, map[string]any{"title": "updated title"}, mem.UpdatedAt)
+	require.NoError(t, err)
+
+	got, err := repo.GetByID(ctx, mem.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "updated title", got.Title)
+}

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -191,7 +192,7 @@ func (uc *AdminUserUsecase) CreateUser(ctx context.Context, input CreateUserInpu
 	var user *model.AdminUser
 
 	err = uc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 
 		// Create user — DB unique constraint rejects duplicate emails atomically.
 		user = &model.AdminUser{

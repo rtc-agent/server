@@ -196,12 +196,15 @@ func (e OAuth2TokenExchangeRFC8693RequestGrantType) Valid() bool {
 // Defines values for OAuth2TokenExchangeRFC8693RequestSubjectTokenType.
 const (
 	OAuth2TokenExchangeRFC8693RequestSubjectTokenTypeUrnIetfParamsOauthTokenTypeAccessToken OAuth2TokenExchangeRFC8693RequestSubjectTokenType = "urn:ietf:params:oauth:token-type:access_token"
+	OAuth2TokenExchangeRFC8693RequestSubjectTokenTypeUrnIetfParamsOauthTokenTypeJwt         OAuth2TokenExchangeRFC8693RequestSubjectTokenType = "urn:ietf:params:oauth:token-type:jwt"
 )
 
 // Valid indicates whether the value is a known member of the OAuth2TokenExchangeRFC8693RequestSubjectTokenType enum.
 func (e OAuth2TokenExchangeRFC8693RequestSubjectTokenType) Valid() bool {
 	switch e {
 	case OAuth2TokenExchangeRFC8693RequestSubjectTokenTypeUrnIetfParamsOauthTokenTypeAccessToken:
+		return true
+	case OAuth2TokenExchangeRFC8693RequestSubjectTokenTypeUrnIetfParamsOauthTokenTypeJwt:
 		return true
 	default:
 		return false
@@ -211,12 +214,15 @@ func (e OAuth2TokenExchangeRFC8693RequestSubjectTokenType) Valid() bool {
 // Defines values for OAuth2TokenExchangeRFC8693ResponseIssuedTokenType.
 const (
 	OAuth2TokenExchangeRFC8693ResponseIssuedTokenTypeUrnIetfParamsOauthTokenTypeAccessToken OAuth2TokenExchangeRFC8693ResponseIssuedTokenType = "urn:ietf:params:oauth:token-type:access_token"
+	OAuth2TokenExchangeRFC8693ResponseIssuedTokenTypeUrnIetfParamsOauthTokenTypeJwt         OAuth2TokenExchangeRFC8693ResponseIssuedTokenType = "urn:ietf:params:oauth:token-type:jwt"
 )
 
 // Valid indicates whether the value is a known member of the OAuth2TokenExchangeRFC8693ResponseIssuedTokenType enum.
 func (e OAuth2TokenExchangeRFC8693ResponseIssuedTokenType) Valid() bool {
 	switch e {
 	case OAuth2TokenExchangeRFC8693ResponseIssuedTokenTypeUrnIetfParamsOauthTokenTypeAccessToken:
+		return true
+	case OAuth2TokenExchangeRFC8693ResponseIssuedTokenTypeUrnIetfParamsOauthTokenTypeJwt:
 		return true
 	default:
 		return false
@@ -550,7 +556,7 @@ type AdminLoginRequest struct {
 	// Email 管理员邮箱
 	Email openapi_types.Email `json:"email"`
 
-	// Password 管理员密码（最少 6 个字符）
+	// Password 管理员密码（最少 8 个字符）
 	Password string `json:"password"`
 }
 

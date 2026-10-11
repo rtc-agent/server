@@ -11,6 +11,7 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -56,7 +57,7 @@ func (uc *ServerConfigUsecase) RollbackConfig(ctx context.Context, key string, u
 	var shouldTrimHistory bool // Track if TrimHistory should be called after transaction
 
 	err = uc.db.Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 
 		// Get current config inside transaction to avoid TOCTOU.
 		currentCfg, getErr := uc.configRepo.Get(txCtx, key, userID)

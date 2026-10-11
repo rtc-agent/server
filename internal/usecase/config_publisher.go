@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
@@ -78,25 +82,79 @@ func (p *RedisConfigPublisher) PublishConfigUpdate(ctx context.Context, key stri
 // Implemented by CachedConfigProvider to invalidate cache entries.
 type ConfigUpdateHandler func(event model.ConfigUpdateEvent)
 
+// handlerRegistration wraps a handler with its metadata for metrics and monitoring.
+type handlerRegistration struct {
+	handler ConfigUpdateHandler
+	name    string
+}
+
+// subscriberMetrics holds Prometheus metrics for config subscriber operations.
+type subscriberMetrics struct {
+	handlerDuration *prometheus.HistogramVec // labels: handler_name
+	handlerErrors   prometheus.Counter
+	handlerTimeouts prometheus.Counter
+}
+
+// global subscriberMetrics instance (promauto handles registration).
+var globalSubscriberMetrics = newSubscriberMetrics()
+
+// newSubscriberMetrics creates and registers all subscriber metrics.
+func newSubscriberMetrics() *subscriberMetrics {
+	return &subscriberMetrics{
+		handlerDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rtc",
+			Subsystem: "config_subscriber",
+			Name:      "handler_duration_seconds",
+			Help:      "Duration of config update handler execution in seconds.",
+			Buckets:   prometheus.DefBuckets,
+		}, []string{"handler_name"}),
+		handlerErrors: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "config_subscriber",
+			Name:      "handler_errors_total",
+			Help:      "Total number of config update handler execution errors.",
+		}),
+		handlerTimeouts: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "config_subscriber",
+			Name:      "handler_timeouts_total",
+			Help:      "Total number of config update handler timeouts.",
+		}),
+	}
+}
+
 // RedisConfigSubscriber subscribes to config update events from Redis Pub/Sub
 // and invokes registered handlers to invalidate local caches.
+// Handlers are executed asynchronously with timeout to prevent blocking message processing.
 type RedisConfigSubscriber struct {
-	rdb      redis.UniversalClient
-	handlers []ConfigUpdateHandler
+	rdb            redis.UniversalClient
+	handlers       []handlerRegistration
+	handlerTimeout time.Duration // max duration per handler execution
 }
 
 // NewRedisConfigSubscriber creates a new RedisConfigSubscriber.
 func NewRedisConfigSubscriber(rdb redis.UniversalClient) *RedisConfigSubscriber {
 	return &RedisConfigSubscriber{
-		rdb:      rdb,
-		handlers: make([]ConfigUpdateHandler, 0),
+		rdb:            rdb,
+		handlers:       make([]handlerRegistration, 0),
+		handlerTimeout: 5 * time.Second, // default timeout for handler execution
 	}
+}
+
+// SetHandlerTimeout sets the maximum duration allowed for each handler execution.
+// Default is 5 seconds. This prevents slow handlers from blocking message processing.
+func (s *RedisConfigSubscriber) SetHandlerTimeout(timeout time.Duration) {
+	s.handlerTimeout = timeout
 }
 
 // RegisterHandler adds a handler that will be called when config update events are received.
 // Typically, the CachedConfigProvider registers itself as a handler to invalidate its cache.
-func (s *RedisConfigSubscriber) RegisterHandler(handler ConfigUpdateHandler) {
-	s.handlers = append(s.handlers, handler)
+// The name parameter is used for metrics and logging.
+func (s *RedisConfigSubscriber) RegisterHandler(name string, handler ConfigUpdateHandler) {
+	s.handlers = append(s.handlers, handlerRegistration{
+		handler: handler,
+		name:    name,
+	})
 }
 
 // Start begins listening for config update events in a background goroutine.
@@ -172,8 +230,67 @@ func (s *RedisConfigSubscriber) handleMessage(ctx context.Context, msg *redis.Me
 		zap.String("operation", event.Operation),
 		zap.String("source", event.Source))
 
-	// Invoke all registered handlers.
-	for _, handler := range s.handlers {
-		handler(event)
+	// Invoke all registered handlers asynchronously with timeout control.
+	// This prevents slow handlers from blocking message processing and ensures
+	// that config updates are processed promptly even if some handlers are slow.
+	// Note: We cannot forcibly stop a goroutine in Go, so handlers that exceed
+	// the timeout will continue running in the background. Handlers should be
+	// designed to complete quickly (e.g., cache invalidation, not network calls).
+	var wg sync.WaitGroup
+	for _, reg := range s.handlers {
+		wg.Add(1)
+		go func(reg handlerRegistration) {
+			defer wg.Done()
+			start := time.Now()
+
+			// Use a timer to detect timeout.
+			// The handler itself continues running if it exceeds the timeout,
+			// but we log and move on to prevent blocking other handlers.
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				reg.handler(event)
+			}()
+
+			// Wait for completion or timeout.
+			timer := time.NewTimer(s.handlerTimeout)
+			defer timer.Stop()
+
+			select {
+			case <-done:
+				duration := time.Since(start).Seconds()
+				globalSubscriberMetrics.handlerDuration.WithLabelValues(reg.name).Observe(duration)
+				logger.Debug(ctx, "config.subscriber.handler_completed",
+					zap.String("handler", reg.name),
+					zap.Duration("duration", time.Since(start)))
+			case <-timer.C:
+				globalSubscriberMetrics.handlerTimeouts.Inc()
+				logger.Error(ctx, "config.subscriber.handler_timeout",
+					zap.String("handler", reg.name),
+					zap.Duration("timeout", s.handlerTimeout),
+					zap.Duration("elapsed", time.Since(start)),
+					zap.String("message", "handler continues running in background"))
+			}
+		}(reg)
+	}
+
+	// Wait for all handlers to complete (with timeout already enforced per-handler).
+	// We use a separate timeout for the overall wait to prevent blocking indefinitely.
+	waitDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		// All handlers completed.
+	case <-time.After(s.handlerTimeout * 2):
+		// This should not happen if per-handler timeouts work correctly,
+		// but serves as a safety net.
+		globalSubscriberMetrics.handlerErrors.Inc()
+		logger.Error(ctx, "config.subscriber.wait_timeout",
+			zap.Duration("timeout", s.handlerTimeout*2),
+			zap.Int("handler_count", len(s.handlers)))
 	}
 }

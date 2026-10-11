@@ -39,6 +39,7 @@ token_exchange:
       jwks_uri: "http://admin-server:8081/.well-known/jwks.json"
       allowed_algorithms: ["RS256", "ES256"]
       cache_ttl: 3600
+      expected_audience: ""               # 期望的 JWT aud claim（可选，为空则不验证）
       claims_mapping:
         sub: "sub"
         email: "email"
@@ -59,7 +60,20 @@ cors:
     - "http://localhost:23001"  # Grafana
     - "http://localhost:5173"   # Vite dev server
     - "http://localhost:8000"   # Admin UI dev server
+    - "http://localhost:28081"  # Admin UI Docker 环境
     - "http://localhost:8888"   # Main server (self)
+
+# API 配置
+api:
+  query_default_limit: 50
+  query_max_limit: 100
+  rate_limit:
+    requests_per_second: 50.0
+    burst_size: 100
+  ip_rate_limit:
+    requests_per_second: 5.0
+    burst_size: 10
+    limiter_ttl_sec: 3600
 
 # LLM 配置
 # 优先级说明：config file > environment variable > default
@@ -97,6 +111,9 @@ tracing:
   enabled: true
   endpoint: "jaeger:4317"
   sample_rate: 1.0
+  insecure: true                   # Docker 环境使用非加密连接
+  service_version: "1.0.0"         # 服务版本
+  environment: "development"       # 部署环境
 
 # Web Search 配置
 web_search:
@@ -237,6 +254,7 @@ storage:
       - "http://localhost:23001"  # Grafana
       - "http://localhost:5173"   # Vite dev server
       - "http://localhost:8000"   # Admin UI dev server
+      - "http://localhost:28081"  # Admin UI Docker 环境
       - "http://localhost:8888"   # Main server
   quota:
     max_file_size_bytes: 104857600     # 100MB
@@ -247,11 +265,16 @@ storage:
     requests_per_minute: 60
   credential:
     access_token_ttl: 1h
-    session_token_ttl: 1h
+    session_token_ttl: 15m           # 默认 15m，大文件上传需确保客户端有刷新逻辑
     presigned_url_ttl: 1h
   cleanup:
     interval: 1h
     multipart_expiry: 24h
     credential_expiry: 24h
+    orphan:
+      enabled: false
+      batch_size: 500
+      cooldown_period: 24h
+      dry_run: true
   encryption:
     session_token_key: "${OSS3_SESSION_TOKEN_KEY}"  # 通过环境变量 OSS3_SESSION_TOKEN_KEY 配置（64个十六进制字符 = 32字节）

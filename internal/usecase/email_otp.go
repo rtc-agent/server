@@ -43,6 +43,16 @@ type EmailOTPConfig struct {
 	LockDuration time.Duration
 }
 
+// Default OTP configuration values to avoid magic numbers.
+const (
+	defaultOTPTTL            = 10 * time.Minute
+	defaultOTPLength         = 6
+	defaultSendCooldown      = 60 * time.Second
+	defaultMaxSendPerIP      = 5
+	defaultMaxVerifyAttempts = 5
+	defaultLockDuration      = 15 * time.Minute
+)
+
 // EmailOTPUsecase handles email verification code operations.
 type EmailOTPUsecase struct {
 	adminUserRepo repo.AdminUserRepo
@@ -52,12 +62,33 @@ type EmailOTPUsecase struct {
 }
 
 // NewEmailOTPUsecase creates a new EmailOTPUsecase.
+// Applies default values for any zero-valued config fields.
 func NewEmailOTPUsecase(
 	adminUserRepo repo.AdminUserRepo,
 	emailSender email.Sender,
 	store OTPStore,
 	cfg EmailOTPConfig,
 ) *EmailOTPUsecase {
+	// Apply defaults for zero-valued config fields
+	if cfg.TTL <= 0 {
+		cfg.TTL = defaultOTPTTL
+	}
+	if cfg.Length <= 0 {
+		cfg.Length = defaultOTPLength
+	}
+	if cfg.SendCooldown <= 0 {
+		cfg.SendCooldown = defaultSendCooldown
+	}
+	if cfg.MaxSendPerIP <= 0 {
+		cfg.MaxSendPerIP = defaultMaxSendPerIP
+	}
+	if cfg.MaxVerifyAttempts <= 0 {
+		cfg.MaxVerifyAttempts = defaultMaxVerifyAttempts
+	}
+	if cfg.LockDuration <= 0 {
+		cfg.LockDuration = defaultLockDuration
+	}
+
 	return &EmailOTPUsecase{
 		adminUserRepo: adminUserRepo,
 		emailSender:   emailSender,

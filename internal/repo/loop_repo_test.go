@@ -525,11 +525,59 @@ func TestLoopRepo_FindStaleLoops_ExcludesNilLastRunAt(t *testing.T) {
 	loop := newTestLoop(t, sessionID)
 	require.NoError(t, repo.Create(ctx, loop))
 
-	// Active loop with nil last_run_at — never run, should not be stale
+	// Active loop with nil last_run_at created recently — should not be stale
+	// because it hasn't had enough time to be considered stale
 	staleThreshold := time.Now().Add(-1 * time.Hour)
 	results, err := repo.FindStaleLoops(ctx, staleThreshold)
 	require.NoError(t, err)
-	assert.Empty(t, results, "loops with nil last_run_at should not be stale")
+	assert.Empty(t, results, "recently created loops with nil last_run_at should not be stale")
+}
+
+func TestLoopRepo_FindStaleLoops_RecoverNeverRunLoops(t *testing.T) {
+	t.Parallel()
+	db := setupLoopTestDB(t)
+	repo := NewLoopRepo(db)
+	ctx := context.Background()
+
+	sessionID := uuid.New()
+	loop := newTestLoop(t, sessionID)
+	require.NoError(t, repo.Create(ctx, loop))
+
+	// Set created_at to 10 minutes ago (well beyond the 5-minute threshold)
+	// and leave last_run_at as nil to simulate a never-run loop
+	oldCreatedAt := time.Now().Add(-10 * time.Minute)
+	require.NoError(t, repo.Update(ctx, loop.ID, map[string]any{
+		"created_at": oldCreatedAt,
+	}))
+
+	staleThreshold := time.Now().Add(-1 * time.Hour)
+	results, err := repo.FindStaleLoops(ctx, staleThreshold)
+	require.NoError(t, err)
+	assert.Len(t, results, 1, "never-run loops created more than 5 minutes ago should be stale")
+	assert.Equal(t, loop.ID, results[0].ID)
+}
+
+func TestLoopRepo_FindStaleLoops_ExcludesNewlyCreatedNeverRun(t *testing.T) {
+	t.Parallel()
+	db := setupLoopTestDB(t)
+	repo := NewLoopRepo(db)
+	ctx := context.Background()
+
+	sessionID := uuid.New()
+	loop := newTestLoop(t, sessionID)
+	require.NoError(t, repo.Create(ctx, loop))
+
+	// Set created_at to 3 minutes ago (less than 5-minute threshold)
+	// and leave last_run_at as nil
+	recentCreatedAt := time.Now().Add(-3 * time.Minute)
+	require.NoError(t, repo.Update(ctx, loop.ID, map[string]any{
+		"created_at": recentCreatedAt,
+	}))
+
+	staleThreshold := time.Now().Add(-1 * time.Hour)
+	results, err := repo.FindStaleLoops(ctx, staleThreshold)
+	require.NoError(t, err)
+	assert.Empty(t, results, "never-run loops created less than 5 minutes ago should not be stale")
 }
 
 // ─── FindExpiredLoops Tests ───

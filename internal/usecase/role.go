@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -167,7 +168,7 @@ func (uc *AdminRoleUsecase) DeleteRole(ctx context.Context, roleID uuid.UUID, op
 
 	// Steps 3-4: Database operations wrapped in a transaction
 	err = uc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 
 		// Step 3: Cascade delete admin_user_roles assignments for this role
 		if err := uc.adminUserRoleRepo.DeleteByRoleID(txCtx, roleID); err != nil {

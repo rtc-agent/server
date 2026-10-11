@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/agent/stringutil"
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
@@ -128,15 +129,15 @@ type UpsertDeviceInput struct {
 // UpsertDevice finds or updates device information.
 func (uc *AuthUsecase) UpsertDevice(ctx context.Context, input *UpsertDeviceInput) error {
 	// DeviceID is critical for device identification - reject if too long.
-	if len([]rune(input.DeviceID)) > 100 {
-		return fmt.Errorf("device_id exceeds maximum length of 100 characters")
+	if len([]rune(input.DeviceID)) > maxDeviceIDLength {
+		return fmt.Errorf("device_id exceeds maximum length of %d characters", maxDeviceIDLength)
 	}
 
 	device := &model.Device{
 		UserID:       input.UserID,
 		DeviceID:     input.DeviceID,
-		Name:         stringutil.TruncateByRune(input.Name, 100),
-		UserAgent:    stringutil.TruncateByRune(input.UserAgent, 500),
+		Name:         stringutil.TruncateByRune(input.Name, maxDeviceNameLength),
+		UserAgent:    stringutil.TruncateByRune(input.UserAgent, maxUserAgentLength),
 		LastActiveAt: time.Now(),
 	}
 	return uc.deviceRepo.Upsert(ctx, device)
@@ -180,7 +181,7 @@ func (uc *AuthUsecase) RefreshTokenPair(ctx context.Context, plainToken string) 
 	var result *TokenPairResult
 
 	err := uc.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 
 		// 1. Validate and revoke the old refresh token.
 		rtInfo, err := uc.validateRefreshTokenInTx(txCtx, plainToken)
@@ -205,9 +206,13 @@ func (uc *AuthUsecase) RefreshTokenPair(ctx context.Context, plainToken string) 
 }
 
 // validateRefreshTokenInTx is the transactional version of ValidateRefreshToken.
+// Uses SELECT ... FOR UPDATE to prevent concurrent token reuse attacks.
 func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken string) (*RefreshTokenInfo, error) {
 	rtHash := hashRefreshToken(plainToken)
-	rt, err := uc.refreshTokenRepo.FindByHash(ctx, rtHash)
+	// SECURITY: Use FOR UPDATE to lock the row and prevent concurrent refresh attempts.
+	// This ensures that if the same token is used simultaneously by an attacker,
+	// only one request can proceed while others wait and detect the revocation.
+	rt, err := uc.refreshTokenRepo.FindByHashForUpdate(ctx, rtHash)
 	if err != nil {
 		if repo.IsNotFound(err) {
 			return nil, ErrInvalidRefreshToken

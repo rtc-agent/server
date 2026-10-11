@@ -35,6 +35,35 @@ security:
   login_max_attempts: 5        # Max failed login attempts before lockout
   login_lock_duration: 900     # Lockout duration in seconds (15 minutes)
   cookie_secure: true          # HTTPS-only cookies in production (TLS terminates at reverse proxy)
+  # Content Security Policy (CSP) configuration
+  csp:
+    enabled: true
+    report_only: false         # Production mode: block violations
+    report_uri: "/api/csp-report"
+    default_src: ["'self'"]
+    script_src: ["'self'", "'unsafe-inline'", "'unsafe-eval"]  # Umi framework requires inline scripts
+    style_src: ["'self'", "'unsafe-inline'"]                    # Lit/antd-style requires inline styles
+    img_src: ["'self'", "data:", "blob:"]                      # Support data URIs and blob URLs
+    font_src: ["'self'", "data:"]                              # Inline fonts (e.g., base64 encoded)
+    connect_src:
+      - "'self'"
+      - "ws:"                                                  # WebSocket connections
+      - "wss:"                                                 # Secure WebSocket connections
+      # RTC Agent Server（通过 Nginx LB 或 Admin Server 反向代理访问）
+      # 开发环境：localhost:28080 (Nginx LB) 或 localhost:28081 (Admin Server)
+      # 生产环境：配置实际的 RTC Agent Server URL
+      - "http://localhost:*"                                   # 本地开发（所有端口）
+      - "ws://localhost:*"                                     # WebSocket 本地开发
+      # 外部 API（如需要）
+      - "https://api.anthropic.com"                            # Claude API
+      - "https://api.tavily.com"                               # Tavily search API
+    frame_src:
+      - "'self'"                                               # Same-origin iframes
+      # iframe 通过反向代理访问（/api/grafana, /api/jaeger, /api/pyroscope）
+      # 实际是同源，不需要额外配置 frame_src
+    frame_ancestors: ["'none'"]                                # Prevent framing (replaces X-Frame-Options)
+    base_uri: ["'self'"]
+    form_action: ["'self'"]
 
 features:
   permission_system: true      # Enable Casbin RBAC permission system

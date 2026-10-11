@@ -16,7 +16,7 @@ var loopMetrics = struct {
 	tasksTotal *prometheus.CounterVec
 
 	// taskDuration tracks the duration of loop task processing in seconds.
-	// Labels: outcome (success|failure|lock_skipped|idempotent_skip)
+	// Labels: outcome (success|failure|idempotent_skip)
 	taskDuration *prometheus.HistogramVec
 
 	// recoveryScansTotal counts the number of recovery scans performed.
@@ -39,7 +39,7 @@ var loopMetrics = struct {
 		Name:      "task_duration_seconds",
 		Help:      "Duration of loop task processing in seconds.",
 		Buckets:   prometheus.ExponentialBuckets(0.01, 2, 10), // 10ms ~ 5s
-	}, []string{"outcome"}), // outcome: "success", "failure", "lock_skipped", "idempotent_skip"
+	}, []string{"outcome"}), // outcome: "success", "failure", "idempotent_skip"
 
 	recoveryScansTotal: promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "rtc",
@@ -66,11 +66,6 @@ func recordTaskSuccess(duration time.Duration) {
 func recordTaskFailure(duration time.Duration) {
 	loopMetrics.tasksTotal.WithLabelValues("failure").Inc()
 	loopMetrics.taskDuration.WithLabelValues("failure").Observe(duration.Seconds())
-}
-
-// recordTaskLockSkipped records a task skipped due to lock not acquired.
-func recordTaskLockSkipped(duration time.Duration) {
-	loopMetrics.taskDuration.WithLabelValues("lock_skipped").Observe(duration.Seconds())
 }
 
 // recordTestIdempotentSkip records a task skipped due to idempotency check.

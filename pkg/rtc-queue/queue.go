@@ -51,10 +51,30 @@ func (q *Queue) Client() *redis.Client { return q.rdb }
 // the session's priority queue, and a notification is broadcast on the
 // session:new channel so idle workers can wake up and try to claim it.
 // All three writes are performed atomically by a single Lua script.
+//
+// The work ID is generated using UUID v7 (time-based). For idempotent
+// publishing (e.g., with retries), use PublishWithID instead.
 func (q *Queue) Publish(ctx context.Context, sessionID, data string, priority int64) (string, error) {
+	workID := uuid.Must(uuid.NewV7()).String()
+	return q.PublishWithID(ctx, sessionID, workID, data, priority)
+}
+
+// PublishWithID enqueues a new Work item with a caller-specified work ID.
+// This enables idempotent publishing: retries with the same work ID will
+// be skipped (the Lua script checks for existing work items).
+//
+// Use this method when you need exactly-once semantics, such as:
+//   - Retry scenarios where the same logical work should not be duplicated
+//   - Deterministic work IDs based on business keys (e.g., sessionID + messageID)
+//
+// Returns the work ID and nil error on success. If a work item with the
+// same ID already exists, it returns the existing work ID and nil error
+// (idempotent behavior).
+func (q *Queue) PublishWithID(ctx context.Context, sessionID, workID, data string, priority int64) (string, error) {
 	ctx, span := queueTracer().Start(ctx, "queue.publish",
 		trace.WithAttributes(
 			attribute.String("session.id", sessionID),
+			attribute.String("work.id", workID),
 			attribute.Int64("work.priority", priority),
 		),
 	)
@@ -64,14 +84,15 @@ func (q *Queue) Publish(ctx context.Context, sessionID, data string, priority in
 		span.SetStatus(codes.Error, "session_id required")
 		return "", fmt.Errorf("rtcqueue: session_id required")
 	}
+	if workID == "" {
+		span.SetStatus(codes.Error, "work_id required")
+		return "", fmt.Errorf("rtcqueue: work_id required")
+	}
 
-	workID := uuid.Must(uuid.NewV7()).String()
 	now := time.Now().Unix()
 
 	workKey := keyWork(workID)
 	queueKey := keyQueue(sessionID)
-
-	span.SetAttributes(attribute.String("work.id", workID))
 
 	// Bound the Redis round-trip to 5s so an unresponsive broker cannot
 	// stall the caller's goroutine indefinitely. The caller
@@ -81,15 +102,24 @@ func (q *Queue) Publish(ctx context.Context, sessionID, data string, priority in
 	publishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	if err := publishScript.Run(publishCtx, q.rdb, []string{workKey, queueKey},
+	result, err := publishScript.Run(publishCtx, q.rdb, []string{workKey, queueKey},
 		workID, sessionID, data, priority, now, now,
 		ChannelSessionNew, sessionID,
-	).Err(); err != nil {
+	).Int()
+	if err != nil {
 		globalQueueMetrics.recordPublish("error")
 		span.SetStatus(codes.Error, err.Error())
 		return "", fmt.Errorf("rtcqueue: publish: %w", err)
 	}
-	globalQueueMetrics.recordPublish("success")
+
+	// result=1 means published, result=0 means already exists (idempotent skip)
+	if result == 0 {
+		span.SetAttributes(attribute.Bool("work.idempotent_skip", true))
+		globalQueueMetrics.recordPublish("idempotent_skip")
+	} else {
+		globalQueueMetrics.recordPublish("success")
+	}
+
 	return workID, nil
 }
 

@@ -329,7 +329,7 @@ func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 			return nil, err
 		}
 		if err := validateKeyType(t.Method, pubKey); err != nil {
-			return nil, errors.New("invalid token: key type mismatch")
+			return nil, fmt.Errorf("invalid token: %w", err)
 		}
 		return pubKey, nil
 	},

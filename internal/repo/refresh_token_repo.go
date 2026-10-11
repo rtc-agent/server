@@ -18,6 +18,9 @@ type RefreshTokenRepo interface {
 	Create(ctx context.Context, rt *model.RefreshToken) error
 	// FindByHash looks up a refresh token by its hash.
 	FindByHash(ctx context.Context, hash string) (*model.RefreshToken, error)
+	// FindByHashForUpdate looks up a refresh token by its hash with a row lock (SELECT ... FOR UPDATE).
+	// This prevents concurrent modifications and is critical for detecting token reuse attacks.
+	FindByHashForUpdate(ctx context.Context, hash string) (*model.RefreshToken, error)
 	// Revoke marks a refresh token as revoked.
 	Revoke(ctx context.Context, id uuid.UUID) error
 	// RevokeAllByUserID revokes all refresh tokens for a user.
@@ -54,6 +57,23 @@ func (r *refreshTokenRepo) FindByHash(ctx context.Context, hash string) (*model.
 			return nil, fmt.Errorf("find refresh token: %w", ErrRefreshTokenNotFound)
 		}
 		return nil, fmt.Errorf("find refresh token: %w", err)
+	}
+	return &rt, nil
+}
+
+// FindByHashForUpdate looks up a refresh token by its hash with a row lock (SELECT ... FOR UPDATE).
+// This prevents concurrent modifications and is critical for detecting token reuse attacks.
+func (r *refreshTokenRepo) FindByHashForUpdate(ctx context.Context, hash string) (*model.RefreshToken, error) {
+	var rt model.RefreshToken
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Set("gorm:query_option", "FOR UPDATE").
+		Where("token_hash = ?", hash).
+		First(&rt).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("find refresh token for update: %w", ErrRefreshTokenNotFound)
+		}
+		return nil, fmt.Errorf("find refresh token for update: %w", err)
 	}
 	return &rt, nil
 }

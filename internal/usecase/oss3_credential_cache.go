@@ -176,6 +176,8 @@ func (uc *OSS3Usecase) populateCredentialCache(
 		if setErr := uc.redis.Set(ctx, cacheKey, data, ttl).Err(); setErr != nil {
 			logger.Warn(ctx, "credential_cache_set_failed",
 				zap.String("access_key_id", accessKeyID),
+				zap.Duration("ttl", ttl),
+				zap.Int("data_size_bytes", len(data)),
 				zap.Error(setErr))
 		}
 		// best-effort; cache miss on next read will repopulate

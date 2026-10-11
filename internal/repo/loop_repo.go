@@ -91,9 +91,15 @@ func (r *loopRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, curso
 //
 // Query conditions explained:
 //   - status = active: only consider loops that should be running
-//   - last_run_at IS NOT NULL: loop has run at least once
-//   - last_run_at + interval_seconds + stale_threshold < now(): the loop should have
-//     run again by now (considering its interval) but hasn't, indicating it's truly stale
+//   - created_at < 1 minute ago: exclude newly created loops to avoid recovering
+//     loops whose first execution may not have completed yet
+//   - For loops that have run before (last_run_at IS NOT NULL):
+//     last_run_at + interval_seconds + stale_threshold < now()
+//     This ensures we don't mark a loop as stale if it's still within its normal execution interval.
+//   - For loops that have never run (last_run_at IS NULL):
+//     created_at < staleThreshold * 2 OR created_at < 5 minutes ago (whichever is smaller)
+//     This recovers loops that were created long ago but never executed, likely due to
+//     server crash or scheduling loss.
 //
 // Note: We no longer check asynq_task_id because we use loop.ID as the task ID
 // for idempotent scheduling. The task ID is always set and doesn't indicate
@@ -127,10 +133,21 @@ func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time)
 	// Additionally, exclude loops created within the last minute to avoid recovering
 	// newly created loops whose first execution may not have completed yet.
 	createdAtProtection := time.Now().Add(-1 * time.Minute)
+
+	// For never-run loops, use a longer threshold (5 minutes) to avoid premature recovery.
+	// This allows time for the first scheduled execution to complete.
+	neverRunThreshold := time.Now().Add(-5 * time.Minute)
+
+	// Build the WHERE clause with OR logic for never-run vs previously-run loops
+	whereClause := fmt.Sprintf(`status = ? AND created_at < ? AND (
+		(last_run_at IS NOT NULL AND %s < %s) OR
+		(last_run_at IS NULL AND created_at < ?)
+	)`, scheduledRunTimeExpr, thresholdExpr)
+
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
-		Where("status = ? AND last_run_at IS NOT NULL AND "+
-			scheduledRunTimeExpr+" < "+thresholdExpr+" AND created_at < ?",
-			model.LoopStatusActive, staleThreshold, createdAtProtection).
+		Where(whereClause,
+			model.LoopStatusActive, createdAtProtection,
+			staleThreshold, neverRunThreshold).
 		Limit(safetyLimit).
 		Find(&loops).Error
 	if err != nil {

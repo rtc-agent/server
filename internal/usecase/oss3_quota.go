@@ -62,7 +62,10 @@ func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, 
 	}
 	if result == 0 {
 		// P1-2 fix: Include current usage and limit in error message for better user feedback.
-		// Query current quota usage to provide informative error.
+		// NOTE (P2-1): This GET is a separate operation from the reserve, so the usage value
+		// may be stale under concurrent uploads (TOCTOU). This only affects the error message
+		// text, not correctness. Fixing would require Lua script modification, which is not
+		// worth the complexity for informational text.
 		currentUsage, getErr := uc.redis.Get(ctx, quotaKey).Int64()
 		if getErr != nil && getErr.Error() != "redis: nil" {
 			logger.Warn(ctx, "failed to get current quota usage for error message",

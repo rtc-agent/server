@@ -74,7 +74,9 @@ func NewLoginProtection(cfg LoginProtectionConfig) *LoginProtection {
 			zap.String("risk", "attacker_can_bypass_brute_force_protection_by_triggering_process_restart"),
 			zap.Int("max_attempts", cfg.MaxAttempts),
 			zap.Duration("lock_duration", cfg.LockDuration),
-			zap.String("recommendation", "use_redis_backended_login_protection_in_production"))
+			zap.String("recommendation", "use_redis_backended_login_protection_in_production"),
+			zap.String("config_key", "LOGIN_PROTECTION_BACKEND"),
+			zap.String("config_value_required", "redis"))
 	} else {
 		logger.Info(context.Background(), "login_protection.using_memory_storage",
 			zap.String("env", cfg.Env),

@@ -46,9 +46,9 @@ security:
       - "https://api.anthropic.com"                            # Claude API
       - "https://api.tavily.com"                               # Tavily search API
     frame_src:
-      - "'self'"
-      - "http://localhost:3000"                                # Grafana
-      - "http://localhost:16686"                               # Jaeger
+      - "'self'"                                               # Same-origin iframes
+      # iframe 通过反向代理访问，实际是同源，不需要额外配置
+      # Grafana/Jaeger/Pyroscope 的静态资源通过 proxy 加载，不受 frame_src 限制
     frame_ancestors: ["'none'"]                                # Prevent framing (replaces X-Frame-Options)
     base_uri: ["'self'"]
     form_action: ["'self'"]
