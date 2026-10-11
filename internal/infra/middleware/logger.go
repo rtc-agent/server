@@ -44,6 +44,9 @@ func RequestLogger(next http.Handler) http.Handler {
 
 		start := time.Now()
 
+		// SECURITY: Use r.URL.Path instead of r.URL.String() to avoid logging query parameters.
+		// Query parameters may contain sensitive information like tokens, codes, or session IDs.
+		// Only log the path portion to prevent accidental data leakage.
 		// Normalize route path to avoid high cardinality span names.
 		// For S3 routes: /s3/{bucket}/{key} → /s3/{bucket}/{key}
 		spanName := r.Method + " " + r.URL.Path

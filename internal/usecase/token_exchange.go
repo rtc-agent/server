@@ -25,39 +25,11 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/config"
+	"github.com/rtc-agent/server/internal/infra/httputil"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 )
-
-// RFC 8693 token type URIs.
-const (
-	TokenTypeAccessToken = "urn:ietf:params:oauth:token-type:access_token"
-	TokenTypeJWT         = "urn:ietf:params:oauth:token-type:jwt"
-)
-
-// RFC 6749 Section 5.2 error codes.
-const (
-	ErrInvalidRequest         = "invalid_request"
-	ErrInvalidGrant           = "invalid_grant"
-	ErrServerError            = "server_error"
-	ErrTemporarilyUnavailable = "temporarily_unavailable"
-	ErrAccessDenied           = "access_denied"
-)
-
-// TokenExchangeError is an OAuth2-compliant error returned by the Token Exchange usecase.
-type TokenExchangeError struct {
-	Code        string `json:"error"`
-	Description string `json:"error_description,omitempty"`
-	HTTPStatus  int    `json:"-"`
-}
-
-func (e *TokenExchangeError) Error() string {
-	if e.Description != "" {
-		return fmt.Sprintf("%s: %s", e.Code, e.Description)
-	}
-	return e.Code
-}
 
 // TokenExchangeResult holds the result of a successful token exchange.
 type TokenExchangeResult struct {
@@ -76,6 +48,7 @@ type TokenExchangeUsecase struct {
 	jwksClient     *auth.JWKSClient
 	issuers        []config.ExternalIssuerConfig
 	issuerMap      map[string]*config.ExternalIssuerConfig // issuer string -> config
+	serverEnv      string                                  // runtime environment (production/development)
 }
 
 // NewTokenExchangeUsecase creates a new TokenExchangeUsecase.
@@ -85,6 +58,7 @@ func NewTokenExchangeUsecase(
 	signer TokenSigner,
 	jwksClient *auth.JWKSClient,
 	cfg config.TokenExchangeConfig,
+	serverEnv string,
 ) *TokenExchangeUsecase {
 	issuerMap := make(map[string]*config.ExternalIssuerConfig, len(cfg.ExternalIssuers))
 	for i := range cfg.ExternalIssuers {
@@ -97,6 +71,7 @@ func NewTokenExchangeUsecase(
 		jwksClient:     jwksClient,
 		issuers:        cfg.ExternalIssuers,
 		issuerMap:      issuerMap,
+		serverEnv:      serverEnv,
 	}
 }
 
@@ -228,8 +203,8 @@ func (uc *TokenExchangeUsecase) ExchangeToken(
 		device := &model.Device{
 			UserID:       createdUser.ID,
 			DeviceID:     deviceID,
-			Name:         model.DerefStr(deviceName),
-			UserAgent:    model.DerefStr(userAgent),
+			Name:         httputil.DerefStr(deviceName),
+			UserAgent:    httputil.DerefStr(userAgent),
 			LastActiveAt: time.Now(),
 		}
 		if err := uc.deviceRepo.Upsert(ctx, device); err != nil {
@@ -386,8 +361,9 @@ func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 
 	// Validate aud if configured.
 	// SECURITY: When ExpectedAudience is not configured, skip audience validation but log
-	// a warning. Without audience restriction, any JWT from this issuer can be exchanged,
+	// an error in production. Without audience restriction, any JWT from this issuer can be exchanged,
 	// which increases the risk if the JWT is intended for a different service.
+	// This is a critical security misconfiguration that should be fixed immediately.
 	if issuerCfg.ExpectedAudience != "" {
 		aud, _ := claims["aud"].([]interface{})
 		if len(aud) == 0 {
@@ -404,9 +380,24 @@ func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 			return nil, fmt.Errorf("jwt aud claim does not match expected audience")
 		}
 	} else {
-		logger.Warn(ctx, "token_exchange.audience_validation_skipped",
-			zap.String("issuer", issuerCfg.Issuer),
-			zap.String("reason", "expected_audience_not_configured"))
+		// SECURITY: In production, log an error when audience validation is skipped.
+		// This is a critical security misconfiguration that allows any JWT from this issuer
+		// to be exchanged, even if it was intended for a different service.
+		// Operators should configure expected_audience immediately.
+		if uc.serverEnv == "production" {
+			logger.Error(ctx, "token_exchange.audience_validation_disabled",
+				zap.String("issuer", issuerCfg.Issuer),
+				zap.String("severity", "CRITICAL"),
+				zap.String("reason", "expected_audience_not_configured"),
+				zap.String("risk", "any JWT from this issuer can be exchanged, even if intended for other services"),
+				zap.String("remediation", "configure expected_audience in token_exchange config to restrict which JWTs can be exchanged"))
+		} else {
+			// In non-production environments, log as warning for awareness
+			logger.Warn(ctx, "token_exchange.audience_validation_skipped",
+				zap.String("issuer", issuerCfg.Issuer),
+				zap.String("reason", "expected_audience_not_configured"),
+				zap.String("warning", "audience validation is disabled; configure expected_audience in production"))
+		}
 	}
 
 	return claims, nil

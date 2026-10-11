@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"hash/fnv"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
@@ -212,6 +214,10 @@ func AdminRateLimitMiddleware(limiter RateLimiterInterface) gin.HandlerFunc {
 // STSRateLimitMiddleware creates a standard HTTP middleware for rate limiting STS endpoints.
 // Rate limiting is based on IP address to prevent credential exhaustion attacks.
 //
+// SECURITY: IP extraction only trusts X-Forwarded-For/X-Real-IP headers when the request
+// comes from a configured trusted proxy. This prevents IP spoofing attacks where malicious
+// clients forge these headers to bypass rate limiting.
+//
 // P1-7 fix: Current implementation uses IP-based rate limiting, which provides basic DoS protection.
 // For more granular control, consider adding user-based rate limiting AFTER authentication:
 //
@@ -235,15 +241,14 @@ func AdminRateLimitMiddleware(limiter RateLimiterInterface) gin.HandlerFunc {
 // - User-based limiting adds complexity (Redis dependency, distributed state)
 //
 // If abuse becomes an issue, implement user-based limiting as a second middleware layer.
-func STSRateLimitMiddleware(limiter RateLimiterInterface, next http.Handler) http.Handler {
+//
+// trustedProxies is a list of trusted proxy IP addresses or CIDR ranges.
+// When empty, X-Forwarded-For and X-Real-IP headers are ignored and RemoteAddr is used.
+func STSRateLimitMiddleware(limiter RateLimiterInterface, next http.Handler, trustedProxies ...string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		// Extract IP from X-Forwarded-For or X-Real-IP if present (for proxied requests)
-		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-			ip = forwarded
-		} else if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
-			ip = realIP
-		}
+		// SECURITY: Extract client IP safely, only trusting forwarding headers
+		// when request comes from a trusted proxy. This prevents IP spoofing.
+		ip := middleware.ExtractClientIP(r, parseTrustedProxies(trustedProxies))
 
 		if !limiter.Allow(ip) {
 			w.Header().Set("Content-Type", "application/json")
@@ -263,4 +268,32 @@ func STSRateLimitMiddleware(limiter RateLimiterInterface, next http.Handler) htt
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// parseTrustedProxies converts a list of IP addresses or CIDR ranges to []*net.IPNet.
+// This is used by STSRateLimitMiddleware to safely extract client IPs.
+func parseTrustedProxies(proxies []string) []*net.IPNet {
+	if len(proxies) == 0 {
+		return nil
+	}
+	var nets []*net.IPNet
+	for _, p := range proxies {
+		// Try parsing as CIDR first
+		if _, ipNet, err := net.ParseCIDR(p); err == nil {
+			nets = append(nets, ipNet)
+			continue
+		}
+		// Try parsing as a single IP address
+		if ip := net.ParseIP(p); ip != nil {
+			// Convert single IP to /32 or /128 CIDR
+			mask := "/32"
+			if ip.To4() == nil {
+				mask = "/128"
+			}
+			if _, ipNet, err := net.ParseCIDR(p + mask); err == nil {
+				nets = append(nets, ipNet)
+			}
+		}
+	}
+	return nets
 }

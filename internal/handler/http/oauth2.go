@@ -138,23 +138,32 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	redirectURI := r.URL.Query().Get("redirect_uri")
 
 	// PKCE parameters (RFC 7636)
-	// TODO(security): Consider enforcing PKCE for all OAuth2 flows to prevent
-	// authorization code interception attacks. Currently PKCE is optional for
-	// backward compatibility, but RFC 8252 recommends it for all OAuth2 clients.
-	// See: https://datatracker.ietf.org/doc/html/rfc8252#section-8.4
+	// SECURITY: PKCE is required in production to prevent authorization code interception attacks.
+	// RFC 8252 Section 8.4 recommends PKCE for all OAuth2 clients.
+	// In development mode, PKCE is optional for testing convenience.
 	codeChallenge := r.URL.Query().Get("code_challenge")
 	codeChallengeMethod := r.URL.Query().Get("code_challenge_method")
 	if codeChallengeMethod == "" {
 		codeChallengeMethod = "S256" // Default to S256
 	}
 
-	// Security: Warn when PKCE is not used in production environment (RFC 8252 Section 8.4)
-	// PKCE prevents authorization code interception attacks. All OAuth2 clients should use it.
+	// Enforce PKCE in production environment
 	if codeChallenge == "" && h.serverEnv == "production" {
+		logger.Error(r.Context(), "oauth2.pkce_required_in_production",
+			zap.String("provider", provider),
+			zap.String("redirect_uri", redirectURI),
+			zap.String("error", "PKCE is required in production environment per RFC 8252"))
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request",
+			"code_challenge is required (PKCE must be enabled)")
+		return
+	}
+
+	// Warn when PKCE is not used in non-production environments
+	if codeChallenge == "" && h.serverEnv != "production" {
 		logger.Warn(r.Context(), "oauth2.pkce_not_enabled",
 			zap.String("provider", provider),
 			zap.String("redirect_uri", redirectURI),
-			zap.String("warning", "PKCE is not enabled for this OAuth2 flow. RFC 8252 recommends PKCE for all clients to prevent authorization code interception attacks."))
+			zap.String("warning", "PKCE is recommended for all OAuth2 flows to prevent authorization code interception attacks"))
 	}
 
 	// Validate redirect_uri to prevent Open Redirect attacks

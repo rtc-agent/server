@@ -113,6 +113,45 @@ func (rl *IPRateLimiter) Cleanup() {
 	})
 }
 
+// ExtractClientIP extracts the client IP from the request, only trusting
+// X-Forwarded-For and X-Real-IP headers if the request comes from a trusted proxy.
+// This is a package-level function that can be reused by other middleware.
+//
+// SECURITY NOTES:
+// - X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
+// - We take the FIRST IP as the client IP (leftmost)
+// - Subsequent IPs are proxy chain, which we don't trust for rate limiting
+// - If X-Forwarded-For is malformed, we fall back to RemoteAddr
+func ExtractClientIP(r *http.Request, trustedProxies []*net.IPNet) string {
+	remoteIP := parseRemoteIP(r)
+
+	if isTrustedProxyIP(remoteIP, trustedProxies) {
+		// Check X-Forwarded-For first (may contain multiple IPs, take the first)
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			for i := 0; i < len(xff); i++ {
+				if xff[i] == ',' {
+					if ip := net.ParseIP(strings.TrimSpace(xff[:i])); ip != nil {
+						return ip.String()
+					}
+					break
+				}
+			}
+			if ip := net.ParseIP(strings.TrimSpace(xff)); ip != nil {
+				return ip.String()
+			}
+		}
+
+		// Check X-Real-IP (single IP)
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			if ip := net.ParseIP(strings.TrimSpace(xri)); ip != nil {
+				return ip.String()
+			}
+		}
+	}
+
+	return remoteIP.String()
+}
+
 // extractClientIP extracts the client IP from the request.
 // It only trusts X-Forwarded-For and X-Real-IP headers if the request comes
 // from a trusted proxy (configured via SetTrustedProxies). Otherwise, it falls
@@ -124,41 +163,20 @@ func (rl *IPRateLimiter) Cleanup() {
 // - Subsequent IPs are proxy chain, which we don't trust for rate limiting
 // - If X-Forwarded-For is malformed, we fall back to RemoteAddr
 func (rl *IPRateLimiter) extractClientIP(r *http.Request) string {
-	// Parse RemoteAddr to determine if the request comes from a trusted proxy.
-	remoteIP := parseRemoteIP(r)
+	return ExtractClientIP(r, rl.trustedProxies)
+}
 
-	// Only trust forwarding headers if the request comes from a trusted proxy.
-	if rl.isTrustedProxy(remoteIP) {
-		// Check X-Forwarded-For first (may contain multiple IPs, take the first)
-		// Format: "client, proxy1, proxy2" or just "client"
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// Split by comma and take the first non-empty IP
-			for i := 0; i < len(xff); i++ {
-				if xff[i] == ',' {
-					// Found comma - parse everything before it
-					if ip := net.ParseIP(strings.TrimSpace(xff[:i])); ip != nil {
-						return ip.String()
-					}
-					// Malformed IP before comma - fall through to RemoteAddr
-					break
-				}
-			}
-			// No comma found - entire header is a single IP
-			if ip := net.ParseIP(strings.TrimSpace(xff)); ip != nil {
-				return ip.String()
-			}
-		}
-
-		// Check X-Real-IP (single IP, simpler than X-Forwarded-For)
-		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			if ip := net.ParseIP(strings.TrimSpace(xri)); ip != nil {
-				return ip.String()
-			}
+// isTrustedProxyIP checks if the given IP is within any of the trusted proxy ranges.
+func isTrustedProxyIP(ip net.IP, trustedProxies []*net.IPNet) bool {
+	if ip == nil || len(trustedProxies) == 0 {
+		return false
+	}
+	for _, n := range trustedProxies {
+		if n.Contains(ip) {
+			return true
 		}
 	}
-
-	// Fall back to RemoteAddr
-	return remoteIP.String()
+	return false
 }
 
 // parseRemoteIP extracts the IP from the request's RemoteAddr.

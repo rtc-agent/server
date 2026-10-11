@@ -373,13 +373,15 @@ var (
 // whether the email exists in the database, preventing timing-based email enumeration.
 // Generated with bcrypt cost 12 (matching the production cost factor).
 // Note: bcrypt.GenerateFromPassword only fails if cost is invalid, which is not the case here.
+// The fallback value is a valid 60-character bcrypt hash generated once at startup.
 var dummyPasswordHash = func() []byte {
-	h, err := bcrypt.GenerateFromPassword([]byte("dummy"), 12)
+	h, err := bcrypt.GenerateFromPassword([]byte("dummy"), bcryptCost)
 	if err != nil {
-		// This should never happen with valid cost parameter
-		// Return a pre-computed hash as fallback (cost 12, password "dummy")
-		// Generated once and hardcoded to avoid any startup failure risk
-		return []byte("$2a$12$LJ3m4ys3Lg2VUqJYH9xJYO6qK0ZQZQZQZQZQZQZQZQZQZQZQZQZ")
+		// This should never happen with valid cost parameter.
+		// Return a pre-computed valid bcrypt hash as fallback (cost 12, password "dummy").
+		// This is a valid 60-character bcrypt hash to ensure bcrypt.CompareHashAndPassword
+		// performs the full comparison, preventing timing attacks.
+		return []byte("$2a$12$byQ/pStRfWSclUFqZ404m.ep8VudWTz89DPUkvt7zHQNgWpUfQuyi")
 	}
 	return h
 }()
