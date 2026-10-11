@@ -41,9 +41,23 @@ func NewRedisOTPStore(rdb *redis.Client, maxSendPerIP, maxVerifyAttempts int, lo
 }
 
 // Store stores an OTP for the given email with TTL.
+// Uses SETNX to prevent overwriting an existing valid OTP, which could happen
+// if a concurrent request is in progress. Returns ErrOTPAlreadyExists if an
+// OTP is already stored for this email.
 func (s *RedisOTPStore) Store(ctx context.Context, emailAddr, otp string, ttl time.Duration) error {
 	key := fmt.Sprintf("admin:otp:code:%s", emailAddr)
-	return s.rdb.Set(ctx, key, otp, ttl).Err()
+	stored, err := s.rdb.SetNX(ctx, key, otp, ttl).Result()
+	if err != nil {
+		return fmt.Errorf("redis setnx otp: %w", err)
+	}
+	if !stored {
+		// An OTP already exists - this could indicate a race condition or
+		// that the caller didn't properly check cooldown first.
+		logger.Warn(ctx, "redis_otp_store_already_exists",
+			zap.String("email", emailAddr))
+		return ErrOTPAlreadyExists
+	}
+	return nil
 }
 
 // Get retrieves the stored OTP for the given email.
@@ -102,7 +116,7 @@ func (s *RedisOTPStore) RecordSend(ctx context.Context, emailAddr, clientIP stri
 	pipe.Expire(ctx, ipKey, time.Minute)
 
 	if _, err := pipe.Exec(ctx); err != nil {
-		logger.Debug(ctx, "redis_otp_record_send_failed", zap.Error(err))
+		logger.Warn(ctx, "redis_otp_record_send_failed", zap.Error(err))
 	}
 }
 
@@ -161,6 +175,6 @@ func (s *RedisOTPStore) ResetVerifyFailures(ctx context.Context, emailAddr strin
 	pipe.Del(ctx, fmt.Sprintf("admin:otp:verify:%s", emailAddr))
 	pipe.Del(ctx, fmt.Sprintf("admin:otp:lock:%s", emailAddr))
 	if _, err := pipe.Exec(ctx); err != nil {
-		logger.Debug(ctx, "redis_otp_reset_verify_failures_failed", zap.Error(err))
+		logger.Warn(ctx, "redis_otp_reset_verify_failures_failed", zap.Error(err))
 	}
 }

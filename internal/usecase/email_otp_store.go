@@ -149,9 +149,14 @@ func (s *MemoryOTPStore) cleanup() {
 }
 
 // Store stores an OTP for the given email with TTL.
+// Returns ErrOTPAlreadyExists if a valid OTP is already stored for this email.
 func (s *MemoryOTPStore) Store(ctx context.Context, emailAddr, otp string, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Check for existing valid OTP
+	if existing, ok := s.otps[emailAddr]; ok && time.Now().Before(existing.expiresAt) {
+		return ErrOTPAlreadyExists
+	}
 	s.otps[emailAddr] = otpEntry{
 		code:      otp,
 		expiresAt: time.Now().Add(ttl),

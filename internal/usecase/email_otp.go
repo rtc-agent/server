@@ -24,6 +24,7 @@ var (
 	ErrOTPRateLimited     = errors.New("too many send requests, please try again later")
 	ErrOTPCooldown        = errors.New("please wait before requesting another code")
 	ErrEmailNotRegistered = errors.New("email not registered")
+	ErrOTPAlreadyExists   = errors.New("a verification code is already active for this email")
 )
 
 // EmailOTPConfig configures OTP behavior.
@@ -112,6 +113,13 @@ func (uc *EmailOTPUsecase) SendOTP(ctx context.Context, emailAddr, clientIP stri
 
 	// 5. Store OTP
 	if err := uc.store.Store(ctx, emailAddr, otp, uc.cfg.TTL); err != nil {
+		if errors.Is(err, ErrOTPAlreadyExists) {
+			// An OTP is already active - this shouldn't happen since we checked cooldown,
+			// but handle it gracefully
+			logger.Warn(ctx, "email_otp.store_race_detected",
+				zap.String("email", emailAddr))
+			return ErrOTPCooldown
+		}
 		return fmt.Errorf("email otp store: %w", err)
 	}
 
@@ -125,11 +133,12 @@ func (uc *EmailOTPUsecase) SendOTP(ctx context.Context, emailAddr, clientIP stri
 		Body:    uc.buildEmailBody(otp),
 	}
 	if err := uc.emailSender.Send(ctx, msg); err != nil {
-		logger.Error(ctx, "email_otp.send_failed",
+		// Email send failed - rollback: delete the stored OTP so user can retry immediately
+		uc.store.Delete(ctx, emailAddr)
+		logger.Error(ctx, "email_otp.send_failed_rolled_back",
 			zap.String("email", emailAddr),
 			zap.Error(err))
-		// Don't return error to user - OTP is stored, they can request again after cooldown
-		// But log for debugging
+		return fmt.Errorf("email otp send: %w", err)
 	}
 
 	logger.Info(ctx, "email_otp.sent",
