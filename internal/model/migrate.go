@@ -24,6 +24,56 @@ import (
 // idx_admin_audit_logs_operator_time) which don't follow this convention.
 // These are kept for backward compatibility but new indexes should follow the standard.
 
+// TODO(migration): Implement migration version tracking system.
+// Current state: AutoMigrate runs on every startup, relying on idempotent operations
+// (IF NOT EXISTS, IF EXISTS) to safely re-execute. This works but has limitations:
+//   - No way to track which migrations have completed
+//   - No way to run one-time data transformations safely
+//   - Difficult to debug migration failures or partial completions
+//   - No rollback capability for failed migrations
+//
+// Proposed solution:
+//   - Create a schema_migrations table to track applied migrations
+//   - Each migration gets a unique version ID (timestamp-based)
+//   - Migrations check version before execution and record completion
+//   - Add rollback functions for each migration
+//   - Example schema:
+//     CREATE TABLE schema_migrations (
+//       version BIGINT PRIMARY KEY,
+//       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+//       duration_ms INTEGER NOT NULL
+//     );
+
+// TODO(migration): Make batch backfill sleep duration configurable.
+// Current state: Large table migrations (e.g., memory_links index creation) may need
+// batch processing with sleep intervals to avoid overwhelming the database. However,
+// the sleep duration is not configurable and may not suit all deployment scenarios.
+//
+// Consider:
+//   - Read sleep duration from environment variable or config file
+//   - Add batch size configuration for large operations
+//   - Implement adaptive sleep based on database load metrics
+//   - Example: MIGRATION_BATCH_SLEEP_MS=100, MIGRATION_BATCH_SIZE=1000
+
+// TODO(migration): Add migration progress monitoring and reporting.
+// Current state: Migrations run silently with no progress indication for long-running
+// operations. This makes it difficult to:
+//   - Estimate completion time for large migrations
+//   - Detect stalled or slow migrations
+//   - Provide feedback to operators during deployment
+//
+// Proposed enhancements:
+//   - Log progress for operations on large tables (e.g., "processed 1000/10000 rows")
+//   - Emit Prometheus metrics for migration progress
+//   - Add timeout per migration with automatic rollback
+//   - Implement dry-run mode to estimate migration duration
+//   - Example progress log:
+//     logger.Info("migration progress",
+//       zap.String("migration", "backfill_memory_links"),
+//       zap.Int("processed", 1000),
+//       zap.Int("total", 10000),
+//       zap.Duration("elapsed", 5*time.Second))
+
 // AutoMigrate runs GORM auto-migration for all models.
 func AutoMigrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(
@@ -55,7 +105,9 @@ func AutoMigrate(db *gorm.DB) error {
 	// Drop legacy composite unique index on files (user_id, key) if it exists.
 	// The unique constraint is now on (key) only — content-addressed storage
 	// guarantees key uniqueness per content hash. See oss3-phase3 review Task 4.
-	if err := db.Exec("DROP INDEX IF EXISTS idx_files_user_key").Error; err != nil {
+	// Using CONCURRENTLY to avoid blocking table operations during index drop.
+	// Note: DROP INDEX CONCURRENTLY cannot run inside a transaction block.
+	if err := db.Exec("DROP INDEX CONCURRENTLY IF EXISTS idx_files_user_key").Error; err != nil {
 		logger.Warn(context.Background(), "migrate.drop_legacy_index_failed",
 			zap.String("index", "idx_files_user_key"), zap.Error(err))
 	}

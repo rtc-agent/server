@@ -68,6 +68,18 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeString,
 		Description: "LLM provider (claude / openai)",
 		YamlDefault: "claude",
+		Validator: func(v any) error {
+			s, ok := v.(string)
+			if !ok {
+				return fmt.Errorf("provider must be a string, got %T", v)
+			}
+			// Supported providers: claude, openai
+			validProviders := map[string]bool{"claude": true, "openai": true}
+			if !validProviders[s] {
+				return fmt.Errorf("provider must be one of [claude, openai], got %q", s)
+			}
+			return nil
+		},
 	},
 	"llm.base_url": {
 		Key:         "llm.base_url",
@@ -95,6 +107,16 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeFloat,
 		Description: "Sampling temperature (0.0-2.0)",
 		YamlDefault: 1.0,
+		Validator: func(v any) error {
+			f, ok := v.(float64)
+			if !ok {
+				return fmt.Errorf("temperature must be a float64, got %T", v)
+			}
+			if f < 0.0 || f > 2.0 {
+				return fmt.Errorf("temperature must be in range [0.0, 2.0], got %f", f)
+			}
+			return nil
+		},
 	},
 	"llm.thinking_budget_tokens": {
 		Key:         "llm.thinking_budget_tokens",
@@ -115,6 +137,18 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeString,
 		Description: "OpenAI reasoning effort level (low / medium / high)",
 		YamlDefault: "medium",
+		Validator: func(v any) error {
+			s, ok := v.(string)
+			if !ok {
+				return fmt.Errorf("reasoning_effort must be a string, got %T", v)
+			}
+			// Supported effort levels: low, medium, high
+			validEfforts := map[string]bool{"low": true, "medium": true, "high": true}
+			if !validEfforts[s] {
+				return fmt.Errorf("reasoning_effort must be one of [low, medium, high], got %q", s)
+			}
+			return nil
+		},
 	},
 	"llm.retry_max_attempts": {
 		Key:         "llm.retry_max_attempts",
@@ -451,6 +485,18 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeString,
 		Description: "Log level (debug / info / warn / error)",
 		YamlDefault: "info",
+		Validator: func(v any) error {
+			s, ok := v.(string)
+			if !ok {
+				return fmt.Errorf("log.level must be a string, got %T", v)
+			}
+			// Supported log levels: debug, info, warn, error
+			validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+			if !validLevels[s] {
+				return fmt.Errorf("log.level must be one of [debug, info, warn, error], got %q", s)
+			}
+			return nil
+		},
 	},
 
 	// ── Asynq ────────────────────────────────────────────────────────

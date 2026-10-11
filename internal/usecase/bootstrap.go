@@ -17,12 +17,8 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
-// Expected policy counts for default roles (used for bootstrap validation).
-const (
-	expectedAdminPolicies    = 21 // admin role: admin_user(3) + role(3) + permission(3) + admin_user_role(3) + audit_log(1) + rtc_user(2) + rtc_session(1) + rtc_message(1) + server_config(3) + dashboard(1)
-	expectedOperatorPolicies = 12 // operator role: admin_user(2) + role(1) + admin_user_role(2) + rtc_user(2) + rtc_session(1) + rtc_message(1) + server_config(2) + dashboard(1)
-	expectedViewerPolicies   = 6  // viewer role: admin_user(1) + rtc_user(1) + rtc_session(1) + rtc_message(1) + server_config(1) + dashboard(1)
-)
+// Expected policy counts for default roles are derived dynamically from the policy lists
+// to prevent drift between constants and actual policy definitions.
 
 // createRoleIfMissing creates a role if it doesn't exist, handling concurrent creation safely.
 // Uses ON CONFLICT DO NOTHING for concurrent safety: if another instance creates the same
@@ -84,14 +80,14 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, adminRoleRepo repo.AdminRo
 			// Admin has all expected policies — bootstrap already complete
 			logger.Info(ctx, "bootstrap.already_complete_skipping",
 				zap.Int("admin_policies", len(existingPolicies)),
-				zap.Int("expected", expectedAdminPolicies))
+				zap.Int("expected", len(getAllExpectedAdminPolicies(adminRole.ID.String()))))
 			return nil
 		}
 
 		// Roles exist but policies are missing/incomplete — add missing policies
 		logger.Info(ctx, "bootstrap.roles_exist_policies_missing_adding",
 			zap.Int("existing_policies", len(existingPolicies)),
-			zap.Int("expected", expectedAdminPolicies))
+			zap.Int("expected", len(getAllExpectedAdminPolicies(adminRole.ID.String()))))
 		return addAllPolicies(ctx, enforcer, adminRole.ID.String(), operatorRole.ID.String(), viewerRole.ID.String())
 	}
 
@@ -148,7 +144,14 @@ func BootstrapAdmin(ctx context.Context, db *gorm.DB, adminRoleRepo repo.AdminRo
 	// Add policies AFTER the transaction commits (Casbin adapter uses its own DB session).
 	// If this fails, the next restart will detect the missing policies and add them.
 	if err := addAllPolicies(ctx, enforcer, createdAdminID, createdOperatorID, createdViewerID); err != nil {
-		return err
+		// Roles were created successfully but policies failed — this is an inconsistency window.
+		// Log at error level for alerting. The next bootstrap attempt will retry.
+		logger.Error(ctx, "bootstrap.policies_failed_after_roles_committed",
+			zap.Error(err),
+			zap.String("admin_id", createdAdminID),
+			zap.String("operator_id", createdOperatorID),
+			zap.String("viewer_id", createdViewerID))
+		return fmt.Errorf("add policies after role creation: %w", err)
 	}
 
 	// Auto-assign admin role to the first user if no one has admin role yet.
@@ -340,7 +343,9 @@ func autoAssignAdminRole(
 
 	// No admin user has admin role — find the first admin user
 	var firstUser model.AdminUser
-	if err := db.WithContext(ctx).First(&firstUser).Error; err != nil {
+	// Use explicit ordering to ensure deterministic results across multiple executions.
+	// Order by created_at ASC to get the earliest created admin user.
+	if err := db.WithContext(ctx).Order("created_at ASC").First(&firstUser).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			// No admin users exist yet — nothing to do
 			logger.Info(ctx, "bootstrap.no_admin_users_exist_skipping_admin_assignment")

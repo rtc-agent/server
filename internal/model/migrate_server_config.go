@@ -64,9 +64,9 @@ func MigrateServerConfigTable(db *gorm.DB) error {
 		return fmt.Errorf("check id column: %w", err)
 	}
 
+	// Check if id is already a primary key (used in Phase 3 for idempotency)
+	var isPK bool
 	if hasIDColumn {
-		// Check if id is already a primary key
-		var isPK bool
 		if err := db.Raw(`
 			SELECT EXISTS (
 				SELECT 1 FROM information_schema.table_constraints tc
@@ -139,8 +139,66 @@ func MigrateServerConfigTable(db *gorm.DB) error {
 	}
 
 	// Phase 3: DDL operations (requires ACCESS EXCLUSIVE lock but executes quickly)
+	// WARNING: This phase acquires ACCESS EXCLUSIVE locks which block all read/write operations.
+	// For production environments, ensure this runs during low-traffic maintenance windows.
+	if totalBackfilled > 0 {
+		logger.Info(context.Background(), "migrate_server_config.phase3_warning",
+			zap.String("message", "Phase 3 will acquire ACCESS EXCLUSIVE locks. Monitor pg_stat_activity for lock contention."),
+			zap.Int64("rows_migrated", totalBackfilled))
+	}
 	logger.Info(context.Background(), "migrate_server_config.phase3_ddl_start")
 	return db.Transaction(func(tx *gorm.DB) error {
+		// Set lock_timeout to avoid indefinite blocking if locks cannot be acquired.
+		// Increased from 5s to 30s to handle larger tables under heavy load.
+		// This prevents the migration from hanging indefinitely while providing enough
+		// time for lock acquisition on production systems.
+		if err := tx.Exec("SET lock_timeout = '30s'").Error; err != nil {
+			return fmt.Errorf("set lock_timeout: %w", err)
+		}
+
+		// Idempotency check: If 'id' column exists but is not a primary key,
+		// it means a previous migration attempt may have failed mid-way.
+		// We need to drop the old column and recreate it to ensure a clean state.
+		// This handles the edge case where:
+		// 1. Column was added (Phase 1 complete)
+		// 2. Backfill was done (Phase 2 complete)
+		// 3. But DDL operations (Phase 3) failed partway through
+		if hasIDColumn && !isPK {
+			logger.Warn(context.Background(), "migrate_server_config.phase3_idempotency_fix",
+				zap.String("reason", "id column exists but is not primary key, dropping and recreating"))
+			if err := tx.Exec(`
+				ALTER TABLE server_configs DROP COLUMN IF EXISTS id
+			`).Error; err != nil {
+				return fmt.Errorf("drop stale id column: %w", err)
+			}
+			// Recreate the column
+			if err := tx.Exec(`
+				ALTER TABLE server_configs
+				ADD COLUMN id UUID
+			`).Error; err != nil {
+				return fmt.Errorf("recreate id column: %w", err)
+			}
+			// Re-backfill the column
+			logger.Info(context.Background(), "migrate_server_config.phase3_rebackfill_start")
+			const rebackfillBatchSize = 1000
+			for {
+				result := tx.Exec(`
+					UPDATE server_configs
+					SET id = gen_random_uuid()
+					WHERE id IS NULL
+					AND ctid IN (SELECT ctid FROM server_configs WHERE id IS NULL LIMIT ?)
+				`, rebackfillBatchSize)
+				if result.Error != nil {
+					return fmt.Errorf("rebackfill id column: %w", result.Error)
+				}
+				if result.RowsAffected == 0 {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			logger.Info(context.Background(), "migrate_server_config.phase3_rebackfill_completed")
+		}
+
 		// Step 3a: Drop the old primary key constraint (if exists)
 		// Query the constraint name dynamically. We already verified outside the transaction
 		// that 'id' is not a PK, so any existing PK here is the old composite key.
