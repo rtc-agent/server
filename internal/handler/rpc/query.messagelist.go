@@ -5,18 +5,29 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
 // MessageList retrieves the message list for the current user's session (ordered by global_offset ascending, cursor pagination).
 func (h *Handler) MessageList(ctx context.Context, req *protocol.MessageListRequest) (*protocol.MessageListResponse, error) {
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.list_messages",
+		trace.WithAttributes(
+			attribute.String("session.id", req.SessionId),
+		),
+	)
+	defer span.End()
+
 	userID, err := h.requireUserID(ctx)
 	if err != nil {
 		return nil, err
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 
 	limit, apiErr := clampLimit(req.Limit, h.deps.API.QueryDefaultLimit, h.deps.API.QueryMaxLimit)
 	if apiErr != nil {
@@ -53,7 +64,7 @@ func (h *Handler) MessageList(ctx context.Context, req *protocol.MessageListRequ
 
 	items := make([]protocol.Message, 0, len(messages))
 	for _, m := range messages {
-		items = append(items, model.ToProtocolMessage(m))
+		items = append(items, converter.ToProtocolMessage(m))
 	}
 
 	var nextCursor *string

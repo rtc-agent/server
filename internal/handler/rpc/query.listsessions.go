@@ -3,19 +3,25 @@ package rpchandler
 import (
 	"context"
 
-	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
 // ListSessions retrieves the current user's session list (ordered by creation time descending, cursor pagination).
 // RPC-specific query, not shared with LLM; business logic is implemented directly here.
 func (h *Handler) ListSessions(ctx context.Context, req *protocol.ListSessionsRequest) (*protocol.ListSessionsResponse, error) {
+	ctx, span := otel.GetTracerProvider().Tracer("rpc").Start(ctx, "rpc.list_sessions")
+	defer span.End()
+
 	userID, err := h.requireUserID(ctx)
 	if err != nil {
 		return nil, err
 	}
+	span.SetAttributes(attribute.String("user.id", userID.String()))
 
 	// Use configured default limit from API config instead of hardcoded value.
 	limit, apiErr := clampLimit(req.Limit, h.deps.API.QueryDefaultLimit, h.deps.API.QueryMaxLimit)
@@ -30,7 +36,7 @@ func (h *Handler) ListSessions(ctx context.Context, req *protocol.ListSessionsRe
 
 	items := make([]protocol.Session, 0, len(sessions))
 	for _, s := range sessions {
-		items = append(items, model.ToProtocolSession(s))
+		items = append(items, converter.ToProtocolSession(s))
 	}
 
 	// When returned count equals limit, assume there may be a next page; use the last ID as cursor.
