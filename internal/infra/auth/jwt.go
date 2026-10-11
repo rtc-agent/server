@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,6 +10,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // Claims is the JWT payload.
@@ -37,13 +41,14 @@ type JWTSigner struct {
 // NewJWTSigner creates a JWT signer.
 //
 // secret is the HMAC key (recommended >= 32 bytes random string);
-// accessTTL is the default validity period for access tokens.
+// accessTTL is the default validity period for access tokens;
+// env is the runtime environment ("production" or "development").
 //
 // SECURITY REQUIREMENTS:
 //   - secret MUST be at least 32 bytes of cryptographically random data
 //   - In production, use strong asymmetric algorithms (RS256/ES256) instead
 //   - Rotate secrets regularly and store securely (e.g., AWS Secrets Manager, HashiCorp Vault)
-func NewJWTSigner(secret string, accessTTL time.Duration) (*JWTSigner, error) {
+func NewJWTSigner(secret string, accessTTL time.Duration, env string) (*JWTSigner, error) {
 	if secret == "" {
 		return nil, errors.New("auth: jwt secret is required")
 	}
@@ -54,6 +59,17 @@ func NewJWTSigner(secret string, accessTTL time.Duration) (*JWTSigner, error) {
 	if accessTTL <= 0 {
 		return nil, errors.New("auth: access token TTL must be positive")
 	}
+
+	// Security warning for production environments using symmetric algorithm
+	if env == "production" {
+		logger.Warn(context.Background(),
+			"jwt.using_symmetric_algorithm",
+			zap.String("algorithm", "HS256"),
+			zap.String("recommendation", "consider using RS256 or ES256 in production"),
+			zap.String("risk", "symmetric keys must be kept secret on both signing and verifying sides"),
+		)
+	}
+
 	return &JWTSigner{
 		secret:    []byte(secret),
 		accessTTL: accessTTL,

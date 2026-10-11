@@ -57,6 +57,9 @@ type JWKSClientConfig struct {
 	LockTTL time.Duration
 	// MaxResponseSize is the maximum JWKS response size in bytes. Defaults to 1MB.
 	MaxResponseSize int64
+	// Environment is the runtime environment (production/development).
+	// Used to emit security warnings for insecure configurations.
+	Environment string
 }
 
 // issuerCircuitBreaker tracks per-issuer circuit breaker state for JWKS refresh.
@@ -81,6 +84,7 @@ type JWKSClient struct {
 	defaultCacheTTL time.Duration
 	lockTTL         time.Duration
 	maxResponseSize int64
+	environment     string // runtime environment (production/development)
 
 	// Per-issuer circuit breaker state (exponential backoff for refresh failures)
 	cbMu     sync.Mutex
@@ -114,6 +118,7 @@ func NewJWKSClient(cfg JWKSClientConfig) (*JWKSClient, error) {
 		defaultCacheTTL: cacheTTL,
 		lockTTL:         lockTTL,
 		maxResponseSize: maxSize,
+		environment:     cfg.Environment,
 		cbStates:        make(map[string]*issuerCircuitBreaker),
 	}, nil
 }
@@ -144,6 +149,16 @@ func (c *JWKSClient) FetchJWKS(ctx context.Context, jwksURI string) (jwk.Set, er
 		hasNoDots := !strings.Contains(host, ".") // Docker internal services
 		if !isLocal && !hasNoDots {
 			return nil, fmt.Errorf("jwks URI must use HTTPS for external hosts: %s", jwksURI)
+		}
+		// SECURITY: In production, warn when HTTP is used for non-localhost services.
+		// This helps operators identify potential misconfigurations that could lead to MITM attacks.
+		// Only localhost (127.0.0.1/localhost) is exempt from this warning.
+		isLoopback := host == "localhost" || host == "127.0.0.1"
+		if c.environment == "production" && !isLoopback {
+			logger.Warn(ctx, "jwks.insecure_http_uri",
+				zap.String("uri", jwksURI),
+				zap.String("environment", c.environment),
+				zap.String("recommendation", "use HTTPS for all JWKS endpoints in production"))
 		}
 	}
 

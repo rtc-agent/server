@@ -149,6 +149,7 @@ func TestTokenExchangeUsecase_ExchangeToken_UnsupportedTokenType(t *testing.T) {
 		&mockTokenSigner{accessTTL: time.Hour},
 		nil, // JWKS not needed for this test.
 		config.TokenExchangeConfig{},
+		"development",
 	)
 
 	_, err := uc.ExchangeToken(context.Background(), "token", "unsupported_type", "device-1", nil, nil)
@@ -174,6 +175,7 @@ func TestTokenExchangeUsecase_ExchangeToken_InvalidJWT(t *testing.T) {
 				},
 			},
 		},
+		"development",
 	)
 
 	_, err := uc.ExchangeToken(context.Background(), "not-a-jwt", usecase.TokenTypeJWT, "device-1", nil, nil)
@@ -208,6 +210,7 @@ func TestTokenExchangeUsecase_ExchangeToken_UntrustedIssuer(t *testing.T) {
 				},
 			},
 		},
+		"development",
 	)
 
 	_, err := uc.ExchangeToken(context.Background(), tokenStr, usecase.TokenTypeJWT, "device-1", nil, nil)
@@ -238,6 +241,7 @@ func TestTokenExchangeUsecase_ExtractUserInfo(t *testing.T) {
 		&mockTokenSigner{accessTTL: time.Hour},
 		nil,
 		config.TokenExchangeConfig{},
+		"development",
 	)
 
 	// Test via ExchangeToken that missing sub results in error.

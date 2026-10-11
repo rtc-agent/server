@@ -15,7 +15,6 @@ import (
 
 	"github.com/rtc-agent/server/internal/infra/httputil"
 	"github.com/rtc-agent/server/internal/infra/middleware"
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 )
@@ -144,10 +143,10 @@ func (h *TokenExchangeHandler) parseRequest(w http.ResponseWriter, r *http.Reque
 	req.SubjectTokenType = r.FormValue("subject_token_type")
 	req.DeviceID = r.FormValue("device_id")
 	if deviceName := r.FormValue("device_name"); deviceName != "" {
-		req.DeviceName = model.StrPtr(deviceName)
+		req.DeviceName = httputil.StrPtr(deviceName)
 	}
 	if userAgent := r.FormValue("user_agent"); userAgent != "" {
-		req.UserAgent = model.StrPtr(userAgent)
+		req.UserAgent = httputil.StrPtr(userAgent)
 	}
 
 	return &req, nil
