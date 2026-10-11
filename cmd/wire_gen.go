@@ -243,7 +243,11 @@ func provideUpdatePublisher(
 }
 
 func provideJWTSigner(cfg *config.Config) (*auth.JWTSigner, error) {
-	return auth.NewJWTSigner(cfg.Auth.JWTSecret, time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second)
+	return auth.NewJWTSigner(
+		cfg.Auth.JWTSecret,
+		time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second,
+		cfg.Server.Env,
+	)
 }
 
 func provideCentrifugeNode(cfg *config.Config) (*centrifuge.Node, error) {
@@ -755,13 +759,14 @@ func provideOAuth2Handler(
 		jwtSigner,
 		cfg.Auth.RefreshTokenTTL,
 	)
-	handler := httphandler.NewOAuth2Handler(authUC, jwtSigner, stateStore, providerClient, cfg.Auth)
+	handler := httphandler.NewOAuth2Handler(authUC, jwtSigner, stateStore, providerClient, cfg.Auth, cfg.Server.Env)
 
 	if len(cfg.TokenExchange.ExternalIssuers) > 0 {
 		jwksClient, err := auth.NewJWKSClient(auth.JWKSClientConfig{
 			RedisClient:     svcCtx.Redis,
 			DefaultCacheTTL: time.Hour,
 			LockTTL:         10 * time.Second,
+			Environment:     cfg.Server.Env,
 		})
 		if err != nil {
 			logger.Fatal(context.Background(), "init JWKS client", zap.Error(err))
@@ -772,6 +777,7 @@ func provideOAuth2Handler(
 			jwtSigner,
 			jwksClient,
 			cfg.TokenExchange,
+			cfg.Server.Env,
 		)
 		teHandler := httphandler.NewTokenExchangeHandler(teUC)
 		handler.SetTokenExchangeHandler(teHandler)

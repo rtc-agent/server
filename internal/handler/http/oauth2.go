@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,7 +22,6 @@ import (
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/infra/httputil"
 	"github.com/rtc-agent/server/internal/infra/middleware"
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/oauth"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -56,16 +56,18 @@ type OAuth2Handler struct {
 	authConfig     config.AuthConfig
 	ipRateLimiter  *middleware.IPRateLimiter // Optional: for protecting public endpoints
 	tokenExchange  *TokenExchangeHandler     // RFC 8693 Token Exchange handler (nil if not configured)
+	serverEnv      string                    // Server environment (production/development)
 }
 
 // NewOAuth2Handler creates a new OAuth2 endpoint handler.
-func NewOAuth2Handler(authUsecase *usecase.AuthUsecase, signer TokenSigner, stateStore StateStore, providerClient ProviderClient, authCfg config.AuthConfig) *OAuth2Handler {
+func NewOAuth2Handler(authUsecase *usecase.AuthUsecase, signer TokenSigner, stateStore StateStore, providerClient ProviderClient, authCfg config.AuthConfig, serverEnv string) *OAuth2Handler {
 	return &OAuth2Handler{
 		authUsecase:    authUsecase,
 		signer:         signer,
 		stateStore:     stateStore,
 		providerClient: providerClient,
 		authConfig:     authCfg,
+		serverEnv:      serverEnv,
 	}
 }
 
@@ -144,6 +146,15 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	codeChallengeMethod := r.URL.Query().Get("code_challenge_method")
 	if codeChallengeMethod == "" {
 		codeChallengeMethod = "S256" // Default to S256
+	}
+
+	// Security: Warn when PKCE is not used in production environment (RFC 8252 Section 8.4)
+	// PKCE prevents authorization code interception attacks. All OAuth2 clients should use it.
+	if codeChallenge == "" && h.serverEnv == "production" {
+		logger.Warn(r.Context(), "oauth2.pkce_not_enabled",
+			zap.String("provider", provider),
+			zap.String("redirect_uri", redirectURI),
+			zap.String("warning", "PKCE is not enabled for this OAuth2 flow. RFC 8252 recommends PKCE for all clients to prevent authorization code interception attacks."))
 	}
 
 	// Validate redirect_uri to prevent Open Redirect attacks
@@ -330,8 +341,8 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 		if err := h.authUsecase.UpsertDevice(ctx, &usecase.UpsertDeviceInput{
 			UserID:    userResult.UserID,
 			DeviceID:  req.DeviceId,
-			Name:      model.DerefStr(req.DeviceName),
-			UserAgent: model.DerefStr(req.UserAgent),
+			Name:      httputil.DerefStr(req.DeviceName),
+			UserAgent: httputil.DerefStr(req.UserAgent),
 		}); err != nil {
 			logger.Warn(ctx, "failed to update device info", zap.Error(err))
 		}
@@ -375,14 +386,14 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// This operation is wrapped in a transaction to prevent concurrent refresh race conditions.
 	resp, err := h.authUsecase.RefreshTokenPair(ctx, req.RefreshToken)
 	if err != nil {
-		switch err {
-		case usecase.ErrInvalidRefreshToken:
+		switch {
+		case errors.Is(err, usecase.ErrInvalidRefreshToken):
 			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token is invalid")
-		case usecase.ErrRefreshTokenRevoked:
+		case errors.Is(err, usecase.ErrRefreshTokenRevoked):
 			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has been revoked")
-		case usecase.ErrRefreshTokenExpired:
+		case errors.Is(err, usecase.ErrRefreshTokenExpired):
 			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has expired")
-		case usecase.ErrAccountBanned:
+		case errors.Is(err, usecase.ErrAccountBanned):
 			httputil.WriteError(w, http.StatusForbidden, "access_denied", "account has been banned")
 		default:
 			logger.Error(ctx, "failed to refresh token pair", zap.Error(err))
@@ -459,8 +470,8 @@ func parseTokenExchangeRequest(w http.ResponseWriter, r *http.Request) (*protoco
 		req.RedirectUri = r.FormValue("redirect_uri")
 		req.State = r.FormValue("state")
 		req.DeviceId = r.FormValue("device_id")
-		req.DeviceName = model.StrPtr(r.FormValue("device_name"))
-		req.UserAgent = model.StrPtr(r.FormValue("user_agent"))
+		req.DeviceName = httputil.StrPtr(r.FormValue("device_name"))
+		req.UserAgent = httputil.StrPtr(r.FormValue("user_agent"))
 	}); err != nil {
 		return nil, err
 	}

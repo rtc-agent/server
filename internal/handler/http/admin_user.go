@@ -8,8 +8,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // AdminUserHandler handles admin user-related HTTP requests.
@@ -79,6 +81,10 @@ func (h *AdminUserHandler) ListUsers(c *gin.Context) {
 
 	users, total, err := h.adminUserUsecase.ListUsersPaginated(ctx, page, pageSize)
 	if err != nil {
+		logger.Error(ctx, "admin_user.list_failed",
+			zap.Int("page", page),
+			zap.Int("page_size", pageSize),
+			zap.Error(err))
 		Error(c, "server_error", "Failed to get admin users")
 		return
 	}
@@ -92,6 +98,9 @@ func (h *AdminUserHandler) ListUsers(c *gin.Context) {
 	// Batch-fetch roles for all users to avoid N+1 queries
 	rolesMap, err := h.adminUserUsecase.GetUsersRolesBatch(ctx, userIDs)
 	if err != nil {
+		logger.Error(ctx, "admin_user.batch_get_roles_failed",
+			zap.Int("user_count", len(userIDs)),
+			zap.Error(err))
 		Error(c, "server_error", "Failed to get user roles")
 		return
 	}
@@ -166,6 +175,9 @@ func (h *AdminUserHandler) CreateUser(c *gin.Context) {
 			Error(c, "email_exists", "Email already exists")
 			return
 		}
+		logger.Error(ctx, "admin_user.create_failed",
+			zap.String("email", req.Email),
+			zap.Error(err))
 		Error(c, "server_error", "Failed to create admin user")
 		return
 	}
@@ -208,6 +220,9 @@ func (h *AdminUserHandler) UpdateUser(c *gin.Context) {
 			Error(c, "admin_user_not_found", "Admin user not found")
 			return
 		}
+		logger.Error(ctx, "admin_user.update_failed",
+			zap.String("user_id", userID.String()),
+			zap.Error(err))
 		Error(c, "server_error", "Failed to update admin user")
 		return
 	}
@@ -257,9 +272,19 @@ func (h *AdminUserHandler) UpdateCurrentUser(c *gin.Context) {
 			Error(c, "admin_user_not_found", "Admin user not found")
 			return
 		}
+		logger.Error(ctx, "admin_user.update_profile_failed",
+			zap.String("user_id", userID.String()),
+			zap.Error(err))
 		Error(c, "server_error", "Failed to update profile")
 		return
 	}
+
+	// Audit log: self-service profile update (security: track all self-modifications)
+	logger.Info(ctx, "admin_user.self_update",
+		zap.String("user_id", userID.String()),
+		zap.String("email", user.Email),
+		zap.Bool("name_changed", req.Name != nil),
+		zap.Bool("password_changed", req.Password != nil))
 
 	Success(c, AdminUserResponse{
 		ID:        user.ID.String(),
