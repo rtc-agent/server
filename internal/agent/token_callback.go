@@ -109,25 +109,13 @@ func (h *helpers) newTokenUsageCallbackHandler() callbacks.Handler {
 					h.metrics.IncBackgroundGoroutine("stream_drain")
 				}
 
-				go func() {
+				logger.SafeGo("token_callback.stream_drain", func() {
 					defer cancel()
 					if h.metrics != nil {
 						defer h.metrics.DecBackgroundGoroutine("stream_drain")
 					}
-					// Defensive recover: drainStreamAndReport has its own recover
-					// internally, but adding one here protects against future refactors
-					// that remove the inner recover. A panic in a goroutine crashes the
-					// entire process, so defense-in-depth is warranted.
-					defer func() {
-						if r := recover(); r != nil {
-							logger.Error(bgCtx, "token_callback.goroutine_panic",
-								zap.Any("recover", r),
-								zap.String("stack", string(debug.Stack())),
-							)
-						}
-					}()
 					h.drainStreamAndReport(bgCtx, output, startTime)
-				}()
+				})
 				return ctx
 			},
 		}).

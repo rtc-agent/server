@@ -16,7 +16,7 @@ func (s StringArray) Value() (driver.Value, error) {
 	if s == nil {
 		return "[]", nil
 	}
-	b, err := json.Marshal([]string(s))
+	b, err := json.Marshal(s)
 	if err != nil {
 		return nil, fmt.Errorf("marshal StringArray: %w", err)
 	}

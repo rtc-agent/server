@@ -243,16 +243,12 @@ func TestCancelLoopAsynqTask_Success_UsesLoopID(t *testing.T) {
 	logger := &testEntityLogger{}
 
 	deps := &usecase.Dependencies{TaskScheduler: scheduler}
-	updateFields := map[string]any{"status": model.LoopStatusCancelled}
 
-	cancelLoopAsynqTask(context.Background(), deps, logger, loop, updateFields)
+	cancelLoopAsynqTask(context.Background(), deps, logger, loop)
 
 	// Should use loop.ID as task ID (not AsynqTaskID field)
 	require.Len(t, scheduler.cancelled, 1)
 	assert.Equal(t, loopID.String(), scheduler.cancelled[0])
-	// No need to update asynq_task_id field since we use loop.ID as task ID
-	_, exists := updateFields["asynq_task_id"]
-	assert.False(t, exists, "asynq_task_id should not be set")
 }
 
 func TestCancelLoopAsynqTask_NilScheduler_NoOp(t *testing.T) {
@@ -264,13 +260,9 @@ func TestCancelLoopAsynqTask_NilScheduler_NoOp(t *testing.T) {
 	logger := &testEntityLogger{}
 
 	deps := &usecase.Dependencies{TaskScheduler: nil}
-	updateFields := map[string]any{"status": model.LoopStatusCancelled}
 
-	cancelLoopAsynqTask(context.Background(), deps, logger, loop, updateFields)
+	cancelLoopAsynqTask(context.Background(), deps, logger, loop)
 
-	// Should not add asynq_task_id to fields when scheduler is nil
-	_, exists := updateFields["asynq_task_id"]
-	assert.False(t, exists, "asynq_task_id should not be set when scheduler is nil")
 	assert.Empty(t, logger.entries, "no log entries expected when scheduler is nil")
 }
 
@@ -285,18 +277,14 @@ func TestCancelLoopAsynqTask_CancelError_LoggedButNotReturned(t *testing.T) {
 	logger := &testEntityLogger{}
 
 	deps := &usecase.Dependencies{TaskScheduler: scheduler}
-	updateFields := map[string]any{"status": model.LoopStatusCancelled}
 
 	// Should not panic, should not return error
-	cancelLoopAsynqTask(context.Background(), deps, logger, loop, updateFields)
+	cancelLoopAsynqTask(context.Background(), deps, logger, loop)
 
 	// Error should be logged
 	require.Len(t, logger.entries, 1, "error should be logged")
 	assert.Contains(t, logger.entries[0], "error")
 	assert.Contains(t, logger.entries[0]["error"].(string), "task not found")
-	// No asynq_task_id field update
-	_, exists := updateFields["asynq_task_id"]
-	assert.False(t, exists, "asynq_task_id should not be set")
 }
 
 func TestCancelLoopAsynqTask_NilScheduler_NilLogger_NoPanic(t *testing.T) {
@@ -307,11 +295,10 @@ func TestCancelLoopAsynqTask_NilScheduler_NilLogger_NoPanic(t *testing.T) {
 	}
 
 	deps := &usecase.Dependencies{TaskScheduler: nil}
-	updateFields := map[string]any{"status": model.LoopStatusCancelled}
 
 	// Should not panic even with nil logger
 	assert.NotPanics(t, func() {
-		cancelLoopAsynqTask(context.Background(), deps, nil, loop, updateFields)
+		cancelLoopAsynqTask(context.Background(), deps, nil, loop)
 	})
 }
 
@@ -331,13 +318,10 @@ func TestCancelLoopAsynqTask_PreservesExistingFields(t *testing.T) {
 		"last_reason":     "done",
 	}
 
-	cancelLoopAsynqTask(context.Background(), deps, logger, loop, updateFields)
+	cancelLoopAsynqTask(context.Background(), deps, logger, loop)
 
-	// Existing fields should be preserved
+	// Existing fields should be preserved (updateFields is no longer passed)
 	assert.Equal(t, model.LoopStatusCompleted, updateFields["status"])
 	assert.Equal(t, 10, updateFields["completed_turns"])
 	assert.Equal(t, "done", updateFields["last_reason"])
-	// No asynq_task_id field update since we use loop.ID as task ID
-	_, exists := updateFields["asynq_task_id"]
-	assert.False(t, exists, "asynq_task_id should not be set")
 }

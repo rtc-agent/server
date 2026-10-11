@@ -321,7 +321,17 @@ func (r *SessionManagerRegistry) Replace(
 		}
 		credential = claim.Credential
 
-		// Re-acquire mutex for manager registration (double-check for TOCTOU).
+		// Double-check locking pattern (TOCTOU prevention):
+		// After releasing the mutex for the Redis claim operation, another goroutine
+		// may have created a manager for the same session. Re-acquire the mutex and
+		// check again before creating a duplicate manager. This prevents race conditions
+		// where multiple workers attempt to create managers for the same session simultaneously.
+		//
+		// Why this is necessary:
+		//   1. Initial check (line ~250) found no manager
+		//   2. Mutex released for Redis claim (slow network operation)
+		//   3. Another worker could create manager during this window
+		//   4. Re-check prevents duplicate manager creation
 		r.mu.Lock()
 		if existing := r.managers[sessionID]; existing != nil {
 			r.mu.Unlock()

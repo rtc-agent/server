@@ -72,7 +72,6 @@ func cancelLoopAsynqTask(
 	deps *usecase.Dependencies,
 	logger turnagent.Logger,
 	loop *model.Loop,
-	updateFields map[string]any,
 ) {
 	if deps.TaskScheduler == nil {
 		return

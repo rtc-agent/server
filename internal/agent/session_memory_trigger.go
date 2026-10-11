@@ -2,12 +2,11 @@ package agent
 
 import (
 	"context"
-	"fmt"
-	"runtime/debug"
 	"time"
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/pkg/logger"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
@@ -65,7 +64,7 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 	// Run extraction in background goroutine.
 	// Use context.WithoutCancel to detach from the parent context, so extraction
 	// continues even if the turn completes and the parent context is canceled.
-	go func() {
+	logger.SafeGo("session_memory.extraction", func() {
 		// Track active goroutine for monitoring (P1 concurrency issue #6)
 		if h.metrics != nil {
 			h.metrics.IncBackgroundGoroutine("session_memory_extraction")
@@ -73,18 +72,6 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 		defer func() {
 			if h.metrics != nil {
 				h.metrics.DecBackgroundGoroutine("session_memory_extraction")
-			}
-		}()
-
-		// Panic recovery: prevent a single panic from crashing the entire server.
-		defer func() {
-			if r := recover(); r != nil {
-				bgCtx := context.Background()
-				h.logger.Error(bgCtx, "[triggerSessionMemoryExtraction] panic recovered", map[string]any{
-					"session_id": sessionID.String(),
-					"panic":      fmt.Sprintf("%v", r),
-					"stack":      string(debug.Stack()),
-				})
 			}
 		}()
 
@@ -119,7 +106,7 @@ func (h *helpers) triggerSessionMemoryExtraction(ctx context.Context, sessionID 
 				"last_message_count": newState.LastMessageCount,
 			})
 		}
-	}()
+	})
 }
 
 // loadExtractionState loads the persisted ExtractionState from the session record.

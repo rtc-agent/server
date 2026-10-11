@@ -70,7 +70,7 @@ func (t *pauseLoopTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	}
 
 	// Cancel the scheduled task if TaskScheduler is available.
-	cancelLoopAsynqTask(ctx, t.helpers.deps, t.helpers.logger, loop, updateFields)
+	cancelLoopAsynqTask(ctx, t.helpers.deps, t.helpers.logger, loop)
 
 	if err := t.helpers.deps.LoopRepo.Update(ctx, loop.ID, updateFields); err != nil {
 		span.RecordError(err)

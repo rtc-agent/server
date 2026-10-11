@@ -14,6 +14,25 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// checkTokenLimit checks if the session has exceeded its token quota.
+// This is a basic check that can be extended with more sophisticated
+// rate limiting logic in the future.
+//
+// TODO: Integrate with application-level token quota system when available.
+// Currently returns nil (no-op) to allow all requests through.
+func (a *Agent) checkTokenLimit(ctx context.Context, sessionID string) error {
+	// Future implementation:
+	// 1. Check session-level token usage against configured limits
+	// 2. Check user-level token quota
+	// 3. Return error if limits exceeded
+	// 4. Consider adding rate limiting (requests per minute/hour)
+
+	// For now, this is a no-op check. The eino framework may have internal
+	// limits, but explicit checking here allows early rejection before
+	// consuming resources.
+	return nil
+}
+
 // handleNonOwnerCompletion handles the completion path for non-owner Process
 // calls (isNew=false). Non-owners do not manage the session's turn lifecycle;
 // they only wait for their work item to complete or be abandoned.

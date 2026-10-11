@@ -118,8 +118,10 @@ func (b *TopicBroker) RegisterBrokerEventHandler(handler centrifuge.BrokerEventH
 // StreamPosition is read from Redis meta key.
 func (b *TopicBroker) History(ch string, opts centrifuge.HistoryOptions) (pubs []*centrifuge.Publication, sp centrifuge.StreamPosition, err error) {
 	// Interface methods cannot accept context; use an internal context with timeout to prevent Redis/DB queries from blocking indefinitely.
-	// Recovery may involve many DB queries, so allow generous timeout.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// 10s timeout: balances recovery needs (potentially many DB queries) against the risk of
+	// blocking Centrifuge's internal goroutines for too long. 30s was deemed too generous;
+	// most History queries complete in <1s under normal load.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	_, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.history",

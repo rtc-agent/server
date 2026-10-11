@@ -2,54 +2,23 @@ package agent
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
-// resolveEffectiveValue fetches the effective config value for a key.
-// Resolution order: user override > system default > yaml baseline.
-// userID=nil skips user-level overrides (background calls).
-//
-// Returns an error if the key is not registered in the config registry,
-// preventing silent failures when accessing undefined configuration.
-func resolveEffectiveValue(ctx context.Context, configRepo usecase.ServerConfigRepo, key string, userID *uuid.UUID) (any, error) {
-	if userID != nil {
-		cfg, err := configRepo.Get(ctx, key, userID)
-		if err == nil {
-			return config.UnmarshalJSONB(cfg.Value), nil
-		}
-		if !errors.Is(err, dbutil.ErrNotFound) {
-			return nil, fmt.Errorf("get user config %q: %w", key, err)
-		}
-	}
-	cfg, err := configRepo.Get(ctx, key, nil)
-	if err == nil {
-		return config.UnmarshalJSONB(cfg.Value), nil
-	}
-	if !errors.Is(err, dbutil.ErrNotFound) {
-		return nil, fmt.Errorf("get system config %q: %w", key, err)
-	}
-	if entry := config.GetRegistryEntry(key); entry != nil {
-		return entry.YamlDefault, nil
-	}
-	// Key not found in DB and not registered in config registry.
-	// Return error to prevent silent failures when accessing undefined config.
-	return nil, fmt.Errorf("config key %q is not registered and has no value", key)
-}
-
-// resolveOverrides reads dynamic config values from the DB and builds ChatModelOverrides.
+// resolveOverrides reads dynamic config values via ConfigProvider and builds ChatModelOverrides.
 // Resolution order per key: user override > system default > yaml baseline.
 // userID=nil skips user-level overrides (background calls).
-func resolveOverrides(ctx context.Context, configRepo usecase.ServerConfigRepo, userID *uuid.UUID) (usecase.ChatModelOverrides, error) {
+//
+// Delegates to ConfigProvider (CachedConfigProvider -> DBConfigProvider) which handles
+// caching, singleflight dedup, and the three-tier resolution consistently.
+func resolveOverrides(ctx context.Context, provider config.ConfigProvider, userID *uuid.UUID) (usecase.ChatModelOverrides, error) {
 	overrides := usecase.ChatModelOverrides{}
 
 	// Table-driven resolution: each entry maps a config key to a setter.
@@ -102,7 +71,8 @@ func resolveOverrides(ctx context.Context, configRepo usecase.ServerConfigRepo, 
 	}
 
 	for _, r := range resolvers {
-		v, err := resolveEffectiveValue(ctx, configRepo, r.key, userID)
+		// Use GetEffectiveJSON for type-agnostic resolution via ConfigProvider.
+		v, err := provider.GetEffectiveJSON(ctx, r.key, userID)
 		if err != nil {
 			return overrides, err
 		}
@@ -144,11 +114,11 @@ func toFloat64(v any) (float64, bool) {
 // Exported for use by RPC handlers and other non-helper code paths.
 // Falls back to deps.ChatModel when dynamic config is unavailable or resolution fails.
 func ResolveChatModel(ctx context.Context, deps *usecase.Dependencies) einomodel.ToolCallingChatModel {
-	if deps.ChatModelFactory == nil || deps.ServerConfigRepo == nil {
+	if deps.ChatModelFactory == nil || deps.ConfigProvider == nil {
 		return deps.ChatModel
 	}
 
-	overrides, err := resolveOverrides(ctx, deps.ServerConfigRepo, nil)
+	overrides, err := resolveOverrides(ctx, deps.ConfigProvider, nil)
 	if err != nil {
 		// Log fallback reason for observability (P1-3 fix).
 		logger.Warn(ctx, "resolveChatModel.fallback",

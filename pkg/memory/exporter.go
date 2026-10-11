@@ -222,7 +222,7 @@ func filterByTags(memories []*Memory, tags []string) []*Memory {
 	for _, t := range tags {
 		tagSet[t] = true
 	}
-	var result []*Memory
+	result := make([]*Memory, 0, len(memories))
 	for _, m := range memories {
 		for _, mt := range m.Tags {
 			if tagSet[mt] {

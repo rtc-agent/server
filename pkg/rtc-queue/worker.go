@@ -188,6 +188,14 @@ func (w *Worker) Run(ctx context.Context) error {
 				defer w.wg.Done()
 				defer func() {
 					if r := recover(); r != nil {
+						// Release session lock on panic to prevent deadlock.
+						// Use ForceReleaseSession since we don't have the credential here.
+						// This is safe because a panic indicates an unrecoverable error
+						// and the worker is abandoning this session anyway.
+						if err := w.q.ForceReleaseSession(ctx, sessionID); err != nil {
+							w.logError(ctx, "failed to release session after panic",
+								"session", sessionID, "error", err.Error())
+						}
 						w.logError(ctx, "goroutine panic",
 							"session", sessionID, "recover", r, "stack", string(debug.Stack()))
 					}
@@ -434,6 +442,29 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 	credential := claim.Credential
 	workCount := 0
 
+	// releaseLock releases the session lock using a fresh context with timeout.
+	// Uses context.Background() because the session ctx may be cancelled (shutdown),
+	// which would prevent the lock from being released and leave the session locked
+	// until TTL expires.
+	releaseLock := func(reason string) {
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer releaseCancel()
+		released, releaseErr := w.q.ReleaseSession(releaseCtx, sessionID, w.cfg.WorkerID, credential)
+		if releaseErr != nil {
+			w.logError(ctx, "worker.release_session_failed",
+				"session", sessionID, "error", releaseErr.Error())
+		} else if !released {
+			w.log(ctx, "worker.release_session_skipped", map[string]any{
+				"session_id": sessionID,
+				"reason":     "lock_already_lost",
+			})
+		} else {
+			w.log(ctx, reason, map[string]any{
+				"session_id": sessionID,
+			})
+		}
+	}
+
 	// Process work in a loop
 	for {
 		w.processWorkHoldLock(ctx, claim)
@@ -447,44 +478,13 @@ func (w *Worker) processSessionHoldLock(ctx context.Context, sessionID string) {
 				"session_id": sessionID,
 				"error":      err.Error(),
 			})
-			// Release lock on error. Use Background() with timeout because ctx
-			// may be cancelled (worker shutdown), which would prevent the lock
-			// from being released and leave the session locked until TTL expires.
-			// Only release if we still hold the lock (credential check).
-			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			released, releaseErr := w.q.ReleaseSession(releaseCtx, sessionID, w.cfg.WorkerID, credential)
-			if releaseErr != nil {
-				w.logError(ctx, "worker.release_session_failed",
-					"session", sessionID, "error", releaseErr.Error())
-			} else if !released {
-				w.log(ctx, "worker.release_session_skipped", map[string]any{
-					"session_id": sessionID,
-					"reason":     "lock_already_lost",
-				})
-			}
-			releaseCancel()
+			releaseLock("worker.lock_released_on_error")
 			span.SetAttributes(attribute.Int("worker.works_processed", workCount))
 			return
 		}
 		if nextClaim == nil {
 			// Queue is empty, release lock.
-			// Use Background() with timeout for the same reason as above.
-			// Only release if we still hold the lock (credential check).
-			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			w.log(ctx, "worker.queue_empty_releasing_lock", map[string]any{
-				"session_id": sessionID,
-			})
-			released, releaseErr := w.q.ReleaseSession(releaseCtx, sessionID, w.cfg.WorkerID, credential)
-			if releaseErr != nil {
-				w.logError(ctx, "worker.release_session_failed",
-					"session", sessionID, "error", releaseErr.Error())
-			} else if !released {
-				w.log(ctx, "worker.release_session_skipped", map[string]any{
-					"session_id": sessionID,
-					"reason":     "lock_already_lost",
-				})
-			}
-			releaseCancel()
+			releaseLock("worker.queue_empty_releasing_lock")
 			span.SetAttributes(attribute.Int("worker.works_processed", workCount))
 			return
 		}

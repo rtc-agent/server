@@ -155,7 +155,7 @@ func finalizeLoopStatus(
 	}
 
 	// Cancel the scheduled task if TaskScheduler is available.
-	cancelLoopAsynqTask(ctx, h.deps, h.logger, loop, updateFields)
+	cancelLoopAsynqTask(ctx, h.deps, h.logger, loop)
 
 	if err := h.deps.LoopRepo.Update(ctx, loop.ID, updateFields); err != nil {
 		span.RecordError(err)

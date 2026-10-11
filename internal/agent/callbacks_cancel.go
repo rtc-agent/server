@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"github.com/google/uuid"
@@ -144,17 +145,9 @@ func (h *helpers) cascadeCancelChildren(callerCtx context.Context, turnID string
 	var wg sync.WaitGroup
 	for _, child := range activeChildren {
 		wg.Add(1)
-		go func(childID uuid.UUID) {
+		childID := child.ID
+		logger.SafeGo("cascade_cancel.child", func() {
 			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					h.logger.Warn(ctx, "cascadeCancelChildren.panic", map[string]any{
-						"parent_session_id": parentSessionID.String(),
-						"child_session_id":  childID.String(),
-						"panic":             fmt.Sprintf("%v", r),
-					})
-				}
-			}()
 			// Per-child timeout: each child gets up to 30s independently.
 			// ctx is already detached from the caller's context via WithoutCancel
 			// at the top of this method, so child cancel operations are protected
@@ -168,7 +161,7 @@ func (h *helpers) cascadeCancelChildren(callerCtx context.Context, turnID string
 					"error":             err.Error(),
 				})
 			}
-		}(child.ID)
+		})
 	}
 	wg.Wait()
 	h.logger.Info(ctx, "cascadeCancelChildren.done", map[string]any{

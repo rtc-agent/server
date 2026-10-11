@@ -14,6 +14,7 @@ import (
 	"github.com/rtc-agent/server/internal/agent/util"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
+	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
@@ -496,12 +497,14 @@ func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Mes
 	// Launch parallel loaders
 	for i, file := range files {
 		wg.Add(1)
-		go func(idx int, f protocol.FileAttachment) {
+		idx := i
+		f := file
+		logger.SafeGo("file_attachment.loader", func() {
 			defer wg.Done()
 			// Acquire semaphore slot (blocks if maxConcurrentLoads are already running).
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			// Panic recovery to prevent process crash
+			// Panic recovery to set error result (business logic requirement)
 			defer func() {
 				if r := recover(); r != nil {
 					h.logger.Error(ctx, "file_attachment.panic_recovery", map[string]any{
@@ -580,7 +583,7 @@ func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Mes
 					"mimetype": f.Mimetype,
 				})
 			}
-		}(i, file)
+		})
 	}
 
 	// Wait for all loaders to complete

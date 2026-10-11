@@ -55,6 +55,17 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	ctx = WithSessionID(ctx, p.SessionID)
 	ctx = WithUserID(ctx, p.UserID)
 
+	// 1.1. Check token limit before processing.
+	// This is a basic check to prevent processing sessions that have exceeded
+	// their token quota. More sophisticated rate limiting can be added later.
+	if err := a.checkTokenLimit(ctx, p.SessionID); err != nil {
+		a.log(ctx, LogLevelWarn, "agent.token_limit_exceeded", map[string]any{
+			"session_id": p.SessionID,
+			"error":      err.Error(),
+		})
+		return fmt.Errorf("turnagent: token limit check: %w", err)
+	}
+
 	// 1.5. Fast path: compact work bypasses the turn loop entirely.
 	if p.Kind == WorkKindCompact {
 		return a.handleCompactWork(ctx, p)
