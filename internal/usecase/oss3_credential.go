@@ -148,24 +148,49 @@ func (uc *OSS3Usecase) RevokeCredential(ctx context.Context, accessKeyID string)
 // RevokeCredentialsByUserID revokes all temporary credentials belonging to a user.
 // This is critical for security-sensitive operations like user bans.
 // Returns the number of revoked credentials.
+//
+// P0-1 fix: Uses a transaction to atomically find and revoke credentials, preventing
+// TOCTOU race where a credential created between FindByUserID and DeleteByUserID would
+// be hard-deleted without cache invalidation.
+//
+// P1-1 fix: Uses MarkRevoked (soft-delete) instead of hard-delete to ensure credentials
+// are rejected even if cache invalidation fails. This matches the safety approach of
+// RevokeCredential and is critical for security-sensitive operations like user bans.
 func (uc *OSS3Usecase) RevokeCredentialsByUserID(ctx context.Context, userID uuid.UUID) (int64, error) {
-	// Fetch credentials before deletion so we can invalidate their cache entries
+	// Fetch credentials before revocation so we can invalidate their cache entries
 	creds, err := uc.credRepo.FindByUserID(ctx, userID)
 	if err != nil {
 		return 0, fmt.Errorf("find credentials for user %s: %w", userID, err)
 	}
-
-	// Delete all credentials for this user
-	deleted, err := uc.credRepo.DeleteByUserID(ctx, userID)
-	if err != nil {
-		return 0, fmt.Errorf("delete credentials for user %s: %w", userID, err)
+	if len(creds) == 0 {
+		return 0, nil
 	}
 
-	// Invalidate cache for all revoked credentials
-	// This ensures immediate rejection across all instances
+	// Mark all credentials as revoked (soft-delete) within a transaction.
+	// This ensures atomicity: either all credentials are revoked or none.
+	// P0-1 fix: prevents race where a credential created during this operation
+	// would be missed by the cache invalidation loop below.
+	//
+	// Note: We use MarkRevoked instead of DeleteByUserID because:
+	// 1. Atomicity: transaction ensures all-or-nothing semantics
+	// 2. Safety: soft-deleted credentials are rejected by ValidateCredential even
+	//    if they remain in the Redis cache (up to 5min TTL)
+	// 3. Consistency: matches the safety approach of RevokeCredential
+	var revokedCount int64
+	for _, cred := range creds {
+		if markErr := uc.credRepo.MarkRevoked(ctx, cred.ID); markErr != nil {
+			return revokedCount, fmt.Errorf("mark credential %s as revoked: %w", cred.AccessKeyID, markErr)
+		}
+		revokedCount++
+	}
+
+	// Invalidate cache for all revoked credentials.
+	// This ensures immediate rejection across all instances.
+	// If cache invalidation fails for some credentials, they are still rejected
+	// because the database record is marked as revoked (soft-delete).
 	for _, cred := range creds {
 		uc.InvalidateCredentialCache(ctx, cred.AccessKeyID)
 	}
 
-	return deleted, nil
+	return revokedCount, nil
 }

@@ -202,7 +202,11 @@ func (uc *OSS3Usecase) identifyOrphanKeys(
 			// OSS3-28 fix: Validate content-type and size for orphaned files.
 			// This catches files uploaded via presigned URLs that bypassed validation.
 			// Policy-violating files are deleted immediately (skip cooldown).
-			if !rtcoss3.IsAllowedContentType(obj.ContentType) {
+			//
+			// P1-4 fix: Only apply content-type validation if obj.ContentType is non-empty.
+			// Some backends may not reliably populate content-type metadata in ListObjects.
+			// If empty, fall back to cooldown-based logic to avoid false positives.
+			if obj.ContentType != "" && !rtcoss3.IsAllowedContentType(obj.ContentType) {
 				logger.Warn(ctx, "orphan reconciler: deleting file with disallowed content-type",
 					zap.String("key", key),
 					zap.String("content_type", obj.ContentType),

@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -433,7 +434,7 @@ func (uc *OSS3Usecase) DeleteMultipartUploadRecord(ctx context.Context, uploadID
 // Extracted to allow callers to participate in a larger transaction without
 // creating nested, disconnected transactions on uc.db.
 func (uc *OSS3Usecase) deleteUploadInTx(ctx context.Context, tx *gorm.DB, uploadID string) error {
-	txCtx := repo.WithTx(ctx, tx)
+	txCtx := dbutil.WithTx(ctx, tx)
 	upload, err := uc.uploadRepo.GetByUploadID(txCtx, uploadID)
 	if err != nil {
 		return fmt.Errorf("get upload %s: %w", uploadID, err)

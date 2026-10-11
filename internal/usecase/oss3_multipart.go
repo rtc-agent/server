@@ -8,9 +8,9 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/model"
-	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	"go.uber.org/zap"
@@ -88,7 +88,7 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 	meta, err := uc.backend.HeadObject(ctx, bucket, key)
 	if err != nil {
 		// Compensation: async delete the backend object (don't block on this)
-		uc.asyncCleanupBackendObject(bucket, key, "HeadObject after CompleteMultipartUpload")
+		uc.asyncCleanupBackendObject(bucket, key, "HeadObject after CompleteMultipartUpload", userID)
 		return "", fmt.Errorf("head object after complete: %w", err)
 	}
 
@@ -96,7 +96,7 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 	// This ensures the object was not corrupted during the completion process.
 	// ETag mismatch indicates a backend bug or data corruption — fail fast and trigger compensation.
 	if etag != "" && meta.ETag != "" && etag != meta.ETag {
-		uc.asyncCleanupBackendObject(bucket, key, "ETag mismatch after CompleteMultipartUpload")
+		uc.asyncCleanupBackendObject(bucket, key, "ETag mismatch after CompleteMultipartUpload", userID)
 		logger.Error(ctx, "ETag mismatch after CompleteMultipartUpload; data may be corrupted",
 			zap.String("bucket", bucket),
 			zap.String("key", key),
@@ -110,7 +110,7 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 	dbErr := uc.completeMultipartUploadDBOps(ctx, userID, bucket, key, uploadID, etag, meta.Size, meta.ContentType)
 	if dbErr != nil {
 		// Compensation: async delete the backend object (don't block on this)
-		uc.asyncCleanupBackendObject(bucket, key, "DB operations after CompleteMultipartUpload")
+		uc.asyncCleanupBackendObject(bucket, key, "DB operations after CompleteMultipartUpload", userID)
 		return "", fmt.Errorf("DB operations failed: %w", dbErr)
 	}
 
@@ -121,7 +121,7 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 // Used for compensation when DB operations fail after backend success.
 // A separate context with timeout is used because the original request context may
 // be cancelled when the response is sent.
-func (uc *OSS3Usecase) asyncCleanupBackendObject(bucket, key, reason string) {
+func (uc *OSS3Usecase) asyncCleanupBackendObject(bucket, key, reason, userID string) {
 	// Create a detached context with timeout for the cleanup operation.
 	// We use context.Background() because the original ctx may be cancelled
 	// as soon as we return the error response.
@@ -133,12 +133,14 @@ func (uc *OSS3Usecase) asyncCleanupBackendObject(bucket, key, reason string) {
 			logger.Warn(cleanupCtx, "async backend cleanup failed (orphan reconciler will retry)",
 				zap.String("bucket", bucket),
 				zap.String("key", key),
+				zap.String("user_id", userID),
 				zap.String("reason", reason),
 				zap.Error(compErr))
 		} else {
 			logger.Info(cleanupCtx, "async backend cleanup succeeded",
 				zap.String("bucket", bucket),
 				zap.String("key", key),
+				zap.String("user_id", userID),
 				zap.String("reason", reason))
 		}
 	})
@@ -154,7 +156,7 @@ func (uc *OSS3Usecase) completeMultipartUploadDBOps(
 	contentType string,
 ) error {
 	return uc.db.Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 
 		// Create file record with actual size and content type from backend (not calculated from parts)
 		file := &model.File{
@@ -205,7 +207,7 @@ func (uc *OSS3Usecase) PutObjectWithComp(
 	}
 	if err := uc.fileRepo.Create(ctx, file); err != nil {
 		// Compensation: async delete the backend object (don't block on this)
-		uc.asyncCleanupBackendObject(bucket, key, "DB operations after PutObject")
+		uc.asyncCleanupBackendObject(bucket, key, "DB operations after PutObject", userID)
 		return fmt.Errorf("create file record failed: %w", err)
 	}
 

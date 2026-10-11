@@ -129,12 +129,17 @@ func (uc *OSS3Usecase) setRedisQuota(ctx context.Context, userID string, value i
 //
 // This is used during quota reconciliation to account for in-flight uploads.
 // The correct Redis quota value should be: dbSum + pendingTotal.
+//
+// P1-3 fix: Only counts pending entries whose backing pending key still exists.
+// This prevents stale ZSET entries (whose pending keys expired but weren't cleaned)
+// from inflating the pending total and causing over-correction.
 func (uc *OSS3Usecase) getPendingQuotaTotal(ctx context.Context, userID string) (int64, error) {
 	aggKey := cache.OSS3QuotaPendingAgg(userID)
+	pendingKeyPrefix := cache.PrefixOSS3QuotaPending + userID + ":"
 
 	// Use ZRANGEBYSCORE to get all members with their scores.
 	// The ZSET stores requestID as member and amount as score.
-	// We sum all scores to get the total pending amount.
+	// We sum scores only for entries whose backing pending key still exists.
 	members, err := uc.redis.ZRangeWithScores(ctx, aggKey, 0, -1).Result()
 	if err != nil {
 		return 0, fmt.Errorf("get pending quota total for user %s: %w", userID, err)
@@ -142,6 +147,21 @@ func (uc *OSS3Usecase) getPendingQuotaTotal(ctx context.Context, userID string) 
 
 	var total int64
 	for _, m := range members {
+		requestID := m.Member.(string)
+		// Verify the backing pending key exists.
+		// If the key is gone (expired), this ZSET entry is stale and should be skipped.
+		pendingKey := pendingKeyPrefix + requestID
+		if exists, getErr := uc.redis.Exists(ctx, pendingKey).Result(); getErr != nil {
+			// Redis error — skip this entry but log warning
+			logger.Warn(ctx, "reconcile: failed to check pending key existence, skipping entry",
+				zap.String("user_id", userID),
+				zap.String("request_id", requestID),
+				zap.Error(getErr))
+			continue
+		} else if exists == 0 {
+			// Pending key gone — stale ZSET entry, skip it
+			continue
+		}
 		total += int64(m.Score)
 	}
 	return total, nil

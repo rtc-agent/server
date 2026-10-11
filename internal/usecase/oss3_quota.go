@@ -109,8 +109,12 @@ func (uc *OSS3Usecase) CommitQuota(ctx context.Context, userID, requestID string
 		// fails but marker deletion also fails.
 		existingTimestamp, getErr := uc.redis.Get(ctx, markerKey).Int64()
 		if getErr != nil {
-			// Marker disappeared between SETNX and GET — retry the SETNX
-			return uc.CommitQuota(ctx, userID, requestID, amount)
+			// Marker disappeared between SETNX and GET — this is a rare race.
+			// Instead of recursing (risk of stack overflow under high contention),
+			// return an error and let the caller retry. The next attempt will either
+			// succeed the SETNX or detect the fresh marker.
+			// P0-2 fix: replaced unbounded recursion with error return.
+			return fmt.Errorf("quota commit marker race: marker disappeared during check for request %s", requestID)
 		}
 		markerAge := time.Duration(now-existingTimestamp) * time.Second
 		if markerAge < safeRetryWindow {
@@ -119,6 +123,12 @@ func (uc *OSS3Usecase) CommitQuota(ctx context.Context, userID, requestID string
 		}
 		// Marker is stale (older than safeRetryWindow) — allow force retry.
 		// Overwrite the marker with current timestamp.
+		//
+		// P1-2 note: Two concurrent calls can both see a stale marker and both overwrite it.
+		// The Lua script's idempotency (pending key check) prevents double-commit. The second
+		// caller gets result=0 (pending gone) and returns a spurious error. The caller will
+		// retry, and on retry the marker is fresh, so it returns nil (idempotent success).
+		// This is acceptable: no data corruption, only a transient error.
 		if setErr := uc.redis.Set(ctx, markerKey, now, markerTTL).Err(); setErr != nil {
 			return fmt.Errorf("quota commit marker refresh: %w", setErr)
 		}
@@ -336,17 +346,19 @@ func (uc *OSS3Usecase) ReleaseMultipartUploadQuota(ctx context.Context, userID, 
 // The method looks up the upload by uploadID to get the internal UUID, then creates the
 // part record. Errors are logged but do not fail the upload — the data is already in MinIO
 // and quota is committed. A background reconciler can repair missing part records if needed.
-func (uc *OSS3Usecase) RecordUploadPart(ctx context.Context, uploadID string, partNumber int, size int64, etag string) error {
+//
+// P2-2 fix: Added userID parameter for better error context and traceability.
+func (uc *OSS3Usecase) RecordUploadPart(ctx context.Context, userID, uploadID string, partNumber int, size int64, etag string) error {
 	// Look up the upload record to get the internal UUID
 	upload, err := uc.uploadRepo.GetByUploadID(ctx, uploadID)
 	if err != nil {
-		return fmt.Errorf("get upload record for part recording: %w", err)
+		return fmt.Errorf("get upload record for part recording (user=%s, uploadID=%s): %w", userID, uploadID, err)
 	}
 	if upload == nil {
 		// Upload record not found — this should not happen in normal flow.
 		// The upload was validated earlier in the request, so this indicates
 		// a race condition or data inconsistency. Log and return error.
-		return fmt.Errorf("upload record not found for uploadID %s", uploadID)
+		return fmt.Errorf("upload record not found (user=%s, uploadID=%s)", userID, uploadID)
 	}
 
 	part := &model.MultipartUploadPart{
@@ -356,7 +368,7 @@ func (uc *OSS3Usecase) RecordUploadPart(ctx context.Context, uploadID string, pa
 		ETag:       etag,
 	}
 	if err := uc.uploadRepo.CreatePart(ctx, part); err != nil {
-		return fmt.Errorf("create part record: %w", err)
+		return fmt.Errorf("create part record (user=%s, uploadID=%s, part=%d): %w", userID, uploadID, partNumber, err)
 	}
 	return nil
 }

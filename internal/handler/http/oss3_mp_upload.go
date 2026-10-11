@@ -168,7 +168,7 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 	// If part recording fails, log at Error level but do not fail the request — the data
 	// is already in MinIO and quota is committed. A background reconciler can repair
 	// missing part records by querying MinIO's ListParts.
-	if err = h.oss3UC.RecordUploadPart(r.Context(), uploadID, partNumber, contentLength, etag); err != nil {
+	if err = h.oss3UC.RecordUploadPart(r.Context(), userID, uploadID, partNumber, contentLength, etag); err != nil {
 		logger.Error(r.Context(), "failed to record uploaded part to database; reconciler will repair",
 			zap.String("user_id", userID),
 			zap.String("upload_id", uploadID),
