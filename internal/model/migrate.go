@@ -11,18 +11,18 @@ import (
 	"github.com/rtc-agent/server/pkg/memory"
 )
 
-// Index Naming Convention:
+// 索引命名规范:
 //
-// Indexes should follow the pattern: idx_<table>_<column1>_<column2>...
-// where column names match the actual database column names (not abbreviated).
+// 索引应遵循模式: idx_<表名>_<列名1>_<列名2>...
+// 其中列名应与实际数据库列名一致（不缩写）。
 //
-// Examples:
+// 示例:
 //   - idx_messages_session_offset (session_id, global_offset)
 //   - idx_memory_links_from_relation (from_id, relation)
 //
-// Note: Some legacy indexes use abbreviated names (e.g., idx_sessions_owner_created,
-// idx_admin_audit_logs_operator_time) which don't follow this convention.
-// These are kept for backward compatibility but new indexes should follow the standard.
+// 注意: 部分遗留索引使用缩写名称（如 idx_sessions_owner_created,
+// idx_admin_audit_logs_operator_time），不符合此规范。
+// 为保持向后兼容，这些索引保留不变，但新索引应遵循标准命名规范。
 
 // TODO(migration): Implement migration version tracking system.
 // Current state: AutoMigrate runs on every startup, relying on idempotent operations

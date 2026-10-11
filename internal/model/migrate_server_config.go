@@ -142,10 +142,72 @@ func MigrateServerConfigTable(db *gorm.DB) error {
 	// WARNING: This phase acquires ACCESS EXCLUSIVE locks which block all read/write operations.
 	// For production environments, ensure this runs during low-traffic maintenance windows.
 	if totalBackfilled > 0 {
-		logger.Info(context.Background(), "migrate_server_config.phase3_warning",
-			zap.String("message", "Phase 3 will acquire ACCESS EXCLUSIVE locks. Monitor pg_stat_activity for lock contention."),
-			zap.Int64("rows_migrated", totalBackfilled))
+		logger.Warn(context.Background(), "migrate_server_config.phase3_lock_warning",
+			zap.String("message", "Phase 3 will acquire ACCESS EXCLUSIVE locks which block all read/write operations."),
+			zap.Int64("rows_migrated", totalBackfilled),
+			zap.String("recommendation", "Monitor pg_stat_activity for lock contention. Expected duration: 1-5 seconds for DDL operations."),
+			zap.String("lock_timeout", "30s"),
+			zap.Strings("monitoring_queries", []string{
+				"SELECT * FROM pg_stat_activity WHERE state = 'active' AND query LIKE '%server_configs%';",
+				"SELECT * FROM pg_locks WHERE relation = 'server_configs'::regclass;",
+			}))
 	}
+
+	// Idempotency check: If 'id' column exists but is not a primary key,
+	// it means a previous migration attempt may have failed mid-way.
+	// We need to drop the old column and recreate it to ensure a clean state.
+	// This handles the edge case where:
+	// 1. Column was added (Phase 1 complete)
+	// 2. Backfill was done (Phase 2 complete)
+	// 3. But DDL operations (Phase 3) failed partway through
+	// IMPORTANT: This check and re-backfill must happen OUTSIDE the transaction to avoid
+	// holding ACCESS EXCLUSIVE locks during the slow batch update operations.
+	if hasIDColumn && !isPK {
+		logger.Warn(context.Background(), "migrate_server_config.phase3_idempotency_fix",
+			zap.String("reason", "id column exists but is not primary key, dropping and recreating"))
+		if err := db.Exec(`
+			ALTER TABLE server_configs DROP COLUMN IF EXISTS id
+		`).Error; err != nil {
+			return fmt.Errorf("drop stale id column: %w", err)
+		}
+		// Recreate the column
+		if err := db.Exec(`
+			ALTER TABLE server_configs
+			ADD COLUMN id UUID
+		`).Error; err != nil {
+			return fmt.Errorf("recreate id column: %w", err)
+		}
+		// Re-backfill the column (outside transaction to avoid long lock holding)
+		logger.Info(context.Background(), "migrate_server_config.phase3_rebackfill_start")
+		const rebackfillBatchSize = 1000
+		var rebackfillTotal int64
+		var rebackfillBatchNum int
+		for {
+			rebackfillBatchNum++
+			result := db.Exec(`
+				UPDATE server_configs
+				SET id = gen_random_uuid()
+				WHERE id IS NULL
+				AND ctid IN (SELECT ctid FROM server_configs WHERE id IS NULL LIMIT ?)
+			`, rebackfillBatchSize)
+			if result.Error != nil {
+				return fmt.Errorf("rebackfill id column batch %d: %w", rebackfillBatchNum, result.Error)
+			}
+			if result.RowsAffected == 0 {
+				break
+			}
+			rebackfillTotal += result.RowsAffected
+			logger.Info(context.Background(), "migrate_server_config.phase3_rebackfill_batch",
+				zap.Int("batch_number", rebackfillBatchNum),
+				zap.Int64("rows_affected", result.RowsAffected),
+				zap.Int64("total_backfilled", rebackfillTotal))
+			time.Sleep(100 * time.Millisecond)
+		}
+		logger.Info(context.Background(), "migrate_server_config.phase3_rebackfill_completed",
+			zap.Int64("total_rows_backfilled", rebackfillTotal),
+			zap.Int("total_batches", rebackfillBatchNum-1))
+	}
+
 	logger.Info(context.Background(), "migrate_server_config.phase3_ddl_start")
 	return db.Transaction(func(tx *gorm.DB) error {
 		// Set lock_timeout to avoid indefinite blocking if locks cannot be acquired.
@@ -154,49 +216,6 @@ func MigrateServerConfigTable(db *gorm.DB) error {
 		// time for lock acquisition on production systems.
 		if err := tx.Exec("SET lock_timeout = '30s'").Error; err != nil {
 			return fmt.Errorf("set lock_timeout: %w", err)
-		}
-
-		// Idempotency check: If 'id' column exists but is not a primary key,
-		// it means a previous migration attempt may have failed mid-way.
-		// We need to drop the old column and recreate it to ensure a clean state.
-		// This handles the edge case where:
-		// 1. Column was added (Phase 1 complete)
-		// 2. Backfill was done (Phase 2 complete)
-		// 3. But DDL operations (Phase 3) failed partway through
-		if hasIDColumn && !isPK {
-			logger.Warn(context.Background(), "migrate_server_config.phase3_idempotency_fix",
-				zap.String("reason", "id column exists but is not primary key, dropping and recreating"))
-			if err := tx.Exec(`
-				ALTER TABLE server_configs DROP COLUMN IF EXISTS id
-			`).Error; err != nil {
-				return fmt.Errorf("drop stale id column: %w", err)
-			}
-			// Recreate the column
-			if err := tx.Exec(`
-				ALTER TABLE server_configs
-				ADD COLUMN id UUID
-			`).Error; err != nil {
-				return fmt.Errorf("recreate id column: %w", err)
-			}
-			// Re-backfill the column
-			logger.Info(context.Background(), "migrate_server_config.phase3_rebackfill_start")
-			const rebackfillBatchSize = 1000
-			for {
-				result := tx.Exec(`
-					UPDATE server_configs
-					SET id = gen_random_uuid()
-					WHERE id IS NULL
-					AND ctid IN (SELECT ctid FROM server_configs WHERE id IS NULL LIMIT ?)
-				`, rebackfillBatchSize)
-				if result.Error != nil {
-					return fmt.Errorf("rebackfill id column: %w", result.Error)
-				}
-				if result.RowsAffected == 0 {
-					break
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
-			logger.Info(context.Background(), "migrate_server_config.phase3_rebackfill_completed")
 		}
 
 		// Step 3a: Drop the old primary key constraint (if exists)
@@ -213,6 +232,11 @@ func MigrateServerConfigTable(db *gorm.DB) error {
 		}
 
 		if pkConstraintName != "" {
+			// Validate constraint name to prevent SQL injection.
+			// Constraint names should only contain alphanumeric characters and underscores.
+			if !isValidConstraintName(pkConstraintName) {
+				return fmt.Errorf("invalid constraint name: %s", pkConstraintName)
+			}
 			// Drop the existing primary key constraint.
 			// We know it's not on 'id' because we checked earlier (lines 82-102).
 			if err := tx.Exec(fmt.Sprintf(
@@ -243,4 +267,21 @@ func MigrateServerConfigTable(db *gorm.DB) error {
 		logger.Info(context.Background(), "migrate_server_config.phase3_ddl_completed")
 		return nil
 	})
+}
+
+// isValidConstraintName validates that a constraint name contains only safe characters.
+// This prevents SQL injection when constraint names are interpolated into SQL statements.
+// Valid constraint names contain only alphanumeric characters, underscores, and dots.
+func isValidConstraintName(name string) bool {
+	if len(name) == 0 || len(name) > 128 {
+		return false
+	}
+	for _, c := range name {
+		// Apply De Morgan's law: !(a || b) = !a && !b
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') &&
+			(c < '0' || c > '9') && c != '_' && c != '.' {
+			return false
+		}
+	}
+	return true
 }

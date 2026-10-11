@@ -257,6 +257,13 @@ func (r *sessionRepo) FindActiveByParent(ctx context.Context, parentSessionID uu
 }
 
 func (r *sessionRepo) AtomicAddTokenUsage(ctx context.Context, sessionID uuid.UUID, delta model.TokenUsageDelta) error {
+	// Validate that all Delta values are non-negative to prevent counter decrement.
+	if delta.InputDelta < 0 || delta.OutputDelta < 0 || delta.TotalDelta < 0 ||
+		delta.CachedReadDelta < 0 || delta.CachedWriteDelta < 0 ||
+		delta.ReasoningDelta < 0 || delta.CostMicrosDelta < 0 {
+		return fmt.Errorf("token usage delta values must be non-negative: %+v", delta)
+	}
+
 	updates := map[string]any{
 		"total_input_tokens":        gorm.Expr("total_input_tokens + ?", delta.InputDelta),
 		"total_output_tokens":       gorm.Expr("total_output_tokens + ?", delta.OutputDelta),

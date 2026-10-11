@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/google/uuid"
+	dbmodel "github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase"
 )
 
@@ -59,7 +60,7 @@ func NewTokenEstimator(contextLimit, compactBuffer int, sessionRepo usecase.Sess
 		sessionRepo:      sessionRepo,
 		triggerThreshold: threshold,
 		alpha:            0.3,
-		defaultGrowth:    2000.0,
+		defaultGrowth:    float64(dbmodel.DefaultTokenEstimateEWMA),
 	}
 }
 

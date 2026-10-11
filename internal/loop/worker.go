@@ -8,6 +8,13 @@
 //   - loop_worker_task_duration_seconds: Histogram of task processing duration
 //   - loop_recovery_scans_total: Counter of recovery scans
 //   - loop_recovery_attempts_total{status="success|failure|exhausted"}: Counter of recovery attempts
+//
+// Concurrency model:
+//
+//	asynq guarantees single-node consumption through Redis BRPOPLPUSH semantics.
+//	A task can only be in "processing" state on one worker at a time. Combined with
+//	TaskID-based idempotency (loop.ID), this ensures exactly-once processing without
+//	the need for distributed locks.
 package loop
 
 import (
@@ -18,14 +25,12 @@ import (
 
 	"github.com/google/uuid"
 	hibikenasynq "github.com/hibiken/asynq"
-	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
-	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -50,17 +55,17 @@ type Worker struct {
 	loopRepo            usecase.LoopRepo
 	sessionRepo         usecase.SessionRepo
 	notificationCreator NotificationCreator
-	redis               redis.UniversalClient
 }
 
 // NewWorker creates a loop worker.
-func NewWorker(queue *rtcqueue.Queue, loopRepo usecase.LoopRepo, sessionRepo usecase.SessionRepo, notificationCreator NotificationCreator, redisClient redis.UniversalClient) *Worker {
+// Note: asynq provides single-node consumption guarantee, so no Redis client
+// is needed for distributed locking. TaskID-based idempotency prevents duplicate processing.
+func NewWorker(queue *rtcqueue.Queue, loopRepo usecase.LoopRepo, sessionRepo usecase.SessionRepo, notificationCreator NotificationCreator) *Worker {
 	return &Worker{
 		queue:               queue,
 		loopRepo:            loopRepo,
 		sessionRepo:         sessionRepo,
 		notificationCreator: notificationCreator,
-		redis:               redisClient,
 	}
 }
 
@@ -76,17 +81,17 @@ const loopTaskTimeout = 30 * time.Second
 // Idempotency: safe to call multiple times. If the loop no longer exists,
 // is not active, or the ID doesn't match, returns nil without side effects.
 //
-// Concurrency safety: Uses a Redis distributed lock (keyed by loop.ID) to prevent
-// TOCTOU race conditions where multiple workers read the same loop state and both
-// pass the idempotency check. The lock ensures only one worker processes the task at a time.
+// Concurrency safety: asynq guarantees single-node consumption through Redis
+// BRPOPLPUSH semantics. A task in "processing" state cannot be picked up by
+// another worker. Combined with TaskID-based idempotency (using loop.ID), this
+// ensures exactly-once processing without distributed locks.
 //
 // Following the async sub-agent pattern:
-//  1. Acquire distributed lock (prevents concurrent execution)
-//  2. Validate loop is still active
-//  3. Check idempotency (secondary safeguard after lock)
+//  1. Validate loop is still active
+//  2. Check idempotency via LastRunAt (secondary safeguard)
+//  3. Update LastRunAt (prevents duplicate triggers if publish fails)
 //  4. Build the loop task prompt
-//  5. Create a user-role notification message in the session (so it becomes
-//     the last user message in conversation history)
+//  5. Create a user-role notification message in the session
 //  6. Publish WorkKindSubmit to trigger a new turn
 //  7. The LLM sees the notification as the most recent instruction
 //
@@ -115,27 +120,8 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	)
 	defer span.End()
 
-	// Acquire distributed lock
-	lockKey := cache.LoopLockKey(loopUUID.String())
-	holderUUID, acquired, err := w.acquireDistributedLock(ctx, loopUUID)
-	if err != nil {
-		span.SetStatus(codes.Error, "internal_error")
-		span.RecordError(err)
-		recordTaskFailure(time.Since(startTime))
-		return err
-	}
-	if !acquired {
-		span.SetAttributes(attribute.String("outcome", "lock_not_acquired"))
-		logger.Debug(ctx, "[loop.Worker] another worker is processing this loop, skipping",
-			zap.String("loop_id", loopUUID.String()))
-		recordTaskLockSkipped(time.Since(startTime))
-		return nil
-	}
-	defer func() {
-		w.releaseDistributedLock(ctx, lockKey, holderUUID)
-	}()
-
 	// Validate loop state
+	// Note: No distributed lock needed - asynq guarantees single-node consumption
 	loop, err := w.validateLoopState(ctx, sessionUUID, loopUUID, span)
 	if err != nil {
 		recordTaskFailure(time.Since(startTime))
@@ -160,26 +146,22 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	// Accepting the inverse risk (LastRunAt updated but publish fails) is safer:
 	// the recovery mechanism will detect stale loops (missing asynq task within
 	// staleLoopThreshold) and re-enqueue them on the next scan.
+	//
+	// Fix(P1-4): Reset recovery_attempts atomically with last_run_at to prevent
+	// accumulation on successful task processing. If these were separate updates
+	// and the second failed, recovery_attempts could accumulate and cause premature
+	// exhaustion marking.
 	now := time.Now()
-	if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{"last_run_at": now}); err != nil {
+	updateFields := map[string]any{"last_run_at": now}
+	if loop.RecoveryAttempts > 0 {
+		updateFields["recovery_attempts"] = 0
+	}
+	if err := w.loopRepo.Update(ctx, loopUUID, updateFields); err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
-		logTaskFailure(ctx, "update last_run_at", sessionUUID.String(), loopUUID.String(), err)
+		logTaskFailure(ctx, "update loop state", sessionUUID.String(), loopUUID.String(), err)
 		recordTaskFailure(time.Since(startTime))
-		return fmt.Errorf("update last_run_at: %w", err)
-	}
-
-	// Fix(P1-4): Reset recovery_attempts on successful task processing.
-	// If a previous recovery reset failed, we clear it here to prevent
-	// stale recovery_attempts from accumulating and causing premature exhaustion.
-	if loop.RecoveryAttempts > 0 {
-		if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{"recovery_attempts": 0}); err != nil {
-			// Fix(P1-4): Elevate from Warn to Error. This failure can cause
-			// the loop to be incorrectly marked as exhausted in future recovery scans.
-			logger.Error(ctx, "[loop.Worker] reset recovery_attempts failed",
-				zap.String("loop_id", loopUUID.String()),
-				zap.Error(err))
-		}
+		return fmt.Errorf("update loop state: %w", err)
 	}
 
 	// Build prompt and create notification
@@ -307,48 +289,6 @@ func parseLoopTaskPayload(ctx context.Context, t *hibikenasynq.Task) (sessionUUI
 	}
 
 	return sessionUUID, loopUUID, payload.TraceID, payload.SpanID, nil
-}
-
-// acquireDistributedLock acquires a Redis distributed lock for loop task processing.
-// Returns the lock holder UUID and whether the lock was successfully acquired.
-//
-// Concurrency safety: SetNX is an atomic operation in Redis. If multiple workers
-// call SetNX simultaneously, only one will succeed (return true), and the others
-// will fail (return false). This atomicity eliminates the need for additional
-// locking mechanisms and ensures exactly-once lock acquisition semantics.
-func (w *Worker) acquireDistributedLock(ctx context.Context, loopUUID uuid.UUID) (string, bool, error) {
-	lockKey := cache.LoopLockKey(loopUUID.String())
-	holderUUID := uuid.Must(uuid.NewV7()).String()
-	// Fix(P1-5): Use proportional buffer instead of hardcoded 30s.
-	// A proportional buffer (50% of timeout) scales correctly with
-	// different task timeout values and avoids under- or over-provisioning.
-	lockTTL := loopTaskTimeout + loopTaskTimeout/2
-
-	acquired, err := w.redis.SetNX(ctx, lockKey, holderUUID, lockTTL).Result()
-	if err != nil {
-		logger.Error(ctx, "[loop.Worker] acquire distributed lock failed",
-			zap.String("loop_id", loopUUID.String()),
-			zap.Error(err))
-		return "", false, fmt.Errorf("acquire lock: %w", err)
-	}
-
-	return holderUUID, acquired, nil
-}
-
-// releaseDistributedLock releases the distributed lock using a Lua script for atomicity.
-func (w *Worker) releaseDistributedLock(ctx context.Context, lockKey, holderUUID string) {
-	releaseLua := `
-local holder = ARGV[1]
-local current = redis.call('GET', KEYS[1])
-if current ~= holder then
-    return 0
-end
-return redis.call('DEL', KEYS[1])
-`
-	if err := w.redis.Eval(ctx, releaseLua, []string{lockKey}, holderUUID).Err(); err != nil {
-		logger.Warn(ctx, "[loop.Worker] release distributed lock failed",
-			zap.Error(err))
-	}
 }
 
 // validateLoopState validates that the loop is still active and matches the expected ID.
