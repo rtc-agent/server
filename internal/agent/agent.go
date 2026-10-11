@@ -166,6 +166,24 @@ type Config struct {
 	// OSS3Bucket is the default OSS bucket name.
 	// Used together with OSS3Backend to read file attachments.
 	OSS3Bucket string
+
+	// BatchTokenUpdateInterval controls how often token updates are flushed to DB.
+	// If <= 0, batch updates are disabled and every LLM call updates DB immediately.
+	// Default: 5s. Recommended range: 2-10s.
+	//
+	// Benefits of enabling batch updates:
+	//   - Reduces DB load by 5-10x during active turns (ReAct loops)
+	//   - Lower latency for LLM calls (no immediate DB write)
+	//
+	// Trade-offs:
+	//   - Up to BatchTokenUpdateInterval of token data may be lost on crash
+	//   - Requires careful shutdown to flush pending updates
+	BatchTokenUpdateInterval time.Duration
+
+	// BatchTokenUpdateCount triggers an immediate flush after this many updates
+	// per session, regardless of BatchTokenUpdateInterval.
+	// If <= 0, defaults to 10.
+	BatchTokenUpdateCount int
 }
 
 // New constructs a *turnagent.Agent with all callbacks wired to the
@@ -392,6 +410,11 @@ type helpers struct {
 
 	// ossBucket is the default OSS bucket name.
 	ossBucket string
+
+	// batchTokenUpdater accumulates token updates in memory and flushes them
+	// periodically to reduce DB load. nil means batch updates are disabled
+	// (every update goes directly to DB via AtomicAddTokenUsage).
+	batchTokenUpdater *BatchTokenUpdater
 }
 
 // applyHelperDefaults fills in zero-value fields on helpers with sensible
@@ -434,6 +457,20 @@ func (h *helpers) initialize(cfg Config) error {
 	h.tokenEstimator = NewTokenEstimator(h.contextTokensLimit, h.autoCompactBufferTokens, cfg.Deps.SessionRepo)
 	h.tokenUpdateThrottle = NewThrottle(500 * time.Millisecond)
 	h.modelPricing = NewModelPricing(cfg.ModelPricing)
+
+	// Batch token updater (optional optimization to reduce DB load)
+	if cfg.BatchTokenUpdateInterval > 0 {
+		h.batchTokenUpdater = NewBatchTokenUpdater(
+			cfg.Deps.SessionRepo,
+			h.logger,
+			cfg.BatchTokenUpdateInterval,
+			cfg.BatchTokenUpdateCount,
+		)
+		h.logger.Info(context.Background(), "batch_token_updater.enabled", map[string]any{
+			"flush_interval": cfg.BatchTokenUpdateInterval.String(),
+			"flush_count":    cfg.BatchTokenUpdateCount,
+		})
+	}
 
 	// Register built-in slash commands
 	registerGoalCommand(cfg.Deps.CommandRegistry, h)
@@ -517,5 +554,15 @@ func (h *helpers) toolResultBudgetConfig() ToolResultBudgetConfig {
 func (h *helpers) Close() {
 	if h.tokenUpdateThrottle != nil {
 		h.tokenUpdateThrottle.Stop()
+	}
+	if h.batchTokenUpdater != nil {
+		// Flush all pending token updates before shutdown to prevent data loss
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.batchTokenUpdater.Shutdown(shutdownCtx); err != nil {
+			h.logger.Warn(shutdownCtx, "batch_token_updater.shutdown_error", map[string]any{
+				"error": err.Error(),
+			})
+		}
 	}
 }

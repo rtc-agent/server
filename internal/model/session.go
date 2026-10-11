@@ -149,14 +149,31 @@ type TokenUsageDelta struct {
 	ReasoningDelta   int64
 	CostMicrosDelta  int64
 
-	// SetEWMA, if > 0, atomically sets token_estimate_ewma to this value.
+	// SetEWMA atomically sets token_estimate_ewma to this value when > 0.
 	// Used by TokenEstimator to persist the EWMA after each LLM call.
+	//
+	// Why "if > 0" semantics: EWMA values are always positive (they represent token growth rate).
+	// A zero value means "don't update EWMA in this call", allowing callers to selectively
+	// update EWMA only when they have computed a new estimate. This avoids unnecessary DB writes
+	// and prevents accidental resets to zero during turns where estimation is skipped.
+	//
+	// If you need to explicitly reset EWMA to zero (rare), use AtomicUpdateEWMA directly.
 	SetEWMA float64
 
-	// SetCurrentContextTokens, if > 0, atomically sets current_context_tokens.
-	// Used by token_callback to update the current context size after each
-	// LLM call, and by persistCompressedMessages / compact to write the
-	// accurate post-compaction token count.
+	// SetCurrentContextTokens atomically sets current_context_tokens when > 0.
+	// Used by token_callback to update the current context size after each LLM call,
+	// and by persistCompressedMessages / compact to write the accurate post-compaction token count.
+	//
+	// Why "if > 0" semantics: CurrentContextTokens represents the actual context size sent to
+	// the model, which is always positive when initialized. A zero value means "don't update
+	// in this call", allowing callers to:
+	//   1. Skip updates during compression calls (persistCompressedMessages writes the accurate value)
+	//   2. Skip updates when session is nil or estimation is not available
+	//   3. Avoid unnecessary DB writes when the value hasn't changed meaningfully
+	//
+	// Note: A session's CurrentContextTokens may legitimately be 0 before the first LLM call.
+	// In that case, the first token_callback invocation will set it to a positive value.
+	// Subsequent calls always update it (unless it's a compression call).
 	SetCurrentContextTokens int64
 }
 

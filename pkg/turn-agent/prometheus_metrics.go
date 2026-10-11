@@ -48,6 +48,10 @@ type PrometheusMetrics struct {
 
 	// Config fallback metrics (tracks degradation to YAML defaults)
 	configFallback *prometheus.CounterVec
+
+	// Token estimation metrics (fine-grained observability for EWMA and delta tracking)
+	tokenDeltaHistogram *prometheus.HistogramVec // histogram of per-turn token deltas
+	ewmaGauge           *prometheus.GaugeVec     // gauge of current EWMA values per session
 }
 
 // NewPrometheusMetrics creates and registers all Prometheus metrics.
@@ -235,6 +239,28 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name:      "fallback_total",
 			Help:      "Total number of config reads that fell back to YAML defaults (DB unavailable or key not found).",
 		}, []string{"key", "reason"}), // reason: "not_found", "db_error"
+
+		// Token estimation metrics for fine-grained observability.
+		// tokenDeltaHistogram tracks the distribution of per-turn token deltas,
+		// helping identify anomalous turns with unusually large or small token usage.
+		// Buckets range from 100 to 1M tokens to capture the full spectrum of LLM calls.
+		tokenDeltaHistogram: promauto.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rtc",
+			Subsystem: "token",
+			Name:      "delta_tokens",
+			Help:      "Distribution of per-turn token deltas (total tokens consumed in a single LLM call).",
+			Buckets:   prometheus.ExponentialBuckets(100, 2, 15), // 100 ~ 1,638,400 tokens
+		}, []string{"model", "type"}), // type: "input", "output", "total"
+
+		// ewmaGauge tracks the current EWMA (Exponentially Weighted Moving Average) value
+		// per session, enabling monitoring of token growth rate predictions over time.
+		// This helps identify sessions with anomalous growth patterns or EWMA convergence issues.
+		ewmaGauge: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "rtc",
+			Subsystem: "token",
+			Name:      "ewma",
+			Help:      "Current EWMA (Exponentially Weighted Moving Average) value per session, predicting next round's token increment.",
+		}, []string{"session_id"}),
 	}
 }
 
@@ -410,4 +436,54 @@ func (m *PrometheusMetrics) RecordConfigFallback(ctx context.Context, key, reaso
 		reason = "unknown"
 	}
 	m.configFallback.WithLabelValues(key, reason).Inc()
+}
+
+// RecordTokenDelta records a token usage delta event for fine-grained observability.
+// This tracks the distribution of per-turn token consumption, helping identify
+// anomalous turns with unusually large or small token usage.
+//
+// Parameters:
+//   - model: the model identifier (e.g., "claude-3-opus")
+//   - deltaType: the type of delta ("input", "output", "total")
+//   - tokens: the number of tokens consumed in this turn
+//
+// Called from token_callback.go after each LLM call to build histogram distributions.
+func (m *PrometheusMetrics) RecordTokenDelta(ctx context.Context, model, deltaType string, tokens int) {
+	if model == "" {
+		model = "unknown"
+	}
+	if deltaType == "" {
+		deltaType = "unknown"
+	}
+	if tokens > 0 {
+		m.tokenDeltaHistogram.WithLabelValues(model, deltaType).Observe(float64(tokens))
+	}
+}
+
+// UpdateEWMA updates the EWMA gauge for a session.
+// This tracks the current EWMA (Exponentially Weighted Moving Average) value per session,
+// enabling monitoring of token growth rate predictions over time.
+//
+// Parameters:
+//   - sessionID: the session identifier
+//   - ewma: the current EWMA value (predicted next round's token increment)
+//
+// Called from token_callback.go after EWMA is computed/updated.
+// Note: Gauge values persist until explicitly updated or the session is closed.
+func (m *PrometheusMetrics) UpdateEWMA(ctx context.Context, sessionID string, ewma float64) {
+	if sessionID == "" {
+		return
+	}
+	if ewma > 0 {
+		m.ewmaGauge.WithLabelValues(sessionID).Set(ewma)
+	}
+}
+
+// ResetEWMA resets the EWMA gauge for a session (e.g., when session is closed).
+// This prevents stale EWMA values from accumulating in the gauge.
+func (m *PrometheusMetrics) ResetEWMA(ctx context.Context, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	m.ewmaGauge.DeleteLabelValues(sessionID)
 }

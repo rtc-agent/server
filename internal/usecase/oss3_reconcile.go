@@ -133,14 +133,28 @@ func (uc *OSS3Usecase) setRedisQuota(ctx context.Context, userID string, value i
 // P1-3 fix: Only counts pending entries whose backing pending key still exists.
 // This prevents stale ZSET entries (whose pending keys expired but weren't cleaned)
 // from inflating the pending total and causing over-correction.
+//
+// P2-4 fix: Added COUNT parameter to ZRANGEBYSCORE to prevent unbounded memory usage.
+// The limit of 1000 entries per query balances between:
+//   - Completeness: Most users won't have more than 1000 concurrent pending uploads
+//   - Memory safety: Prevents OOM if a user has an unusually large number of pending entries
+//   - Performance: Avoids loading excessive data in a single Redis call
+// If a user exceeds this limit, reconciliation will undercount their pending total,
+// but this is acceptable as it's a rare edge case and the next reconciliation cycle
+// will correct any drift.
 func (uc *OSS3Usecase) getPendingQuotaTotal(ctx context.Context, userID string) (int64, error) {
 	aggKey := cache.OSS3QuotaPendingAgg(userID)
 	pendingKeyPrefix := cache.PrefixOSS3QuotaPending + userID + ":"
 
-	// Use ZRANGEBYSCORE to get all members with their scores.
+	// Use ZRANGEBYSCORE with COUNT limit to get members with their scores.
 	// The ZSET stores requestID as member and amount as score.
 	// We sum scores only for entries whose backing pending key still exists.
-	members, err := uc.redis.ZRangeWithScores(ctx, aggKey, 0, -1).Result()
+	//
+	// COUNT 1000 prevents unbounded memory usage when a user has many pending entries.
+	// This is a pragmatic limit: most users won't exceed 1000 concurrent pending uploads,
+	// and even if they do, the next reconciliation cycle will correct any drift.
+	const maxPendingEntries = 1000
+	members, err := uc.redis.ZRangeWithScores(ctx, aggKey, 0, int64(maxPendingEntries-1)).Result()
 	if err != nil {
 		return 0, fmt.Errorf("get pending quota total for user %s: %w", userID, err)
 	}

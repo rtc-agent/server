@@ -178,11 +178,30 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 	currentCtxTokens, estimate := h.computeTokenEstimate(ctx, session, sessionID, fullUsage)
 
 	delta := h.buildTokenUsageDelta(fullUsage, costMicros, isCompress, session, currentCtxTokens, estimate)
-	if err := h.deps.SessionRepo.AtomicAddTokenUsage(ctx, sessionID, delta); err != nil {
-		h.logger.Warn(ctx, "token_callback.atomic_update_failed", map[string]any{
-			"session_id": sessionID,
-			"error":      err.Error(),
-		})
+
+	// Use batch token updater if enabled (reduces DB load during active turns)
+	// Otherwise, fall back to immediate DB update
+	if h.batchTokenUpdater != nil {
+		if err := h.batchTokenUpdater.Accumulate(ctx, sessionID, delta); err != nil {
+			h.logger.Warn(ctx, "token_callback.batch_accumulate_failed", map[string]any{
+				"session_id": sessionID,
+				"error":      err.Error(),
+			})
+			// Fall back to immediate update on batch failure
+			if err := h.deps.SessionRepo.AtomicAddTokenUsage(ctx, sessionID, delta); err != nil {
+				h.logger.Warn(ctx, "token_callback.atomic_update_failed", map[string]any{
+					"session_id": sessionID,
+					"error":      err.Error(),
+				})
+			}
+		}
+	} else {
+		if err := h.deps.SessionRepo.AtomicAddTokenUsage(ctx, sessionID, delta); err != nil {
+			h.logger.Warn(ctx, "token_callback.atomic_update_failed", map[string]any{
+				"session_id": sessionID,
+				"error":      err.Error(),
+			})
+		}
 	}
 
 	h.applySessionTokenUpdates(session, fullUsage, costMicros, currentCtxTokens, isCompress, estimate)
@@ -200,6 +219,21 @@ func (h *helpers) reportLLMCall(ctx context.Context, fullUsage *FullTokenUsage, 
 			ReasoningTokens: int(fullUsage.ReasoningTokens),
 			LatencyMs:       latencyMs,
 		})
+
+		// Record fine-grained token delta metrics for observability.
+		// These histograms help identify anomalous turns with unusual token consumption patterns.
+		if modelName == "" {
+			modelName = "unknown"
+		}
+		h.metrics.RecordTokenDelta(ctx, modelName, "input", int(fullUsage.InputTokens))
+		h.metrics.RecordTokenDelta(ctx, modelName, "output", int(fullUsage.OutputTokens))
+		h.metrics.RecordTokenDelta(ctx, modelName, "total", int(fullUsage.TotalTokens))
+
+		// Update EWMA gauge for monitoring token growth predictions.
+		// This enables dashboards to track EWMA convergence and identify sessions with anomalous growth.
+		if estimate != nil {
+			h.metrics.UpdateEWMA(ctx, sessionIDStr, estimate.NewEWMA)
+		}
 	}
 
 	h.logger.Info(ctx, "llm.complete", map[string]any{

@@ -88,6 +88,17 @@ type Metrics interface {
 	// DecBackgroundGoroutine decrements the active goroutine count for the given type.
 	// Called when a background goroutine exits (typically deferred).
 	DecBackgroundGoroutine(goroutineType string)
+
+	// RecordTokenDelta records a token usage delta event for fine-grained observability.
+	// Tracks the distribution of per-turn token consumption (input/output/total).
+	RecordTokenDelta(ctx context.Context, model, deltaType string, tokens int)
+
+	// UpdateEWMA updates the EWMA gauge for a session.
+	// Tracks the current EWMA value per session for monitoring token growth predictions.
+	UpdateEWMA(ctx context.Context, sessionID string, ewma float64)
+
+	// ResetEWMA resets the EWMA gauge for a session (e.g., when session is closed).
+	ResetEWMA(ctx context.Context, sessionID string)
 }
 
 // TurnMetricsAttrs contains attributes for a turn event.
