@@ -66,7 +66,7 @@ func (h *OSS3Handler) handleCopyObject(
 	// Get source object size for quota check.
 	// HeadObject also serves as an existence check — if the source doesn't exist,
 	// we fail here before reserving quota or attempting the copy.
-	srcMeta, err := h.oss3UC.Backend().HeadObject(r.Context(), srcBucket, srcKey)
+	srcMeta, err := h.oss3UC.HeadObject(r.Context(), srcBucket, srcKey)
 	if err != nil {
 		rtcoss3.WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return
@@ -110,7 +110,7 @@ func (h *OSS3Handler) handleCopyObject(
 	}()
 
 	// Copy object in backend
-	result, err := h.oss3UC.Backend().CopyObject(r.Context(), srcBucket, srcKey, dstBucket, dstKey)
+	result, err := h.oss3UC.CopyObject(r.Context(), srcBucket, srcKey, dstBucket, dstKey)
 	if err != nil {
 		rtcoss3.WriteS3Error(w, mapBackendError(err), r.URL.Path, "")
 		return // uploadSucceeded=false -> defer releases quota
