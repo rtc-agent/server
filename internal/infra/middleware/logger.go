@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,13 @@ import (
 
 	"github.com/rtc-agent/server/pkg/logger"
 )
+
+// routeParamPattern matches dynamic path segments (UUIDs, numeric IDs, hex strings)
+// to normalize span names and avoid high cardinality in traces.
+// Examples: /api/v1/users/123 -> /api/v1/users/{param}
+//
+//	/api/v1/sessions/550e8400-e29b-41d4-a716-446655440000 -> /api/v1/sessions/{param}
+var routeParamPattern = regexp.MustCompile(`/[0-9a-fA-F-]{8,}`)
 
 // RequestLogger middleware creates a trace span for each request,
 // records the trace_id in logs, and logs request duration and status code.
@@ -47,19 +55,12 @@ func RequestLogger(next http.Handler) http.Handler {
 		// SECURITY: Use r.URL.Path instead of r.URL.String() to avoid logging query parameters.
 		// Query parameters may contain sensitive information like tokens, codes, or session IDs.
 		// Only log the path portion to prevent accidental data leakage.
+		//
 		// Normalize route path to avoid high cardinality span names.
-		// For S3 routes: /s3/{bucket}/{key} → /s3/{bucket}/{key}
-		spanName := r.Method + " " + r.URL.Path
-		if strings.HasPrefix(r.URL.Path, "/s3/") {
-			parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/s3/"), "/", 2)
-			if len(parts) >= 1 {
-				if len(parts) == 1 {
-					spanName = r.Method + " /s3/{bucket}"
-				} else {
-					spanName = r.Method + " /s3/{bucket}/{key}"
-				}
-			}
-		}
+		// Since this is an HTTP middleware (not Gin), we don't have access to route templates.
+		// Replace UUIDs, numeric IDs, and other dynamic path segments with {param}.
+		// Special case: S3 routes use {bucket}/{key} pattern for clarity.
+		spanName := r.Method + " " + normalizeRoutePath(r.URL.Path)
 
 		// Create trace span.
 		ctx, span := tracer.Start(r.Context(), spanName,
@@ -162,4 +163,25 @@ func RequestLogger(next http.Handler) http.Handler {
 			logger.Info(ctx, "HTTP request", fields...)
 		}
 	})
+}
+
+// normalizeRoutePath replaces dynamic path segments (UUIDs, numeric IDs, hex strings)
+// with {param} to produce low-cardinality span names for tracing.
+// Special cases: /s3 routes use {bucket}/{key} for clarity.
+func normalizeRoutePath(path string) string {
+	// Special handling for S3 routes: /s3/{bucket}/{key}
+	if strings.HasPrefix(path, "/s3/") {
+		parts := strings.SplitN(strings.TrimPrefix(path, "/s3/"), "/", 2)
+		if len(parts) == 1 {
+			return "/s3/{bucket}"
+		}
+		return "/s3/{bucket}/{key}"
+	}
+
+	// Replace path segments that look like dynamic parameters:
+	// - UUIDs (8+ hex chars with optional dashes)
+	// - Numeric IDs
+	// - Long hex strings
+	// This keeps span names low-cardinality for tracing systems.
+	return routeParamPattern.ReplaceAllString(path, "/{param}")
 }

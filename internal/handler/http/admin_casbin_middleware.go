@@ -2,8 +2,8 @@
 package httphandler
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -47,9 +47,13 @@ func init() {
 		if existing, dup := routeMap[key]; dup {
 			// Fail fast at startup: duplicate route mappings indicate a configuration
 			// error that would silently cause incorrect permission checks.
-			log.Fatalf("FATAL: duplicate route mapping in routeResourceMap: key=%q, "+
-				"existing=(%s, %s), duplicate=(%s, %s)",
-				key, existing.resource, existing.action, m.resource, m.action)
+			// Use structured logging for consistency with the rest of the codebase.
+			logger.Fatal(context.Background(), "duplicate_route_mapping_in_routeResourceMap",
+				zap.String("key", key),
+				zap.String("existing_resource", existing.resource),
+				zap.String("existing_action", existing.action),
+				zap.String("duplicate_resource", m.resource),
+				zap.String("duplicate_action", m.action))
 		}
 		routeMap[key] = struct {
 			resource string

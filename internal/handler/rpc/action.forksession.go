@@ -43,7 +43,8 @@ func buildForkMessages(
 
 	// Filter out old prompt messages that would conflict with the new one.
 	// When forking with new scenarios, the old "scenarios" prompt is stale.
-	var filteredMessages []*converter.Message
+	// Pre-allocate with capacity to avoid repeated allocations.
+	filteredMessages := make([]*converter.Message, 0, len(oldMessages))
 	for _, oldMsg := range oldMessages {
 		if needsNewPrompt {
 			contentData, parseErr := primitives.ParseContentData(oldMsg.Content)

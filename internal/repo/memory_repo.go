@@ -105,7 +105,13 @@ func (r *memoryRepo) ListByScope(ctx context.Context, scope memory.ScopeType, sc
 		query = query.Offset(opts.Offset)
 	}
 
-	var memories []*memory.Memory
+	// Pre-allocate with a reasonable initial capacity.
+	// Use opts.Limit if specified, otherwise default to 20.
+	initialCap := 20
+	if opts.Limit > 0 {
+		initialCap = opts.Limit
+	}
+	memories := make([]*memory.Memory, 0, initialCap)
 	if err := query.Find(&memories).Error; err != nil {
 		return nil, fmt.Errorf("list memories by scope: %w", err)
 	}
@@ -174,8 +180,9 @@ func (r *memoryRepo) Search(ctx context.Context, scope memory.ScopeType, scopeID
 	// Build word-matching conditions wrapped in parentheses to ensure correct SQL precedence:
 	// WHERE scope = ? AND scope_id = ? AND (word1_matches OR word2_matches OR ...)
 	isSQLite := getDialectName(db) == "sqlite"
-	var wordConditions []string
-	var wordArgs []any
+	// Pre-allocate slices to avoid repeated allocations during append.
+	wordConditions := make([]string, 0, len(words))
+	wordArgs := make([]any, 0, len(words)*3)
 	for _, word := range words {
 		likeQuery := "%" + escapeLikePattern(word) + "%"
 		if isSQLite {

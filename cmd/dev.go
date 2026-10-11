@@ -67,6 +67,9 @@ func getDevComposePath() (string, error) {
 	return "", fmt.Errorf("docker-compose.yml not found (searched cwd and source location)")
 }
 
+// runDevDependenciesStart starts Redis and PostgreSQL containers via Docker Compose.
+// NOTE: fmt.Println is used here (not structured logging) because this is a CLI command
+// providing immediate feedback to the user. Output is for human consumption on stdout.
 func runDevDependenciesStart(cmd *cobra.Command, args []string) error {
 	composePath, err := getDevComposePath()
 	if err != nil {

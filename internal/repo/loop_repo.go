@@ -101,14 +101,36 @@ func (r *loopRepo) ListBySession(ctx context.Context, sessionID uuid.UUID, curso
 // in HandleLoopTask prevents concurrent execution.
 // Safety limit of 100 loops to prevent overwhelming the recovery process.
 func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time) ([]*model.Loop, error) {
-	var loops []*model.Loop
 	const safetyLimit = 100
-	// Calculate the cutoff time: last_run_at + interval_seconds should be before staleThreshold
-	// This ensures we don't mark a loop as stale if it's still within its normal execution interval
+	// Pre-allocate with safety limit capacity to avoid reallocation.
+	loops := make([]*model.Loop, 0, safetyLimit)
+
+	// Build database-specific SQL for calculating scheduled run time
+	dialect := getDialectName(r.db)
+	var scheduledRunTimeExpr, thresholdExpr string
+
+	if dialect == "sqlite" {
+		// SQLite: calculate the threshold time in Go and compare directly
+		// We need to account for each loop's interval, so we use a different approach:
+		// Check if: last_run_at < (staleThreshold - interval_seconds)
+		// Since interval varies per row, we use: last_run_at < datetime(staleThreshold, '-' || interval_seconds || ' seconds')
+		scheduledRunTimeExpr = "datetime(last_run_at)"
+		thresholdExpr = "datetime(?, '-' || interval_seconds || ' seconds')"
+	} else {
+		// PostgreSQL: use interval arithmetic
+		scheduledRunTimeExpr = "last_run_at"
+		thresholdExpr = "? - (interval_seconds * interval '1 second')"
+	}
+
+	// Calculate the cutoff time: last_run_at should be before (staleThreshold - interval)
+	// This ensures we don't mark a loop as stale if it's still within its normal execution interval.
+	// Additionally, exclude loops created within the last minute to avoid recovering
+	// newly created loops whose first execution may not have completed yet.
+	createdAtProtection := time.Now().Add(-1 * time.Minute)
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("status = ? AND last_run_at IS NOT NULL AND "+
-			"last_run_at + (interval_seconds * interval '1 second') < ?",
-			model.LoopStatusActive, staleThreshold).
+			scheduledRunTimeExpr+" < "+thresholdExpr+" AND created_at < ?",
+			model.LoopStatusActive, staleThreshold, createdAtProtection).
 		Limit(safetyLimit).
 		Find(&loops).Error
 	if err != nil {
@@ -120,8 +142,9 @@ func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time)
 // FindExpiredLoops returns active loops whose expires_at has passed.
 // Safety limit of 100 loops to prevent overwhelming the cleanup process.
 func (r *loopRepo) FindExpiredLoops(ctx context.Context) ([]*model.Loop, error) {
-	var loops []*model.Loop
 	const safetyLimit = 100
+	// Pre-allocate with safety limit capacity to avoid reallocation.
+	loops := make([]*model.Loop, 0, safetyLimit)
 	err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("status = ? AND expires_at IS NOT NULL AND expires_at < ?",
 			model.LoopStatusActive, time.Now()).

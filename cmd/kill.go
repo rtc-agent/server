@@ -39,6 +39,10 @@ func init() {
 	rootCmd.AddCommand(killCmd)
 }
 
+// runKill executes the kill command, stopping specified rtc-agent processes.
+// NOTE: fmt.Printf/Fprintln are used here (not structured logging) because this is
+// a CLI command interacting directly with the user. Output goes to stdout/stderr
+// for immediate human consumption, not to a log aggregation system.
 func runKill(cmd *cobra.Command, args []string) error {
 	if killAllFlag {
 		killServeFlag = true

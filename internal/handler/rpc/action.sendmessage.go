@@ -304,7 +304,8 @@ func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol
 		}
 
 		// Collect message IDs for updates (prompt message + user message).
-		var messageIDs []uuid.UUID
+		// Pre-allocate with capacity for prompt + user message to avoid reallocation.
+		messageIDs := make([]uuid.UUID, 0, 2)
 		if promptMsg != nil {
 			messageIDs = append(messageIDs, promptMsg.ID)
 		}
@@ -420,6 +421,9 @@ func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string)
 	}
 	existing, err := h.deps.Deps.RtcSessionUsecase.FindMessageByClientID(ctx, clientID)
 	if err != nil {
+		logger.Error(ctx, "idempotency check failed",
+			zap.String("client_id", clientID),
+			zap.Error(err))
 		return &APIError{Code: ErrorCodeInternalError, Message: "idempotency check failed"}
 	}
 	if existing != nil {
@@ -437,7 +441,7 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 	if h.deps.Queue == nil {
 		logger.Error(txCtx, "rpc.send_message.queue_uninitialized",
 			zap.String("session", sessionID.String()))
-		return h.internalError(txCtx, ErrorCodeSendQueueUninit, "queue not initialized", nil)
+		return h.internalError(txCtx, ErrorCodeSendQueueUninit, "queue not initialized", fmt.Errorf("queue dependency is nil"))
 	}
 	// Extract trace context from the transaction context for cross-process propagation.
 	traceID, spanID := turnagent.ExtractTraceFromCtx(txCtx)
@@ -452,6 +456,8 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 		return h.internalError(txCtx, ErrorCodeSendMarshalPayload, "failed to marshal work payload", err)
 	}
 
+	// Use exponential backoff with a maximum elapsed time to prevent
+	// indefinite retry attempts when Redis is persistently unavailable.
 	bo := backoff.NewExponentialBackOff()
 	_, err = backoff.Retry(txCtx, func() (string, error) {
 		workID, publishErr := h.deps.Queue.Publish(txCtx, sessionID.String(), string(payload), rtcqueue.SubmitWorkPriority)
@@ -468,6 +474,7 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 	},
 		backoff.WithBackOff(bo),
 		backoff.WithMaxTries(3),
+		backoff.WithMaxElapsedTime(10*time.Second), // Hard limit on total retry duration
 	)
 	if err != nil {
 		return h.internalError(txCtx, ErrorCodeSendQueuePublish, "failed to publish to queue", err)

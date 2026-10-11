@@ -72,6 +72,10 @@ func init() {
 	accountCmd.AddCommand(bindRoleCmd)
 }
 
+// runCreate creates a new admin user with the specified email, password, and optional role.
+// NOTE: fmt.Printf is used here (not structured logging) because this is a CLI command
+// providing formatted output for immediate human consumption. The output includes
+// visual indicators (emojis) and structured layout for better readability on stdout.
 func runCreate(cmd *cobra.Command, args []string) {
 	// Load admin config
 	cfg, err := config.LoadAdminConfig(adminCfgFile)
@@ -167,6 +171,10 @@ func runCreate(cmd *cobra.Command, args []string) {
 	}
 }
 
+// runBindRole binds a role to an existing admin user by email.
+// NOTE: fmt.Printf is used here (not structured logging) because this is a CLI command
+// providing formatted output for immediate human consumption. The output includes
+// visual indicators (emojis) and structured layout for better readability on stdout.
 func runBindRole(cmd *cobra.Command, args []string) {
 	// Load admin config
 	cfg, err := config.LoadAdminConfig(adminCfgFile)

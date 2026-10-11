@@ -295,6 +295,7 @@ func (uc *TokenExchangeUsecase) verifyJWTWithJWKS(
 
 // verifyWithCachedKeys verifies a JWT using cached JWKS keys.
 // The kid parameter is the key ID extracted from the JWT header by the caller.
+// Refactored to reduce complexity: delegates to specialized validation functions.
 func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 	ctx context.Context,
 	tokenString string,
@@ -324,8 +325,8 @@ func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 	}
 
 	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (any, error) {
-		if !isAllowedAlgorithm(t.Method.Alg(), allowedAlgs) {
-			return nil, errors.New("invalid token: unsupported signing algorithm")
+		if err := validateJWTAlgorithm(t, allowedAlgs); err != nil {
+			return nil, err
 		}
 		if err := validateKeyType(t.Method, pubKey); err != nil {
 			return nil, errors.New("invalid token: key type mismatch")
@@ -344,63 +345,111 @@ func (uc *TokenExchangeUsecase) verifyWithCachedKeys(
 		return nil, fmt.Errorf("invalid jwt claims")
 	}
 
+	// Validate JWT claims (sub, nbf, aud).
+	if err := uc.validateJWTClaims(ctx, claims, issuerCfg); err != nil {
+		return nil, err
+	}
+
+	return claims, nil
+}
+
+// validateJWTAlgorithm checks if the JWT signing algorithm is allowed.
+func validateJWTAlgorithm(token *jwt.Token, allowedAlgs []string) error {
+	if !isAllowedAlgorithm(token.Method.Alg(), allowedAlgs) {
+		return errors.New("invalid token: unsupported signing algorithm")
+	}
+	return nil
+}
+
+// validateJWTClaims validates JWT claims including sub, nbf, and audience.
+// Refactored from verifyWithCachedKeys to reduce complexity.
+func (uc *TokenExchangeUsecase) validateJWTClaims(
+	ctx context.Context,
+	claims jwt.MapClaims,
+	issuerCfg *config.ExternalIssuerConfig,
+) error {
 	// Validate sub is present.
 	sub, _ := claims["sub"].(string)
 	if sub == "" {
-		return nil, fmt.Errorf("jwt missing sub claim")
+		return fmt.Errorf("jwt missing sub claim")
 	}
 
 	// Validate nbf if present.
+	if err := validateNBFClaim(claims); err != nil {
+		return err
+	}
+
+	// Validate audience.
+	if err := uc.validateAudienceClaim(ctx, claims, issuerCfg); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateNBFClaim validates the "not before" (nbf) claim if present.
+func validateNBFClaim(claims jwt.MapClaims) error {
 	if nbf, ok := claims["nbf"]; ok {
 		if nbfFloat, ok := nbf.(float64); ok {
 			if time.Now().Before(time.Unix(int64(nbfFloat), 0)) {
-				return nil, fmt.Errorf("jwt used before nbf")
+				return fmt.Errorf("jwt used before nbf")
 			}
 		}
 	}
+	return nil
+}
 
-	// Validate aud if configured.
-	// SECURITY: When ExpectedAudience is not configured, skip audience validation but log
-	// an error in production. Without audience restriction, any JWT from this issuer can be exchanged,
-	// which increases the risk if the JWT is intended for a different service.
-	// This is a critical security misconfiguration that should be fixed immediately.
-	if issuerCfg.ExpectedAudience != "" {
-		aud, _ := claims["aud"].([]interface{})
-		if len(aud) == 0 {
-			return nil, fmt.Errorf("jwt missing aud claim")
+// validateAudienceClaim validates the audience (aud) claim against the expected audience.
+// SECURITY: When ExpectedAudience is not configured, logs a critical warning in production.
+func (uc *TokenExchangeUsecase) validateAudienceClaim(
+	ctx context.Context,
+	claims jwt.MapClaims,
+	issuerCfg *config.ExternalIssuerConfig,
+) error {
+	if issuerCfg.ExpectedAudience == "" {
+		// SECURITY: Log when audience validation is skipped.
+		uc.logAudienceValidationDisabled(ctx, issuerCfg)
+		return nil
+	}
+
+	aud, _ := claims["aud"].([]interface{})
+	if len(aud) == 0 {
+		return fmt.Errorf("jwt missing aud claim")
+	}
+
+	for _, a := range aud {
+		if audStr, ok := a.(string); ok && audStr == issuerCfg.ExpectedAudience {
+			return nil
 		}
-		found := false
-		for _, a := range aud {
-			if audStr, ok := a.(string); ok && audStr == issuerCfg.ExpectedAudience {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, fmt.Errorf("jwt aud claim does not match expected audience")
-		}
-	} else {
+	}
+
+	return fmt.Errorf("jwt aud claim does not match expected audience")
+}
+
+// logAudienceValidationDisabled logs a warning or error when audience validation is disabled.
+// In production, this is a critical security misconfiguration.
+func (uc *TokenExchangeUsecase) logAudienceValidationDisabled(
+	ctx context.Context,
+	issuerCfg *config.ExternalIssuerConfig,
+) {
+	if uc.serverEnv == "production" {
 		// SECURITY: In production, log an error when audience validation is skipped.
 		// This is a critical security misconfiguration that allows any JWT from this issuer
 		// to be exchanged, even if it was intended for a different service.
 		// Operators should configure expected_audience immediately.
-		if uc.serverEnv == "production" {
-			logger.Error(ctx, "token_exchange.audience_validation_disabled",
-				zap.String("issuer", issuerCfg.Issuer),
-				zap.String("severity", "CRITICAL"),
-				zap.String("reason", "expected_audience_not_configured"),
-				zap.String("risk", "any JWT from this issuer can be exchanged, even if intended for other services"),
-				zap.String("remediation", "configure expected_audience in token_exchange config to restrict which JWTs can be exchanged"))
-		} else {
-			// In non-production environments, log as warning for awareness
-			logger.Warn(ctx, "token_exchange.audience_validation_skipped",
-				zap.String("issuer", issuerCfg.Issuer),
-				zap.String("reason", "expected_audience_not_configured"),
-				zap.String("warning", "audience validation is disabled; configure expected_audience in production"))
-		}
+		logger.Error(ctx, "token_exchange.audience_validation_disabled",
+			zap.String("issuer", issuerCfg.Issuer),
+			zap.String("severity", "CRITICAL"),
+			zap.String("reason", "expected_audience_not_configured"),
+			zap.String("risk", "any JWT from this issuer can be exchanged, even if intended for other services"),
+			zap.String("remediation", "configure expected_audience in token_exchange config to restrict which JWTs can be exchanged"))
+	} else {
+		// In non-production environments, log as warning for awareness
+		logger.Warn(ctx, "token_exchange.audience_validation_skipped",
+			zap.String("issuer", issuerCfg.Issuer),
+			zap.String("reason", "expected_audience_not_configured"),
+			zap.String("warning", "audience validation is disabled; configure expected_audience in production"))
 	}
-
-	return claims, nil
 }
 
 // extractedUserInfo holds user info extracted from JWT claims.
