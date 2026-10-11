@@ -216,17 +216,36 @@ func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken 
 	}
 
 	if rt.Revoked {
-		// Potential token reuse detection: if a revoked token is used, it may indicate
-		// that the token was stolen. This is a security-critical event that should
-		// trigger alerting and potentially session revocation.
-		logger.Warn(ctx, "auth.refresh_token_reuse_detected",
-			zap.String("token_hash_prefix", rtHash[:16]),
+		// SECURITY CRITICAL: Refresh token reuse detected. This strongly indicates
+		// that the token has been stolen and is being used by an attacker.
+		// Immediate alerting and session revocation are required.
+		logger.Error(ctx, "auth.refresh_token_reuse_detected: potential token theft - refresh token was reused",
+			zap.String("token_id", rt.ID.String()),
 			zap.String("user_id", rt.UserID.String()),
 			zap.String("device_id", rt.DeviceID),
-			zap.Time("token_expires_at", rt.ExpiresAt))
+			zap.String("token_hash_prefix", rtHash[:16]),
+			zap.Time("token_expires_at", rt.ExpiresAt),
+			zap.Time("detected_at", time.Now()))
 		// Record Prometheus metric for security monitoring and alerting.
 		// Alert rule suggestion: rate(sec_events_total{event_type="refresh_token_reuse"}) > 0
 		auth.RecordSecurityEvent("refresh_token_reuse")
+
+		// SECURITY: Revoke all active refresh tokens for this user+device to invalidate
+		// potentially stolen sessions. This prevents an attacker from continuing to use
+		// any tokens obtained from the compromised device.
+		if revoked, revokeErr := uc.refreshTokenRepo.RevokeAllByUserAndDevice(ctx, rt.UserID, rt.DeviceID); revokeErr != nil {
+			logger.Error(ctx, "auth.revoke_all_tokens_failed",
+				zap.String("user_id", rt.UserID.String()),
+				zap.String("device_id", rt.DeviceID),
+				zap.Error(revokeErr))
+		} else {
+			logger.Error(ctx, "auth.refresh_token_reuse_mitigated: all tokens for this device have been revoked",
+				zap.String("token_id", rt.ID.String()),
+				zap.String("user_id", rt.UserID.String()),
+				zap.String("device_id", rt.DeviceID),
+				zap.Int64("tokens_revoked", revoked))
+		}
+
 		return nil, ErrRefreshTokenRevoked
 	}
 	if time.Now().After(rt.ExpiresAt) {
