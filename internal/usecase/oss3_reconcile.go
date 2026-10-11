@@ -139,6 +139,7 @@ func (uc *OSS3Usecase) setRedisQuota(ctx context.Context, userID string, value i
 //   - Completeness: Most users won't have more than 1000 concurrent pending uploads
 //   - Memory safety: Prevents OOM if a user has an unusually large number of pending entries
 //   - Performance: Avoids loading excessive data in a single Redis call
+//
 // If a user exceeds this limit, reconciliation will undercount their pending total,
 // but this is acceptable as it's a rare edge case and the next reconciliation cycle
 // will correct any drift.

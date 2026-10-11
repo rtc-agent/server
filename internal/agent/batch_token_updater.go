@@ -32,7 +32,7 @@ import (
 	"github.com/google/uuid"
 	dbmodel "github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
-	"github.com/rtc-agent/server/pkg/turn-agent"
+	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
 
 // BatchTokenUpdater accumulates token updates in memory and flushes them to the
@@ -56,9 +56,9 @@ type BatchTokenUpdater struct {
 type pendingUpdate struct {
 	sessionID   uuid.UUID
 	delta       dbmodel.TokenUsageDelta
-	updateCount int           // number of LLM calls accumulated
-	firstUpdate time.Time     // time of first update (for metrics)
-	lastUpdate  time.Time     // time of last update (for metrics)
+	updateCount int       // number of LLM calls accumulated
+	firstUpdate time.Time // time of first update (for metrics)
+	lastUpdate  time.Time // time of last update (for metrics)
 }
 
 // NewBatchTokenUpdater creates a new BatchTokenUpdater.
@@ -207,11 +207,11 @@ func (b *BatchTokenUpdater) flushSessionLocked(ctx context.Context, sessionID uu
 	}
 
 	b.logger.Debug(ctx, "batch_token_updater.flushed", map[string]any{
-		"session_id":    sessionID,
-		"update_count":  pending.updateCount,
-		"duration_ms":   pending.lastUpdate.Sub(pending.firstUpdate).Milliseconds(),
-		"total_delta":   pending.delta.TotalDelta,
-		"cost_micros":   pending.delta.CostMicrosDelta,
+		"session_id":   sessionID,
+		"update_count": pending.updateCount,
+		"duration_ms":  pending.lastUpdate.Sub(pending.firstUpdate).Milliseconds(),
+		"total_delta":  pending.delta.TotalDelta,
+		"cost_micros":  pending.delta.CostMicrosDelta,
 	})
 
 	return nil
