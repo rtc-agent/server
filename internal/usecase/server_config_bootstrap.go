@@ -9,7 +9,9 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -56,53 +58,64 @@ func (uc *ServerConfigUsecase) BootstrapDynamicConfigs(ctx context.Context, oper
 			continue
 		}
 
-		// Create config record (version=1).
-		cfg := &model.ServerConfig{
-			Key:         key,
-			UserID:      nil,
-			Value:       datatypes.JSON(jsonVal),
-			ValueType:   entry.ValueType,
-			Category:    entry.Category,
-			Description: entry.Description,
-			Version:     1,
-			UpdatedBy:   &operatorID,
-			UpdatedAt:   now,
-		}
-		if err := uc.configRepo.Upsert(ctx, cfg, 0); err != nil {
-			// In multi-instance deployments, concurrent bootstrap attempts may cause
-			// unique constraint violations. If the config was already created by another
-			// instance, skip silently (idempotent behavior).
-			if errors.Is(err, repo.ErrConflict) {
-				logger.Debug(ctx, "bootstrap.config_already_exists",
-					zap.String("key", key),
-					zap.String("reason", "concurrent_bootstrap"))
-				continue
-			}
-			return fmt.Errorf("bootstrap config %q: %w", key, err)
-		}
+		// P0-3 fix: Wrap config and history creation in a transaction for atomicity.
+		err = uc.db.Transaction(func(tx *gorm.DB) error {
+			txCtx := dbutil.WithTx(ctx, tx)
 
-		// Create v1 history record (old_value=null, new_value=yaml_default).
-		// This represents the "initial bootstrap" from no DB value to yaml default.
-		history := &model.ServerConfigHistory{
-			Key:        key,
-			UserID:     nil,
-			OldValue:   nil, // null represents "no DB value"
-			NewValue:   datatypes.JSON(jsonVal),
-			Version:    1, // Match config record version
-			ChangedBy:  operatorID,
-			ChangedAt:  now,
-			ChangeNote: "Initial bootstrap from yaml default",
-		}
-		if err := uc.db.WithContext(ctx).Create(history).Error; err != nil {
-			// History creation may also fail due to concurrent bootstrap or duplicate key.
-			// Log as warning but don't fail the entire bootstrap process.
-			if repo.IsDuplicateKeyError(err) {
-				logger.Warn(ctx, "bootstrap.history_already_exists",
-					zap.String("key", key),
-					zap.Error(err))
-				continue
+			// Create config record (version=1).
+			cfg := &model.ServerConfig{
+				Key:         key,
+				UserID:      nil,
+				Value:       datatypes.JSON(jsonVal),
+				ValueType:   entry.ValueType,
+				Category:    entry.Category,
+				Description: entry.Description,
+				Version:     1,
+				UpdatedBy:   &operatorID,
+				UpdatedAt:   now,
 			}
-			return fmt.Errorf("create bootstrap history for %q: %w", key, err)
+			if err := uc.configRepo.Upsert(txCtx, cfg, 0); err != nil {
+				// In multi-instance deployments, concurrent bootstrap attempts may cause
+				// unique constraint violations. If the config was already created by another
+				// instance, skip silently (idempotent behavior).
+				if errors.Is(err, repo.ErrConflict) {
+					logger.Debug(ctx, "bootstrap.config_already_exists",
+						zap.String("key", key),
+						zap.String("reason", "concurrent_bootstrap"))
+					return nil // Return nil to commit transaction (no-op)
+				}
+				return fmt.Errorf("bootstrap config %q: %w", key, err)
+			}
+
+			// Create v1 history record (old_value=null, new_value=yaml_default).
+			// This represents the "initial bootstrap" from no DB value to yaml default.
+			history := &model.ServerConfigHistory{
+				Key:        key,
+				UserID:     nil,
+				OldValue:   nil, // null represents "no DB value"
+				NewValue:   datatypes.JSON(jsonVal),
+				Version:    1, // Match config record version
+				ChangedBy:  operatorID,
+				ChangedAt:  now,
+				ChangeNote: "Initial bootstrap from yaml default",
+			}
+			if err := tx.WithContext(ctx).Create(history).Error; err != nil {
+				// History creation may also fail due to concurrent bootstrap or duplicate key.
+				// Log as warning but don't fail the entire bootstrap process.
+				if repo.IsDuplicateKeyError(err) {
+					logger.Warn(ctx, "bootstrap.history_already_exists",
+						zap.String("key", key),
+						zap.Error(err))
+					return nil // Return nil to commit transaction (no-op)
+				}
+				return fmt.Errorf("create bootstrap history for %q: %w", key, err)
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			return fmt.Errorf("bootstrap %q transaction failed: %w", key, err)
 		}
 
 		logger.Info(ctx, "bootstrap.config_initialized",

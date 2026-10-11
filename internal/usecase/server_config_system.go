@@ -11,6 +11,7 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
@@ -135,9 +136,9 @@ func (uc *ServerConfigUsecase) UpdateSystemConfig(ctx context.Context, key strin
 	now := time.Now()
 
 	for attempt := 0; attempt < maxConfigRetries; attempt++ {
-		oldValueJSON, newVersion, err := uc.executeConfigUpdateTx(ctx, key, jsonVal, input, entry, operatorID, now)
+		_, newVersion, err := uc.executeConfigUpdateTx(ctx, key, jsonVal, input, entry, operatorID, operatorIP, now)
 		if err == nil {
-			uc.postUpdateOperations(ctx, key, oldValueJSON, input, newVersion, operatorID, operatorIP)
+			uc.postUpdateOperations(ctx, key, newVersion)
 			return uc.GetSystemConfig(ctx, key)
 		}
 
@@ -145,11 +146,22 @@ func (uc *ServerConfigUsecase) UpdateSystemConfig(ctx context.Context, key strin
 			return nil, err
 		}
 
+		// P0-4 fix: Only retry when input.Version < 0 (force overwrite).
+		// When input.Version >= 0, the client specified a specific version that has changed,
+		// so retrying won't help - the client must fetch the new version and retry explicitly.
+		if input.Version >= 0 {
+			return nil, fmt.Errorf("optimistic lock conflict: specified version %d no longer current for key %q", input.Version, key)
+		}
+
 		if attempt < maxConfigRetries-1 {
+			// P0-4 fix: Add exponential backoff to reduce contention.
+			backoff := time.Duration(1<<uint(attempt)) * 100 * time.Millisecond // 100ms, 200ms, 400ms
 			logger.Warn(ctx, "optimistic_lock_conflict_retrying",
 				zap.String("key", key),
 				zap.Int("attempt", attempt+1),
-				zap.Int("max_retries", maxConfigRetries))
+				zap.Int("max_retries", maxConfigRetries),
+				zap.Duration("backoff", backoff))
+			time.Sleep(backoff)
 			continue
 		}
 	}
@@ -166,10 +178,11 @@ func (uc *ServerConfigUsecase) executeConfigUpdateTx(
 	input UpdateConfigInput,
 	entry *config.ConfigEntry,
 	operatorID uuid.UUID,
+	operatorIP string,
 	now time.Time,
 ) (oldValueJSON datatypes.JSON, newVersion int, err error) {
 	err = uc.db.Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 
 		// Capture old value within the same transaction for history.
 		oldValueJSON = uc.getOldValue(txCtx, key, nil, entry)
@@ -210,6 +223,20 @@ func (uc *ServerConfigUsecase) executeConfigUpdateTx(
 			return fmt.Errorf("create config history: %w", err)
 		}
 
+		// Write audit log within the same transaction for atomicity (P0-1 fix).
+		auditDetails := map[string]any{
+			"key":         key,
+			"user_id":     nil,
+			"old_value":   config.UnmarshalJSONB(oldValueJSON),
+			"new_value":   input.Value,
+			"version":     newVersion,
+			"change_note": input.ChangeNote,
+		}
+		auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.update", "server_config", uuid.Nil, auditDetails)
+		if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
+			return fmt.Errorf("create audit log: %w", err)
+		}
+
 		return nil
 	})
 	return oldValueJSON, newVersion, err
@@ -245,39 +272,43 @@ func (uc *ServerConfigUsecase) calculateVersionAndExpected(
 }
 
 // postUpdateOperations handles all operations after a successful config update transaction.
+// P0-1 fix: Audit log is now created within the transaction for atomicity.
+// P0-2 fix: Publish operations now include retry with exponential backoff.
 func (uc *ServerConfigUsecase) postUpdateOperations(
 	ctx context.Context,
 	key string,
-	oldValueJSON datatypes.JSON,
-	input UpdateConfigInput,
 	newVersion int,
-	operatorID uuid.UUID,
-	operatorIP string,
 ) {
-	// Trim history to 100 entries.
+	// Trim history to 100 entries (non-critical, failures logged).
 	if trimErr := uc.configRepo.TrimHistory(ctx, key, nil, 100); trimErr != nil {
 		logger.Warn(ctx, "config.trim_history_failed", zap.Error(trimErr))
 	}
 
-	// Audit log (config key stored in details, ResourceID left as zero UUID).
-	auditDetails := map[string]any{
-		"key":         key,
-		"user_id":     nil,
-		"old_value":   config.UnmarshalJSONB(oldValueJSON),
-		"new_value":   input.Value,
-		"version":     newVersion,
-		"change_note": input.ChangeNote,
-	}
-	auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.update", "server_config", uuid.Nil, auditDetails)
-	if auditErr := uc.auditLogRepo.Create(ctx, auditLog); auditErr != nil {
-		logger.Warn(ctx, "config.create_audit_log_failed", zap.Error(auditErr))
-	}
-
 	// Publish config update event for multi-instance cache synchronization.
+	// P0-2 fix: Add retry with exponential backoff for publish operations.
 	if uc.configPublisher != nil {
-		if pubErr := uc.configPublisher.PublishConfigUpdate(ctx, key, nil, newVersion, "update"); pubErr != nil {
-			logger.Warn(ctx, "config.publish_update_failed",
+		const maxPublishRetries = 3
+		var pubErr error
+		for attempt := 0; attempt < maxPublishRetries; attempt++ {
+			pubErr = uc.configPublisher.PublishConfigUpdate(ctx, key, nil, newVersion, "update")
+			if pubErr == nil {
+				break
+			}
+			if attempt < maxPublishRetries-1 {
+				backoff := time.Duration(1<<uint(attempt)) * 50 * time.Millisecond // 50ms, 100ms
+				logger.Warn(ctx, "config.publish_update_failed_retrying",
+					zap.String("key", key),
+					zap.Int("attempt", attempt+1),
+					zap.Int("max_retries", maxPublishRetries),
+					zap.Duration("backoff", backoff),
+					zap.Error(pubErr))
+				time.Sleep(backoff)
+			}
+		}
+		if pubErr != nil {
+			logger.Error(ctx, "config.publish_update_failed_after_retries",
 				zap.String("key", key),
+				zap.Int("version", newVersion),
 				zap.Error(pubErr))
 		}
 	}
@@ -292,7 +323,7 @@ func (uc *ServerConfigUsecase) DeleteSystemConfig(ctx context.Context, key strin
 
 	now := time.Now()
 	err = uc.db.Transaction(func(tx *gorm.DB) error {
-		txCtx := repo.WithTx(ctx, tx)
+		txCtx := dbutil.WithTx(ctx, tx)
 
 		// CAS delete returns the deleted record in a single SELECT+DELETE,
 		// eliminating the redundant pre-transaction Get (P2-1 fix).
@@ -344,10 +375,30 @@ func (uc *ServerConfigUsecase) DeleteSystemConfig(ctx context.Context, key strin
 	}
 
 	// Publish config delete event for multi-instance cache synchronization.
+	// P0-2 fix: Add retry with exponential backoff for publish operations.
 	if uc.configPublisher != nil {
-		if pubErr := uc.configPublisher.PublishConfigUpdate(ctx, key, nil, deletedVersion+1, "delete"); pubErr != nil {
-			logger.Warn(ctx, "config.publish_delete_failed",
+		const maxPublishRetries = 3
+		var pubErr error
+		for attempt := 0; attempt < maxPublishRetries; attempt++ {
+			pubErr = uc.configPublisher.PublishConfigUpdate(ctx, key, nil, deletedVersion+1, "delete")
+			if pubErr == nil {
+				break
+			}
+			if attempt < maxPublishRetries-1 {
+				backoff := time.Duration(1<<uint(attempt)) * 50 * time.Millisecond // 50ms, 100ms
+				logger.Warn(ctx, "config.publish_delete_failed_retrying",
+					zap.String("key", key),
+					zap.Int("attempt", attempt+1),
+					zap.Int("max_retries", maxPublishRetries),
+					zap.Duration("backoff", backoff),
+					zap.Error(pubErr))
+				time.Sleep(backoff)
+			}
+		}
+		if pubErr != nil {
+			logger.Error(ctx, "config.publish_delete_failed_after_retries",
 				zap.String("key", key),
+				zap.Int("version", deletedVersion+1),
 				zap.Error(pubErr))
 		}
 	}
