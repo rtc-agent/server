@@ -10,13 +10,17 @@ import (
 
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/pkg/memory"
 )
 
 // RtcSessionUsecase handles RTC session and message management operations.
 type RtcSessionUsecase struct {
-	sessionRepo repo.SessionRepo
-	messageRepo repo.MessageRepo
-	turnRepo    repo.TurnRepo
+	sessionRepo         repo.SessionRepo
+	messageRepo         repo.MessageRepo
+	turnRepo            repo.TurnRepo
+	rtcRepo             repo.RtcRepo
+	memoryRepo          memory.Repository
+	scriptExecutionRepo repo.ScriptExecutionRepo
 }
 
 // NewRtcSessionUsecase creates a new RtcSessionUsecase.
@@ -24,11 +28,17 @@ func NewRtcSessionUsecase(
 	sessionRepo repo.SessionRepo,
 	messageRepo repo.MessageRepo,
 	turnRepo repo.TurnRepo,
+	rtcRepo repo.RtcRepo,
+	memoryRepo memory.Repository,
+	scriptExecutionRepo repo.ScriptExecutionRepo,
 ) *RtcSessionUsecase {
 	return &RtcSessionUsecase{
-		sessionRepo: sessionRepo,
-		messageRepo: messageRepo,
-		turnRepo:    turnRepo,
+		sessionRepo:         sessionRepo,
+		messageRepo:         messageRepo,
+		turnRepo:            turnRepo,
+		rtcRepo:             rtcRepo,
+		memoryRepo:          memoryRepo,
+		scriptExecutionRepo: scriptExecutionRepo,
 	}
 }
 
@@ -295,4 +305,42 @@ func computeTokenStatsSummary(dailyStats []*TokenStatDay) *TokenStatsSummary {
 		}
 	}
 	return summary
+}
+
+// ============================================================
+// RTC operations (used by RPC handlers)
+// ============================================================
+
+// GetRtcSession returns an RTC by ID.
+// Returns nil and an error if the RTC is not found.
+func (uc *RtcSessionUsecase) GetRtcSession(ctx context.Context, id uuid.UUID) (*model.Rtc, error) {
+	return uc.rtcRepo.GetByID(ctx, id)
+}
+
+// UpdateRtcOutputMessageID updates the output message ID for an RTC.
+func (uc *RtcSessionUsecase) UpdateRtcOutputMessageID(ctx context.Context, id uuid.UUID, outputMessageID uuid.UUID) error {
+	return uc.rtcRepo.UpdateOutputMessageID(ctx, id, outputMessageID)
+}
+
+// ListRtcSessionsBySession returns RTCs for a session with cursor pagination (ASC by creation time).
+func (uc *RtcSessionUsecase) ListRtcSessionsBySession(ctx context.Context, sessionID uuid.UUID, cursor *string, limit int) ([]*model.Rtc, error) {
+	return uc.rtcRepo.ListBySession(ctx, sessionID, cursor, limit)
+}
+
+// ============================================================
+// Memory operations (used by RPC handlers)
+// ============================================================
+
+// DeleteMemoryByScope deletes all memories for the given scope and scope ID.
+func (uc *RtcSessionUsecase) DeleteMemoryByScope(ctx context.Context, scope memory.ScopeType, scopeID uuid.UUID) error {
+	return uc.memoryRepo.DeleteByScope(ctx, scope, scopeID)
+}
+
+// ============================================================
+// Script Execution operations (used by RPC handlers)
+// ============================================================
+
+// CreateScriptExecution stores a new script execution record.
+func (uc *RtcSessionUsecase) CreateScriptExecution(ctx context.Context, exec *model.ScriptExecution) error {
+	return uc.scriptExecutionRepo.Create(ctx, exec)
 }

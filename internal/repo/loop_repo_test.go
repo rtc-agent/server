@@ -454,10 +454,13 @@ func TestLoopRepo_FindStaleLoops_FindsStale(t *testing.T) {
 	loop := newTestLoop(t, sessionID)
 	require.NoError(t, repo.Create(ctx, loop))
 
-	// Set last_run_at to the past (stale)
+	// Set last_run_at to the past (stale) and created_at to more than 1 minute ago
+	// to pass the created_at protection that prevents recovering newly created loops.
 	staleTime := time.Now().Add(-2 * time.Hour)
+	oldCreatedAt := time.Now().Add(-5 * time.Minute)
 	require.NoError(t, repo.Update(ctx, loop.ID, map[string]any{
 		"last_run_at": staleTime,
+		"created_at":  oldCreatedAt,
 	}))
 
 	staleThreshold := time.Now().Add(-1 * time.Hour)

@@ -1,9 +1,8 @@
 package model
 
-// Utility functions for pointer operations.
-// TODO: Consider moving to internal/infra/httputil or a dedicated util package.
-
 // StrPtr converts a non-empty string to *string; returns nil for empty strings.
+// NOTE: A copy of this function also exists in internal/infra/httputil/ptr.go
+// for use by handler packages that must not import internal/model.
 func StrPtr(s string) *string {
 	if s == "" {
 		return nil
@@ -12,6 +11,8 @@ func StrPtr(s string) *string {
 }
 
 // DerefStr dereferences a *string; returns empty string for nil.
+// NOTE: A copy of this function also exists in internal/infra/httputil/ptr.go
+// for use by handler packages that must not import internal/model.
 func DerefStr(s *string) string {
 	if s == nil {
 		return ""

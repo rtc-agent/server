@@ -23,12 +23,13 @@ type BanPublisher interface {
 
 // RtcUserUsecase handles RTC user management operations.
 type RtcUserUsecase struct {
-	db               *gorm.DB
-	oauth2UserRepo   repo.OAuth2UserRepo
-	refreshTokenRepo repo.RefreshTokenRepo
-	banPublisher     BanPublisher
-	auditLogRepo     repo.AuditLogRepo
-	deviceRepo       repo.DeviceRepo
+	db                      *gorm.DB
+	oauth2UserRepo          repo.OAuth2UserRepo
+	refreshTokenRepo        repo.RefreshTokenRepo
+	banPublisher            BanPublisher
+	auditLogRepo            repo.AuditLogRepo
+	deviceRepo              repo.DeviceRepo
+	temporaryCredentialRepo repo.TemporaryCredentialRepo
 }
 
 // NewRtcUserUsecase creates a new RtcUserUsecase.
@@ -38,13 +39,15 @@ func NewRtcUserUsecase(
 	refreshTokenRepo repo.RefreshTokenRepo,
 	auditLogRepo repo.AuditLogRepo,
 	deviceRepo repo.DeviceRepo,
+	temporaryCredentialRepo repo.TemporaryCredentialRepo,
 ) *RtcUserUsecase {
 	return &RtcUserUsecase{
-		db:               db,
-		oauth2UserRepo:   oauth2UserRepo,
-		refreshTokenRepo: refreshTokenRepo,
-		auditLogRepo:     auditLogRepo,
-		deviceRepo:       deviceRepo,
+		db:                      db,
+		oauth2UserRepo:          oauth2UserRepo,
+		refreshTokenRepo:        refreshTokenRepo,
+		auditLogRepo:            auditLogRepo,
+		deviceRepo:              deviceRepo,
+		temporaryCredentialRepo: temporaryCredentialRepo,
 	}
 }
 
@@ -121,6 +124,7 @@ func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput, admin
 
 	// 2. Update user + revoke tokens in a transaction
 	var revokedCount int64
+	var revokedCredentialsCount int64
 	if err := uc.db.Transaction(func(tx *gorm.DB) error {
 		txCtx := repo.WithTx(ctx, tx)
 
@@ -137,6 +141,22 @@ func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput, admin
 		logger.Info(txCtx, "ban_user.tokens_revoked",
 			zap.String("user_id", input.UserID.String()),
 			zap.Int64("revoked_count", revokedCount))
+
+		// Revoke OSS3 temporary credentials - critical for security
+		// This ensures banned users cannot continue using S3 credentials
+		if uc.temporaryCredentialRepo != nil {
+			deleted, err := uc.temporaryCredentialRepo.DeleteByUserID(txCtx, input.UserID)
+			if err != nil {
+				// Rollback transaction - credential revocation is critical for security
+				return fmt.Errorf("revoke oss3 credentials: %w", err)
+			}
+			revokedCredentialsCount = deleted
+			if deleted > 0 {
+				logger.Info(txCtx, "ban_user.oss3_credentials_revoked",
+					zap.String("user_id", input.UserID.String()),
+					zap.Int64("revoked_count", deleted))
+			}
+		}
 
 		return nil
 	}); err != nil {
@@ -161,7 +181,7 @@ func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput, admin
 	if uc.auditLogRepo != nil {
 		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
 			adminUserID, adminIP, "ban_user", "rtc_user", input.UserID,
-			map[string]any{"reason": input.Reason, "revoked_tokens": revokedCount},
+			map[string]any{"reason": input.Reason, "revoked_tokens": revokedCount, "revoked_oss3_credentials": revokedCredentialsCount},
 		)); err != nil {
 			logger.Error(ctx, "ban_user.audit_log_failed", zap.Error(err))
 		}

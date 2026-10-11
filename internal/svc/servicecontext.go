@@ -72,6 +72,7 @@ func NewServiceContext(cfg *config.Config, db *gorm.DB, rdb redis.UniversalClien
 	jwtSigner, err := auth.NewJWTSigner(
 		cfg.Auth.JWTSecret,
 		time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second,
+		cfg.Server.Env,
 	)
 	if err != nil {
 		logger.Fatal(context.Background(), "init JWT signer", zap.Error(err))

@@ -58,7 +58,9 @@ func (r *deviceRepo) FindByUserAndDeviceID(ctx context.Context, userID uuid.UUID
 }
 
 func (r *deviceRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]*model.Device, error) {
-	var devices []*model.Device
+	// Pre-allocate with a reasonable initial capacity. Most users have <10 devices,
+	// so we use 8 as a starting point to minimize reallocations for typical cases.
+	devices := make([]*model.Device, 0, 8)
 	if err := DBFromContext(ctx, r.db).WithContext(ctx).
 		Where("user_id = ?", userID).
 		Order("last_active_at DESC").

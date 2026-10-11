@@ -16,6 +16,7 @@ type TemporaryCredential struct {
 	SecretAccessKey string    `gorm:"type:varchar(255);not null" json:"secret_access_key"` // AES-256-GCM encrypted
 	SessionToken    string    `gorm:"type:text;not null" json:"session_token"`             // AES-256-GCM encrypted
 	ExpiresAt       time.Time `gorm:"not null;index:idx_credentials_expires_at" json:"expires_at"`
+	Revoked         bool      `gorm:"not null;default:false" json:"revoked"` // P1-4 fix: soft-delete flag for cache invalidation failure
 	CreatedAt       time.Time `json:"created_at"`
 }
 

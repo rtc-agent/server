@@ -42,6 +42,22 @@ func PrepareSession(
 	}
 
 	// New session
+	// Idempotency check: if clientSessionID is provided, check if it already exists
+	if clientSessionID != "" {
+		existing, err := deps.SessionRepo.FindByClientID(ctx, clientSessionID)
+		if err != nil {
+			return nil, false, fmt.Errorf("find session by client_id %q: %w", clientSessionID, err)
+		}
+		if existing != nil {
+			// Session with this clientSessionID already exists - verify ownership
+			if err := assertCreatorOwns(existing, creator); err != nil {
+				return nil, false, err
+			}
+			// Return existing session for idempotency (isNew=false)
+			return existing, false, nil
+		}
+	}
+
 	session := &model.Session{
 		ID:         uuid.Must(uuid.NewV7()),
 		ClientID:   clientSessionID,

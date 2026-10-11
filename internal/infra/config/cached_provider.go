@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -46,7 +47,7 @@ func (p *CachedConfigProvider) GetEffectiveString(ctx context.Context, key strin
 	}
 	s, ok := val.(string)
 	if !ok {
-		return "", err
+		return "", fmt.Errorf("config %q expected string, got %T", key, val)
 	}
 	return s, nil
 }
@@ -66,8 +67,7 @@ func (p *CachedConfigProvider) GetEffectiveInt(ctx context.Context, key string, 
 	case float64:
 		return int(v), nil
 	default:
-		// Re-fetch from inner provider for type conversion.
-		return p.inner.GetEffectiveInt(ctx, key, userID)
+		return 0, fmt.Errorf("config %q expected int, got %T", key, val)
 	}
 }
 
@@ -85,7 +85,7 @@ func (p *CachedConfigProvider) GetEffectiveFloat(ctx context.Context, key string
 	case int:
 		return float64(v), nil
 	default:
-		return p.inner.GetEffectiveFloat(ctx, key, userID)
+		return 0, fmt.Errorf("config %q expected float, got %T", key, val)
 	}
 }
 
@@ -99,7 +99,7 @@ func (p *CachedConfigProvider) GetEffectiveBool(ctx context.Context, key string,
 	}
 	b, ok := val.(bool)
 	if !ok {
-		return p.inner.GetEffectiveBool(ctx, key, userID)
+		return false, fmt.Errorf("config %q expected bool, got %T", key, val)
 	}
 	return b, nil
 }

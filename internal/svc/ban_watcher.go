@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"runtime/debug"
 	"sync"
 	"time"
 
@@ -48,17 +47,9 @@ func NewBanWatcher(node *centrifuge.Node, rdb redis.UniversalClient) (*BanWatche
 	}
 
 	// Start background listener with reconnection
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Error(bw.baseCtx, "panic_recovered",
-					zap.String("goroutine", "ban_watcher.listenWithReconnect"),
-					zap.Any("panic", r),
-					zap.String("stack", string(debug.Stack())))
-			}
-		}()
+	logger.SafeGo("ban_watcher.listen", func() {
 		bw.listenWithReconnect()
-	}()
+	})
 
 	return bw, nil
 }

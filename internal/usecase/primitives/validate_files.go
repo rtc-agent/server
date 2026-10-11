@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -63,14 +62,12 @@ func ValidateFilesExist(ctx context.Context, fileRepo FileRepo, files []protocol
 		return fmt.Errorf("file verification failed: %w", err)
 	}
 
-	var missing []string
 	for _, key := range keys {
 		if !exists[key] {
-			missing = append(missing, key)
+			// Return a generic message to avoid leaking internal file keys
+			// that could be used for file enumeration attacks.
+			return fmt.Errorf("one or more files not found")
 		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("files not found: %s", strings.Join(missing, ", "))
 	}
 	return nil
 }

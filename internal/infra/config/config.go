@@ -616,6 +616,20 @@ type TracingConfig struct {
 
 	// SampleRate is the sampling rate (0.0 - 1.0). Default 1.0 (full sampling).
 	SampleRate float64 `mapstructure:"sample_rate"`
+
+	// Insecure controls whether to use an unencrypted connection to the OTLP endpoint.
+	// Default false (use TLS). Set to true only for development environments.
+	Insecure bool `mapstructure:"insecure"`
+
+	// ServiceVersion is the version of the service (e.g., "1.0.0").
+	// Optional but recommended for multi-version deployments and canary releases.
+	// Defaults to "unknown" if not specified.
+	ServiceVersion string `mapstructure:"service_version"`
+
+	// Environment is the deployment environment (e.g., "production", "staging", "development").
+	// Optional but helps distinguish traces from different environments.
+	// Defaults to cfg.Server.Env or "development" if not specified.
+	Environment string `mapstructure:"environment"`
 }
 
 // StorageConfig holds object storage (rtc-oss3) configuration.

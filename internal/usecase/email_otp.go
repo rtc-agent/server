@@ -4,6 +4,7 @@ package usecase
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"math/big"
@@ -159,8 +160,10 @@ func (uc *EmailOTPUsecase) VerifyOTP(ctx context.Context, emailAddr, otp string)
 		return fmt.Errorf("email otp get: %w", err)
 	}
 
-	// 3. Compare OTP
-	if storedOTP != otp {
+	// 3. Compare OTP using constant-time comparison to prevent timing attacks.
+	// Standard string comparison (storedOTP != otp) can leak information about
+	// how many characters match through timing differences.
+	if subtle.ConstantTimeCompare([]byte(storedOTP), []byte(otp)) != 1 {
 		// Record failed attempt
 		uc.store.RecordVerifyFailure(ctx, emailAddr)
 		logger.Info(ctx, "email_otp.verify_invalid",

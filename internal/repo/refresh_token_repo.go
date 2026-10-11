@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
@@ -21,6 +22,12 @@ type RefreshTokenRepo interface {
 	Revoke(ctx context.Context, id uuid.UUID) error
 	// RevokeAllByUserID revokes all refresh tokens for a user.
 	RevokeAllByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
+	// RevokeAllByUserAndDevice revokes all refresh tokens for a user on a specific device.
+	// This is used when token reuse is detected to invalidate all sessions for that device.
+	RevokeAllByUserAndDevice(ctx context.Context, userID uuid.UUID, deviceID string) (int64, error)
+	// DeleteExpired removes refresh tokens that expired before the given cutoff time.
+	// Returns the number of deleted rows.
+	DeleteExpired(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 type refreshTokenRepo struct {
@@ -73,6 +80,30 @@ func (r *refreshTokenRepo) RevokeAllByUserID(ctx context.Context, userID uuid.UU
 		Update("revoked", true)
 	if result.Error != nil {
 		return 0, fmt.Errorf("revoke all refresh tokens for user %s: %w", userID, result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// RevokeAllByUserAndDevice revokes all refresh tokens for a user on a specific device.
+// This is used when token reuse is detected to invalidate all sessions for that device.
+func (r *refreshTokenRepo) RevokeAllByUserAndDevice(ctx context.Context, userID uuid.UUID, deviceID string) (int64, error) {
+	result := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.RefreshToken{}).
+		Where("user_id = ? AND device_id = ? AND revoked = false", userID, deviceID).
+		Update("revoked", true)
+	if result.Error != nil {
+		return 0, fmt.Errorf("revoke all refresh tokens for user %s device %s: %w", userID, deviceID, result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// DeleteExpired removes refresh tokens that expired before the given cutoff time.
+func (r *refreshTokenRepo) DeleteExpired(ctx context.Context, cutoff time.Time) (int64, error) {
+	result := DBFromContext(ctx, r.db).WithContext(ctx).
+		Where("expires_at < ?", cutoff).
+		Delete(&model.RefreshToken{})
+	if result.Error != nil {
+		return 0, fmt.Errorf("delete expired refresh tokens: %w", result.Error)
 	}
 	return result.RowsAffected, nil
 }

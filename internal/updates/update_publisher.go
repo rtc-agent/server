@@ -124,6 +124,15 @@ func readChunksWithRetry(ctx context.Context, ss StreamStoreAccessor, messageID 
 		// Verify completeness: check if chunks are stable (no new chunks arriving).
 		// Skip verification on the last attempt.
 		if attempt < maxRetries-1 {
+			// NOTE: time.Sleep blocks the goroutine synchronously. This is acceptable
+			// here because:
+			//   1. maxRetries is small (3), so worst-case blocking is 200ms total.
+			//   2. This runs in the update publishing path, which is already async
+			//      (post-commit), so brief blocking does not affect request latency.
+			//   3. Replacing with time.Timer would add complexity without meaningful
+			//      benefit given the bounded retry count.
+			// If retry count or delay increases in the future, reconsider using
+			// a non-blocking timer approach.
 			time.Sleep(retryDelay)
 
 			newChunks, newErr := ss.GetAllChunks(messageID)

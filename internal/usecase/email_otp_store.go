@@ -3,12 +3,10 @@ package usecase
 
 import (
 	"context"
-	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/rtc-agent/server/pkg/logger"
-	"go.uber.org/zap"
 )
 
 // OTPStore defines the interface for OTP storage and rate limiting.
@@ -82,17 +80,9 @@ func NewMemoryOTPStore(maxSendPerIP, maxVerifyAttempts int, lockDuration, sendCo
 		sendCooldownDur:   sendCooldown,
 		stopCleanup:       make(chan struct{}),
 	}
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Error(context.Background(), "panic_recovered",
-					zap.String("goroutine", "MemoryOTPStore.cleanupLoop"),
-					zap.Any("panic", r),
-					zap.String("stack", string(debug.Stack())))
-			}
-		}()
+	logger.SafeGo("otp_store.cleanup", func() {
 		store.cleanupLoop()
-	}()
+	})
 	return store
 }
 

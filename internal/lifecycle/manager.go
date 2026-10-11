@@ -5,7 +5,6 @@ package lifecycle
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"sync"
 
 	"go.uber.org/zap"
@@ -148,17 +147,10 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 	// Wait for all goroutines to finish (all callers wait, even concurrent ones).
 	done := make(chan struct{})
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Error(context.Background(), "[lifecycle.Manager] shutdown wait panic",
-					zap.Any("recover", r),
-					zap.String("stack", string(debug.Stack())))
-			}
-		}()
+	logger.SafeGo("lifecycle.manager.shutdown_wait", func() {
 		m.wg.Wait()
 		close(done)
-	}()
+	})
 
 	select {
 	case <-done:
@@ -190,18 +182,10 @@ func (m *Manager) HealthCheck(ctx context.Context) error {
 // name is used for log identification.
 func (m *Manager) Go(name string, fn func(ctx context.Context)) {
 	m.wg.Add(1)
-	go func() {
+	logger.SafeGo("lifecycle.manager."+name, func() {
 		defer m.wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Error(context.Background(), "[lifecycle.Manager] goroutine panic",
-					zap.String("name", name),
-					zap.Any("recover", r))
-			}
-		}()
-
 		fn(m.ctx)
-	}()
+	})
 }
 
 // ShutdownCh returns a channel that is closed when Stop is called.

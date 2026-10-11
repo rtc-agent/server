@@ -584,7 +584,7 @@ func (s *Server) registerOSS3Routes(mux *http.ServeMux) {
 	var handler http.Handler = s.oss3Handler
 	handler = httphandler.NewBusinessRestrictionMiddleware(oss3UC, s.cfg.Storage.MinIO.Bucket, handler)
 	handler = httphandler.NewRateLimitMiddleware(oss3UC, handler)
-	handler = httphandler.NewSigV4Middleware(oss3UC, s.cfg.Storage.S3Endpoint.Region, handler)
+	handler = httphandler.NewSigV4Middleware(oss3UC, s.cfg.Storage.S3Endpoint.Region, s.svcCtx.OAuth2UserRepo, handler)
 	handler = httphandler.NewOSS3MetricsMiddleware()(handler)
 	handler = httphandler.RequestIDMiddleware(handler)
 	handler = httphandler.NewAccessLogMiddleware(oss3UC, handler)

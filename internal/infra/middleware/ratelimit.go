@@ -57,7 +57,9 @@ func NewRateLimiter(r rate.Limit, burst int) *RateLimiter {
 		burst:       burst,
 		stopCleanup: make(chan struct{}),
 	}
-	go rl.cleanupLoop()
+	logger.SafeGo("ratelimiter-cleanup", func() {
+		rl.cleanupLoop()
+	})
 	return rl
 }
 
