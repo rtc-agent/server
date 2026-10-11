@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"runtime/debug"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -123,22 +122,19 @@ func (s *RedisConfigSubscriber) Start(ctx context.Context) func() {
 		zap.String("channel", model.ConfigChannel))
 
 	// Process messages in a goroutine.
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Error(ctx, "panic_recovered",
-					zap.String("goroutine", "RedisConfigSubscriber.Start"),
-					zap.Any("panic", r),
-					zap.String("stack", string(debug.Stack())))
-			}
-		}()
+	logger.SafeGo("config.subscriber", func() {
 		ch := pubsub.Channel()
 		for {
 			select {
 			case <-ctx.Done():
 				logger.Info(ctx, "config.subscriber.stopping",
 					zap.String("reason", "context cancelled"))
-				_ = pubsub.Close()
+				// pubsub.Close errors are logged but don't prevent shutdown.
+				// Redis connections may already be broken when context is cancelled.
+				if err := pubsub.Close(); err != nil {
+					logger.Warn(ctx, "config.subscriber.close_failed",
+						zap.Error(err))
+				}
 				return
 			case msg, ok := <-ch:
 				if !ok {
@@ -148,10 +144,15 @@ func (s *RedisConfigSubscriber) Start(ctx context.Context) func() {
 				s.handleMessage(ctx, msg)
 			}
 		}
-	}()
+	})
 
 	return func() {
-		_ = pubsub.Close()
+		// pubsub.Close errors are logged but don't prevent cleanup.
+		// This is a best-effort cleanup; Redis will eventually timeout the connection.
+		if err := pubsub.Close(); err != nil {
+			logger.Warn(ctx, "config.subscriber.cleanup_close_failed",
+				zap.Error(err))
+		}
 	}
 }
 

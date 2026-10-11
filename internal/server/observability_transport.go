@@ -38,6 +38,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -136,6 +137,8 @@ func (t *observabilityTransport) RoundTrip(req *http.Request) (*http.Response, e
 		if err != nil {
 			t.logError("llm.http.request_read_error", req.URL.String(), err)
 		}
+		// req.Body.Close errors are intentionally ignored.
+		// The body has been fully read, and close errors on request bodies are not actionable.
 		_ = req.Body.Close()
 		// Restore body so the actual transport can read it
 		req.Body = io.NopCloser(bytes.NewReader(reqBodyBytes))
@@ -265,18 +268,15 @@ func (t *observabilityTransport) payloadLogger() *zap.Logger {
 	return pkglogger.LLMPayload()
 }
 
-// logError logs an error to the payload logger (if available) or drops it.
+// logError logs errors using structured logging, independent of payloadLog setting.
+// Errors are always logged at Warn level to ensure visibility in production environments.
 func (t *observabilityTransport) logError(event, url string, err error) {
-	if t.payloadLog {
-		l := t.payloadLogger()
-		if l != nil {
-			l.Error("LLM HTTP error",
-				zap.String("event", event),
-				zap.String("url", url),
-				zap.Error(err),
-			)
-		}
-	}
+	// Errors are always logged regardless of payloadLog setting
+	pkglogger.Warn(context.Background(), "LLM HTTP error",
+		zap.String("event", event),
+		zap.String("url", url),
+		zap.Error(err),
+	)
 }
 
 // observabilityReadCloser wraps an io.ReadCloser for streaming LLM responses.
@@ -322,15 +322,11 @@ func (orc *observabilityReadCloser) Read(p []byte) (int, error) {
 		}
 	}
 	if err != nil && err != io.EOF {
-		if orc.payloadLog {
-			l := pkglogger.LLMPayload()
-			if l != nil {
-				l.Error("llm.http.stream_read_error",
-					zap.String("url", orc.url),
-					zap.Error(err),
-				)
-			}
-		}
+		// Stream read errors are always logged, independent of payloadLog
+		pkglogger.Warn(context.Background(), "LLM HTTP stream read error",
+			zap.String("url", orc.url),
+			zap.Error(err),
+		)
 	}
 	if errors.Is(err, io.EOF) {
 		// Process any remaining line buffer

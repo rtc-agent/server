@@ -137,6 +137,9 @@ func (c *Client) exchangeCodeForToken(ctx context.Context, cfg *ProviderConfig, 
 	if err != nil {
 		return "", fmt.Errorf("exchange code for token: %w", err)
 	}
+	// resp.Body.Close errors are intentionally ignored.
+	// Per Go best practices, HTTP response body close errors are not actionable:
+	// the response has been fully read, and connection reuse failures are handled by the HTTP client.
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
@@ -175,6 +178,7 @@ func (c *Client) fetchUserInfo(ctx context.Context, userInfoURL string, accessTo
 	if err != nil {
 		return nil, fmt.Errorf("fetch user info: %w", err)
 	}
+	// resp.Body.Close errors are intentionally ignored (see comment on line 140).
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
@@ -275,6 +279,7 @@ func (c *Client) parseUserInfoFromTokenResponse(ctx context.Context, cfg *Provid
 	if err != nil {
 		return nil, fmt.Errorf("exchange code: %w", err)
 	}
+	// resp.Body.Close errors are intentionally ignored (see comment on line 140).
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)

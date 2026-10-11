@@ -106,6 +106,8 @@ func NewRateLimiter(cfg RateLimitConfig) *RateLimiter {
 // getShard returns the shard for a given IP address using FNV-1a hash.
 func (rl *RateLimiter) getShard(ip string) *bucketShard {
 	h := fnv.New32a()
+	// hash.Hash.Write never returns an error; it only returns (n, nil).
+	// See https://pkg.go.dev/hash#Hash: "Write ... never returns an error".
 	_, _ = h.Write([]byte(ip))
 	return rl.shards[h.Sum32()%rl.numShards]
 }
@@ -250,7 +252,13 @@ func STSRateLimitMiddleware(limiter RateLimiterInterface, next http.Handler) htt
 				"error":             "rate_limit_exceeded",
 				"error_description": "Too many requests. Please try again later.",
 			}
-			_ = json.NewEncoder(w).Encode(resp)
+			// json.Encoder.Encode may fail if the client disconnects mid-write.
+			// Log the error for diagnostics, but don't retry — the response is already lost.
+			if err := json.NewEncoder(w).Encode(resp); err != nil {
+				logger.Error(r.Context(), "rate_limit_response_encode_failed",
+					zap.String("client_ip", ip),
+					zap.Error(err))
+			}
 			return
 		}
 		next.ServeHTTP(w, r)
