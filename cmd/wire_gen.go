@@ -369,6 +369,9 @@ func provideUsecaseDependencies(
 		svcCtx.SessionRepo,
 		svcCtx.MessageRepo,
 		svcCtx.TurnRepo,
+		svcCtx.RtcRepo,
+		svcCtx.MemoryRepo,
+		svcCtx.ScriptExecutionRepo,
 	)
 
 	if chatModelResult2.model != nil {

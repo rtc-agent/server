@@ -28,6 +28,7 @@ import (
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
+	"github.com/rtc-agent/server/pkg/memory"
 )
 
 // httpTimeouts defines standard timeout values for the admin HTTP server.
@@ -240,35 +241,43 @@ func initRedis(ctx context.Context, cfg *config.AdminConfig) *redis.Client {
 
 // repositories groups all repository dependencies.
 type repositories struct {
-	adminUserRepo        repo.AdminUserRepo
-	refreshTokenRepo     repo.AdminRefreshTokenRepo
-	adminRoleRepo        repo.AdminRoleRepo
-	adminUserRoleRepo    repo.AdminUserRoleRepo
-	auditLogRepo         repo.AuditLogRepo
-	oauth2UserRepo       repo.OAuth2UserRepo
-	mainRefreshTokenRepo repo.RefreshTokenRepo
-	configRepo           repo.ServerConfigRepo
-	deviceRepo           repo.DeviceRepo
-	sessionRepo          repo.SessionRepo
-	messageRepo          repo.MessageRepo
-	turnRepo             repo.TurnRepo
+	adminUserRepo           repo.AdminUserRepo
+	refreshTokenRepo        repo.AdminRefreshTokenRepo
+	adminRoleRepo           repo.AdminRoleRepo
+	adminUserRoleRepo       repo.AdminUserRoleRepo
+	auditLogRepo            repo.AuditLogRepo
+	oauth2UserRepo          repo.OAuth2UserRepo
+	mainRefreshTokenRepo    repo.RefreshTokenRepo
+	configRepo              repo.ServerConfigRepo
+	deviceRepo              repo.DeviceRepo
+	sessionRepo             repo.SessionRepo
+	messageRepo             repo.MessageRepo
+	turnRepo                repo.TurnRepo
+	rtcRepo                 repo.RtcRepo
+	memoryRepo              memory.Repository
+	scriptExecutionRepo     repo.ScriptExecutionRepo
+	temporaryCredentialRepo repo.TemporaryCredentialRepo
 }
 
 // initRepositories initializes all repository dependencies.
 func initRepositories(db *gorm.DB) repositories {
 	return repositories{
-		adminUserRepo:        repo.NewAdminUserRepo(db),
-		refreshTokenRepo:     repo.NewAdminRefreshTokenRepo(db),
-		adminRoleRepo:        repo.NewAdminRoleRepo(db),
-		adminUserRoleRepo:    repo.NewAdminUserRoleRepo(db),
-		auditLogRepo:         repo.NewAuditLogRepo(db),
-		oauth2UserRepo:       repo.NewOAuth2UserRepo(db),
-		mainRefreshTokenRepo: repo.NewRefreshTokenRepo(db),
-		configRepo:           repo.NewServerConfigRepo(db),
-		deviceRepo:           repo.NewDeviceRepo(db),
-		sessionRepo:          repo.NewSessionRepo(db),
-		messageRepo:          repo.NewMessageRepo(db),
-		turnRepo:             repo.NewTurnRepo(db),
+		adminUserRepo:           repo.NewAdminUserRepo(db),
+		refreshTokenRepo:        repo.NewAdminRefreshTokenRepo(db),
+		adminRoleRepo:           repo.NewAdminRoleRepo(db),
+		adminUserRoleRepo:       repo.NewAdminUserRoleRepo(db),
+		auditLogRepo:            repo.NewAuditLogRepo(db),
+		oauth2UserRepo:          repo.NewOAuth2UserRepo(db),
+		mainRefreshTokenRepo:    repo.NewRefreshTokenRepo(db),
+		configRepo:              repo.NewServerConfigRepo(db),
+		deviceRepo:              repo.NewDeviceRepo(db),
+		sessionRepo:             repo.NewSessionRepo(db),
+		messageRepo:             repo.NewMessageRepo(db),
+		turnRepo:                repo.NewTurnRepo(db),
+		rtcRepo:                 repo.NewRtcRepo(db),
+		memoryRepo:              repo.NewMemoryRepo(db),
+		scriptExecutionRepo:     repo.NewScriptExecutionRepo(db),
+		temporaryCredentialRepo: repo.NewTemporaryCredentialRepo(db),
 	}
 }
 
@@ -321,8 +330,8 @@ func initUsecases(ctx context.Context, db *gorm.DB, cfg *config.AdminConfig, rdb
 	permissionUsecase := usecase.NewPermissionUsecase(repos.adminRoleRepo, enforcer, repos.auditLogRepo)
 	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(db, repos.adminUserRepo, repos.adminRoleRepo, repos.adminUserRoleRepo, enforcer, repos.auditLogRepo)
 	adminUserUsecase := usecase.NewAdminUserUsecase(db, repos.adminUserRepo, repos.adminUserRoleRepo, repos.adminRoleRepo, enforcer)
-	rtcUserUsecase := usecase.NewRtcUserUsecase(db, repos.oauth2UserRepo, repos.mainRefreshTokenRepo, repos.auditLogRepo, repos.deviceRepo)
-	rtcSessionUsecase := usecase.NewRtcSessionUsecase(repos.sessionRepo, repos.messageRepo, repos.turnRepo)
+	rtcUserUsecase := usecase.NewRtcUserUsecase(db, repos.oauth2UserRepo, repos.mainRefreshTokenRepo, repos.auditLogRepo, repos.deviceRepo, repos.temporaryCredentialRepo)
+	rtcSessionUsecase := usecase.NewRtcSessionUsecase(repos.sessionRepo, repos.messageRepo, repos.turnRepo, repos.rtcRepo, repos.memoryRepo, repos.scriptExecutionRepo)
 	serverConfigUsecase := usecase.NewServerConfigUsecase(repos.configRepo, repos.auditLogRepo, repos.oauth2UserRepo, db)
 	auditLogUsecase := usecase.NewAuditLogUsecase(repos.auditLogRepo)
 
@@ -378,6 +387,7 @@ func initLoginProtection(ctx context.Context, cfg *config.AdminConfig, rdb *redi
 	lpCfg := usecase.LoginProtectionConfig{
 		MaxAttempts:  cfg.Security.LoginMaxAttempts,
 		LockDuration: time.Duration(cfg.Security.LoginLockDuration) * time.Second,
+		Env:          cfg.Server.Env,
 	}
 	if rdb != nil {
 		logger.Info(ctx, "admin.redis_login_protection_enabled")

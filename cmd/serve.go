@@ -145,12 +145,15 @@ func runServe(cmd *cobra.Command, args []string) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	// Shutdown sequence (in reverse order of startup):
-	// 1. Stop HTTP server (stops accepting new connections)
-	// 2. Stop Server (stops workers, centrifuge, etc.)
+	// Shutdown sequence (all steps happen inside srv.Stop()):
+	// 1. HTTP server shutdown (drains in-flight requests, stops accepting new connections)
+	// 2. rtc-queue Worker stop (cancels session processors, waits with timeout)
+	// 3. asynq server stop
+	// 4. Background goroutines stop (scanners, cleanup, watchers, config subscriber)
+	// 5. BanWatcher close
+	// 6. RPC handler close
+	// 7. Centrifuge node shutdown + Broker close
 	// Note: database and Redis connections are closed by deferred functions.
-
-	// Stop the main server (handles workers, centrifuge, asynq, etc.)
 	logger.Info(shutdownCtx, "shutdown: stopping server components")
 	srv.Stop()
 
