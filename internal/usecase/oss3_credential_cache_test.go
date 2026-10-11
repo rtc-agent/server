@@ -57,12 +57,25 @@ func (m *mockCredRepo) FindExpired(_ context.Context, _ time.Time) ([]*model.Tem
 	return nil, nil
 }
 
+func (m *mockCredRepo) FindByUserID(_ context.Context, _ uuid.UUID) ([]*model.TemporaryCredential, error) {
+	return nil, nil
+}
+
 func (m *mockCredRepo) Delete(_ context.Context, _ uuid.UUID) error {
 	return nil
 }
 
 func (m *mockCredRepo) DeleteExpired(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
+}
+
+func (m *mockCredRepo) DeleteByUserID(_ context.Context, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
+
+// MarkRevoked is a no-op for the mock. P1-4 fix: soft delete for cache invalidation failure.
+func (m *mockCredRepo) MarkRevoked(_ context.Context, _ uuid.UUID) error {
+	return nil
 }
 
 // Compile-time interface check.

@@ -3,11 +3,15 @@ package httphandler
 import (
 	"net/http"
 
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/infra/contextx"
+	"github.com/rtc-agent/server/internal/infra/middleware"
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
-	"go.uber.org/zap"
 )
 
 // maskAccessKeyID masks an access key ID for safe logging.
@@ -22,17 +26,20 @@ func maskAccessKeyID(key string) string {
 
 // SigV4Middleware wraps an HTTP handler with SigV4 signature verification.
 type SigV4Middleware struct {
-	oss3UC *usecase.OSS3Usecase
-	region string
-	next   http.Handler
+	oss3UC     *usecase.OSS3Usecase
+	region     string
+	banChecker middleware.UserBanChecker
+	next       http.Handler
 }
 
 // NewSigV4Middleware creates a new SigV4 middleware.
-func NewSigV4Middleware(oss3UC *usecase.OSS3Usecase, region string, next http.Handler) *SigV4Middleware {
+// banChecker optionally checks if a user is banned (can be nil to skip check).
+func NewSigV4Middleware(oss3UC *usecase.OSS3Usecase, region string, banChecker middleware.UserBanChecker, next http.Handler) *SigV4Middleware {
 	return &SigV4Middleware{
-		oss3UC: oss3UC,
-		region: region,
-		next:   next,
+		oss3UC:     oss3UC,
+		region:     region,
+		banChecker: banChecker,
+		next:       next,
 	}
 }
 
@@ -49,14 +56,14 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract AccessKeyID from Authorization header
-	auth := r.Header.Get("Authorization")
-	if auth == "" {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
 		rtcoss3.WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
 		return
 	}
 
 	// Parse credential to get AccessKeyID
-	cred, _, _, err := rtcoss3.ParseAuthorizationHeader(auth)
+	cred, _, _, err := rtcoss3.ParseAuthorizationHeader(authHeader)
 	if err != nil {
 		rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
@@ -108,6 +115,54 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			zap.Error(err))
 		rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
 		return
+	}
+
+	// SECURITY (P1 fix): Check if user is banned before allowing access.
+	// Even if OSS3 credentials were revoked via BanUser, cached credentials
+	// could still be used within their TTL. This check closes that window
+	// by verifying ban status on every authenticated request.
+	//
+	// Follows the same fail-open strategy as JWT middleware for resilience:
+	// - If Redis cache is unavailable, falls back to DB check
+	// - If both cache and DB are unavailable, request is allowed (fail-open)
+	// See JWTAuth in middleware/auth.go for detailed rationale.
+	if m.banChecker != nil {
+		parsedUserID, parseErr := uuid.Parse(payload.UserID)
+		if parseErr != nil {
+			maskedKey := maskAccessKeyID(cred.AccessKeyID)
+			logger.Error(r.Context(), "SigV4: invalid user_id in session token",
+				zap.String("access_key_id", maskedKey),
+				zap.String("user_id", payload.UserID),
+				zap.Error(parseErr))
+			rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidSignature, r.URL.Path, "")
+			return
+		}
+
+		banned, cached := middleware.GetBanCache(r.Context(), parsedUserID)
+		if !cached {
+			var banErr error
+			banned, banErr = m.banChecker.IsUserBanned(r.Context(), parsedUserID)
+			if banErr != nil {
+				// Fail-open: log the error but allow the request to proceed
+				logger.Warn(r.Context(), "SigV4: failed to check user ban status - fail-open applied",
+					zap.Error(banErr),
+					zap.String("user_id", parsedUserID.String()),
+					zap.String("remote_addr", r.RemoteAddr),
+					zap.Bool("bypass_applied", true))
+				auth.RecordSecurityEvent("ban_check_fail_open")
+			} else {
+				// Successfully checked ban status, cache it
+				middleware.SetBanCache(r.Context(), parsedUserID, banned)
+			}
+		}
+
+		if banned {
+			logger.Info(r.Context(), "SigV4: banned user rejected",
+				zap.String("user_id", parsedUserID.String()),
+				zap.String("remote_addr", r.RemoteAddr))
+			rtcoss3.WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
+			return
+		}
 	}
 
 	// Inject user_id into context for downstream handlers.

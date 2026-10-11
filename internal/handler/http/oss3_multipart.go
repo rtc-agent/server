@@ -1,9 +1,11 @@
 package httphandler
 
 import (
+	"context"
 	"encoding/xml"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -18,15 +20,17 @@ import (
 
 // OSS3MultipartHandler handles S3-compatible multipart upload operations.
 type OSS3MultipartHandler struct {
-	oss3UC *usecase.OSS3Usecase
-	bucket string
+	oss3UC           *usecase.OSS3Usecase
+	bucket           string
+	maxFileSizeBytes int64 // maximum allowed file size (P1-6 fix: for instant upload validation)
 }
 
 // NewOSS3MultipartHandler creates a new multipart upload handler.
-func NewOSS3MultipartHandler(oss3UC *usecase.OSS3Usecase, bucket string) *OSS3MultipartHandler {
+func NewOSS3MultipartHandler(oss3UC *usecase.OSS3Usecase, bucket string, maxFileSizeBytes int64) *OSS3MultipartHandler {
 	return &OSS3MultipartHandler{
-		oss3UC: oss3UC,
-		bucket: bucket,
+		oss3UC:           oss3UC,
+		bucket:           bucket,
+		maxFileSizeBytes: maxFileSizeBytes,
 	}
 }
 
@@ -94,12 +98,17 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(
 	err = h.oss3UC.CreateMultipartUploadRecord(
 		r.Context(), userID, bucket, key, result.UploadID)
 	if err != nil {
-		// DB failed but backend upload created — orphaned upload
-		logger.Warn(r.Context(), "failed to create multipart upload record",
+		// P1-7 fix: DB failed but backend upload created — start async retry to prevent orphaned upload
+		logger.Warn(r.Context(), "failed to create multipart upload record, starting async retry",
 			zap.String("user_id", userID),
 			zap.String("key", key),
 			zap.String("upload_id", result.UploadID),
 			zap.Error(err))
+
+		// Launch async retry with exponential backoff (1s, 2s, 4s)
+		logger.SafeGo("oss3.multipart.upload_record_retry", func() {
+			h.retryCreateMultipartUploadRecord(userID, bucket, key, result.UploadID)
+		})
 	}
 
 	RecordMultipartUploadStart()
@@ -174,4 +183,44 @@ func (h *OSS3MultipartHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	default:
 		rtcoss3.WriteS3Error(w, rtcoss3.ErrMethodNotAllowed, r.URL.Path, "")
 	}
+}
+
+// retryCreateMultipartUploadRecord attempts to create a multipart upload record in DB
+// with exponential backoff (1s, 2s, 4s). P1-7 fix: prevents orphaned uploads when
+// MinIO succeeds but DB fails initially. If all retries fail, logs Error for orphan reconciler.
+func (h *OSS3MultipartHandler) retryCreateMultipartUploadRecord(
+	userID, bucket, key, uploadID string,
+) {
+	// Use background context since original request context may be cancelled
+	ctx := context.Background()
+
+	// Exponential backoff: 1s, 2s, 4s
+	backoffDurations := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+
+	for attempt, delay := range backoffDurations {
+		time.Sleep(delay)
+
+		err := h.oss3UC.CreateMultipartUploadRecord(ctx, userID, bucket, key, uploadID)
+		if err == nil {
+			logger.Info(ctx, "async retry: multipart upload record created successfully",
+				zap.String("user_id", userID),
+				zap.String("key", key),
+				zap.String("upload_id", uploadID),
+				zap.Int("attempt", attempt+1))
+			return
+		}
+
+		logger.Warn(ctx, "async retry: failed to create multipart upload record",
+			zap.String("user_id", userID),
+			zap.String("key", key),
+			zap.String("upload_id", uploadID),
+			zap.Int("attempt", attempt+1),
+			zap.Error(err))
+	}
+
+	// All retries failed — log Error for orphan reconciler to handle
+	logger.Error(ctx, "async retry exhausted: orphaned multipart upload in MinIO",
+		zap.String("user_id", userID),
+		zap.String("key", key),
+		zap.String("upload_id", uploadID))
 }

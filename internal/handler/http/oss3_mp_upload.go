@@ -163,6 +163,20 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 		quotaCommitAttempted = true
 	}
 
+	// P1-2 fix: Record the uploaded part to the database for auditing purposes.
+	// This is done after quota commit so that the critical path (quota) completes first.
+	// If part recording fails, log at Error level but do not fail the request — the data
+	// is already in MinIO and quota is committed. A background reconciler can repair
+	// missing part records by querying MinIO's ListParts.
+	if err = h.oss3UC.RecordUploadPart(r.Context(), uploadID, partNumber, contentLength, etag); err != nil {
+		logger.Error(r.Context(), "failed to record uploaded part to database; reconciler will repair",
+			zap.String("user_id", userID),
+			zap.String("upload_id", uploadID),
+			zap.Int("part_number", partNumber),
+			zap.String("etag", etag),
+			zap.Error(err))
+	}
+
 	w.Header().Set("ETag", etag)
 	w.WriteHeader(http.StatusOK)
 }

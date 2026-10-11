@@ -44,7 +44,7 @@ func NewOSS3Handler(oss3UC *usecase.OSS3Usecase, bucket string, maxFileSizeBytes
 		oss3UC:           oss3UC,
 		bucket:           bucket,
 		maxFileSizeBytes: maxFileSizeBytes,
-		multipart:        NewOSS3MultipartHandler(oss3UC, bucket),
+		multipart:        NewOSS3MultipartHandler(oss3UC, bucket, maxFileSizeBytes),
 	}
 }
 

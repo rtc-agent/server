@@ -219,6 +219,14 @@ func (h *OSS3Handler) handlePutObject(w http.ResponseWriter, r *http.Request, bu
 
 	// Upload to backend with compensation
 	contentType := r.Header.Get("Content-Type")
+	// P1-1 fix: Default empty Content-Type to "application/octet-stream" for consistency
+	// with multipart upload handler (oss3_multipart.go:77-79).
+	// Note: This default will be rejected by IsAllowedContentType validation below,
+	// since only image/* and text/* types are permitted. The default ensures consistent
+	// error handling across both upload paths.
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
 
 	// Validate Content-Type against whitelist (image/* and text/* only)
 	if !rtcoss3.IsAllowedContentType(contentType) {

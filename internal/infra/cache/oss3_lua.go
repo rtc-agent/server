@@ -29,6 +29,7 @@ var (
 	//	ARGV[4] = requestID         (unique request identifier, used as ZSET member)
 	//	ARGV[5] = pendingKeyPrefix  (e.g. "oss3:quota:pending:{uid}:", for constructing
 	//	                             other requests' pending keys during aggregation scan)
+	//	ARGV[6] = doCleanup         (0 or 1; if 1, perform stale entry cleanup with 10% probability)
 	//
 	// Returns: 1 on success, 0 if quota exceeded.
 	// Idempotent: if pending key already exists with same amount, returns 1 without re-reserving.
@@ -36,6 +37,11 @@ var (
 	// Aggregation: The ZSET in KEYS[3] tracks ALL pending reservations for this user.
 	// This solves the multi-concurrent-reserve problem: when multiple Reserve calls happen
 	// in parallel, each call sees the SUM of all pending amounts and correctly enforces quota.
+	//
+	// P0 fix: Stale entry cleanup is now probabilistic (10% of calls) to prevent Redis blocking
+	// under high concurrency. The caller passes a random value (0-9) in ARGV[6]; cleanup only
+	// executes when the value is 0 (10% probability). This amortizes cleanup cost across many
+	// reserve calls while bounding per-call latency.
 	//
 	// Stale entry cleanup: If a pending key has expired (TTL), its ZSET entry becomes stale
 	// (score > 0 but no backing key). The script detects and cleans up stale entries when
@@ -47,6 +53,7 @@ local maxQ      = tonumber(ARGV[2])
 local ttl       = tonumber(ARGV[3])
 local requestID = ARGV[4]
 local prefix    = ARGV[5]
+local doCleanup = tonumber(ARGV[6])
 local pendingKey = KEYS[2]
 local aggKey     = KEYS[3]
 
@@ -61,12 +68,23 @@ end
 
 -- Sum ALL pending amounts from the aggregation ZSET, with lazy cleanup of stale entries.
 -- A stale entry is one whose pending key has expired (TTL) but whose ZSET score remains.
--- Limit cleanup to max 100 stale entries per call to avoid blocking Redis when there are
--- many concurrent uploads with pending reservations.
+--
+-- P0 fix: Cleanup is probabilistic (10% of calls) to prevent Redis blocking under high load.
+-- When doCleanup is 1, limit cleanup to max 100 stale entries per call to avoid blocking Redis.
+-- When doCleanup is 0, skip cleanup entirely and only sum live entries.
+--
+-- Design rationale:
+-- - Prevents Redis blocking: Scanning and deleting thousands of stale entries in a single
+--   Lua script execution could block Redis for too long (Redis is single-threaded).
+-- - Amortized cleanup: Stale entries are cleaned incrementally across multiple reserve calls.
+--   Even under high load, the cleanup keeps pace with new reservations.
+-- - Bounded latency: Each reserve call takes at most O(100) extra work for cleanup,
+--   keeping latency predictable.
 local totalPending = 0
 local cursor = "0"
 local maxClean = 100
 local cleaned = 0
+local shouldClean = (doCleanup == 1)
 repeat
     local result = redis.call('ZSCAN', aggKey, cursor)
     cursor = result[1]
@@ -77,8 +95,8 @@ repeat
         local memberPendingKey = prefix .. member
         local memberVal = redis.call('GET', memberPendingKey)
         if not memberVal then
-            -- Stale entry: the pending key expired. Clean it up (with limit).
-            if cleaned < maxClean then
+            -- Stale entry: the pending key expired. Clean it up (with limit, probabilistic).
+            if shouldClean and cleaned < maxClean then
                 redis.call('ZREM', aggKey, member)
                 cleaned = cleaned + 1
             end

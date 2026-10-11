@@ -92,11 +92,19 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 		return "", fmt.Errorf("head object after complete: %w", err)
 	}
 
-	// TODO(integrity): Validate ETag from CompleteMultipartUpload response matches
-	// the ETag from HeadObject. This ensures the object was not corrupted during
-	// the completion process. Currently we trust the backend's atomic completion,
-	// but explicit validation provides defense-in-depth against backend bugs.
-	// Example: if etag != meta.ETag { return error }
+	// P1-3 fix: Validate ETag from CompleteMultipartUpload response matches the ETag from HeadObject.
+	// This ensures the object was not corrupted during the completion process.
+	// ETag mismatch indicates a backend bug or data corruption — fail fast and trigger compensation.
+	if etag != "" && meta.ETag != "" && etag != meta.ETag {
+		uc.asyncCleanupBackendObject(bucket, key, "ETag mismatch after CompleteMultipartUpload")
+		logger.Error(ctx, "ETag mismatch after CompleteMultipartUpload; data may be corrupted",
+			zap.String("bucket", bucket),
+			zap.String("key", key),
+			zap.String("upload_id", uploadID),
+			zap.String("etag_from_complete", etag),
+			zap.String("etag_from_head", meta.ETag))
+		return "", fmt.Errorf("ETag mismatch: complete returned %q but HeadObject returned %q", etag, meta.ETag)
+	}
 
 	// Step 3 & 4: DB operations
 	dbErr := uc.completeMultipartUploadDBOps(ctx, userID, bucket, key, uploadID, etag, meta.Size, meta.ContentType)

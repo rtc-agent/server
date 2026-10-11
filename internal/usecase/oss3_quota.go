@@ -3,11 +3,13 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/rtc-agent/server/internal/infra/cache"
+	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	"go.uber.org/zap"
@@ -38,6 +40,14 @@ func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, 
 	script := uc.scripts[cache.OSS3ScriptQuotaReserve]
 	// Lua script expects TTL in seconds (e.g., 300 for 5 minutes)
 	pendingTTLSeconds := int(uc.cfg.Quota.PendingTTL.Seconds())
+	// P0 fix: Probabilistic stale entry cleanup (10% probability).
+	// Generate a random value 0-9; cleanup triggers only when value is 0.
+	// This amortizes cleanup cost across many reserve calls while preventing
+	// Redis blocking under high concurrency.
+	doCleanup := 0
+	if rand.Intn(10) == 0 {
+		doCleanup = 1
+	}
 	result, err := script.Run(ctx, uc.redis,
 		[]string{quotaKey, pendingKey, aggKey},
 		additionalBytes,
@@ -45,12 +55,23 @@ func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, 
 		pendingTTLSeconds,
 		requestID,
 		pendingKeyPrefix,
+		doCleanup,
 	).Int()
 	if err != nil {
 		return "", fmt.Errorf("quota reserve: %w", err)
 	}
 	if result == 0 {
-		return "", fmt.Errorf("check quota: %w", rtcoss3.ErrQuotaExceeded)
+		// P1-2 fix: Include current usage and limit in error message for better user feedback.
+		// Query current quota usage to provide informative error.
+		currentUsage, getErr := uc.redis.Get(ctx, quotaKey).Int64()
+		if getErr != nil && getErr.Error() != "redis: nil" {
+			logger.Warn(ctx, "failed to get current quota usage for error message",
+				zap.String("user_id", userID),
+				zap.Error(getErr))
+		}
+		maxQuota := uc.cfg.Quota.MaxUserQuotaBytes
+		return "", fmt.Errorf("quota exceeded: current usage %d bytes, limit %d bytes, requested %d bytes: %w",
+			currentUsage, maxQuota, additionalBytes, rtcoss3.ErrQuotaExceeded)
 	}
 	return requestID, nil
 }
@@ -62,19 +83,49 @@ func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, 
 // If the marker already exists (duplicate call from network retry), the commit is skipped.
 // The marker has a 24h TTL to cover the retry window.
 //
+// P1-5 fix: The marker now stores a timestamp instead of "1". If the marker exists but
+// is older than 1 hour, the commit is allowed to proceed (force retry). This prevents
+// a stuck marker from blocking retries for 24 hours when the Lua script fails but
+// marker deletion also fails.
+//
 // Flow: SETNX commit marker -> Lua script OSS3QuotaCommit atomically adds pending
 // amount to quota and deletes pending key.
 func (uc *OSS3Usecase) CommitQuota(ctx context.Context, userID, requestID string, amount int64) error {
 	// Idempotency guard: SETNX a commit marker to prevent duplicate commits.
-	// If the marker already exists, this commit has already been processed.
+	// If the marker already exists, check its age to allow force retry after timeout.
 	markerKey := cache.OSS3QuotaCommitMarker(userID, requestID)
-	ok, err := uc.redis.SetNX(ctx, markerKey, 1, 24*time.Hour).Result()
+	now := time.Now().Unix()
+	markerTTL := 24 * time.Hour
+	safeRetryWindow := 1 * time.Hour // P1-5 fix: allow retry after 1 hour
+
+	// Try to set the marker with timestamp
+	ok, err := uc.redis.SetNX(ctx, markerKey, now, markerTTL).Result()
 	if err != nil {
 		return fmt.Errorf("quota commit marker: %w", err)
 	}
 	if !ok {
-		// Marker already exists — this commit was already processed (duplicate call).
-		return nil
+		// Marker already exists — check if it's old enough to allow force retry.
+		// P1-5 fix: Prevents marker from blocking retries for 24 hours when Lua script
+		// fails but marker deletion also fails.
+		existingTimestamp, getErr := uc.redis.Get(ctx, markerKey).Int64()
+		if getErr != nil {
+			// Marker disappeared between SETNX and GET — retry the SETNX
+			return uc.CommitQuota(ctx, userID, requestID, amount)
+		}
+		markerAge := time.Duration(now-existingTimestamp) * time.Second
+		if markerAge < safeRetryWindow {
+			// Marker is fresh — this commit was already processed (duplicate call).
+			return nil
+		}
+		// Marker is stale (older than safeRetryWindow) — allow force retry.
+		// Overwrite the marker with current timestamp.
+		if setErr := uc.redis.Set(ctx, markerKey, now, markerTTL).Err(); setErr != nil {
+			return fmt.Errorf("quota commit marker refresh: %w", setErr)
+		}
+		logger.Info(ctx, "quota commit: force retry allowed due to stale marker",
+			zap.String("user_id", userID),
+			zap.String("request_id", requestID),
+			zap.Int64("marker_age_seconds", int64(markerAge.Seconds())))
 	}
 
 	quotaKey := cache.OSS3Quota(userID)
@@ -199,6 +250,16 @@ func (uc *OSS3Usecase) AdjustQuota(ctx context.Context, userID string, deltaByte
 // GetMultipartUploadTotalSize calculates the total size of all parts for a multipart upload.
 // Used by instant upload path to release quota committed during UploadPart.
 // Returns (0, nil) when the upload record does not exist.
+//
+// P1-4 fix: TODO - This calculates the LOGICAL size (sum of part sizes as reported by clients),
+// not the PHYSICAL storage size on disk. If the backend uses compression or deduplication,
+// the actual storage consumed may be less than this sum. For accurate quota accounting,
+// consider querying the backend for the actual object size after CompleteMultipartUpload,
+// similar to how PutObject uses HeadObject to get the real size. This is acceptable for now
+// because:
+// 1. Quota is reserved based on logical size (Content-Length), so releasing logical size is consistent.
+// 2. Compression/dedup benefits are typically small for image/text content (the allowed types).
+// 3. The alternative (querying backend) adds latency and complexity.
 func (uc *OSS3Usecase) GetMultipartUploadTotalSize(ctx context.Context, uploadID string) (int64, error) {
 	upload, err := uc.uploadRepo.GetByUploadID(ctx, uploadID)
 	if err != nil {
@@ -264,4 +325,38 @@ func (uc *OSS3Usecase) ReleaseMultipartUploadQuota(ctx context.Context, userID, 
 			zap.Int64("parts_total_size", partsTotalSize),
 			zap.Error(err))
 	}
+}
+
+// RecordUploadPart records a successfully uploaded part to the database.
+// P1-2 fix: UploadPart previously only committed quota but did not persist part metadata
+// to the database. This prevented auditing and made it impossible to reconstruct upload
+// history without querying MinIO. This method creates a MultipartUploadPart record after
+// successful upload.
+//
+// The method looks up the upload by uploadID to get the internal UUID, then creates the
+// part record. Errors are logged but do not fail the upload — the data is already in MinIO
+// and quota is committed. A background reconciler can repair missing part records if needed.
+func (uc *OSS3Usecase) RecordUploadPart(ctx context.Context, uploadID string, partNumber int, size int64, etag string) error {
+	// Look up the upload record to get the internal UUID
+	upload, err := uc.uploadRepo.GetByUploadID(ctx, uploadID)
+	if err != nil {
+		return fmt.Errorf("get upload record for part recording: %w", err)
+	}
+	if upload == nil {
+		// Upload record not found — this should not happen in normal flow.
+		// The upload was validated earlier in the request, so this indicates
+		// a race condition or data inconsistency. Log and return error.
+		return fmt.Errorf("upload record not found for uploadID %s", uploadID)
+	}
+
+	part := &model.MultipartUploadPart{
+		UploadID:   upload.ID,
+		PartNumber: partNumber,
+		Size:       size,
+		ETag:       etag,
+	}
+	if err := uc.uploadRepo.CreatePart(ctx, part); err != nil {
+		return fmt.Errorf("create part record: %w", err)
+	}
+	return nil
 }

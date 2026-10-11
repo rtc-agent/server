@@ -32,9 +32,11 @@ func TestLuaQuotaReserve_MultiConcurrentAgg(t *testing.T) {
 	reserve := func(reqID string, amount int64) int {
 		pendingKey := OSS3QuotaPending(userID, reqID)
 		prefix := PrefixOSS3QuotaPending + userID + ":"
+		// P0 fix: Pass doCleanup=0 for most tests (cleanup not needed).
+		// Tests that specifically test cleanup pass doCleanup=1.
 		result, err := reserveScript.Run(ctx, rdb,
 			[]string{quotaKey, pendingKey, aggKey},
-			amount, maxQuota, pendingTTL, reqID, prefix,
+			amount, maxQuota, pendingTTL, reqID, prefix, int64(0),
 		).Int()
 		if err != nil {
 			t.Fatalf("reserve %s failed: %v", reqID, err)
@@ -92,7 +94,7 @@ func TestLuaQuotaReserve_Idempotent(t *testing.T) {
 	// First reserve: 500 out of 1000.
 	r1, err := reserveScript.Run(ctx, rdb,
 		[]string{quotaKey, pendingKey, aggKey},
-		int64(500), int64(1000), int64(300), reqID, prefix,
+		int64(500), int64(1000), int64(300), reqID, prefix, int64(0),
 	).Int()
 	if err != nil {
 		t.Fatalf("first reserve failed: %v", err)
@@ -104,7 +106,7 @@ func TestLuaQuotaReserve_Idempotent(t *testing.T) {
 	// Idempotent call: same requestID, same amount → should return 1 without double-counting.
 	r2, err := reserveScript.Run(ctx, rdb,
 		[]string{quotaKey, pendingKey, aggKey},
-		int64(500), int64(1000), int64(300), reqID, prefix,
+		int64(500), int64(1000), int64(300), reqID, prefix, int64(0),
 	).Int()
 	if err != nil {
 		t.Fatalf("idempotent reserve failed: %v", err)
@@ -147,7 +149,7 @@ func TestLuaQuotaCommit_ReturnValues(t *testing.T) {
 		// Reserve first.
 		_, err := reserveScript.Run(ctx, rdb,
 			[]string{quotaKey, pendingKey, aggKey},
-			int64(100), int64(1000), int64(300), reqID, prefix,
+			int64(100), int64(1000), int64(300), reqID, prefix, int64(0),
 		).Int()
 		if err != nil {
 			t.Fatalf("reserve failed: %v", err)
@@ -195,7 +197,7 @@ func TestLuaQuotaCommit_ReturnValues(t *testing.T) {
 		// Reserve first.
 		_, err := reserveScript.Run(ctx, rdb,
 			[]string{quotaKey, pendingKey, aggKey},
-			int64(100), int64(1000), int64(300), reqID, prefix,
+			int64(100), int64(1000), int64(300), reqID, prefix, int64(0),
 		).Int()
 		if err != nil {
 			t.Fatalf("reserve failed: %v", err)
@@ -236,7 +238,7 @@ func TestLuaQuotaCommit_ReturnValues(t *testing.T) {
 		// Reserve 100.
 		_, err := reserveScript.Run(ctx, rdb,
 			[]string{quotaKey, pendingKey, aggKey},
-			int64(100), int64(1000), int64(300), reqID, prefix,
+			int64(100), int64(1000), int64(300), reqID, prefix, int64(0),
 		).Int()
 		if err != nil {
 			t.Fatalf("reserve failed: %v", err)
@@ -285,7 +287,7 @@ func TestLuaQuotaRollback_CleansUpZSET(t *testing.T) {
 	// Reserve first.
 	_, err := reserveScript.Run(ctx, rdb,
 		[]string{quotaKey, pendingKey, aggKey},
-		int64(100), int64(1000), int64(300), reqID, prefix,
+		int64(100), int64(1000), int64(300), reqID, prefix, int64(0),
 	).Int()
 	if err != nil {
 		t.Fatalf("reserve failed: %v", err)
@@ -358,9 +360,11 @@ func TestLuaQuotaReserve_StaleZSETCleanup(t *testing.T) {
 	// so (0 + 0 + 600 = 600 <= 1000) succeeds.
 	reqID := "req-fresh"
 	pendingKey := OSS3QuotaPending(userID, reqID)
+	// P0 fix: Pass doCleanup=1 to trigger stale entry cleanup in this test.
+	// In production, this is randomized (10% probability) to prevent Redis blocking.
 	result, err := reserveScript.Run(ctx, rdb,
 		[]string{quotaKey, pendingKey, aggKey},
-		int64(600), int64(1000), int64(300), reqID, prefix,
+		int64(600), int64(1000), int64(300), reqID, prefix, int64(1),
 	).Int()
 	if err != nil {
 		t.Fatalf("reserve failed: %v", err)
