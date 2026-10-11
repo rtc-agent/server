@@ -22,6 +22,7 @@ type DualBroker struct {
 	// which is moderate. Unsubscribe cleans up entries; Close clears all remaining.
 	channelTypes sync.Map // map[string]ChannelType
 	tracer       trace.Tracer
+	logger       Logger // reused from TopicBroker config for diagnostic logging
 }
 
 // NewDualBroker creates a new DualBroker instance.
@@ -41,6 +42,7 @@ func NewDualBroker(node *centrifuge.Node, config DualBrokerConfig) (*DualBroker,
 		liveBroker:  liveBroker,
 		topicBroker: topicBroker,
 		tracer:      config.Topic.Tracing.tracer(),
+		logger:      config.Topic.Logger,
 	}, nil
 }
 
@@ -62,15 +64,30 @@ func (d *DualBroker) getChannelType(ch string) (ChannelType, error) {
 		return v.(ChannelType), nil
 	}
 	// Fallback: infer channel type by prefix (topic: -> Topic, live: -> Live).
+	//
+	// IMPORTANT: These prefixes MUST be kept in sync with internal/channel/parse.go
+	// (channel.TopicPrefix = "topic:" and channel.LivePrefix = "live:").
+	// centrifuge-plus is an independent module and cannot import internal packages,
+	// so these values are duplicated here. If the prefixes change in internal/channel,
+	// update them here as well. See prefix_consistency_test.go for a validation test.
+	const (
+		topicPrefix = "topic:" // must match internal/channel.TopicPrefix
+		livePrefix  = "live:"  // must match internal/channel.LivePrefix
+	)
 	switch {
-	case len(ch) > 6 && ch[:6] == "topic:":
+	case len(ch) > len(topicPrefix) && ch[:len(topicPrefix)] == topicPrefix:
 		d.channelTypes.Store(ch, Topic)
 		return Topic, nil
-	case len(ch) > 5 && ch[:5] == "live:":
+	case len(ch) > len(livePrefix) && ch[:len(livePrefix)] == livePrefix:
 		d.channelTypes.Store(ch, Live)
 		return Live, nil
 	}
-	return ChannelType(0), fmt.Errorf("channel type not registered for %q", ch)
+	// Log a warning when channel type cannot be inferred — this may indicate
+	// a misconfiguration or a channel leaking to the wrong broker.
+	if d.logger != nil {
+		d.logger.Warn("channel type not registered and prefix unmatched for channel %q", ch)
+	}
+	return ChannelType(0), fmt.Errorf("channel type not registered and prefix unmatched for %q", ch)
 }
 
 // RegisterBrokerEventHandler is called once when Broker is set to Node.
@@ -240,7 +257,10 @@ func (d *DualBroker) PublishWithOffset(ctx context.Context, ch string, data []by
 func (d *DualBroker) PublishEphemeral(ctx context.Context, ch string, data []byte, opts centrifuge.PublishOptions) error {
 	// Validate that this is a Live channel (or unregistered, which defaults to Live)
 	if ct, err := d.getChannelType(ch); err == nil && ct == Topic {
-		// Topic channels should not use ephemeral publishing
+		// Topic channels should not use ephemeral publishing.
+		// Audit note (2026-10-10): All callers in the codebase have been verified
+		// to handle this error correctly. PublishEphemeral is only called with
+		// Live (user) channels for transient events like typing indicators.
 		return fmt.Errorf("PublishEphemeral called on Topic channel %q: ephemeral publishing is only supported for Live channels", ch)
 	}
 

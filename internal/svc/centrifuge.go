@@ -405,6 +405,11 @@ func setupSubscribeHandler(client *centrifuge.Client, broker *centrifugeplus.Dua
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
 					EnableRecovery: true,
+					// Note: History retention limits (count and lifetime) are managed by the
+					// HistoryStore implementation, not by SubscribeOptions. The TopicBroker
+					// queries HistoryStore with appropriate limits during recovery.
+					// If clients reconnect after a long absence, the recovery is bounded by
+					// what HistoryStore returns, preventing unbounded memory usage.
 				},
 			}, nil)
 			return
@@ -490,12 +495,13 @@ func setupRPCHandler(client *centrifuge.Client, userID uuid.UUID, deviceID strin
 			if errCode, errMessage, ok := extractAPIError(err); ok {
 				span.RecordError(err)
 				metrics.recordRPC(e.Method, "error", rpcDuration)
-				// Format error message as JSON to match HTTP error format:
-				// {"error": "code", "error_description": "message"}
-				// This ensures consistent error structure across WebSocket and HTTP.
+				// Format error message as JSON to match APIError structure:
+				// {"code": "...", "message": "...", "details": "..."}
+				// This ensures consistent error structure across WebSocket and HTTP,
+				// so clients can parse errors uniformly without handling two formats.
 				errJSON, _ := json.Marshal(map[string]string{
-					"error":             errCode,
-					"error_description": errMessage,
+					"code":    errCode,
+					"message": errMessage,
 				})
 				cb(centrifuge.RPCReply{}, &centrifuge.Error{
 					Code:    500,
