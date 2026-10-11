@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,6 +52,9 @@ type Loop struct {
 
 // BeforeCreate generates a UUID v7 identifier if one is not already set.
 func (l *Loop) BeforeCreate(tx *gorm.DB) error {
+	if err := l.Validate(); err != nil {
+		return fmt.Errorf("validate loop: %w", err)
+	}
 	if l.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
@@ -65,11 +69,17 @@ func (l *Loop) BeforeCreate(tx *gorm.DB) error {
 // Call this before creating a Loop to prevent invalid configurations that
 // could cause performance issues or unexpected behavior.
 func (l *Loop) Validate() error {
+	if strings.TrimSpace(l.Prompt) == "" {
+		return fmt.Errorf("prompt cannot be empty")
+	}
 	if l.IntervalSeconds <= 0 {
 		return fmt.Errorf("interval_seconds must be positive, got %d", l.IntervalSeconds)
 	}
 	if l.MaxTurns <= 0 {
 		return fmt.Errorf("max_turns must be positive, got %d", l.MaxTurns)
+	}
+	if l.RecoveryAttempts < 0 || l.RecoveryAttempts > 100 {
+		return fmt.Errorf("recovery_attempts must be 0-100, got %d", l.RecoveryAttempts)
 	}
 	if l.IntervalSeconds > 86400*30 { // 30 days
 		return fmt.Errorf("interval_seconds too large (max 30 days), got %d", l.IntervalSeconds)
