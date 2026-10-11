@@ -3,13 +3,11 @@
 // Worker handles asynq tasks for loop execution, Recovery monitors for stale
 // or expired loops, and Cleanup handles session close cleanup.
 //
-// TODO(observability): Add Prometheus metrics for loop worker operations:
+// Prometheus metrics are defined in metrics.go and cover:
 //   - loop_worker_tasks_total{status="success|failure"}: Counter of processed tasks
 //   - loop_worker_task_duration_seconds: Histogram of task processing duration
-//   - loop_worker_lock_acquisitions_total{status="acquired|skipped"}: Counter of lock attempts
-//   - loop_worker_lock_hold_duration_seconds: Histogram of lock hold duration
-//   - loop_worker_queue_publish_errors_total: Counter of queue publish failures
-//     These metrics enable monitoring of worker health, performance, and failure patterns.
+//   - loop_recovery_scans_total: Counter of recovery scans
+//   - loop_recovery_attempts_total{status="success|failure|exhausted"}: Counter of recovery attempts
 package loop
 
 import (
@@ -95,6 +93,8 @@ const loopTaskTimeout = 30 * time.Second
 // Error handling: On failure, logs detailed context for debugging and traceability.
 // Failed tasks are archived by asynq and can be inspected via asynqmon or manually retried.
 func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error {
+	startTime := time.Now()
+
 	ctx, cancel := context.WithTimeout(ctx, loopTaskTimeout)
 	defer cancel()
 
@@ -121,12 +121,14 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
+		recordTaskFailure(time.Since(startTime))
 		return err
 	}
 	if !acquired {
 		span.SetAttributes(attribute.String("outcome", "lock_not_acquired"))
 		logger.Debug(ctx, "[loop.Worker] another worker is processing this loop, skipping",
 			zap.String("loop_id", loopUUID.String()))
+		recordTaskLockSkipped(time.Since(startTime))
 		return nil
 	}
 	defer func() {
@@ -136,6 +138,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	// Validate loop state
 	loop, err := w.validateLoopState(ctx, sessionUUID, loopUUID, span)
 	if err != nil {
+		recordTaskFailure(time.Since(startTime))
 		return err
 	}
 	if loop == nil {
@@ -145,7 +148,38 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	// Idempotency check
 	alreadyProcessed := w.checkIdempotency(ctx, loop, sessionUUID, loopUUID, span)
 	if alreadyProcessed {
+		recordTestIdempotentSkip(time.Since(startTime))
 		return nil
+	}
+
+	// Fix(P0-1): Update LastRunAt BEFORE publishing to rtc-queue.
+	// Rationale: If we publish first and then fail to update LastRunAt,
+	// the task is already queued for LLM execution but idempotency check
+	// would think it wasn't processed — leading to duplicate triggers.
+	//
+	// Accepting the inverse risk (LastRunAt updated but publish fails) is safer:
+	// the recovery mechanism will detect stale loops (missing asynq task within
+	// staleLoopThreshold) and re-enqueue them on the next scan.
+	now := time.Now()
+	if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{"last_run_at": now}); err != nil {
+		span.SetStatus(codes.Error, "internal_error")
+		span.RecordError(err)
+		logTaskFailure(ctx, "update last_run_at", sessionUUID.String(), loopUUID.String(), err)
+		recordTaskFailure(time.Since(startTime))
+		return fmt.Errorf("update last_run_at: %w", err)
+	}
+
+	// Fix(P1-4): Reset recovery_attempts on successful task processing.
+	// If a previous recovery reset failed, we clear it here to prevent
+	// stale recovery_attempts from accumulating and causing premature exhaustion.
+	if loop.RecoveryAttempts > 0 {
+		if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{"recovery_attempts": 0}); err != nil {
+			// Fix(P1-4): Elevate from Warn to Error. This failure can cause
+			// the loop to be incorrectly marked as exhausted in future recovery scans.
+			logger.Error(ctx, "[loop.Worker] reset recovery_attempts failed",
+				zap.String("loop_id", loopUUID.String()),
+				zap.Error(err))
+		}
 	}
 
 	// Build prompt and create notification
@@ -155,6 +189,7 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			logTaskFailure(ctx, "create notification message", sessionUUID.String(), loopUUID.String(), err)
+			recordTaskFailure(time.Since(startTime))
 			return fmt.Errorf("create notification message: %w", err)
 		}
 	}
@@ -165,27 +200,11 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	// Publish to rtc-queue
 	if err := w.publishToQueue(ctx, sessionUUID.String(), userID, traceID, spanID, span); err != nil {
 		logTaskFailure(ctx, "publish to rtc-queue", sessionUUID.String(), loopUUID.String(), err)
+		recordTaskFailure(time.Since(startTime))
 		return err
 	}
 
-	// Update LastRunAt only after successful queue publish.
-	// This ensures idempotency check won't skip retries if worker crashes before publish.
-	now := time.Now()
-	if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{"last_run_at": now}); err != nil {
-		span.SetStatus(codes.Error, "internal_error")
-		span.RecordError(err)
-		logTaskFailure(ctx, "update last_run_at", sessionUUID.String(), loopUUID.String(), err)
-		return fmt.Errorf("update last_run_at: %w", err)
-	}
-
-	// Reset recovery_attempts on success
-	if loop.RecoveryAttempts > 0 {
-		if err := w.loopRepo.Update(ctx, loopUUID, map[string]any{"recovery_attempts": 0}); err != nil {
-			logger.Warn(ctx, "[loop.Worker] reset recovery_attempts failed",
-				zap.String("loop_id", loopUUID.String()),
-				zap.Error(err))
-		}
-	}
+	recordTaskSuccess(time.Since(startTime))
 
 	span.SetAttributes(attribute.Int("loop.turn", loop.CompletedTurns+1))
 	logger.Info(ctx, "[loop.Worker] task processed successfully",
@@ -300,7 +319,10 @@ func parseLoopTaskPayload(ctx context.Context, t *hibikenasynq.Task) (sessionUUI
 func (w *Worker) acquireDistributedLock(ctx context.Context, loopUUID uuid.UUID) (string, bool, error) {
 	lockKey := cache.LoopLockKey(loopUUID.String())
 	holderUUID := uuid.Must(uuid.NewV7()).String()
-	lockTTL := loopTaskTimeout + 10*time.Second
+	// Fix(P1-5): Use proportional buffer instead of hardcoded 30s.
+	// A proportional buffer (50% of timeout) scales correctly with
+	// different task timeout values and avoids under- or over-provisioning.
+	lockTTL := loopTaskTimeout + loopTaskTimeout/2
 
 	acquired, err := w.redis.SetNX(ctx, lockKey, holderUUID, lockTTL).Result()
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
+	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/taskscheduler"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -61,37 +62,58 @@ func RunRecovery(ctx context.Context, deps RecoveryDeps) {
 			logger.Info(ctx, "[loop.Recovery] stopped")
 			return
 		case <-ticker.C:
-			// Acquire distributed lock to prevent multiple instances from
-			// running recovery scans concurrently. Lock TTL is slightly less
-			// than the interval to ensure it expires before the next scan.
-			lockTTL := deps.Interval - 1*time.Second
-			if lockTTL <= 0 {
-				lockTTL = 30 * time.Second
-			}
-
-			lockAcquired, err := deps.Redis.SetNX(ctx, recoveryLockKey, "1", lockTTL).Result()
-			if err != nil {
-				logger.Error(ctx, "[loop.Recovery] acquire distributed lock failed",
-					zap.Error(err))
-				continue
-			}
-			if !lockAcquired {
-				// Another instance is running recovery, skip this cycle
-				logger.Debug(ctx, "[loop.Recovery] skipping scan (another instance holds lock)")
-				continue
-			}
-
-			// Ensure lock is released after scan completes
-			defer func() {
-				if err := deps.Redis.Del(ctx, recoveryLockKey).Err(); err != nil {
-					logger.Error(ctx, "[loop.Recovery] release distributed lock failed",
-						zap.Error(err))
-				}
-			}()
-
-			scanAndRecover(ctx, deps)
+			scanAndRecoverWithLock(ctx, deps)
 		}
 	}
+}
+
+// scanAndRecoverWithLock acquires a distributed lock, performs recovery scan,
+// and releases the lock. Extracted to ensure defer executes after each scan,
+// not when RunRecovery returns.
+func scanAndRecoverWithLock(ctx context.Context, deps RecoveryDeps) {
+	// Acquire distributed lock to prevent multiple instances from
+	// running recovery scans concurrently. Lock TTL is slightly less
+	// than the interval to ensure it expires before the next scan.
+	lockTTL := deps.Interval - 1*time.Second
+	if lockTTL <= 0 {
+		lockTTL = 30 * time.Second
+	}
+
+	// Generate a unique holder ID to verify lock ownership during release.
+	// This prevents one instance from accidentally releasing another instance's lock.
+	holderID := uuid.NewString()
+
+	lockAcquired, err := deps.Redis.SetNX(ctx, recoveryLockKey, holderID, lockTTL).Result()
+	if err != nil {
+		logger.Error(ctx, "[loop.Recovery] acquire distributed lock failed",
+			zap.Error(err))
+		return
+	}
+	if !lockAcquired {
+		// Another instance is running recovery, skip this cycle
+		logger.Debug(ctx, "[loop.Recovery] skipping scan (another instance holds lock)")
+		return
+	}
+
+	// Release lock atomically using Lua script that verifies holder identity.
+	// This prevents accidentally deleting another instance's lock if our lock
+	// expired due to GC pause or network delay before we finished the scan.
+	defer func() {
+		releaseLua := `
+local holder = ARGV[1]
+local current = redis.call('GET', KEYS[1])
+if current ~= holder then
+    return 0
+end
+return redis.call('DEL', KEYS[1])
+`
+		if err := deps.Redis.Eval(ctx, releaseLua, []string{recoveryLockKey}, holderID).Err(); err != nil {
+			logger.Error(ctx, "[loop.Recovery] release distributed lock failed",
+				zap.Error(err))
+		}
+	}()
+
+	scanAndRecover(ctx, deps)
 }
 
 // scanAndRecover performs one recovery scan.
@@ -104,6 +126,9 @@ func scanAndRecover(ctx context.Context, deps RecoveryDeps) {
 
 	// 2. Handle stale loops (missing asynq task)
 	recoverStale(ctx, deps)
+
+	// Record recovery scan for observability
+	recordRecoveryScan()
 }
 
 // recoverExpired marks expired loops as cancelled.
@@ -212,6 +237,7 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 		logger.Error(ctx, "[loop.Recovery] max recovery attempts reached",
 			zap.String("loop_id", loop.ID.String()),
 			zap.Int("attempts", loop.RecoveryAttempts))
+		recordRecoveryExhausted()
 		if err := deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
 			"status": model.LoopStatusExhausted,
 		}); err != nil {
@@ -242,6 +268,7 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 		logger.Error(ctx, "[loop.Recovery] marshal payload",
 			zap.String("loop_id", loop.ID.String()),
 			zap.Error(err))
+		recordRecoveryFailure()
 		return
 	}
 
@@ -261,10 +288,16 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 			baseDelay := time.Duration(loop.IntervalSeconds) * time.Second
 			maxBackoff := 1 * time.Hour // Cap at 1 hour to prevent excessive delays
 
-			// Check for potential overflow before calculating backoff.
-			// If shift amount is too large (>= 20), the multiplication would overflow
-			// or exceed maxBackoff anyway, so use maxBackoff directly.
+			// Fix(P0-2): Prevent overflow in exponential backoff calculation.
+			// The formula is: baseDelay * (1 << recoveryAttempts).
+			// Before multiplying, we ensure baseDelay doesn't exceed the maximum
+			// safe value that won't overflow when multiplied by 1<<maxSafeShift.
 			const maxSafeShift = 20
+			maxSafeBaseDelay := maxBackoff / time.Duration(1<<uint(maxSafeShift))
+			if baseDelay > maxSafeBaseDelay {
+				baseDelay = maxSafeBaseDelay
+			}
+
 			var backoff time.Duration
 			if loop.RecoveryAttempts >= maxSafeShift {
 				backoff = maxBackoff
@@ -316,6 +349,7 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 		logger.Error(ctx, "[loop.Recovery] reenqueue failed",
 			zap.String("loop_id", loop.ID.String()),
 			zap.Error(err))
+		recordRecoveryFailure()
 		return
 	}
 
@@ -334,8 +368,11 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 		logger.Error(ctx, "[loop.Recovery] update recovery_attempts failed",
 			zap.String("loop_id", loop.ID.String()),
 			zap.Error(err))
+		recordRecoveryFailure()
 		return
 	}
+
+	recordRecoverySuccess()
 
 	logger.Info(ctx, "[loop.Recovery] re-enqueued stale loop",
 		zap.String("loop_id", loop.ID.String()),
