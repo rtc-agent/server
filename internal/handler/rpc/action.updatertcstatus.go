@@ -64,7 +64,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 	}
 
 	// Load RTC and verify existence.
-	rtc, err := h.deps.Deps.RtcRepo.GetByID(ctx, rtcUUID)
+	rtc, err := h.deps.Deps.RtcSessionUsecase.GetRtcSession(ctx, rtcUUID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "rtc.not_found")
@@ -138,7 +138,7 @@ func (h *Handler) UpdateRtcStatus(ctx context.Context, req *protocol.UpdateRtcSt
 	switch req.Status {
 	case protocol.RtcStatusFailed, protocol.RtcStatusTimeout, protocol.RtcStatusRejected:
 		// Reload RTC to get latest state for batch processing
-		updatedRtc, reloadErr := h.deps.Deps.RtcRepo.GetByID(ctx, rtcUUID)
+		updatedRtc, reloadErr := h.deps.Deps.RtcSessionUsecase.GetRtcSession(ctx, rtcUUID)
 		if reloadErr == nil && updatedRtc != nil {
 			h.resumeTurnAfterRtc(ctx, updatedRtc, userID.String())
 		}

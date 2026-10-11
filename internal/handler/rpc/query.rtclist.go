@@ -4,7 +4,7 @@ package rpchandler
 import (
 	"context"
 
-	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
@@ -12,9 +12,9 @@ import (
 func (h *Handler) RtcList(ctx context.Context, req *protocol.RtcListRequest) (*protocol.RtcListResponse, error) {
 	items, nextCursor, err := listBySessionCursor(ctx, h,
 		req.SessionId, req.Limit, req.Cursor, "rtc",
-		h.deps.Deps.RtcRepo.ListBySession,
-		model.ToProtocolRtc,
-		func(r *model.Rtc) string { return r.ID.String() },
+		h.deps.Deps.RtcSessionUsecase.ListRtcSessionsBySession,
+		converter.ToProtocolRtc,
+		func(r *converter.Rtc) string { return r.ID.String() },
 	)
 	if err != nil {
 		return nil, err

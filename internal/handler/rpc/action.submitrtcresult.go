@@ -56,7 +56,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 		zap.String("rtc", req.RtcId),
 		zap.Bool("success", req.Success))
 
-	rtc, err := h.deps.Deps.RtcRepo.GetByID(ctx, rtcUUID)
+	rtc, err := h.deps.Deps.RtcSessionUsecase.GetRtcSession(ctx, rtcUUID)
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "rtc.not_found")
@@ -249,7 +249,7 @@ func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *converter
 		return nil, h.internalError(txCtx, ErrorCodeSubmitCreateOutputMsg, "failed to create output message", createErr)
 	}
 
-	if err := h.deps.Deps.RtcRepo.UpdateOutputMessageID(txCtx, rtcUUID, outputMsg.ID); err != nil {
+	if err := h.deps.Deps.RtcSessionUsecase.UpdateRtcOutputMessageID(txCtx, rtcUUID, outputMsg.ID); err != nil {
 		logger.Error(txCtx, "[SubmitRtcResult] update output_message_id",
 			zap.String("rtc", rtcUUID.String()), zap.Error(err))
 	}

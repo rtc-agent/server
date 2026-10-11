@@ -4,7 +4,6 @@ package rpchandler
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
@@ -55,7 +54,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	if err != nil {
 		if primitives.IsNotFound(err) {
 			span.SetStatus(codes.Error, "session.not_found")
-			return nil, &APIError{Code: ErrorCodeSessionNotFound, Message: fmt.Sprintf("session %s not found", req.SessionId)}
+			return nil, &APIError{Code: ErrorCodeSessionNotFound, Message: "session not found"}
 		}
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
@@ -63,7 +62,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	}
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
 		span.SetStatus(codes.Error, "permission_denied")
-		return nil, &APIError{Code: ErrorCodePermissionDenied, Message: fmt.Sprintf("session %s does not belong to user", session.ID)}
+		return nil, &APIError{Code: ErrorCodePermissionDenied, Message: "session does not belong to user"}
 	}
 	if protocol.SessionStatus(session.Status) == protocol.SessionStatusClosed {
 		logger.Info(ctx, "[CloseSession] session already closed", zap.String("session", session.ID.String()))
@@ -84,7 +83,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		h.deps.Metrics.RecordSessionClosed(txCtx, "normal")
 
 		// Delete session memories (soft delete; they have served their purpose for compression).
-		if err := h.deps.Deps.MemoryRepo.DeleteByScope(txCtx, memory.ScopeSession, session.ID); err != nil {
+		if err := h.deps.Deps.RtcSessionUsecase.DeleteMemoryByScope(txCtx, memory.ScopeSession, session.ID); err != nil {
 			// Non-fatal: log but don't block session close.
 			logger.Warn(ctx, "[CloseSession] failed to delete session memories (non-fatal)",
 				zap.String("session", session.ID.String()),

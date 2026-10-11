@@ -82,7 +82,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 	// 3. Verify queue availability.
 	if h.deps.Queue == nil {
 		span.SetStatus(codes.Error, "compact.queue_unavailable")
-		return nil, h.internalError(ctx, "compact.queue_unavailable", "compact service unavailable", nil)
+		return nil, h.internalError(ctx, "compact.queue_unavailable", "compact service unavailable", fmt.Errorf("queue dependency is nil"))
 	}
 
 	// 4. Dedup: check if a compact task for this session is already in the queue.

@@ -125,14 +125,18 @@ func mockDependencies(t *testing.T, sessionRepo *mockSessionRepo, memoryRepo *mo
 	// Create mock message and turn repos for RtcSessionUsecase
 	messageRepo := &mockMessageRepo{}
 	turnRepo := &mockTurnRepo{}
+	rtcRepo := &noopRtcRepo{}
+	scriptExecutionRepo := &noopScriptExecutionRepo{}
 
 	usecaseDeps := &usecase.Dependencies{
-		SessionRepo:       sessionRepo,
-		MessageRepo:       messageRepo,
-		TurnRepo:          turnRepo,
-		MemoryRepo:        memoryRepo,
-		UpdatePublisher:   publisher,
-		RtcSessionUsecase: usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo),
+		SessionRepo:         sessionRepo,
+		MessageRepo:         messageRepo,
+		TurnRepo:            turnRepo,
+		RtcRepo:             rtcRepo,
+		MemoryRepo:          memoryRepo,
+		ScriptExecutionRepo: scriptExecutionRepo,
+		UpdatePublisher:     publisher,
+		RtcSessionUsecase:   usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo, rtcRepo, memoryRepo, scriptExecutionRepo),
 	}
 
 	// Create a no-op metrics instance

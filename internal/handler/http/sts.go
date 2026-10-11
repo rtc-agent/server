@@ -46,7 +46,7 @@ func (h *STSHandler) RegisterRoutes(mux *http.ServeMux) {
 
 	// POST /api/credentials/temporary — issue temporary S3 credentials
 	// Rate limiting is applied before authentication to prevent credential exhaustion attacks
-	var handler http.Handler = authMiddleware(http.HandlerFunc(h.IssueTemporaryCredentials))
+	handler := authMiddleware(http.HandlerFunc(h.IssueTemporaryCredentials))
 	if h.rateLimiter != nil {
 		handler = STSRateLimitMiddleware(h.rateLimiter, handler)
 	}

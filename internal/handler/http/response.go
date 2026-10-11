@@ -1,4 +1,42 @@
 // Package httphandler provides HTTP handler implementations.
+//
+// # API Error Handling Architecture Decision
+//
+// This project uses HTTP 200 + application-level error codes for all API responses.
+// This is an intentional design choice that differs from REST conventions (which would
+// use HTTP status codes like 400, 404, 500 for errors).
+//
+// Rationale:
+//   - Simplifies frontend error handling: all responses have the same structure
+//   - Enables richer error information: errorCode + errorMessage provide context
+//   - Avoids HTTP status code ambiguity: 200 always means "request processed"
+//   - Better integration with Ant Design Pro frontend conventions
+//   - Easier to implement retry logic: check success field, not HTTP status
+//
+// Response structure:
+//
+//	Success case:
+//	  {
+//	    "success": true,
+//	    "data": { ... }
+//	  }
+//
+//	Error case:
+//	  {
+//	    "success": false,
+//	    "errorCode": "VALIDATION_ERROR",
+//	    "errorMessage": "Invalid email format"
+//	  }
+//
+// Error code conventions:
+//   - Use UPPER_SNAKE_CASE for error codes (e.g., "VALIDATION_ERROR", "NOT_FOUND")
+//   - Define error codes in a centralized location (see internal/domain/errors.go)
+//   - Include human-readable errorMessage for debugging and user display
+//   - Keep errorCode stable for programmatic handling, errorMessage can change
+//
+// Exception: Health check endpoints use standard HTTP status codes (200, 503) because
+// they are consumed by infrastructure tools (load balancers, Kubernetes) that expect
+// standard HTTP semantics.
 package httphandler
 
 import (

@@ -104,15 +104,21 @@ var testMetrics = turnagent.NewPrometheusMetrics()
 func newTestSendMessageHandler(t *testing.T, sessionRepo *mockSessionRepo, messageRepo *mockMessageRepo, publisher *mockPublisher) *Handler {
 	t.Helper()
 
-	// Create minimal mock turn repo for RtcSessionUsecase
+	// Create minimal mock repos for RtcSessionUsecase
 	turnRepo := &noopTurnRepoForSend{}
+	rtcRepo := &noopRtcRepo{}
+	memoryRepo := &noopMemoryRepo{}
+	scriptExecutionRepo := &noopScriptExecutionRepo{}
 
 	usecaseDeps := &usecase.Dependencies{
-		SessionRepo:       sessionRepo,
-		MessageRepo:       messageRepo,
-		TurnRepo:          turnRepo,
-		UpdatePublisher:   publisher,
-		RtcSessionUsecase: usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo),
+		SessionRepo:         sessionRepo,
+		MessageRepo:         messageRepo,
+		TurnRepo:            turnRepo,
+		RtcRepo:             rtcRepo,
+		MemoryRepo:          memoryRepo,
+		ScriptExecutionRepo: scriptExecutionRepo,
+		UpdatePublisher:     publisher,
+		RtcSessionUsecase:   usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo, rtcRepo, memoryRepo, scriptExecutionRepo),
 		// Redis is nil here - only error path tests that fail before Redis
 		// is accessed can use this helper.
 	}

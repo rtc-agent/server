@@ -25,13 +25,19 @@ func newTestUpdateSessionHandler(t *testing.T, sessionRepo *mockSessionRepo, pub
 	// Create minimal mock repos for RtcSessionUsecase
 	messageRepo := &noopMessageRepoForUpdate{}
 	turnRepo := &noopTurnRepoForUpdate{}
+	rtcRepo := &noopRtcRepo{}
+	memoryRepo := &noopMemoryRepo{}
+	scriptExecutionRepo := &noopScriptExecutionRepo{}
 
 	usecaseDeps := &usecase.Dependencies{
-		SessionRepo:       sessionRepo,
-		MessageRepo:       messageRepo,
-		TurnRepo:          turnRepo,
-		UpdatePublisher:   publisher,
-		RtcSessionUsecase: usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo),
+		SessionRepo:         sessionRepo,
+		MessageRepo:         messageRepo,
+		TurnRepo:            turnRepo,
+		RtcRepo:             rtcRepo,
+		MemoryRepo:          memoryRepo,
+		ScriptExecutionRepo: scriptExecutionRepo,
+		UpdatePublisher:     publisher,
+		RtcSessionUsecase:   usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo, rtcRepo, memoryRepo, scriptExecutionRepo),
 	}
 
 	deps := &Dependencies{

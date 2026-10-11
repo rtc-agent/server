@@ -4,7 +4,7 @@ package rpchandler
 import (
 	"context"
 
-	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
@@ -13,8 +13,8 @@ func (h *Handler) TurnList(ctx context.Context, req *protocol.TurnListRequest) (
 	items, nextCursor, err := listBySessionCursor(ctx, h,
 		req.SessionId, req.Limit, req.Cursor, "turn",
 		h.deps.Deps.RtcSessionUsecase.ListTurnsBySession,
-		model.ToProtocolTurn,
-		func(t *model.Turn) string { return t.ID.String() },
+		converter.ToProtocolTurn,
+		func(t *converter.Turn) string { return t.ID.String() },
 	)
 	if err != nil {
 		return nil, err

@@ -151,13 +151,19 @@ func newTestOpenSessionHandler(t *testing.T, sessionRepo *mockSessionRepo, publi
 	// Create minimal mock repos for RtcSessionUsecase
 	messageRepo := &noopMessageRepo{}
 	turnRepo := &noopTurnRepo{}
+	rtcRepo := &noopRtcRepo{}
+	memoryRepo := &noopMemoryRepo{}
+	scriptExecutionRepo := &noopScriptExecutionRepo{}
 
 	usecaseDeps := &usecase.Dependencies{
 		SessionRepo:       sessionRepo,
 		MessageRepo:       messageRepo,
 		TurnRepo:          turnRepo,
+		RtcRepo:           rtcRepo,
+		MemoryRepo:        memoryRepo,
+		ScriptExecutionRepo: scriptExecutionRepo,
 		UpdatePublisher:   publisher,
-		RtcSessionUsecase: usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo),
+		RtcSessionUsecase: usecase.NewRtcSessionUsecase(sessionRepo, messageRepo, turnRepo, rtcRepo, memoryRepo, scriptExecutionRepo),
 	}
 
 	deps := &Dependencies{

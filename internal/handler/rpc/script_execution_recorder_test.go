@@ -53,9 +53,18 @@ func (m *mockScriptExecutionRepo) ListByUser(_ context.Context, _ uuid.UUID, _, 
 
 func newTestRecorder(t *testing.T, repo *mockScriptExecutionRepo) *scriptExecutionRecorder {
 	t.Helper()
+
+	// Create minimal mock repos for RtcSessionUsecase
+	// Use the shared no-op repos from testhelpers_test.go
+	rtcRepo := &noopRtcRepo{}
+	memoryRepo := &noopMemoryRepo{}
+
+	rtcSessionUsecase := usecase.NewRtcSessionUsecase(nil, nil, nil, rtcRepo, memoryRepo, repo)
+
 	deps := &Dependencies{
 		Deps: &usecase.Dependencies{
 			ScriptExecutionRepo: repo,
+			RtcSessionUsecase:   rtcSessionUsecase,
 		},
 		// Metrics intentionally nil — processTask has a nil check.
 	}
@@ -429,7 +438,13 @@ func TestRecorder_ShutdownDrainsTasks(t *testing.T) {
 		},
 	}
 
-	deps := &Dependencies{Deps: &usecase.Dependencies{ScriptExecutionRepo: repo}}
+	rtcRepo := &noopRtcRepo{}
+	memoryRepo := &noopMemoryRepo{}
+	rtcSessionUsecase := usecase.NewRtcSessionUsecase(nil, nil, nil, rtcRepo, memoryRepo, repo)
+	deps := &Dependencies{Deps: &usecase.Dependencies{
+		ScriptExecutionRepo: repo,
+		RtcSessionUsecase:   rtcSessionUsecase,
+	}}
 	r := newScriptExecutionRecorder(deps, 2, 100)
 
 	ctx := testContext(t)
@@ -496,8 +511,14 @@ func TestRecorder_ConcurrentSubmit(t *testing.T) {
 			return nil
 		},
 	}
+	rtcRepo := &noopRtcRepo{}
+	memoryRepo := &noopMemoryRepo{}
+	rtcSessionUsecase := usecase.NewRtcSessionUsecase(nil, nil, nil, rtcRepo, memoryRepo, repo)
 	// Use large buffer to ensure all 100 tasks can be queued without dropping.
-	deps := &Dependencies{Deps: &usecase.Dependencies{ScriptExecutionRepo: repo}}
+	deps := &Dependencies{Deps: &usecase.Dependencies{
+		ScriptExecutionRepo: repo,
+		RtcSessionUsecase:   rtcSessionUsecase,
+	}}
 	r := newScriptExecutionRecorder(deps, 2, 200)
 	t.Cleanup(r.shutdown)
 

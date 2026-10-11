@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/pkg/protocol"
 )
 
@@ -17,13 +17,13 @@ func (h *Handler) RtcGet(ctx context.Context, req *protocol.RtcGetRequest) (*pro
 		"rtc_id",
 		"rtc.not_found",
 		"rtc",
-		h.deps.Deps.RtcRepo.GetByID,
-		func(r *model.Rtc) uuid.UUID { return r.SessionID },
+		h.deps.Deps.RtcSessionUsecase.GetRtcSession,
+		func(r *converter.Rtc) uuid.UUID { return r.SessionID },
 	)
 	if err != nil {
 		return nil, err
 	}
 	return &protocol.RtcGetResponse{
-		Item: model.ToProtocolRtc(rtc),
+		Item: converter.ToProtocolRtc(rtc),
 	}, nil
 }

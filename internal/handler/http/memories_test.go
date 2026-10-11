@@ -180,7 +180,7 @@ func (r *mockSessionRepo) ListTopByTokens(_ context.Context, _ string, _ int) ([
 // newTestSigner creates a JWT signer for testing.
 func newTestSigner(t *testing.T) *auth.JWTSigner {
 	t.Helper()
-	signer, err := auth.NewJWTSigner("test-secret-key-for-testing-only", 15*time.Minute)
+	signer, err := auth.NewJWTSigner("test-secret-key-for-testing-only", 15*time.Minute, "development")
 	require.NoError(t, err)
 	return signer
 }
