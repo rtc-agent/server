@@ -45,3 +45,8 @@ frpc.toml
 
 # Alertmanager configuration (contains sensitive info)
 etc/dev/alertmanager/alertmanager.yml
+# Claude Code temporary files
+.claude/
+
+# Temporary work documents
+SECURITY_FIX_SUMMARY.md

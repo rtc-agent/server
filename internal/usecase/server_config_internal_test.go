@@ -150,7 +150,12 @@ func TestMarshalAndValidateValue(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, `42`, string(result))
 
-		result, err = marshalAndValidateValue(42.5, entry)
+		// float64 with decimal part should be rejected to prevent silent truncation
+		_, err = marshalAndValidateValue(42.5, entry)
+		assert.Error(t, err)
+
+		// float64 without decimal part should succeed (e.g., from JSON unmarshaling)
+		result, err = marshalAndValidateValue(42.0, entry)
 		require.NoError(t, err)
 		assert.Equal(t, `42`, string(result))
 
@@ -269,8 +274,12 @@ func TestConvertValueByType(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 42, result)
 
-		// From float64
-		result, err = convertValueByType(42.5, config.ValueTypeInt)
+		// From float64 with decimal part → rejected to prevent silent truncation
+		_, err = convertValueByType(42.5, config.ValueTypeInt)
+		assert.Error(t, err)
+
+		// From float64 without decimal part → accepted
+		result, err = convertValueByType(42.0, config.ValueTypeInt)
 		require.NoError(t, err)
 		assert.Equal(t, 42, result)
 

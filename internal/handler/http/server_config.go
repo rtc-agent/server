@@ -148,7 +148,7 @@ func (h *ServerConfigHandler) GetHistory(c *gin.Context) {
 
 // rollbackRequest is the request body for rolling back a config.
 type rollbackRequest struct {
-	TargetVersion int    `json:"target_version" binding:"required,gte=1"`
+	TargetVersion int    `json:"target_version" binding:"required,gte=0"`
 	Version       int    `json:"version" binding:"required,gte=1"`
 	ChangeNote    string `json:"change_note" binding:"max=500"`
 }
