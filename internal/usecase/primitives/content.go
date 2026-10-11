@@ -339,7 +339,7 @@ func toolCallToStorage(tc protocol.ToolCall) (ToolCallData, error) {
 			// Not valid JSON — store as a plain string.
 			marshaled, mErr := json.Marshal(tc.Input)
 			if mErr != nil {
-				slog.Error("toolCallToStorage: failed to marshal input string", "error", mErr)
+				return ToolCallData{}, fmt.Errorf("marshal input string: %w", mErr)
 			}
 			s.Input = json.RawMessage(marshaled)
 		} else {
@@ -360,7 +360,7 @@ func toolCallToStorage(tc protocol.ToolCall) (ToolCallData, error) {
 			// Fallback: not valid JSON — store as string.
 			marshaled, mErr := json.Marshal(*tc.Output)
 			if mErr != nil {
-				slog.Error("toolCallToStorage: failed to marshal output string", "error", mErr)
+				return ToolCallData{}, fmt.Errorf("marshal output string: %w", mErr)
 			}
 			s.Output = json.RawMessage(marshaled)
 		}

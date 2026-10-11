@@ -3,6 +3,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,6 +53,17 @@ func NewAuditLogUsecase(repo repo.AuditLogRepo) *AuditLogUsecase {
 
 // List returns audit logs matching the filter with pagination.
 func (uc *AuditLogUsecase) List(ctx context.Context, filter AuditLogFilter, page, pageSize int) (*AuditLogListResult, error) {
+	// Validate pagination parameters
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		return nil, fmt.Errorf("pageSize %d exceeds maximum 100", pageSize)
+	}
+
 	repoFilter := model.AuditLogFilter{
 		OperatorID:   filter.OperatorID,
 		ResourceType: filter.ResourceType,

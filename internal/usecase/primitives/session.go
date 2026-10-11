@@ -85,8 +85,27 @@ func assertCreatorOwns(session *model.Session, creator usecase.Creator) error {
 }
 
 // CreateSession creates a session inside a transaction (thin wrapper).
+// Handles idempotency: if clientSessionID is provided and a session with that ID
+// already exists (race condition), returns the existing session instead of failing.
 func CreateSession(txCtx context.Context, deps *usecase.Dependencies, session *model.Session) error {
-	return deps.SessionRepo.Create(txCtx, session)
+	err := deps.SessionRepo.Create(txCtx, session)
+	if err != nil && session.ClientID != "" && IsDuplicateKeyError(err) {
+		// Race condition: another request created a session with the same client_id.
+		// Re-query to get the existing session for idempotency.
+		existing, findErr := deps.SessionRepo.FindByClientID(txCtx, session.ClientID)
+		if findErr != nil {
+			return fmt.Errorf("find existing session after conflict: %w", findErr)
+		}
+		if existing == nil {
+			// Should never happen, but handle gracefully
+			return fmt.Errorf("session with client_id %s not found after conflict: %w", session.ClientID, err)
+		}
+		// Copy the existing session data back to the caller's session pointer
+		// so they can use it for idempotency.
+		*session = *existing
+		return nil
+	}
+	return err
 }
 
 // TouchSession touches the updated_at of an active session inside a transaction.

@@ -11,6 +11,13 @@ func IsNotFound(err error) bool {
 	return repo.IsNotFound(err)
 }
 
+// IsDuplicateKeyError checks whether the error is a unique constraint violation.
+// This is a wrapper around repo.IsDuplicateKeyError to allow Handler to check
+// errors without importing repo directly.
+func IsDuplicateKeyError(err error) bool {
+	return repo.IsDuplicateKeyError(err)
+}
+
 // Sentinel errors re-exported from repo package.
 // These allow Handler to check specific error conditions without importing repo.
 var (
