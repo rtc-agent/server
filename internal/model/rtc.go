@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/rtc-agent/server/pkg/logger"
@@ -38,7 +39,7 @@ func (r *Rtc) BeforeCreate(tx *gorm.DB) error {
 	if r.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate rtc ID: %w", err)
 		}
 		r.ID = id
 	}

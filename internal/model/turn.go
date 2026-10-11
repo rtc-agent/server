@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -28,12 +29,16 @@ func (t *Turn) BeforeCreate(tx *gorm.DB) error {
 	if t.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate turn ID: %w", err)
 		}
 		t.ID = id
 	}
 	if t.ClientID == "" {
-		t.ClientID = uuid.Must(uuid.NewV7()).String()
+		id, err := uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("generate turn client ID: %w", err)
+		}
+		t.ClientID = id.String()
 	}
 	return nil
 }

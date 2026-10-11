@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,7 +31,7 @@ func (a *AuditLog) BeforeCreate(tx *gorm.DB) error {
 	if a.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate admin audit log ID: %w", err)
 		}
 		a.ID = id
 	}

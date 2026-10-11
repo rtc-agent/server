@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,7 +26,7 @@ func (d *Device) BeforeCreate(tx *gorm.DB) error {
 	if d.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate device ID: %w", err)
 		}
 		d.ID = id
 	}

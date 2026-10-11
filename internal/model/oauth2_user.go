@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,7 +28,7 @@ func (u *OAuth2User) BeforeCreate(tx *gorm.DB) error {
 	if u.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate oauth2 user ID: %w", err)
 		}
 		u.ID = id
 	}

@@ -2,6 +2,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,7 +42,7 @@ func (sc *ServerConfig) BeforeCreate(tx *gorm.DB) error {
 	if sc.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate server config ID: %w", err)
 		}
 		sc.ID = id
 	}
@@ -78,7 +79,7 @@ func (h *ServerConfigHistory) BeforeCreate(tx *gorm.DB) error {
 	if h.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate server config history ID: %w", err)
 		}
 		h.ID = id
 	}

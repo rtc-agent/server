@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/rtc-agent/server/pkg/protocol"
@@ -164,7 +165,7 @@ func (s *Session) BeforeCreate(tx *gorm.DB) error {
 	if s.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate session ID: %w", err)
 		}
 		s.ID = id
 	}

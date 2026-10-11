@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,7 +34,7 @@ func (r *AdminRefreshToken) BeforeCreate(tx *gorm.DB) error {
 	if r.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate admin refresh token ID: %w", err)
 		}
 		r.ID = id
 	}

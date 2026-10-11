@@ -30,7 +30,7 @@ func (u *UserUpdate) BeforeCreate(tx *gorm.DB) error {
 	if u.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate user update ID: %w", err)
 		}
 		u.ID = id
 	}

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,7 +46,7 @@ func (m *UserMemory) BeforeCreate(tx *gorm.DB) error {
 	if m.ID == uuid.Nil {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return err
+			return fmt.Errorf("generate user memory ID: %w", err)
 		}
 		m.ID = id
 	}
