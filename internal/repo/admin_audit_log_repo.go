@@ -93,7 +93,7 @@ func (r *auditLogRepo) List(ctx context.Context, filter AuditLogFilter, page, pa
 	}
 	offset := (page - 1) * pageSize
 
-	var logs []*model.AuditLog
+	logs := make([]*model.AuditLog, 0, pageSize) // Pre-allocate to match expected result size
 	if err := db.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&logs).Error; err != nil {
 		return nil, 0, fmt.Errorf("list audit logs: %w", err)
 	}

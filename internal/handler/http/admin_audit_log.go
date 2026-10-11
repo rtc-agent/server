@@ -2,7 +2,6 @@
 package httphandler
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -11,25 +10,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase"
 )
 
-// auditLogLister provides audit log query operations.
-// Implemented by repo.AuditLogRepo; defined here to avoid depguard violations.
-type auditLogLister interface {
-	List(ctx context.Context, filter model.AuditLogFilter, page, pageSize int) ([]*model.AuditLog, int64, error)
-	Get(ctx context.Context, id uuid.UUID) (*model.AuditLog, error)
-}
-
 // AuditLogHandler handles audit log query endpoints.
 type AuditLogHandler struct {
-	auditLogRepo auditLogLister
+	auditLogUC *usecase.AuditLogUsecase
 }
 
 // NewAuditLogHandler creates a new AuditLogHandler.
-func NewAuditLogHandler(auditLogRepo auditLogLister) *AuditLogHandler {
-	return &AuditLogHandler{auditLogRepo: auditLogRepo}
+func NewAuditLogHandler(auditLogUC *usecase.AuditLogUsecase) *AuditLogHandler {
+	return &AuditLogHandler{auditLogUC: auditLogUC}
 }
 
 // RegisterRoutes registers audit log routes.
@@ -52,7 +43,7 @@ type AuditLogResponse struct {
 
 // List queries audit logs with filters and pagination.
 func (h *AuditLogHandler) List(c *gin.Context) {
-	filter := model.AuditLogFilter{}
+	filter := usecase.AuditLogFilter{}
 
 	// Parse filters (with aliases for common variations)
 	// operator_id / actor_id
@@ -109,15 +100,15 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	logs, total, err := h.auditLogRepo.List(ctx, filter, page, pageSize)
+	result, err := h.auditLogUC.List(ctx, filter, page, pageSize)
 	if err != nil {
 		Error(c, "server_error", "Failed to query audit logs")
 		return
 	}
 
-	result := make([]AuditLogResponse, 0, len(logs))
-	for _, l := range logs {
-		result = append(result, AuditLogResponse{
+	respItems := make([]AuditLogResponse, 0, len(result.Items))
+	for _, l := range result.Items {
+		respItems = append(respItems, AuditLogResponse{
 			ID:           l.ID.String(),
 			OperatorID:   l.OperatorID.String(),
 			OperatorIP:   l.OperatorIP,
@@ -129,7 +120,7 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 		})
 	}
 
-	Success(c, gin.H{"items": result, "total": total, "page": page, "page_size": pageSize})
+	Success(c, gin.H{"items": respItems, "total": result.Total, "page": page, "page_size": pageSize})
 }
 
 // Get retrieves a single audit log by ID.
@@ -142,7 +133,7 @@ func (h *AuditLogHandler) Get(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	log, err := h.auditLogRepo.Get(ctx, id)
+	log, err := h.auditLogUC.Get(ctx, id)
 	if err != nil {
 		if errors.Is(err, usecase.ErrNotFound) {
 			Error(c, "audit_log_not_found", "Audit log not found")
