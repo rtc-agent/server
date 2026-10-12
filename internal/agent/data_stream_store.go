@@ -20,11 +20,18 @@ import (
 // The returned value satisfies updates.StreamStoreAccessor and can be injected
 // into UpdatePublisher via SetStreamStore. It uses the same Redis key format
 // (cache.MessageStream) as the stream buffering logic in this package.
-func NewStreamStore(rdb redis.UniversalClient, chunkTTL time.Duration) *StreamStore {
+//
+// ttlCheckInterval controls the sampling interval for TTL checks. If <= 0,
+// defaults to 100. See StreamStore.ttlCheckInterval for details.
+func NewStreamStore(rdb redis.UniversalClient, chunkTTL time.Duration, ttlCheckInterval int) *StreamStore {
+	if ttlCheckInterval <= 0 {
+		ttlCheckInterval = 100
+	}
 	return &StreamStore{
-		rdb:             rdb,
-		chunkTTL:        chunkTTL,
-		ttlCheckCounter: make(map[string]int),
+		rdb:              rdb,
+		chunkTTL:         chunkTTL,
+		ttlCheckInterval: ttlCheckInterval,
+		ttlCheckCounter:  make(map[string]int),
 	}
 }
 
@@ -36,10 +43,13 @@ func (h *helpers) getStreamStore(ctx context.Context) *StreamStore {
 			chunkTTL = v
 		}
 	}
+	// ttlCheckInterval is static (not dynamically configurable) to avoid
+	// per-call overhead. Use the configured value from helpers.
 	return &StreamStore{
-		rdb:             h.rdb,
-		chunkTTL:        chunkTTL,
-		ttlCheckCounter: make(map[string]int),
+		rdb:              h.rdb,
+		chunkTTL:         chunkTTL,
+		ttlCheckInterval: h.streamTTLCheckInterval,
+		ttlCheckCounter:  make(map[string]int),
 	}
 }
 
@@ -54,19 +64,25 @@ type StreamStore struct {
 	rdb      redis.UniversalClient
 	chunkTTL time.Duration
 
+	// ttlCheckInterval is the number of AppendChunk calls between TTL checks.
+	// Checking at intervals (rather than on every append) reduces Redis load by
+	// ~99% for high-throughput streams while still surfacing TTL drift issues
+	// within a reasonable timeframe. Default: 100. Configurable via
+	// worker.stream_ttl_check_interval for different workload profiles.
+	ttlCheckInterval int
+
 	// ttlCheckCounter tracks the number of AppendChunk calls per messageID
 	// to implement sampling-based TTL checks. Instead of checking TTL on every
 	// append (which adds Redis load), we check every ttlCheckInterval calls.
 	// This reduces Redis RTTs by ~99% for high-throughput streams.
+	//
+	// Memory safety: Entries are cleaned up in DeleteChunks and GetAndDeleteChunks.
+	// If cleanup is missed (e.g., due to crashes), entries remain but are bounded
+	// by the number of concurrent streaming messages. For long-running processes
+	// with many missed cleanups, consider periodic cleanup via a background goroutine.
 	ttlCheckCounter map[string]int
 	ttlCheckMu      sync.Mutex
 }
-
-// ttlCheckInterval is the number of AppendChunk calls between TTL checks.
-// Checking every 100 calls provides a good balance between visibility into
-// TTL drift and Redis load reduction. For a typical stream of 500 chunks,
-// this reduces TTL checks from 500 to 5.
-const ttlCheckInterval = 100
 
 // streamStoreRedisTimeout is the timeout for Redis operations in StreamStore.
 // Stream operations are latency-sensitive (part of the streaming path), so
@@ -108,7 +124,7 @@ func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error)
 	// This reduces Redis load while still detecting TTL drift issues.
 	s.ttlCheckMu.Lock()
 	s.ttlCheckCounter[messageID]++
-	shouldCheck := s.ttlCheckCounter[messageID]%ttlCheckInterval == 0
+	shouldCheck := s.ttlCheckCounter[messageID]%s.ttlCheckInterval == 0
 	s.ttlCheckMu.Unlock()
 
 	if shouldCheck {
@@ -121,7 +137,7 @@ func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error)
 				zap.String("message_id", messageID),
 				zap.Duration("remaining_ttl", remainingTTL),
 				zap.Duration("chunk_ttl", s.chunkTTL),
-				zap.Int("check_interval", ttlCheckInterval),
+				zap.Int("check_interval", s.ttlCheckInterval),
 			)
 		}
 	}
