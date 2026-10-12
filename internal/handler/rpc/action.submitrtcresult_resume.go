@@ -141,8 +141,14 @@ func (h *Handler) resumeActiveTurn(ctx context.Context, rtc *converter.Rtc, acti
 		logger.Error(ctx, "[resumeTurnAfterRtc] marshal resume payload", zap.Error(marshalErr))
 		return
 	}
-	if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), rtcqueue.ResumeWorkPriority); err != nil {
-		logger.Error(ctx, "[resumeTurnAfterRtc] Queue.Publish resume failed",
+	// Generate deterministic work ID for idempotent publishing.
+	// This ensures retries don't create duplicate resume work items.
+	workID := rtcqueue.GenerateDeterministicWorkID(
+		rtc.SessionID.String(),
+		"resume:"+activeTurns[len(activeTurns)-1].ID.String(),
+	)
+	if _, err := h.deps.Queue.PublishWithID(ctx, rtc.SessionID.String(), workID, string(payload), rtcqueue.ResumeWorkPriority); err != nil {
+		logger.Error(ctx, "[resumeTurnAfterRtc] Queue.PublishWithID resume failed",
 			zap.String("rtc", rtc.ID.String()),
 			zap.String("session", rtc.SessionID.String()),
 			zap.Error(err))
@@ -155,6 +161,7 @@ func (h *Handler) resumeActiveTurn(ctx context.Context, rtc *converter.Rtc, acti
 			zap.String("rtc", rtc.ID.String()),
 			zap.String("session", rtc.SessionID.String()),
 			zap.String("turn", activeTurns[len(activeTurns)-1].ID.String()),
+			zap.String("work_id", workID),
 			zap.Int("batch_size", len(batchResumeItems)))
 	}
 }
@@ -239,18 +246,25 @@ func (h *Handler) publishOrphanSubmit(ctx context.Context, rtc *converter.Rtc, u
 		logger.Error(ctx, "[resumeTurnAfterRtc] marshal submit payload", zap.Error(marshalErr))
 		return
 	}
-	if _, err := h.deps.Queue.Publish(ctx, rtc.SessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
+	// Generate deterministic work ID for idempotent publishing.
+	// This ensures retries don't create duplicate submit work items.
+	workID := rtcqueue.GenerateDeterministicWorkID(
+		rtc.SessionID.String(),
+		"orphan:"+rtc.ID.String(),
+	)
+	if _, err := h.deps.Queue.PublishWithID(ctx, rtc.SessionID.String(), workID, string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 		if delErr := h.deps.Deps.Redis.Del(ctx, orphanKey).Err(); delErr != nil {
 			logger.Warn(ctx, "[resumeTurnAfterRtc] failed to del orphan key",
 				zap.String("key", orphanKey), zap.Error(delErr))
 		}
-		logger.Error(ctx, "[resumeTurnAfterRtc] Queue.Publish submit failed",
+		logger.Error(ctx, "[resumeTurnAfterRtc] Queue.PublishWithID submit failed",
 			zap.String("rtc", rtc.ID.String()),
 			zap.String("session", rtc.SessionID.String()),
 			zap.Error(err))
 	} else {
 		logger.Info(ctx, "[resumeTurnAfterRtc] orphan submit published",
 			zap.String("rtc", rtc.ID.String()),
-			zap.String("session", rtc.SessionID.String()))
+			zap.String("session", rtc.SessionID.String()),
+			zap.String("work_id", workID))
 	}
 }

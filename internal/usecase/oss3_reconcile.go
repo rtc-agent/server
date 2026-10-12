@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,22 +50,55 @@ func (uc *OSS3Usecase) acquireLock(ctx context.Context, lockName string, ttl tim
 }
 
 // extendLock is a generic helper to extend the TTL of a distributed lock.
+// P3-5 fix: Added retry logic (up to 3 attempts) to handle transient Redis failures.
+// This prevents reconciliation from aborting due to temporary network issues.
 func (uc *OSS3Usecase) extendLock(ctx context.Context, lockName, holderUUID string, ttl time.Duration) error {
 	lockKey := cache.OSS3Lock(lockName)
-
 	script := uc.scripts[cache.OSS3ScriptLockExtend]
-	result, err := script.Run(ctx, uc.redis,
-		[]string{lockKey},
-		holderUUID,
-		int(ttl.Seconds()),
-	).Int()
-	if err != nil {
-		return fmt.Errorf("extend %s lock: %w", lockName, err)
+
+	// P3-5 fix: Retry up to 3 times on transient errors
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		result, err := script.Run(ctx, uc.redis,
+			[]string{lockKey},
+			holderUUID,
+			int(ttl.Seconds()),
+		).Int()
+		if err != nil {
+			lastErr = fmt.Errorf("extend %s lock: %w", lockName, err)
+			// Check if error is transient (connection, timeout)
+			// Note: isTransientRedisError is defined in oss3_quota.go
+			if isTransientRedisErrorForReconcile(err) && attempt < maxAttempts {
+				logger.Debug(ctx, "extend_lock_transient_error_retrying",
+					zap.String("lock_name", lockName),
+					zap.Int("attempt", attempt),
+					zap.Error(err))
+				continue
+			}
+			return lastErr
+		}
+		if result == 0 {
+			return fmt.Errorf("%s lock lost (holder=%s)", lockName, holderUUID)
+		}
+		// Success
+		return nil
 	}
-	if result == 0 {
-		return fmt.Errorf("%s lock lost (holder=%s)", lockName, holderUUID)
+	return lastErr
+}
+
+// isTransientRedisErrorForReconcile checks if a Redis error is transient and safe to retry.
+// This is specific to the reconciler; handler layer has its own isTransientRedisError.
+func isTransientRedisErrorForReconcile(err error) bool {
+	if err == nil {
+		return false
 	}
-	return nil
+	errMsg := err.Error()
+	// Common transient errors: connection reset, timeout, I/O error
+	return strings.Contains(errMsg, "connection reset") ||
+		strings.Contains(errMsg, "i/o timeout") ||
+		strings.Contains(errMsg, "broken pipe") ||
+		strings.Contains(errMsg, "NOSCRIPT")
 }
 
 // releaseLock is a generic helper to release a distributed lock.

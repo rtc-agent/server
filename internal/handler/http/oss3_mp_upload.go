@@ -90,16 +90,11 @@ func (h *OSS3MultipartHandler) handleUploadPart(
 		return
 	}
 
-	// Bug fix: Validate minimum part size per S3 specification.
-	// All parts except the last must be at least 5MB.
-	// We check this by comparing with existing parts: if there are already parts
-	// uploaded, this part must be at least MinPartSize (unless it's the last part,
-	// which we cannot determine here, so we enforce the minimum for all parts).
-	// Note: The final part size validation happens at CompleteMultipartUpload.
-	if contentLength > 0 && contentLength < rtcoss3.MinPartSize {
-		rtcoss3.WriteS3Error(w, rtcoss3.ErrEntityTooSmall, r.URL.Path, "")
-		return
-	}
+	// P1-1 fix: Removed minimum part size validation here.
+	// The last part can be smaller than 5MB per S3 spec, but we cannot determine
+	// which part is the last one at this stage. Validation is deferred to
+	// CompleteMultipartUpload where we know the maximum part number.
+	// See oss3_mp_complete.go for the actual validation logic.
 
 	// Bug #9 fix: Limit request body to the declared Content-Length.
 	// This prevents a malicious client from sending more data than declared

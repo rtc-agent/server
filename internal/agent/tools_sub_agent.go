@@ -472,7 +472,13 @@ func (t *subAgentTool) publishSubAgentWork(ctx context.Context, subSessionID uui
 		span.SetStatus(codes.Error, "marshal_failed")
 		return fmt.Errorf("marshal work payload: %w", err)
 	}
-	if _, err := t.helpers.queue.Publish(ctx, subSessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
+	// Generate deterministic work ID for idempotent publishing.
+	// This ensures retries don't create duplicate submit work items.
+	workID := rtcqueue.GenerateDeterministicWorkID(
+		subSessionID.String(),
+		"sub_init:"+subSessionID.String(),
+	)
+	if _, err := t.helpers.queue.PublishWithID(ctx, subSessionID.String(), workID, string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "publish_failed")
 		return fmt.Errorf("publish work item to sub session: %w", err)
@@ -480,6 +486,7 @@ func (t *subAgentTool) publishSubAgentWork(ctx context.Context, subSessionID uui
 	span.SetStatus(codes.Ok, "")
 	t.helpers.logger.Info(ctx, "subAgent.work_submitted", map[string]any{
 		"sub_session_id": subSessionID.String(),
+		"work_id":        workID,
 	})
 	return nil
 }

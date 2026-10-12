@@ -214,6 +214,8 @@ func (b *MinIOBackend) DeleteObjects(ctx context.Context, bucket string, keys []
 	}
 
 	objectsCh := make(chan minio.ObjectInfo, len(keys))
+	panicOccurred := make(chan bool, 1)
+
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -221,6 +223,8 @@ func (b *MinIOBackend) DeleteObjects(ctx context.Context, bucket string, keys []
 					zap.String("goroutine", "MinIOBackend.DeleteObjects"),
 					zap.Any("panic", r),
 					zap.String("stack", string(debug.Stack())))
+				// P2-2 fix: Signal that panic occurred
+				panicOccurred <- true
 			}
 		}()
 		defer close(objectsCh)
@@ -237,6 +241,13 @@ func (b *MinIOBackend) DeleteObjects(ctx context.Context, bucket string, keys []
 	failures := make(map[string]string, len(keys))
 	for err := range b.client.RemoveObjects(ctx, bucket, objectsCh, minio.RemoveObjectsOptions{}) {
 		failures[err.ObjectName] = err.Err.Error()
+	}
+
+	// P2-2 fix: Check if panic occurred and return error
+	select {
+	case <-panicOccurred:
+		return nil, fmt.Errorf("panic occurred while processing delete objects")
+	default:
 	}
 
 	// Build a result for every requested key so callers can distinguish
@@ -320,7 +331,14 @@ func (b *MinIOBackend) PresignPut(ctx context.Context, bucket, key string, expir
 // PresignPostPolicy generates a presigned POST URL with form fields that enforce
 // the given Content-Type via a POST policy.
 // If publicClient is configured, the returned URL uses the public endpoint.
+//
+// P2-4 fix: Validates that expiry is positive to prevent generating immediately-expired policies.
 func (b *MinIOBackend) PresignPostPolicy(ctx context.Context, bucket, key string, expiry time.Duration, contentType string) (string, map[string]string, error) {
+	// P2-4 fix: Validate expiry before creating policy
+	if expiry <= 0 {
+		return "", nil, fmt.Errorf("presign post policy: expiry must be positive, got %v", expiry)
+	}
+
 	client := b.client
 	if b.publicClient != nil {
 		client = b.publicClient

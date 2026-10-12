@@ -20,6 +20,10 @@ type credentialCacheValue struct {
 	SecretAccessKey string    `json:"secret_access_key"`
 	SessionToken    string    `json:"session_token"` // encrypted
 	ExpiresAt       time.Time `json:"expires_at"`
+	// P0-2 fix: Revoked flag is cached to ensure revoked credentials are rejected
+	// even if cache invalidation fails. This closes the 5-minute window where a
+	// revoked credential could be used from cache.
+	Revoked bool `json:"revoked"`
 }
 
 // maxCredentialCacheTTL is the upper bound for cache TTL.
@@ -63,6 +67,19 @@ func (uc *OSS3Usecase) getCredentialFromCache(ctx context.Context, cacheKey, cac
 	var val credentialCacheValue
 	if json.Unmarshal([]byte(cached), &val) != nil {
 		return nil, fmt.Errorf("unmarshal cache failed")
+	}
+
+	// P0-2 fix: Check if credential has been revoked.
+	// This is critical for security: even if cache invalidation fails,
+	// the cached Revoked flag ensures the credential is rejected.
+	if val.Revoked {
+		// Invalidate cache to force DB refresh on next access
+		if delErr := uc.redis.Del(ctx, cacheKey).Err(); delErr != nil {
+			logger.Warn(ctx, "failed to invalidate revoked credential cache",
+				zap.String("access_key_id", accessKeyID),
+				zap.Error(delErr))
+		}
+		return nil, fmt.Errorf("credential revoked")
 	}
 
 	// Defensive expiry check
@@ -154,6 +171,9 @@ func (uc *OSS3Usecase) populateCredentialCache(
 		SessionToken:    cred.SessionToken,
 		ExpiresAt:       cred.ExpiresAt,
 		SecretAccessKey: decryptedSecret,
+		// P0-2 fix: Cache the Revoked flag to ensure revoked credentials
+		// are rejected even if cache invalidation fails later.
+		Revoked: cred.Revoked,
 	}
 
 	// Encrypt SecretAccessKey before caching (Redis stores encrypted form).

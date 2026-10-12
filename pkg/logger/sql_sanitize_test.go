@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -26,8 +27,8 @@ func TestSanitizeSQL(t *testing.T) {
 			expected: "SELECT * FROM users WHERE name = '$?' AND email = '$?'",
 		},
 		{
-			name:     "SELECT with escaped quotes",
-			input:    "SELECT * FROM users WHERE name = 'O\\'Brien'",
+			name:     "SELECT with escaped quotes (PostgreSQL standard)",
+			input:    "SELECT * FROM users WHERE name = 'O''Brien'",
 			expected: "SELECT * FROM users WHERE name = '$?'",
 		},
 		{
@@ -120,6 +121,28 @@ func TestSanitizeSQL(t *testing.T) {
 			input:    "SELECT field1, field2 FROM table1 WHERE id = 1",
 			expected: "SELECT field1, field2 FROM table1 WHERE id = $?",
 		},
+		// P1 fix: PostgreSQL standard escape (double single-quote)
+		{
+			name:     "PostgreSQL standard escape with double single-quote",
+			input:    "SELECT * FROM users WHERE name = 'O''Brien'",
+			expected: "SELECT * FROM users WHERE name = '$?'",
+		},
+		{
+			name:     "PostgreSQL standard escape with multiple double single-quotes",
+			input:    "INSERT INTO users (name, note) VALUES ('It''s a test', 'Don''t worry')",
+			expected: "INSERT INTO users (name, note) VALUES ('$?', '$?')",
+		},
+		// P1 fix: Uppercase UUID
+		{
+			name:     "UUID uppercase",
+			input:    "SELECT * FROM users WHERE id = '550E8400-E29B-41D4-A716-446655440000'",
+			expected: "SELECT * FROM users WHERE id = '$?'",
+		},
+		{
+			name:     "UUID mixed case",
+			input:    "SELECT * FROM users WHERE id = '550e8400-e29b-41D4-A716-446655440000'",
+			expected: "SELECT * FROM users WHERE id = '$?'",
+		},
 	}
 
 	for _, tt := range tests {
@@ -140,4 +163,52 @@ func BenchmarkSanitizeSQL(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		sanitizeSQL(testSQL)
 	}
+}
+
+// BenchmarkSanitizeSQL_LargeBatch tests performance with large batch INSERT statements
+// This simulates the scenario where truncation optimization is most beneficial
+func BenchmarkSanitizeSQL_LargeBatch(b *testing.B) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "Batch 10 rows",
+			sql:  generateBatchInsert(10),
+		},
+		{
+			name: "Batch 100 rows",
+			sql:  generateBatchInsert(100),
+		},
+		{
+			name: "Batch 500 rows",
+			sql:  generateBatchInsert(500),
+		},
+	}
+
+	for _, tt := range tests {
+		b.Run(tt.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				sanitizeSQL(tt.sql)
+			}
+		})
+	}
+}
+
+// generateBatchInsert creates a batch INSERT statement with n rows
+func generateBatchInsert(n int) string {
+	var sb strings.Builder
+	sb.WriteString("INSERT INTO users (name, email, age, balance) VALUES ")
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("('User")
+		sb.WriteString(string(rune('A' + i%26)))
+		sb.WriteString("', 'user")
+		sb.WriteString(string(rune('A' + i%26)))
+		sb.WriteString("@example.com', 30, 1000.50)")
+	}
+	return sb.String()
 }

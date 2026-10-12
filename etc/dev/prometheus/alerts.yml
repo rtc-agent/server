@@ -1,17 +1,57 @@
+# RTC Agent Server Prometheus Alert Rules
+#
+# 本文件定义 RTC Agent Server 的告警规则，涵盖：
+# - 服务可用性与健康检查
+# - 性能指标（HTTP、LLM、DB）
+# - 资源使用（内存、Goroutine）
+# - 业务逻辑（Session、Queue、认证）
+# - 基础设施（MinIO、OSS3）
+#
+# 告警分级：
+# - critical: 需要立即处理，服务不可用或数据丢失风险
+# - warning: 需要关注，可能存在潜在问题
+#
+# 最后更新: 2026-10-11
+
 groups:
-  - name: rtc-agent-alerts
+  # ============================================================================
+  # 服务可用性告警
+  # ============================================================================
+  - name: rtc-agent-availability
     rules:
-      # 服务存活
+      # 服务存活检查
+      # 当 Prometheus 无法采集到目标指标时触发
       - alert: ServerDown
         expr: up{job="rtc-agent-server"} == 0
         for: 30s
         labels:
           severity: critical
+          category: availability
         annotations:
           summary: "RTC Agent server 不可达"
-          description: "{{ $labels.instance }} 已持续 30s 无法采集"
+          description: "{{ $labels.instance }} 已持续 30s 无法采集，服务可能已宕机"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#serverdown"
 
-      # HTTP 错误率
+      # 容器频繁重启检测
+      # 10 分钟内重启超过 2 次，可能是崩溃循环
+      - alert: ContainerRestarting
+        expr: changes(process_start_time_seconds{job="rtc-agent-server"}[10m]) > 2
+        for: 1m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "RTC Agent server 10 分钟内重启超过 2 次"
+          description: "进程频繁重启，可能存在崩溃循环或 OOM"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#containerrestarting"
+
+  # ============================================================================
+  # HTTP 性能告警
+  # ============================================================================
+  - name: rtc-agent-http
+    rules:
+      # HTTP 5xx 错误率过高
+      # 超过 5% 的请求返回服务器错误，说明后端服务异常
       - alert: HighHTTPErrorRate
         expr: |
           (
@@ -21,11 +61,14 @@ groups:
         for: 2m
         labels:
           severity: warning
+          category: performance
         annotations:
           summary: "HTTP 5xx 错误率 > 5%"
-          description: "当前 5xx 比率: {{ $value | humanizePercentage }}"
+          description: "当前 5xx 比率: {{ $value | humanizePercentage }}，需检查服务日志"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#highhttperrorrate"
 
-      # HTTP 高延迟
+      # HTTP p95 延迟过高
+      # 95 分位延迟超过 2 秒，用户体验下降
       - alert: HighHTTPLatency
         expr: |
           histogram_quantile(0.95,
@@ -34,11 +77,19 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: performance
         annotations:
           summary: "HTTP p95 延迟 > 2s"
-          description: "当前 p95: {{ $value | humanizeDuration }}"
+          description: "当前 p95: {{ $value | humanizeDuration }}，可能存在性能瓶颈"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#highhttplatency"
 
-      # LLM 错误
+  # ============================================================================
+  # LLM API 告警
+  # ============================================================================
+  - name: rtc-agent-llm
+    rules:
+      # LLM 调用错误率过高
+      # 超过 10% 的 LLM 请求失败，可能是 API Key 问题或模型服务异常
       - alert: LLMHighErrorRate
         expr: |
           (
@@ -48,21 +99,27 @@ groups:
         for: 2m
         labels:
           severity: warning
+          category: llm
         annotations:
           summary: "LLM 调用错误率 > 10%"
-          description: "当前错误率: {{ $value | humanizePercentage }}"
+          description: "当前错误率: {{ $value | humanizePercentage }}，检查 LLM 提供商状态"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#llmhigherrorrate"
 
-      # Token 消耗速率异常（1 分钟超过 100k tokens）
+      # Token 消耗速率异常
+      # 1 分钟内平均消耗超过 100k tokens/s，可能存在死循环或异常调用
       - alert: HighTokenConsumptionRate
         expr: sum(rate(rtc_llm_tokens_total{job="rtc-agent-server"}[1m])) > 100000
         for: 1m
         labels:
           severity: warning
+          category: llm
         annotations:
           summary: "Token 消耗速率异常 ({{ $value | humanize }} tokens/s)"
-          description: "1 分钟内平均 Token 消耗速率超过 100k/s，可能存在异常调用"
+          description: "1 分钟内平均 Token 消耗速率超过 100k/s，可能存在异常调用或死循环"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#hightokenconsumptionrate"
 
-      # Reasoning Token 占比过高（可能配置错误）
+      # Reasoning Token 占比过高
+      # 超过 50% 可能是配置错误，导致成本激增
       - alert: HighReasoningTokenRatio
         expr: |
           (
@@ -72,40 +129,50 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: llm
         annotations:
           summary: "Reasoning Token 占比 > 50%"
           description: "Reasoning Token 占比异常高，可能影响成本，请检查模型配置"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#highreasoningtokenratio"
 
-      # Goroutine 泄漏
+  # ============================================================================
+  # 资源使用告警
+  # ============================================================================
+  - name: rtc-agent-resources
+    rules:
+      # Goroutine 泄漏检测
+      # 超过 5000 个 Goroutine 可能存在泄漏
       - alert: GoroutineLeak
         expr: go_goroutines{job="rtc-agent-server"} > 5000
         for: 10m
         labels:
           severity: warning
+          category: resources
         annotations:
           summary: "Goroutine 数量异常 ({{ $value }})"
-          description: "Goroutine 数量持续超过 5000，可能存在泄漏"
+          description: "Goroutine 数量持续超过 5000，可能存在泄漏，检查未关闭的 channel 或 goroutine"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#goroutineleak"
 
-      # 内存压力
+      # 堆内存使用过高
+      # 超过 1GB 可能存在内存泄漏或缓存未清理
       - alert: HighMemoryUsage
         expr: go_memstats_heap_alloc_bytes{job="rtc-agent-server"} > 1e9
         for: 5m
         labels:
           severity: warning
+          category: resources
         annotations:
           summary: "堆内存使用 > 1GB"
-          description: "当前堆内存: {{ $value | humanize1024 }}iB"
+          description: "当前堆内存: {{ $value | humanize1024 }}iB，检查是否存在内存泄漏"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#highmemoryusage"
 
-      # 容器异常退出
-      - alert: ContainerRestarting
-        expr: changes(process_start_time_seconds{job="rtc-agent-server"}[10m]) > 2
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "RTC Agent server 10 分钟内重启超过 2 次"
-
-      # Script 执行错误率
+  # ============================================================================
+  # Script 执行告警
+  # ============================================================================
+  - name: rtc-agent-script
+    rules:
+      # Script 执行错误率过高
+      # 超过 10% 的 Script 执行失败，可能是脚本质量问题或环境异常
       - alert: ScriptExecutionHighErrorRate
         expr: >
           sum(rate(rtc_script_executions_total{job="rtc-agent-server",status="failed"}[5m]))
@@ -115,11 +182,14 @@ groups:
         for: 2m
         labels:
           severity: warning
+          category: script
         annotations:
           summary: "Script 执行错误率超过 10%"
           description: "Script 工具执行失败率在过去 5 分钟内超过 10%，当前值: {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#scriptexecutionhigherrorrate"
 
-      # Script 执行延迟
+      # Script 执行延迟过高
+      # p95 延迟超过 30 秒，可能是脚本性能问题或资源不足
       - alert: ScriptExecutionSlow
         expr: >
           histogram_quantile(0.95,
@@ -128,43 +198,58 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: script
         annotations:
           summary: "Script 执行延迟过高"
           description: "Script 执行 P95 延迟超过 30 秒，当前值: {{ $value }}s"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#scriptexecutionslow"
 
-  - name: error-feedback-alerts
+  # ============================================================================
+  # 错误反馈与恢复告警
+  # ============================================================================
+  - name: rtc-agent-error-feedback
     rules:
-      # Stale turn 恢复触发
+      # Stale turn 自动恢复触发
+      # 系统检测到 turn 卡死并自动恢复，频繁触发说明存在处理瓶颈
       - alert: StaleTurnRecoveryActive
         expr: rate(rtc_recovery_stale_turns_recovered_total{job="rtc-agent-server"}[15m]) > 0
         for: 1m
         labels:
           severity: warning
+          category: recovery
         annotations:
           summary: "Stale turn 自动恢复已触发"
           description: "过去 15 分钟内有 stale turn 被自动恢复，当前速率: {{ $value | humanize }}/s"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#staleturnrecoveryactive"
 
-      # Stale turn 恢复速率异常（可能存在大量 turn 卡死）
+      # Stale turn 恢复速率异常
+      # 每秒恢复超过 0.1 个（约 6 个/分钟），可能存在系统性问题
       - alert: StaleTurnRecoveryHighRate
         expr: rate(rtc_recovery_stale_turns_recovered_total{job="rtc-agent-server"}[5m]) > 0.1
         for: 5m
         labels:
           severity: warning
+          category: recovery
         annotations:
           summary: "Stale turn 恢复速率异常 (>6/分钟)"
           description: "过去 5 分钟内平均每秒恢复超过 0.1 个 stale turn，可能存在系统性问题"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#staleturnrecoveryhighrate"
 
-      # 错误消息创建速率突增（依赖 error_feedback metrics，待 Phase 2 实现后生效）
+      # 错误消息创建速率突增
+      # 每秒创建超过 0.5 个错误消息（约 30 个/分钟），可能存在大量错误
       - alert: ErrorMessageRateSpike
         expr: rate(rtc_error_messages_created_total{job="rtc-agent-server"}[5m]) > 0.5
         for: 5m
         labels:
           severity: warning
+          category: error-feedback
         annotations:
           summary: "错误消息创建速率异常 (>30/小时)"
           description: "过去 5 分钟内错误消息创建速率超过 0.5/秒，可能存在大量错误"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#errormessagesratespike"
 
-      # Reactive compact 3 级全部失败（依赖 error_feedback metrics，待实现后生效）
+      # Reactive compact 3 级压缩全部失败
+      # 上下文溢出无法自动恢复，可能导致 Session 数据丢失
       - alert: ReactiveCompactExhausted
         expr: |
           (rate(rtc_reactive_compact_operations_total{job="rtc-agent-server",level="3",status="failed"}[10m]) > 0)
@@ -172,11 +257,14 @@ groups:
         for: 1m
         labels:
           severity: critical
+          category: error-feedback
         annotations:
           summary: "Reactive compact 3 级压缩全部失败或上下文错误频繁"
           description: "Reactive compact level-3 失败，或上下文类错误消息速率 > 0.1/s，系统可能无法自动恢复上下文溢出"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#reactivecompactexhausted"
 
-      # 错误反馈 SLA 违反（依赖 error_feedback metrics，待实现后生效）
+      # 错误反馈 SLA 违反
+      # 从错误发生到用户可见的延迟超过 10 秒
       - alert: ErrorFeedbackSLABreach
         expr: |
           histogram_quantile(0.99,
@@ -185,63 +273,89 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: error-feedback
         annotations:
           summary: "错误反馈 P99 延迟超过 10 秒 SLA"
           description: "从错误发生到用户可见的延迟过高，当前 P99: {{ $value | humanizeDuration }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#errorfeedbackslabreach"
 
-  - name: infra-alerts
+  # ============================================================================
+  # 基础设施告警
+  # ============================================================================
+  - name: rtc-agent-infra
     rules:
-      - alert: PostgresDown
-        expr: up{job="rtc-agent-server"} == 0 and on() (count(up{job="rtc-agent-server"}) == 0)
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "server 不可达，可能依赖服务故障"
-
+      # Prometheus 采集目标缺失
+      # 当某个 scrape job 的目标不可达时触发
       - alert: PrometheusTargetMissing
         expr: up == 0
         for: 2m
         labels:
           severity: warning
+          category: infra
         annotations:
           summary: "采集目标不可达: {{ $labels.job }}"
+          description: "Prometheus 无法采集 {{ $labels.instance }} 的指标"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#prometheustargetmissing"
 
-  - name: minio-alerts
+      # PostgreSQL 不可达
+      # Server 不可达且可能是数据库故障导致
+      - alert: PostgresDown
+        expr: up{job="rtc-agent-server"} == 0 and on() (count(up{job="rtc-agent-server"}) == 0)
+        for: 1m
+        labels:
+          severity: critical
+          category: infra
+        annotations:
+          summary: "server 不可达，可能依赖服务故障"
+          description: "所有 Server 实例均不可达，可能是 PostgreSQL 或其他依赖服务故障"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#postgresdown"
+
+  # ============================================================================
+  # MinIO 对象存储告警
+  # ============================================================================
+  - name: rtc-agent-minio
     rules:
-      # MinIO 服务存活
+      # MinIO 服务不可达
       - alert: MinIODown
         expr: up{job="minio"} == 0
         for: 30s
         labels:
           severity: critical
+          category: storage
         annotations:
           summary: "MinIO 服务不可达"
           description: "MinIO 实例 {{ $labels.instance }} 已持续 30s 无法采集"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#miniodown"
 
-      # MinIO 磁盘使用率过高
+      # MinIO 磁盘使用率过高 (>85%)
+      # 提前预警，需要扩容或清理数据
       - alert: MinIODiskUsageHigh
         expr: |
           (minio_node_drive_used_bytes / minio_node_drive_total_bytes) > 0.85
         for: 5m
         labels:
           severity: warning
+          category: storage
         annotations:
           summary: "MinIO 磁盘使用率 > 85%"
           description: "MinIO 节点 {{ $labels.instance }} 磁盘使用率: {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#miniodiskusagehigh"
 
-      # MinIO 磁盘使用率严重
+      # MinIO 磁盘使用率严重 (>95%)
+      # 即将满载，需要立即处理
       - alert: MinIODiskUsageCritical
         expr: |
           (minio_node_drive_used_bytes / minio_node_drive_total_bytes) > 0.95
         for: 1m
         labels:
           severity: critical
+          category: storage
         annotations:
           summary: "MinIO 磁盘使用率 > 95%"
           description: "MinIO 节点 {{ $labels.instance }} 磁盘使用率: {{ $value | humanizePercentage }}，即将满载"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#miniodiskusagecritical"
 
-      # MinIO 请求错误率（基于 rejected 请求）
+      # MinIO S3 请求错误率异常
       - alert: MinIOHighErrorRate
         expr: |
           (
@@ -253,43 +367,54 @@ groups:
         for: 2m
         labels:
           severity: warning
+          category: storage
         annotations:
           summary: "MinIO S3 请求错误率异常"
           description: "MinIO S3 API 拒绝请求比率异常"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#miniohigherrorrate"
 
-      # MinIO 离线节点
+      # MinIO 集群有节点离线
       - alert: MinIOOfflineNodes
         expr: minio_cluster_nodes_offline_total > 0
         for: 1m
         labels:
           severity: critical
+          category: storage
         annotations:
           summary: "MinIO 有节点离线"
           description: "MinIO 集群中有 {{ $value }} 个节点离线"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#minioofflinenodes"
 
-      # MinIO 离线磁盘
+      # MinIO 有磁盘离线
       - alert: MinIOOfflineDrives
         expr: minio_node_drive_offline_total > 0
         for: 1m
         labels:
           severity: critical
+          category: storage
         annotations:
           summary: "MinIO 有磁盘离线"
           description: "MinIO 节点有 {{ $value }} 个磁盘离线"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#minioofflinedrives"
 
-  - name: oss3-alerts
+  # ============================================================================
+  # OSS3 S3 兼容存储告警
+  # ============================================================================
+  - name: rtc-agent-oss3
     rules:
-      # OSS3 服务不可用
+      # OSS3 S3 端点不可达
       - alert: OSS3EndpointDown
         expr: up{job="rtc-agent-server"} == 0
         for: 30s
         labels:
           severity: critical
+          category: storage
         annotations:
           summary: "OSS3 S3 端点不可达"
           description: "Server 实例 {{ $labels.instance }} 已持续 30s 无法采集"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#oss3endpointdown"
 
-      # 上传错误率
+      # OSS3 上传错误率过高 (>5%)
       - alert: OSS3HighUploadErrorRate
         expr: |
           (
@@ -299,11 +424,13 @@ groups:
         for: 2m
         labels:
           severity: warning
+          category: storage
         annotations:
           summary: "OSS3 上传错误率 > 5%"
           description: "当前 5xx 比率: {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#oss3highuploaderrorrate"
 
-      # 下载延迟过高
+      # OSS3 下载延迟过高 (p95 > 5s)
       - alert: OSS3HighDownloadLatency
         expr: |
           histogram_quantile(0.95,
@@ -312,49 +439,59 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: storage
         annotations:
           summary: "OSS3 下载 p95 延迟 > 5s"
           description: "当前 p95: {{ $value | humanizeDuration }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#oss3highdownloadlatency"
 
-      # 配额使用率过高
-      # 1073741824 = 1 GiB in bytes (1024^3). Matches the default MaxUserQuotaBytes
-      # configured in the server. Update when the quota default changes.
+      # OSS3 用户配额使用率过高 (>90%)
+      # 1073741824 = 1 GiB (1024^3 bytes)，与服务端默认配置一致
       - alert: OSS3QuotaNearLimit
         expr: |
-          (rtc_oss3_quota_usage_bytes / 1073741824) > 0.9  # 1 GiB default limit (1024^3 bytes)
+          (rtc_oss3_quota_usage_bytes / 1073741824) > 0.9
         for: 5m
         labels:
           severity: warning
+          category: storage
         annotations:
           summary: "用户配额使用率 > 90%"
           description: "用户 {{ $labels.user_id }} 配额使用: {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#oss3quotanearlimit"
 
-      # 分片上传堆积
+      # OSS3 活跃分片上传数量过多 (>1000)
+      # 可能存在大量未完成的上传任务
       - alert: OSS3MultipartUploadBacklog
         expr: sum(rtc_oss3_multipart_uploads_active) > 1000
         for: 10m
         labels:
           severity: warning
+          category: storage
         annotations:
           summary: "活跃分片上传数量 > 1000"
           description: "当前活跃上传: {{ $value }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#oss3multipartuploadbacklog"
 
-      # MinIO 后端错误
+      # OSS3 后端错误率异常
       - alert: OSS3BackendError
         expr: |
           sum(rate(rtc_oss3_backend_errors_total[5m])) > 0.1
         for: 2m
         labels:
           severity: warning
+          category: storage
         annotations:
           summary: "OSS3 后端错误率异常"
           description: "后端错误速率: {{ $value | humanize }}/s"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#oss3backenderror"
 
-  - name: new-metrics-alerts
+  # ============================================================================
+  # WebSocket / Centrifuge 告警
+  # ============================================================================
+  - name: rtc-agent-websocket
     rules:
-      # ==================== Centrifuge / WebSocket ====================
-
-      # WebSocket 异常断连率过高（error 类型占全部断连 > 20%）
+      # WebSocket 异常断连率过高 (>20%)
+      # error 类型断连占全部断连的比例过高
       - alert: CentrifugeHighErrorDisconnectRate
         expr: |
           (
@@ -365,11 +502,13 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: websocket
         annotations:
           summary: "WebSocket 异常断连率 > 20%"
           description: "error 类型断连占全部断连比例过高，当前值: {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#centrifugehigherrordisconnectrate"
 
-      # RPC 调用错误率过高
+      # Centrifuge RPC 调用错误率过高 (>10%)
       - alert: CentrifugeRPCHighErrorRate
         expr: |
           (
@@ -380,11 +519,13 @@ groups:
         for: 2m
         labels:
           severity: warning
+          category: websocket
         annotations:
           summary: "Centrifuge RPC 调用错误率 > 10%"
           description: "RPC 调用错误率过高，当前值: {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#centrifugerpchigherrorrate"
 
-      # RPC 延迟过高（p95 > 1s）
+      # Centrifuge RPC 延迟过高 (p95 > 1s)
       - alert: CentrifugeRPCHighLatency
         expr: |
           histogram_quantile(0.95,
@@ -393,13 +534,19 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: websocket
         annotations:
           summary: "Centrifuge RPC p95 延迟 > 1s"
           description: "RPC 调用延迟过高，当前 p95: {{ $value | humanizeDuration }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#centrifugerpchighlatency"
 
-      # ==================== Queue 生命周期 ====================
-
-      # Queue 等待时间过长（p95 > 30s）
+  # ============================================================================
+  # Queue 消息队列告警
+  # ============================================================================
+  - name: rtc-agent-queue
+    rules:
+      # Queue 等待时间过长 (p95 > 30s)
+      # 消息在队列中等待时间过长，可能存在处理瓶颈
       - alert: QueueHighWaitDuration
         expr: |
           histogram_quantile(0.95,
@@ -408,11 +555,13 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: queue
         annotations:
           summary: "Queue 等待时间 p95 > 30s"
           description: "消息在 Queue 中等待时间过长，当前 p95: {{ $value | humanizeDuration }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#queuehighwaitduration"
 
-      # Queue 处理时间过长（p95 > 5min）
+      # Queue 处理时间过长 (p95 > 5min)
       - alert: QueueHighProcessingDuration
         expr: |
           histogram_quantile(0.95,
@@ -421,11 +570,13 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: queue
         annotations:
           summary: "Queue 处理时间 p95 > 5min"
           description: "消息处理耗时过长，当前 p95: {{ $value | humanizeDuration }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#queuehighprocessingduration"
 
-      # Queue complete 失败率过高（> 10%）
+      # Queue complete 失败率过高 (>10%)
       - alert: QueueHighCompleteFailureRate
         expr: |
           (
@@ -436,11 +587,14 @@ groups:
         for: 2m
         labels:
           severity: warning
+          category: queue
         annotations:
           summary: "Queue complete 失败率 > 10%"
           description: "消息处理完成失败率过高，当前值: {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#queuehighcompletefailurerate"
 
-      # Queue 取消率过高（取消数 / 发布数 > 20%）
+      # Queue 取消率过高 (>20%)
+      # 取消数 / 发布数 > 20%，可能存在大量超时或用户主动取消
       - alert: QueueHighCancelRate
         expr: |
           (
@@ -451,39 +605,56 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: queue
         annotations:
           summary: "Queue 取消率 > 20%"
           description: "消息取消比例过高，当前值: {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#queuehighcancelrate"
 
-      # ==================== Auth 认证失败 ====================
-
-      # 认证失败速率突增（> 1/秒）
+  # ============================================================================
+  # 认证安全告警
+  # ============================================================================
+  - name: rtc-agent-auth
+    rules:
+      # 认证失败速率突增 (>1/秒)
+      # 可能存在暴力破解或 Token 滥用
       - alert: AuthFailuresSpike
         expr: |
           sum(rate(rtc_auth_failures_total{job="rtc-agent-server"}[5m])) > 1
         for: 2m
         labels:
           severity: warning
+          category: security
         annotations:
           summary: "认证失败速率突增 (>1/秒)"
           description: "认证失败速率异常，可能存在攻击或配置问题，当前值: {{ $value | humanize }}/s"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#authfailuresspike"
 
-      # ==================== Circuit Breaker 熔断器 ====================
-
-      # 熔断器状态变为 open（服务降级）
+  # ============================================================================
+  # 熔断器告警
+  # ============================================================================
+  - name: rtc-agent-circuitbreaker
+    rules:
+      # 熔断器状态变为 open
+      # 服务降级，相关功能不可用
       - alert: CircuitBreakerOpen
         expr: |
           rtc_circuitbreaker_state{job="rtc-agent-server",state="open"} == 1
         for: 1m
         labels:
           severity: critical
+          category: resilience
         annotations:
           summary: "熔断器 {{ $labels.name }} 已打开"
           description: "服务 {{ $labels.name }} 熔断器处于 open 状态，服务已降级"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#circuitbreakeropen"
 
-      # ==================== DB 查询 ====================
-
-      # DB 查询延迟过高（p95 > 1s）
+  # ============================================================================
+  # 数据库告警
+  # ============================================================================
+  - name: rtc-agent-database
+    rules:
+      # DB 查询延迟过高 (p95 > 1s)
       - alert: DBHighQueryLatency
         expr: |
           histogram_quantile(0.95,
@@ -492,11 +663,13 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: database
         annotations:
           summary: "DB 查询 p95 延迟 > 1s"
           description: "数据库查询延迟过高，当前 p95: {{ $value | humanizeDuration }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#dbhighquerylatency"
 
-      # DB 查询错误率过高（> 5%）
+      # DB 查询错误率过高 (>5%)
       - alert: DBHighQueryErrorRate
         expr: |
           (
@@ -507,11 +680,13 @@ groups:
         for: 2m
         labels:
           severity: warning
+          category: database
         annotations:
           summary: "DB 查询错误率 > 5%"
           description: "数据库查询错误率过高，当前值: {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#dbhighqueryerrorrate"
 
-      # DB 完全不可用（错误率 100%）
+      # DB 完全不可用 (错误率 >90%)
       - alert: DBUnavailable
         expr: |
           (
@@ -522,13 +697,19 @@ groups:
         for: 1m
         labels:
           severity: critical
+          category: database
         annotations:
           summary: "DB 完全不可用"
           description: "数据库查询几乎全部失败，当前错误率: {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#dbunavailable"
 
-      # ==================== 业务事件 ====================
-
-      # Session 关闭错误率过高（reason="error" 占比 > 20%）
+  # ============================================================================
+  # Session 业务告警
+  # ============================================================================
+  - name: rtc-agent-session
+    rules:
+      # Session 错误关闭率过高 (>20%)
+      # reason="error" 占比过高，可能存在系统异常
       - alert: SessionHighErrorCloseRate
         expr: |
           (
@@ -539,6 +720,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          category: business
         annotations:
           summary: "Session 错误关闭率 > 20%"
           description: "Session 因 error 关闭的比例过高，当前值: {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/rtc-agent/server/wiki/Alerts#sessionhigherrorcloserate"

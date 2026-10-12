@@ -37,7 +37,22 @@ func (uc *OSS3Usecase) CleanupExpiredUploads(ctx context.Context) (int, error) {
 	}
 
 	cleaned := 0
+	// P3-1 fix: Track consecutive failures to enable early termination.
+	// If database is consistently failing, continuing the loop wastes resources
+	// and generates excessive error logs. Early termination allows the next
+	// scheduled cleanup to retry when the database may have recovered.
+	const maxConsecutiveFailures = 5
+	consecutiveFailures := 0
+
 	for _, upload := range expired {
+		// P3-1 fix: Check if we've hit the consecutive failure threshold
+		if consecutiveFailures >= maxConsecutiveFailures {
+			logger.Warn(ctx, "cleanup: terminating early due to consecutive failures",
+				zap.Int("consecutive_failures", consecutiveFailures),
+				zap.Int("remaining_uploads", len(expired)-cleaned-consecutiveFailures))
+			break
+		}
+
 		// Abort in storage backend (best-effort).
 		// Backend may have already cleaned up the upload, so errors are logged
 		// at Debug level only — they do not indicate a real problem.
@@ -58,8 +73,13 @@ func (uc *OSS3Usecase) CleanupExpiredUploads(ctx context.Context) (int, error) {
 			logger.Warn(ctx, "cleanup: failed to delete expired upload record",
 				zap.String("upload_id", upload.UploadID),
 				zap.Error(err))
+			// P3-1 fix: Increment consecutive failure counter
+			consecutiveFailures++
 			continue
 		}
+
+		// P3-1 fix: Reset consecutive failure counter on success
+		consecutiveFailures = 0
 
 		// Note: Quota release is handled by TTL on pending keys
 		// No need to explicitly release here

@@ -19,10 +19,14 @@ func TestMaskUserID(t *testing.T) {
 		{"three chars", "abc", "***"},
 		{"six chars", "abcdef", "***"},
 		{"seven chars", "abcdefg", "abc***efg"},
-		{"uuid format", "550e8400-e29b-41d4-a716-446655440000", "550***000"},
+		// P2 fix: UUID format now keeps only first 8 chars for better security
+		{"uuid format", "550e8400-e29b-41d4-a716-446655440000", "550e8400***"},
+		{"uuid uppercase", "550E8400-E29B-41D4-A716-446655440000", "550E8400***"},
 		{"short id", "user1", "***"},
 		{"chinese chars", "用户张三丰", "***"},
 		{"chinese chars long", "用户名称张三丰", "用户名***张三丰"},
+		// Non-UUID format with hyphens (not matching UUID pattern)
+		{"non-uuid with hyphens", "abc-def-ghi", "abc***ghi"},
 	}
 
 	for _, tt := range tests {
@@ -79,8 +83,8 @@ func TestMaskingCore(t *testing.T) {
 
 	fields := entries[0].ContextMap()
 
-	// user_id should be masked (UUID first 3 + *** + last 3).
-	if got, ok := fields["user_id"].(string); !ok || got != "550***000" {
+	// user_id should be masked (UUID format: first 8 chars + ***).
+	if got, ok := fields["user_id"].(string); !ok || got != "550e8400***" {
 		t.Errorf("user_id not masked correctly: got %v", fields["user_id"])
 	}
 
@@ -94,7 +98,7 @@ func TestMaskingCore(t *testing.T) {
 		t.Errorf("safe_field unexpectedly modified: got %v", fields["safe_field"])
 	}
 
-	// user_id_raw should be masked.
+	// user_id_raw should be masked (non-UUID format: first 3 + *** + last 3).
 	if got, ok := fields["user_id_raw"].(string); !ok || got != "raw***678" {
 		t.Errorf("user_id_raw not masked correctly: got %v", fields["user_id_raw"])
 	}

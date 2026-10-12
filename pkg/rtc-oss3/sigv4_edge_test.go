@@ -139,10 +139,10 @@ func TestParseCredential_EdgeCases(t *testing.T) {
 		{"TooFewParts", "AKIAIOSFODNN7EXAMPLE/20260930/us-east-1/s3", true},
 		{"TooManyParts", "AKIAIOSFODNN7EXAMPLE/20260930/us-east-1/s3/aws4_request/extra", true},
 		{"EmptyString", "", true},
-		{"EmptyAccessKey", "/20260930/us-east-1/s3/aws4_request", false}, // valid format, empty AK
-		{"EmptyDate", "AKIAIOSFODNN7EXAMPLE//us-east-1/s3/aws4_request", false},
+		{"EmptyAccessKey", "/20260930/us-east-1/s3/aws4_request", true},        // now rejected: empty AK
+		{"EmptyDate", "AKIAIOSFODNN7EXAMPLE//us-east-1/s3/aws4_request", true}, // now rejected: empty date
 		{"SingleSlash", "AKIA/20260930", true},
-		{"OnlySlashes", "////", false}, // 5 parts, all empty
+		{"OnlySlashes", "////", true}, // now rejected: empty AK and date
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

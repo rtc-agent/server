@@ -199,14 +199,23 @@ func (uc *OSS3Usecase) identifyOrphanKeys(
 		if !existingKeys[key] {
 			obj := keyMeta[key]
 
-			// OSS3-28 fix: Validate content-type and size for orphaned files.
+			// P1-6 fix: Validate content-type and size for orphaned files.
 			// This catches files uploaded via presigned URLs that bypassed validation.
 			// Policy-violating files are deleted immediately (skip cooldown).
 			//
-			// P1-4 fix: Only apply content-type validation if obj.ContentType is non-empty.
-			// Some backends may not reliably populate content-type metadata in ListObjects.
-			// If empty, fall back to cooldown-based logic to avoid false positives.
-			if obj.ContentType != "" && !rtcoss3.IsAllowedContentType(obj.ContentType) {
+			// Files with empty ContentType are also deleted: this prevents malicious clients
+			// from uploading disallowed content types that MinIO doesn't reliably populate.
+			// The PresignPostPolicy enforces Content-Type via POST policy, so any file with
+			// empty or invalid ContentType is suspicious and should be removed.
+			if obj.ContentType == "" {
+				logger.Warn(ctx, "orphan reconciler: deleting file with missing content-type",
+					zap.String("key", key),
+					zap.Int64("size", obj.Size))
+				orphanKeys = append(orphanKeys, key)
+				result.OrphansFound++
+				continue
+			}
+			if !rtcoss3.IsAllowedContentType(obj.ContentType) {
 				logger.Warn(ctx, "orphan reconciler: deleting file with disallowed content-type",
 					zap.String("key", key),
 					zap.String("content_type", obj.ContentType),

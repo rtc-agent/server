@@ -148,6 +148,15 @@ func (r *fileRepo) SumSizeByUserGrouped(ctx context.Context) (map[string]int64, 
 
 // KeysExist returns the subset of keys that exist in the DB (not soft-deleted).
 // Uses batched IN queries to avoid exceeding database parameter limits.
+//
+// Soft-delete semantics:
+//   - GORM automatically adds "deleted_at IS NULL" condition to queries
+//   - Soft-deleted files (where deleted_at is set) are NOT returned as existing
+//   - This is critical for orphan reconciler: soft-deleted files are treated as
+//     "not existing", so the corresponding MinIO objects will be marked as orphans
+//     and deleted after the cooldown period
+//
+// Batch size: 1000 keys per query to avoid SQL parameter limits (e.g., PostgreSQL's 65535)
 func (r *fileRepo) KeysExist(ctx context.Context, keys []string) (map[string]bool, error) {
 	if len(keys) == 0 {
 		return make(map[string]bool), nil

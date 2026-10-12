@@ -22,6 +22,33 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// Timeout constants for Redis operations.
+// These timeouts prevent unresponsive Redis from blocking callers indefinitely.
+const (
+	// DefaultRedisTimeout is the default timeout for most Redis operations.
+	// 5 seconds balances between allowing slow queries and preventing indefinite blocking.
+	DefaultRedisTimeout = 5 * time.Second
+
+	// PublishTimeout is the timeout for Publish/PublishWithID operations.
+	// Slightly longer to account for Lua script execution.
+	PublishTimeout = 5 * time.Second
+
+	// ClaimTimeout is the timeout for Claim operations.
+	ClaimTimeout = 5 * time.Second
+
+	// CompleteTimeout is the timeout for Complete/CompleteWork operations.
+	CompleteTimeout = 5 * time.Second
+
+	// CancelTimeout is the timeout for Cancel/CancelSession operations.
+	CancelTimeout = 5 * time.Second
+
+	// RenewLockTimeout is the timeout for RenewLock operations.
+	RenewLockTimeout = 5 * time.Second
+
+	// ReleaseTimeout is the timeout for ReleaseSession/ForceReleaseSession operations.
+	ReleaseTimeout = 5 * time.Second
+)
+
 // ErrAlreadyTerminal is returned when Cancel is invoked on a Work item
 // whose status is already completed or cancelled.
 var ErrAlreadyTerminal = fmt.Errorf("rtcqueue: work already completed or cancelled")
@@ -52,8 +79,20 @@ func (q *Queue) Client() *redis.Client { return q.rdb }
 // session:new channel so idle workers can wake up and try to claim it.
 // All three writes are performed atomically by a single Lua script.
 //
-// The work ID is generated using UUID v7 (time-based). For idempotent
-// publishing (e.g., with retries), use PublishWithID instead.
+// Deprecated: Use PublishWithID instead for idempotent publishing.
+// Publish generates a random UUID v7 work ID, which means retries will
+// create duplicate work items. PublishWithID allows callers to specify
+// a deterministic work ID (e.g., using GenerateDeterministicWorkID) to
+// ensure exactly-once semantics even with retries.
+//
+// Example migration:
+//
+//	// Before:
+//	workID, err := queue.Publish(ctx, sessionID, data, priority)
+//
+//	// After:
+//	workID := rtcqueue.GenerateDeterministicWorkID(sessionID, uniqueKey)
+//	workID, err := queue.PublishWithID(ctx, sessionID, workID, data, priority)
 func (q *Queue) Publish(ctx context.Context, sessionID, data string, priority int64) (string, error) {
 	workID := uuid.Must(uuid.NewV7()).String()
 	return q.PublishWithID(ctx, sessionID, workID, data, priority)
@@ -99,7 +138,7 @@ func (q *Queue) PublishWithID(ctx context.Context, sessionID, workID, data strin
 	// (publishSubmitWork) applies its own exponential-backoff retry on
 	// top of this timeout, so a single slow Redis call will be retried
 	// rather than immediately failing the whole SendMessage request.
-	publishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	publishCtx, cancel := context.WithTimeout(ctx, PublishTimeout)
 	defer cancel()
 
 	result, err := publishScript.Run(publishCtx, q.rdb, []string{workKey, queueKey},
@@ -144,7 +183,7 @@ func (q *Queue) Claim(ctx context.Context, sessionID, workerID string) (*ClaimRe
 	now := time.Now().Unix()
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	claimCtx, cancel := context.WithTimeout(ctx, ClaimTimeout)
 	defer cancel()
 
 	res, err := claimScript.Run(claimCtx, q.rdb, []string{
@@ -217,7 +256,7 @@ func (q *Queue) ClaimWithCredential(ctx context.Context, sessionID, workerID, cr
 	now := time.Now().Unix()
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	claimCtx, cancel := context.WithTimeout(ctx, ClaimTimeout)
 	defer cancel()
 
 	res, err := claimWithCredentialScript.Run(claimCtx, q.rdb, []string{
@@ -305,7 +344,7 @@ func (q *Queue) Complete(ctx context.Context, workID string) error {
 	defer span.End()
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	completeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	completeCtx, cancel := context.WithTimeout(ctx, CompleteTimeout)
 	defer cancel()
 
 	n, err := completeScript.Run(completeCtx, q.rdb, []string{keyWork(workID)},
@@ -354,7 +393,7 @@ func (q *Queue) CompleteWork(ctx context.Context, workID string) error {
 	span.SetAttributes(attribute.String("session.id", work.SessionID))
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	completeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	completeCtx, cancel := context.WithTimeout(ctx, CompleteTimeout)
 	defer cancel()
 
 	n, err := completeWorkScript.Run(completeCtx, q.rdb, []string{
@@ -406,7 +445,7 @@ func (q *Queue) Cancel(ctx context.Context, workID, reason string) error {
 	}
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	cancelCtx, cancel := context.WithTimeout(ctx, CancelTimeout)
 	defer cancel()
 
 	n, err := cancelScript.Run(cancelCtx, q.rdb, []string{keyWork(workID)},
@@ -457,7 +496,7 @@ func (q *Queue) CancelSession(ctx context.Context, sessionID, reason string) err
 	now := time.Now().Unix()
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	cancelCtx, cancel := context.WithTimeout(ctx, CancelTimeout)
 	defer cancel()
 
 	// 1. Atomically remove all pending work items from the session queue and
@@ -506,7 +545,7 @@ func (q *Queue) RenewLock(ctx context.Context, sessionID, workerID string) (bool
 	defer span.End()
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	renewCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	renewCtx, cancel := context.WithTimeout(ctx, RenewLockTimeout)
 	defer cancel()
 
 	n, err := renewLockScript.Run(renewCtx, q.rdb, []string{keyLock(sessionID)},
@@ -537,7 +576,7 @@ func (q *Queue) RenewLockWithCredential(ctx context.Context, sessionID, workerID
 	defer span.End()
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	renewCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	renewCtx, cancel := context.WithTimeout(ctx, RenewLockTimeout)
 	defer cancel()
 
 	n, err := renewLockWithCredentialScript.Run(renewCtx, q.rdb, []string{keyLock(sessionID)},
@@ -592,7 +631,7 @@ func (q *Queue) CompleteWorkAndClaimNext(ctx context.Context, currentWorkID, wor
 	now := time.Now().Unix()
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	completeClaimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	completeClaimCtx, cancel := context.WithTimeout(ctx, CompleteTimeout)
 	defer cancel()
 
 	res, err := completeWorkAndClaimNextScript.Run(completeClaimCtx, q.rdb, []string{
@@ -657,7 +696,7 @@ func (q *Queue) ReleaseSession(ctx context.Context, sessionID, workerID, credent
 	defer span.End()
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	releaseCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	releaseCtx, cancel := context.WithTimeout(ctx, ReleaseTimeout)
 	defer cancel()
 
 	result, err := releaseSessionWithCredentialScript.Run(releaseCtx, q.rdb, []string{
@@ -691,7 +730,7 @@ func (q *Queue) ForceReleaseSession(ctx context.Context, sessionID string) error
 	defer span.End()
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	forceCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	forceCtx, cancel := context.WithTimeout(ctx, ReleaseTimeout)
 	defer cancel()
 
 	err := q.rdb.Del(forceCtx, keyLock(sessionID), keyActive(sessionID)).Err()
@@ -720,7 +759,7 @@ func (q *Queue) HasPendingWorkByKind(ctx context.Context, sessionID string, kind
 	defer span.End()
 
 	// Add timeout to prevent indefinite blocking if Redis is unresponsive.
-	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	checkCtx, cancel := context.WithTimeout(ctx, DefaultRedisTimeout)
 	defer cancel()
 
 	n, err := hasPendingWorkByKindScript.Run(checkCtx, q.rdb, []string{

@@ -587,7 +587,13 @@ func (a *Agent) tryReactiveCompactRecovery(
 	detachedCtx := context.WithoutCancel(recoveryCtx) // Preserve trace values, strip cancel
 	publishCtx, publishCancel := context.WithTimeout(detachedCtx, 10*time.Second)
 	defer publishCancel()
-	if _, err := a.queue.Publish(publishCtx, p.SessionID, payload, rtcqueue.ResumeWorkPriority); err != nil {
+	// Generate deterministic work ID for idempotent publishing.
+	// This ensures retries don't create duplicate recovery work items.
+	workID := rtcqueue.GenerateDeterministicWorkID(
+		p.SessionID,
+		"lock_loss_recovery:"+turnID,
+	)
+	if _, err := a.queue.PublishWithID(publishCtx, p.SessionID, workID, payload, rtcqueue.ResumeWorkPriority); err != nil {
 		a.log(recoveryCtx, LogLevelError, "turn.submit_publish_failed", map[string]any{
 			"error":   err.Error(),
 			"attempt": attempt,

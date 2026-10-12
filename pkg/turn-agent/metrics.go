@@ -99,6 +99,10 @@ type Metrics interface {
 
 	// ResetEWMA resets the EWMA gauge for a session (e.g., when session is closed).
 	ResetEWMA(ctx context.Context, sessionID string)
+
+	// RecordConfigFallback records a config fallback event (degradation to YAML defaults).
+	// Called when dynamic config is unavailable and the system falls back to static YAML config.
+	RecordConfigFallback(ctx context.Context, key, reason string)
 }
 
 // TurnMetricsAttrs contains attributes for a turn event.

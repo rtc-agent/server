@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"net/url"
 	"strings"
 
 	"go.opentelemetry.io/otel"
@@ -144,7 +145,10 @@ func (cb *tracingCallbacks) after(db *gorm.DB) {
 	if db.Statement.SQL.String() != "" {
 		sqlStr := db.Statement.SQL.String()
 		if len(sqlStr) > maxSQLLogLength {
-			sqlStr = sqlStr[:500] + "...(truncated)"
+			// P3 optimization: Try to truncate at SQL keyword boundaries to preserve
+			// more structure information for debugging. Fall back to fixed 500 chars
+			// if no good truncation point is found.
+			sqlStr = truncateSQLAtKeyword(sqlStr, 500)
 		}
 		span.SetAttributes(attribute.String("db.statement", sanitizeSQL(sqlStr)))
 	}
@@ -163,6 +167,12 @@ func (cb *tracingCallbacks) after(db *gorm.DB) {
 
 // extractDBNameFromDSN extracts the database name from the GORM dialector config.
 // Returns empty string if the dialector is not postgres or the DSN cannot be parsed.
+//
+// Supported DSN formats:
+//  1. URL format: postgres://user:pass@host:port/dbname?params
+//     Note: Special characters in password must be URL-encoded (e.g., '/' -> '%2F')
+//  2. Key-value format: host=... user=... dbname=... password=...
+//     This format does not require URL encoding.
 func extractDBNameFromDSN(db *gorm.DB) string {
 	if db == nil || db.Config == nil || db.Dialector == nil {
 		return ""
@@ -172,22 +182,63 @@ func extractDBNameFromDSN(db *gorm.DB) string {
 		return ""
 	}
 	dsn := pgDialector.DSN
-	// Parse postgres DSN format: postgres://user:pass@host:port/dbname?params
-	// or key-value format: host=... user=... dbname=... password=...
-	if idx := strings.LastIndex(dsn, "/"); idx >= 0 {
-		rest := dsn[idx+1:]
-		if qIdx := strings.IndexByte(rest, '?'); qIdx >= 0 {
-			return rest[:qIdx]
+
+	// Try URL format first: postgres://user:pass@host:port/dbname?params
+	// Use net/url to correctly handle passwords containing '/' or other special characters
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		parsed, err := url.Parse(dsn)
+		if err == nil && parsed.Path != "" {
+			// Path format: /dbname - remove leading '/'
+			if len(parsed.Path) > 1 {
+				return parsed.Path[1:]
+			}
 		}
-		return rest
 	}
-	// Key-value format
+
+	// Fallback to key-value format: host=... user=... dbname=... password=...
 	for _, part := range strings.Fields(dsn) {
 		if strings.HasPrefix(part, "dbname=") {
 			return strings.TrimPrefix(part, "dbname=")
 		}
 	}
 	return ""
+}
+
+// truncateSQLAtKeyword truncates a long SQL statement at a keyword boundary
+// to preserve more structure information for debugging. It tries to find a
+// good truncation point (VALUES, WHERE, SET) within the first 1000 characters.
+// If no good point is found, it falls back to a fixed truncation at maxLen.
+//
+// Examples:
+//
+//	"INSERT INTO users VALUES (...500 more chars...)" ->
+//	"INSERT INTO users VALUES ...(+500 chars)...(truncated)"
+//
+//	"UPDATE users SET name=... WHERE ...500 more chars..." ->
+//	"UPDATE users SET ...(+500 chars)...(truncated)"
+func truncateSQLAtKeyword(sqlStr string, maxLen int) string {
+	if len(sqlStr) <= maxLen {
+		return sqlStr
+	}
+
+	// Try to find a good truncation point within the first 1000 chars
+	searchLimit := 1000
+	if searchLimit > len(sqlStr) {
+		searchLimit = len(sqlStr)
+	}
+	searchRegion := strings.ToUpper(sqlStr[:searchLimit])
+
+	// Look for common SQL keywords that indicate a good truncation point
+	keywords := []string{" VALUES ", " WHERE ", " SET ", " FROM "}
+	for _, keyword := range keywords {
+		if idx := strings.Index(searchRegion, keyword); idx > 0 && idx < maxLen {
+			// Truncate right after the keyword
+			return sqlStr[:idx+len(keyword)] + "...(truncated)"
+		}
+	}
+
+	// Fallback: fixed truncation at maxLen
+	return sqlStr[:maxLen] + "...(truncated)"
 }
 
 // Ensure TracingPlugin implements gorm.Plugin interface.

@@ -179,8 +179,9 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 	// Get userID from session (optional, for observability)
 	userID := w.getUserIDFromSession(ctx, sessionUUID)
 
-	// Publish to rtc-queue
-	if err := w.publishToQueue(ctx, sessionUUID.String(), userID, traceID, spanID, span); err != nil {
+	// Publish to rtc-queue with deterministic work ID for idempotency.
+	// Use loop ID and turn number to ensure retries produce the same work ID.
+	if err := w.publishToQueue(ctx, sessionUUID.String(), userID, traceID, spanID, loop.ID.String(), loop.CompletedTurns+1, span); err != nil {
 		logTaskFailure(ctx, "publish to rtc-queue", sessionUUID.String(), loopUUID.String(), err)
 		recordTaskFailure(time.Since(startTime))
 		return err
@@ -216,8 +217,8 @@ func (w *Worker) getUserIDFromSession(ctx context.Context, sessionUUID uuid.UUID
 	return ""
 }
 
-// publishToQueue publishes the work item to the rtc-queue.
-func (w *Worker) publishToQueue(ctx context.Context, sessionID, userID, traceID, spanID string, span trace.Span) error {
+// publishToQueue publishes the work item to the rtc-queue with deterministic work ID.
+func (w *Worker) publishToQueue(ctx context.Context, sessionID, userID, traceID, spanID, loopID string, turnNumber int, span trace.Span) error {
 	workPayload, err := json.Marshal(turnagent.WorkPayload{
 		Kind:      turnagent.WorkKindSubmit,
 		SessionID: sessionID,
@@ -231,7 +232,11 @@ func (w *Worker) publishToQueue(ctx context.Context, sessionID, userID, traceID,
 		return fmt.Errorf("marshal work payload: %w", err)
 	}
 
-	_, err = w.queue.Publish(ctx, sessionID, string(workPayload), rtcqueue.SubmitWorkPriority)
+	// Generate deterministic work ID for idempotency.
+	// Format: "loop:{loopID}:turn:{turnNumber}" ensures retries produce the same ID.
+	workID := rtcqueue.GenerateDeterministicWorkID(sessionID, fmt.Sprintf("loop:%s:turn:%d", loopID, turnNumber))
+
+	_, err = w.queue.PublishWithID(ctx, sessionID, workID, string(workPayload), rtcqueue.SubmitWorkPriority)
 	if err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)

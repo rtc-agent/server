@@ -106,7 +106,13 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 		return
 	}
 
-	if _, err := h.queue.Publish(ctx, parentSessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
+	// Generate deterministic work ID for idempotent publishing.
+	// This ensures retries don't create duplicate notification work items.
+	workID := rtcqueue.GenerateDeterministicWorkID(
+		parentSessionID.String(),
+		"sub_notify:"+subSession.ID.String(),
+	)
+	if _, err := h.queue.PublishWithID(ctx, parentSessionID.String(), workID, string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "publish_failed")
 		h.logger.Warn(ctx, "notifyParentAfterAsyncSubAgent.submit_failed", map[string]any{
@@ -120,6 +126,7 @@ func (h *helpers) notifyParentAfterAsyncSubAgent(callerCtx context.Context, subS
 	h.logger.Info(ctx, "notifyParentAfterAsyncSubAgent.done", map[string]any{
 		"sub_session_id":    subSession.ID.String(),
 		"parent_session_id": parentSessionID.String(),
+		"work_id":           workID,
 		"status":            status,
 	})
 }

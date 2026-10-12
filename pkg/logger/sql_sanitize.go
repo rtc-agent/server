@@ -7,8 +7,11 @@ import (
 // Regex patterns for SQL sanitization (compiled once and reused)
 var (
 	// Pattern order matters: UUID must come before generic numbers
-	uuidPattern   = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
-	stringPattern = regexp.MustCompile(`'(?:[^'\\]|\\.)*'`)
+	// (?i) makes UUID pattern case-insensitive to catch both lowercase and uppercase UUIDs
+	uuidPattern = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+	// Support both backslash escape (\') and PostgreSQL standard escape ('')
+	// Order matters: try backslash escape first, then double single-quote
+	stringPattern = regexp.MustCompile(`'(?:[^']|\\.|'')*'`)
 	numberPattern = regexp.MustCompile(`\b\d+(?:\.\d+)?\b`)
 )
 

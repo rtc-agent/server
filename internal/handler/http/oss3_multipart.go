@@ -74,9 +74,13 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(
 		return
 	}
 
+	// P2-6 fix: Require Content-Type header for multipart uploads.
+	// Previously, empty Content-Type defaulted to "application/octet-stream", which would
+	// then be rejected by IsAllowedContentType. Returning a specific error is clearer.
 	contentType := r.Header.Get("Content-Type")
 	if contentType == "" {
-		contentType = "application/octet-stream"
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrMissingContentType, r.URL.Path, "")
+		return
 	}
 
 	// Validate Content-Type against whitelist (image/* and text/* only)

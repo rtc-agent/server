@@ -160,6 +160,9 @@ func (mgr *SessionTurnManager) onAgentEvents(
 	// AsyncIterator does not support Close()/Cancel(), so we only
 	// log a warning when no events arrive for a prolonged period.
 	activityReceived := make(chan struct{}, 1)
+	idleWatcherDone := make(chan struct{})
+	defer close(idleWatcherDone) // Ensure idle watcher exits when onAgentEvents returns
+
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -177,6 +180,8 @@ func (mgr *SessionTurnManager) onAgentEvents(
 			select {
 			case <-ctx.Done():
 				return
+			case <-idleWatcherDone:
+				return // Explicit exit signal when onAgentEvents returns
 			case <-activityReceived:
 				if !timer.Stop() {
 					select {

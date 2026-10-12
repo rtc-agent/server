@@ -308,7 +308,10 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 		if originalSpan != nil && originalSpan.SpanContext().IsValid() {
 			cleanupBaseCtx = trace.ContextWithRemoteSpanContext(cleanupBaseCtx, originalSpan.SpanContext())
 		}
-		cleanupCtx, cleanupCancel := context.WithTimeout(cleanupBaseCtx, 30*time.Second)
+		// Use 60s timeout to accommodate multiple Redis operations (ReleaseSession,
+		// notifyPendingWork) each with their own 10s timeouts, plus margin for
+		// network latency and retries.
+		cleanupCtx, cleanupCancel := context.WithTimeout(cleanupBaseCtx, 60*time.Second)
 		defer cleanupCancel()
 		mgr.Cleanup(cleanupCtx)
 	}()

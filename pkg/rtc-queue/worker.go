@@ -192,9 +192,18 @@ func (w *Worker) Run(ctx context.Context) error {
 						// Use ForceReleaseSession since we don't have the credential here.
 						// This is safe because a panic indicates an unrecoverable error
 						// and the worker is abandoning this session anyway.
-						if err := w.q.ForceReleaseSession(ctx, sessionID); err != nil {
-							w.logError(ctx, "failed to release session after panic",
+						//
+						// Use context.Background() with timeout because the session ctx
+						// (globalCtx) may be cancelled during worker shutdown, which would
+						// prevent the lock from being released.
+						releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer releaseCancel()
+						if err := w.q.ForceReleaseSession(releaseCtx, sessionID); err != nil {
+							globalQueueMetrics.recordPanicRecovery("error")
+							w.logError(releaseCtx, "failed to release session after panic",
 								"session", sessionID, "error", err.Error())
+						} else {
+							globalQueueMetrics.recordPanicRecovery("success")
 						}
 						w.logError(ctx, "goroutine panic",
 							"session", sessionID, "recover", r, "stack", string(debug.Stack()))

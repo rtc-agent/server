@@ -90,7 +90,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	}
 
 	// 2.5. Setup turn context with observability.
-	turnCtx, turnSpan, turnCancel := a.setupTurnContext(ctx, p, turnID, work.ID)
+	turnCtx, turnSpan, turnCancel, turnStart := a.setupTurnContext(ctx, p, turnID, work.ID)
 	defer turnCancel()
 	defer turnSpan.End()
 
@@ -104,7 +104,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	}
 
 	// 6-8. Setup cancel listener, wait for completion, handle lifecycle.
-	return a.waitForWorkCompletion(turnCtx, turnSpan, p, turnID, work.ID, cancel, mgr, isNew, turnCancel)
+	return a.waitForWorkCompletion(turnCtx, turnSpan, p, turnID, work.ID, cancel, mgr, isNew, turnCancel, turnStart)
 }
 
 // decodeAndPreparePayload decodes the work payload and restores trace context.
@@ -149,7 +149,10 @@ func (a *Agent) handleCompactWork(ctx context.Context, p WorkPayload) error {
 }
 
 // setupTurnContext creates the turn context with tracing and enrichment.
-func (a *Agent) setupTurnContext(ctx context.Context, p WorkPayload, turnID string, workID string) (context.Context, trace.Span, context.CancelFunc) {
+func (a *Agent) setupTurnContext(ctx context.Context, p WorkPayload, turnID string, workID string) (context.Context, trace.Span, context.CancelFunc, time.Time) {
+	// Record turn start time BEFORE creating span to capture accurate duration.
+	turnStart := time.Now()
+
 	// Create turnCtx with its own cancel so we can cancel the entire turn
 	// (including the LLM call running in mgr.Run) when StopTurn is called.
 	turnCtx, turnCancel := context.WithCancel(ctx)
@@ -177,7 +180,7 @@ func (a *Agent) setupTurnContext(ctx context.Context, p WorkPayload, turnID stri
 		"work_id":    workID,
 	})
 
-	return turnCtx, turnSpan, turnCancel
+	return turnCtx, turnSpan, turnCancel, turnStart
 }
 
 // setupPanicRecovery sets up panic recovery for the turn.
@@ -193,7 +196,12 @@ func (a *Agent) setupPanicRecovery(turnCtx context.Context, sessionID, turnID st
 	default:
 		pErr = fmt.Errorf("turnagent: panic in callback: %v", v)
 	}
-	a.log(turnCtx, LogLevelError, "turn.panicked", map[string]any{
+	// Use context.Background() with timeout for FailTurn because turnCtx may
+	// have been cancelled (e.g., during shutdown or turn completion), which
+	// would prevent the fail turn from being persisted.
+	panicCtx, panicCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer panicCancel()
+	a.log(panicCtx, LogLevelError, "turn.panicked", map[string]any{
 		"session_id": sessionID,
 		"turn_id":    turnID,
 		"error":      pErr.Error(),
@@ -205,7 +213,7 @@ func (a *Agent) setupPanicRecovery(turnCtx context.Context, sessionID, turnID st
 			// Swallow the panic to prevent it from crashing the process
 			// during an already-in-flight panic recovery.
 			defer func() { _ = recover() }()
-			_ = a.cfg.FailTurn(turnCtx, turnID, pErr)
+			_ = a.cfg.FailTurn(panicCtx, turnID, pErr)
 		}()
 	}
 	*retErr = pErr
@@ -263,7 +271,7 @@ func (a *Agent) createAndPushWork(turnCtx context.Context, p WorkPayload, turnID
 
 // waitForWorkCompletion sets up cancel listener, waits for work completion,
 // and handles lifecycle transitions.
-func (a *Agent) waitForWorkCompletion(turnCtx context.Context, turnSpan trace.Span, p WorkPayload, turnID string, workID string, cancel <-chan rtcqueue.CancelMessage, mgr *SessionTurnManager, isNew bool, turnCancel context.CancelFunc) error {
+func (a *Agent) waitForWorkCompletion(turnCtx context.Context, turnSpan trace.Span, p WorkPayload, turnID string, workID string, cancel <-chan rtcqueue.CancelMessage, mgr *SessionTurnManager, isNew bool, turnCancel context.CancelFunc, turnStart time.Time) error {
 	// 6. Cancel listener.
 	innerCtx, innerCancel := context.WithCancel(turnCtx)
 	defer innerCancel()
@@ -310,6 +318,5 @@ func (a *Agent) waitForWorkCompletion(turnCtx context.Context, turnSpan trace.Sp
 		)
 	}
 
-	turnStart := time.Now() // approximate; actual start was earlier
 	return a.handleOwnerLifecycleEnd(turnCtx, turnSpan, innerCtx, mgr, p, turnID, turnStart, workID)
 }

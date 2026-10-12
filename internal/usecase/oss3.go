@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -74,6 +75,9 @@ type OSS3Usecase struct {
 	scripts    map[string]*redis.Script // OSS3 Lua scripts from 1A-9
 	aesGCM     cipher.AEAD              // AES-256-GCM for SessionToken encryption
 	credFlight singleflight.Group       // Deduplicates concurrent credential cache misses
+	// P1-4 fix: cleanupWg tracks async cleanup goroutines to prevent leaks.
+	// Used by asyncCleanupBackendObject to ensure graceful shutdown waits for pending cleanups.
+	cleanupWg sync.WaitGroup
 }
 
 // NewOSS3Usecase creates the OSS3 usecase and optionally initializes AES-GCM.

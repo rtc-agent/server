@@ -14,8 +14,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	"github.com/rtc-agent/server/pkg/logger"
-	"go.uber.org/zap"
 )
 
 // Credential represents the parsed credential from Authorization header.
@@ -149,15 +147,25 @@ func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, 
 func VerifySigV4Presigned(r *http.Request, secretAccessKey string, region string, service string) error {
 	q := r.URL.Query()
 
-	// Check expiration
+	// P3-2 fix: Parse timestamp once and reuse for both expiry and skew checks.
+	// Previously, amzDate was parsed twice: once in checkPresignedExpiry and once
+	// in verifyTimestamp. This optimization reduces redundant time.Parse calls.
 	amzDate := q.Get("X-Amz-Date")
 	expires := q.Get("X-Amz-Expires")
-	if err := checkPresignedExpiry(amzDate, expires); err != nil {
+
+	// Parse timestamp once
+	signingTime, parseErr := time.Parse("20060102T150405Z", amzDate)
+	if parseErr != nil {
+		return fmt.Errorf("parse timestamp: %w", parseErr)
+	}
+
+	// Check expiration using pre-parsed timestamp
+	if err := checkPresignedExpiryWithTime(signingTime, expires); err != nil {
 		return err
 	}
 
-	// R7 Review H3: SigV4 timestamp validation
-	if err := verifyTimestamp(amzDate, 15*time.Minute); err != nil {
+	// R7 Review H3: SigV4 timestamp validation using pre-parsed timestamp
+	if err := verifyTimestampWithTime(signingTime, 15*time.Minute); err != nil {
 		return err
 	}
 
@@ -255,12 +263,25 @@ func ParseAuthorizationHeader(auth string) (*Credential, []string, string, error
 	return cred, signedHeaders, signature, nil
 }
 
-// parseCredential parses a credential string.
+// parseCredential parses a credential string with validation.
 // Format: AKID/20260930/us-east-1/s3/aws4_request
+//
+// P2-5 fix: Added validation for AccessKeyID and Date format to fail fast
+// on obviously malformed credentials.
 func parseCredential(credStr string) (*Credential, error) {
 	parts := strings.Split(credStr, "/")
 	if len(parts) != 5 {
-		return nil, fmt.Errorf("invalid credential format")
+		return nil, fmt.Errorf("invalid credential format: expected 5 parts, got %d", len(parts))
+	}
+
+	// P2-5 fix: Validate AccessKeyID is non-empty
+	if parts[0] == "" {
+		return nil, fmt.Errorf("invalid credential format: access key ID is empty")
+	}
+
+	// P2-5 fix: Validate Date format (YYYYMMDD)
+	if len(parts[1]) != 8 {
+		return nil, fmt.Errorf("invalid credential format: date must be YYYYMMDD, got %q", parts[1])
 	}
 
 	return &Credential{
@@ -281,7 +302,12 @@ func verifyTimestamp(amzDate string, window time.Duration) error {
 	if err != nil {
 		return fmt.Errorf("parse timestamp: %w", err)
 	}
+	return verifyTimestampWithTime(t, window)
+}
 
+// verifyTimestampWithTime checks if a pre-parsed timestamp is within the allowed window.
+// P3-2 fix: Avoids redundant time.Parse calls when the timestamp is already parsed.
+func verifyTimestampWithTime(t time.Time, window time.Duration) error {
 	now := time.Now().UTC()
 	diff := now.Sub(t)
 	if diff < 0 {
@@ -304,7 +330,12 @@ func checkPresignedExpiry(amzDate, expires string) error {
 	if err != nil {
 		return fmt.Errorf("parse timestamp: %w", err)
 	}
+	return checkPresignedExpiryWithTime(t, expires)
+}
 
+// checkPresignedExpiryWithTime checks if a presigned URL has expired using a pre-parsed timestamp.
+// P3-2 fix: Avoids redundant time.Parse calls when the timestamp is already parsed.
+func checkPresignedExpiryWithTime(t time.Time, expires string) error {
 	expirySeconds := 0
 	if _, err := fmt.Sscanf(expires, "%d", &expirySeconds); err != nil {
 		return fmt.Errorf("parse expires: %w", err)
@@ -351,18 +382,73 @@ func buildCanonicalRequest(r *http.Request, signedHeaders []string) string {
 	return b.String()
 }
 
-// canonicalURI returns the canonical URI.
-// Per AWS SigV4 spec, each path segment is URI-encoded separately,
-// but the "/" separators are preserved.
+// canonicalURI returns the canonical URI per AWS SigV4 spec.
+// Each path segment is URI-encoded separately, but the "/" separators are preserved.
+//
+// P2-3 fix: Use AWS-compliant URI encoding instead of url.PathEscape.
+// Go's url.PathEscape encodes '~' as '%7E', but AWS SigV4 spec requires '~' to remain
+// unencoded (it's an unreserved character per RFC 3986). This function implements the
+// correct encoding to ensure signature compatibility with AWS SDK clients.
 func canonicalURI(path string) string {
 	if path == "" {
 		return "/"
 	}
 	segments := strings.Split(path, "/")
 	for i, seg := range segments {
-		segments[i] = url.PathEscape(seg)
+		segments[i] = awsURIEncode(seg)
 	}
 	return strings.Join(segments, "/")
+}
+
+// awsURIEncode encodes a string per AWS SigV4 spec (RFC 3986).
+// Unreserved characters (A-Z, a-z, 0-9, '-', '.', '_', '~') are not encoded.
+// All other characters are percent-encoded with uppercase hex digits.
+func awsURIEncode(s string) string {
+	var b strings.Builder
+	for _, c := range s {
+		if isUnreserved(c) {
+			b.WriteRune(c)
+		} else {
+			// Encode as UTF-8 bytes, each prefixed with '%'
+			buf := make([]byte, 4)
+			n := encodeRune(buf, c)
+			for i := 0; i < n; i++ {
+				fmt.Fprintf(&b, "%%%02X", buf[i])
+			}
+		}
+	}
+	return b.String()
+}
+
+// isUnreserved returns true if the character is unreserved per RFC 3986.
+func isUnreserved(c rune) bool {
+	return (c >= 'A' && c <= 'Z') ||
+		(c >= 'a' && c <= 'z') ||
+		(c >= '0' && c <= '9') ||
+		c == '-' || c == '.' || c == '_' || c == '~'
+}
+
+// encodeRune encodes a rune as UTF-8 bytes into buf, returning the number of bytes written.
+func encodeRune(buf []byte, c rune) int {
+	if c < 0x80 {
+		buf[0] = byte(c)
+		return 1
+	} else if c < 0x800 {
+		buf[0] = byte(0xC0 | (c >> 6))
+		buf[1] = byte(0x80 | (c & 0x3F))
+		return 2
+	} else if c < 0x10000 {
+		buf[0] = byte(0xE0 | (c >> 12))
+		buf[1] = byte(0x80 | ((c >> 6) & 0x3F))
+		buf[2] = byte(0x80 | (c & 0x3F))
+		return 3
+	} else {
+		buf[0] = byte(0xF0 | (c >> 18))
+		buf[1] = byte(0x80 | ((c >> 12) & 0x3F))
+		buf[2] = byte(0x80 | ((c >> 6) & 0x3F))
+		buf[3] = byte(0x80 | (c & 0x3F))
+		return 4
+	}
 }
 
 // canonicalQueryString returns the canonical query string.
@@ -486,7 +572,10 @@ func isHexDigest(s string) bool {
 //
 // This is exported for use in integration tests and client SDKs.
 // Uses AWS SDK v4 signer for 100% compatibility with VerifySigV4Request.
-func SignS3Request(r *http.Request, accessKeyID, secretAccessKey, sessionToken, region string) {
+//
+// P2-1 fix: Returns error instead of silently logging. Callers should handle the error
+// to avoid using a request that failed to sign.
+func SignS3Request(r *http.Request, accessKeyID, secretAccessKey, sessionToken, region string) error {
 	now := time.Now().UTC()
 
 	// Ensure host is set for canonical request construction
@@ -512,12 +601,9 @@ func SignS3Request(r *http.Request, accessKeyID, secretAccessKey, sessionToken, 
 	payloadHash := "UNSIGNED-PAYLOAD"
 	r.Header.Set("X-Amz-Content-Sha256", payloadHash)
 
-	// SignHTTP error is intentionally ignored: this function is called in test/client
-	// contexts where the inputs are always valid (we control credentials and region).
-	// The AWS SDK v4 signer only fails on malformed credentials, which cannot happen here.
+	// P2-1 fix: Return error to caller instead of silently logging
 	if err := signer.SignHTTP(context.Background(), awsCreds, r, payloadHash, "s3", region, now); err != nil {
-		logger.Error(context.Background(), "failed to sign S3 request",
-			zap.String("region", region),
-			zap.Error(err))
+		return fmt.Errorf("sign S3 request: %w", err)
 	}
+	return nil
 }

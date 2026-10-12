@@ -236,7 +236,13 @@ func (g *GoalWorkflow) OnTurnComplete(ctx command.Context) error {
 			})
 			return nil // degrade: log but do not interrupt main flow
 		}
-		if _, err := g.helpers.queue.Publish(ctx, ctx.SessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
+		// Generate deterministic work ID for idempotent publishing.
+		// This ensures retries don't create duplicate goal turn work items.
+		workID := rtcqueue.GenerateDeterministicWorkID(
+			ctx.SessionID.String(),
+			fmt.Sprintf("goal:%s:%d", goal.ID.String(), newTurns),
+		)
+		if _, err := g.helpers.queue.PublishWithID(ctx, ctx.SessionID.String(), workID, string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 			span.SetStatus(codes.Error, "internal_error")
 			span.RecordError(err)
 			g.helpers.logger.Warn(ctx, "goalWorkflow.publish_failed", map[string]any{

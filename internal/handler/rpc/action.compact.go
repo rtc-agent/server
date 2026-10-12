@@ -117,7 +117,13 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 		return nil, h.internalError(ctx, "compact.marshal_error", "internal error", marshalErr)
 	}
 
-	if _, err := h.deps.Queue.Publish(ctx, session.ID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
+	// Generate deterministic work ID for idempotent publishing.
+	// This ensures retries don't create duplicate compact work items.
+	workID := rtcqueue.GenerateDeterministicWorkID(
+		session.ID.String(),
+		"compact:"+userID.String(),
+	)
+	if _, err := h.deps.Queue.PublishWithID(ctx, session.ID.String(), workID, string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
 		return nil, h.internalError(ctx, "compact.queue_error", "failed to enqueue compact task", err)
@@ -125,6 +131,7 @@ func (h *Handler) CompactSession(ctx context.Context, req *protocol.CompactSessi
 
 	logger.Info(ctx, "[CompactSession] enqueued",
 		zap.String("session", session.ID.String()),
+		zap.String("work_id", workID),
 		zap.Bool("has_custom_instruction", req.CustomInstruction != nil))
 
 	return &protocol.CompactSessionResponse{

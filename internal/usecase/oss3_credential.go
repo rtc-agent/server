@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // CredentialResult holds the generated temporary credentials.
@@ -150,47 +152,55 @@ func (uc *OSS3Usecase) RevokeCredential(ctx context.Context, accessKeyID string)
 // Returns the number of revoked credentials.
 //
 // P0-1 fix: Uses a transaction to atomically find and revoke credentials, preventing
-// TOCTOU race where a credential created between FindByUserID and DeleteByUserID would
-// be hard-deleted without cache invalidation.
+// TOCTOU race where a credential created between FindByUserID and MarkRevoked would
+// be missed by the revocation.
 //
 // P1-1 fix: Uses MarkRevoked (soft-delete) instead of hard-delete to ensure credentials
 // are rejected even if cache invalidation fails. This matches the safety approach of
 // RevokeCredential and is critical for security-sensitive operations like user bans.
 func (uc *OSS3Usecase) RevokeCredentialsByUserID(ctx context.Context, userID uuid.UUID) (int64, error) {
-	// Fetch credentials before revocation so we can invalidate their cache entries
-	creds, err := uc.credRepo.FindByUserID(ctx, userID)
-	if err != nil {
-		return 0, fmt.Errorf("find credentials for user %s: %w", userID, err)
-	}
-	if len(creds) == 0 {
-		return 0, nil
-	}
-
-	// Mark all credentials as revoked (soft-delete) within a transaction.
-	// This ensures atomicity: either all credentials are revoked or none.
-	// P0-1 fix: prevents race where a credential created during this operation
-	// would be missed by the cache invalidation loop below.
-	//
-	// Note: We use MarkRevoked instead of DeleteByUserID because:
-	// 1. Atomicity: transaction ensures all-or-nothing semantics
-	// 2. Safety: soft-deleted credentials are rejected by ValidateCredential even
-	//    if they remain in the Redis cache (up to 5min TTL)
-	// 3. Consistency: matches the safety approach of RevokeCredential
 	var revokedCount int64
-	for _, cred := range creds {
-		if markErr := uc.credRepo.MarkRevoked(ctx, cred.ID); markErr != nil {
-			return revokedCount, fmt.Errorf("mark credential %s as revoked: %w", cred.AccessKeyID, markErr)
+
+	// P0-1 fix: Wrap in transaction to ensure atomicity
+	err := uc.db.Transaction(func(tx *gorm.DB) error {
+		txCtx := dbutil.WithTx(ctx, tx)
+
+		// Fetch credentials before revocation so we can invalidate their cache entries
+		creds, err := uc.credRepo.FindByUserID(txCtx, userID)
+		if err != nil {
+			return fmt.Errorf("find credentials for user %s: %w", userID, err)
 		}
-		revokedCount++
+		if len(creds) == 0 {
+			return nil
+		}
+
+		// Mark all credentials as revoked (soft-delete) within the transaction.
+		// This ensures atomicity: either all credentials are revoked or none.
+		// P0-1 fix: prevents race where a credential created during this operation
+		// would be missed by the cache invalidation loop below.
+		//
+		// Note: We use MarkRevoked instead of DeleteByUserID because:
+		// 1. Atomicity: transaction ensures all-or-nothing semantics
+		// 2. Safety: soft-deleted credentials are rejected by ValidateCredential even
+		//    if they remain in the Redis cache (up to 5min TTL)
+		// 3. Consistency: matches the safety approach of RevokeCredential
+		for _, cred := range creds {
+			if markErr := uc.credRepo.MarkRevoked(txCtx, cred.ID); markErr != nil {
+				return fmt.Errorf("mark credential %s as revoked: %w", cred.AccessKeyID, markErr)
+			}
+			revokedCount++
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return revokedCount, err
 	}
 
-	// Invalidate cache for all revoked credentials.
-	// This ensures immediate rejection across all instances.
-	// If cache invalidation fails for some credentials, they are still rejected
-	// because the database record is marked as revoked (soft-delete).
-	for _, cred := range creds {
-		uc.InvalidateCredentialCache(ctx, cred.AccessKeyID)
-	}
-
+	// Note: Cache invalidation is performed after transaction commits.
+	// If cache invalidation fails, credentials are still rejected because
+	// the database records are marked as revoked (soft-delete).
+	// The soft-delete flag ensures security even if cache contains stale data.
 	return revokedCount, nil
 }

@@ -33,12 +33,27 @@ func (h *OSS3Handler) handleDeleteObject(
 
 	userID := ExtractUserIDFromContext(r.Context())
 
-	// Bug #8 fix: Get file record before deletion to release quota.
-	// If the record doesn't exist, we still proceed with the backend delete
-	// (the file may exist in MinIO without a DB record — reconciliation will handle it).
-	var fileSize int64
+	// P1-3 fix: Get file record before deletion to release quota.
+	// If GetFileRecord fails (DB error), we fail fast to prevent quota leak.
+	// Without the file size, we cannot correctly release quota, which would
+	// cause the user's quota to remain artificially high.
+	//
+	// Note: If the record doesn't exist (file == nil), we still proceed with
+	// the backend delete (the file may exist in MinIO without a DB record —
+	// reconciliation will handle it). In this case, fileSize remains 0, which
+	// is correct because no quota was committed for a non-existent record.
 	file, err := h.oss3UC.GetFileRecord(r.Context(), userID, key)
-	if err == nil && file != nil {
+	if err != nil {
+		// DB error — fail fast to prevent quota leak
+		logger.Error(r.Context(), "failed to get file record for quota release",
+			zap.String("user_id", userID),
+			zap.String("key", key),
+			zap.Error(err))
+		rtcoss3.WriteS3Error(w, rtcoss3.ErrInternalError, r.URL.Path, "")
+		return
+	}
+	var fileSize int64
+	if file != nil {
 		fileSize = file.Size
 	}
 
@@ -135,11 +150,22 @@ func (h *OSS3Handler) handleDeleteObjects(w http.ResponseWriter, r *http.Request
 	// Delete file records from DB with retry logic for compensation.
 	// This ensures consistency between backend storage and DB records.
 	// OSS3-28 fix: Release quota for each successfully deleted file to prevent quota leaks.
+	// P1-3 fix: Log errors from GetFileRecord to aid reconciliation if quota leaks occur.
 	for i, result := range results {
 		if result.Code == "" {
 			// Get file size before deletion for quota release
 			var fileSize int64
-			file, _ := h.oss3UC.GetFileRecord(r.Context(), userID, keys[i])
+			file, fileErr := h.oss3UC.GetFileRecord(r.Context(), userID, keys[i])
+			if fileErr != nil {
+				// P1-3 fix: Log the error but continue with deletion.
+				// The quota release will use fileSize=0, which may cause a quota leak.
+				// However, failing the entire batch delete for one record lookup failure
+				// would be worse. The orphan reconciler can detect and clean up quota leaks.
+				logger.Error(r.Context(), "failed to get file record for quota release; quota may leak",
+					zap.String("user_id", userID),
+					zap.String("key", keys[i]),
+					zap.Error(fileErr))
+			}
 			if file != nil {
 				fileSize = file.Size
 			}

@@ -40,12 +40,14 @@ func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, 
 	script := uc.scripts[cache.OSS3ScriptQuotaReserve]
 	// Lua script expects TTL in seconds (e.g., 300 for 5 minutes)
 	pendingTTLSeconds := int(uc.cfg.Quota.PendingTTL.Seconds())
-	// P0 fix: Probabilistic stale entry cleanup (10% probability).
-	// Generate a random value 0-9; cleanup triggers only when value is 0.
-	// This amortizes cleanup cost across many reserve calls while preventing
-	// Redis blocking under high concurrency.
+	// P1-5 fix: Probabilistic stale entry cleanup (1% probability, reduced from 10%).
+	// Generate a random value 0-99; cleanup triggers only when value is 0.
+	// This amortizes cleanup cost while significantly reducing Redis blocking risk
+	// under high concurrency. At 1000+ concurrent reserve calls per second, 1% probability
+	// means ~10 cleanup operations per second instead of ~100, preventing Redis from being
+	// overwhelmed by Lua script execution.
 	doCleanup := 0
-	if rand.Intn(10) == 0 {
+	if rand.Intn(100) == 0 { // Changed from 10 to 100
 		doCleanup = 1
 	}
 	result, err := script.Run(ctx, uc.redis,
@@ -84,12 +86,12 @@ func (uc *OSS3Usecase) CheckAndReserveQuota(ctx context.Context, userID string, 
 //
 // Idempotency: Uses Redis SETNX to create a commit marker before the quota update.
 // If the marker already exists (duplicate call from network retry), the commit is skipped.
-// The marker has a 24h TTL to cover the retry window.
+// The marker has a 2h TTL (reduced from 24h) to cover the retry window while minimizing
+// the impact of marker leaks.
 //
-// P1-5 fix: The marker now stores a timestamp instead of "1". If the marker exists but
-// is older than 1 hour, the commit is allowed to proceed (force retry). This prevents
-// a stuck marker from blocking retries for 24 hours when the Lua script fails but
-// marker deletion also fails.
+// P1-7 fix: The marker TTL is reduced from 24h to 2h. This limits the window where a
+// stuck marker can block retries. Combined with the force-retry mechanism (1h age threshold),
+// this provides better resilience against marker leaks while still covering typical retry scenarios.
 //
 // Flow: SETNX commit marker -> Lua script OSS3QuotaCommit atomically adds pending
 // amount to quota and deletes pending key.
@@ -98,8 +100,9 @@ func (uc *OSS3Usecase) CommitQuota(ctx context.Context, userID, requestID string
 	// If the marker already exists, check its age to allow force retry after timeout.
 	markerKey := cache.OSS3QuotaCommitMarker(userID, requestID)
 	now := time.Now().Unix()
-	markerTTL := 24 * time.Hour
-	safeRetryWindow := 1 * time.Hour // P1-5 fix: allow retry after 1 hour
+	// P1-7 fix: Reduced TTL from 24h to 2h to limit marker leak impact
+	markerTTL := 2 * time.Hour
+	safeRetryWindow := 30 * time.Minute // P1-7 fix: allow retry after 30 minutes (1/4 of TTL)
 
 	// Try to set the marker with timestamp
 	ok, err := uc.redis.SetNX(ctx, markerKey, now, markerTTL).Result()
@@ -154,7 +157,7 @@ func (uc *OSS3Usecase) CommitQuota(ctx context.Context, userID, requestID string
 	if err != nil {
 		// Quota commit Lua script failed — clean up the marker so a retry can succeed.
 		// If cleanup itself fails, log at Error level so operators can investigate;
-		// the marker will expire via TTL (24h) but will block retries until then.
+		// the marker will expire via TTL (2h) but will block retries until then.
 		if delErr := uc.redis.Del(ctx, markerKey).Err(); delErr != nil {
 			logger.Error(ctx, "failed to cleanup quota commit marker after Lua failure",
 				zap.String("user_id", userID),

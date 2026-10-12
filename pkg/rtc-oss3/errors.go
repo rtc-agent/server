@@ -136,6 +136,8 @@ var (
 	ErrLockAcquireFailed    = &S3Error{"LockAcquireFailed", "Failed to acquire lock, please retry", http.StatusConflict}
 	ErrInsufficientStorage  = &S3Error{"InsufficientStorage", "Insufficient storage space available", http.StatusInsufficientStorage}                              // 507, MinIO disk full (R10 H3)
 	ErrRequestTimeTooSkewed = &S3Error{"RequestTimeTooSkewed", "The difference between the request time and the server's time is too large", http.StatusForbidden} // R10 M3
+	// P2-6 fix: ErrMissingContentType for requests that require Content-Type but don't provide it
+	ErrMissingContentType = &S3Error{"MissingContentType", "The Content-Type header is required", http.StatusBadRequest}
 
 	// Additional errors for 1E-3 basic operations
 	ErrInvalidURI             = &S3Error{"InvalidURI", "The specified URI is invalid", http.StatusBadRequest}

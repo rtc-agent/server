@@ -176,7 +176,13 @@ func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, 
 		return
 	}
 	payload := string(payloadData)
-	if _, err := s.queue.Publish(ctx, sessionID, payload, rtcqueue.ResumeWorkPriority); err != nil {
+	// Generate deterministic work ID for idempotent publishing.
+	// This ensures retries don't create duplicate recovery work items.
+	workID := rtcqueue.GenerateDeterministicWorkID(
+		sessionID,
+		"recovery_startup:"+turn.ID.String(),
+	)
+	if _, err := s.queue.PublishWithID(ctx, sessionID, workID, payload, rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[Server] recoverStaleTurns: publish submit",
 			zap.String("turn_id", turn.ID.String()),
 			zap.String("user_id", userID),
@@ -185,7 +191,8 @@ func (s *Server) markAndPublishStaleTurn(ctx context.Context, turn *model.Turn, 
 		logger.Debug(ctx, "[Server] recoverStaleTurns: published submit",
 			zap.String("turn_id", turn.ID.String()),
 			zap.String("session_id", sessionID),
-			zap.String("user_id", userID))
+			zap.String("user_id", userID),
+			zap.String("work_id", workID))
 	}
 }
 
@@ -462,7 +469,13 @@ func (s *Server) publishRecoveryWorkItem(ctx context.Context, turn *model.Turn) 
 		return err
 	}
 	payload := string(payloadData)
-	if _, err := s.queue.Publish(ctx, turn.SessionID.String(), payload, rtcqueue.ResumeWorkPriority); err != nil {
+	// Generate deterministic work ID for idempotent publishing.
+	// This ensures retries don't create duplicate recovery work items.
+	workID := rtcqueue.GenerateDeterministicWorkID(
+		turn.SessionID.String(),
+		"recovery_periodic:"+turn.ID.String(),
+	)
+	if _, err := s.queue.PublishWithID(ctx, turn.SessionID.String(), workID, payload, rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[Server] publishRecoveryWorkItem: publish failed",
 			zap.String("turn_id", turn.ID.String()),
 			zap.String("user_id", userID),
@@ -472,7 +485,8 @@ func (s *Server) publishRecoveryWorkItem(ctx context.Context, turn *model.Turn) 
 	logger.Info(ctx, "[Server] publishRecoveryWorkItem: published",
 		zap.String("turn_id", turn.ID.String()),
 		zap.String("session_id", turn.SessionID.String()),
-		zap.String("user_id", userID))
+		zap.String("user_id", userID),
+		zap.String("work_id", workID))
 	return nil
 }
 

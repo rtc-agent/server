@@ -143,17 +143,26 @@ func (m *SigV4Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var banErr error
 			banned, banErr = m.banChecker.IsUserBanned(r.Context(), parsedUserID)
 			if banErr != nil {
-				// Fail-open: log the error but allow the request to proceed
-				logger.Warn(r.Context(), "SigV4: failed to check user ban status - fail-open applied",
+				// P1-2 fix: Fail-close for storage system security.
+				// If ban check fails (Redis/DB unavailable), reject the request.
+				// This is safer than fail-open because:
+				// 1. Storage systems handle sensitive user data
+				// 2. Banned users accessing the system is a security risk
+				// 3. Legitimate users can retry when infrastructure recovers
+				//
+				// Note: This differs from JWT middleware which uses fail-open for web availability.
+				// For OSS3 (S3-compatible storage), security takes precedence over availability.
+				logger.Error(r.Context(), "SigV4: failed to check user ban status - failing closed",
 					zap.Error(banErr),
 					zap.String("user_id", parsedUserID.String()),
 					zap.String("remote_addr", r.RemoteAddr),
-					zap.Bool("bypass_applied", true))
-				auth.RecordSecurityEvent("ban_check_fail_open")
-			} else {
-				// Successfully checked ban status, cache it
-				middleware.SetBanCache(r.Context(), parsedUserID, banned)
+					zap.Bool("request_rejected", true))
+				auth.RecordSecurityEvent("ban_check_fail_closed")
+				rtcoss3.WriteS3Error(w, rtcoss3.ErrAccessDenied, r.URL.Path, "")
+				return
 			}
+			// Successfully checked ban status, cache it
+			middleware.SetBanCache(r.Context(), parsedUserID, banned)
 		}
 
 		if banned {

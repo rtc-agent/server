@@ -262,7 +262,14 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 
 	// Use ResumeWorkPriority to ensure the resume is claimed before any pending
 	// Submit items, so the parent's checkpoint is still intact.
-	if _, err := h.queue.Publish(ctx, parentSessionID, string(payload), rtcqueue.ResumeWorkPriority); err != nil {
+	//
+	// Generate deterministic work ID for idempotent publishing.
+	// This ensures retries don't create duplicate resume work items.
+	workID := rtcqueue.GenerateDeterministicWorkID(
+		parentSessionID,
+		"sub_resume:"+subSession.ID.String(),
+	)
+	if _, err := h.queue.PublishWithID(ctx, parentSessionID, workID, string(payload), rtcqueue.ResumeWorkPriority); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "publish_failed")
 		h.logger.Warn(ctx, "resumeParentAfterSubAgent.publish_failed", map[string]any{
@@ -276,6 +283,7 @@ func (h *helpers) resumeParentAfterSubAgent(callerCtx context.Context, subSessio
 	h.logger.Info(ctx, "resumeParentAfterSubAgent.done", map[string]any{
 		"sub_session_id":    subSession.ID.String(),
 		"parent_session_id": parentSessionID,
+		"work_id":           workID,
 		"has_result":        lastMessage != nil,
 	})
 }

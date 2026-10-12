@@ -470,6 +470,15 @@ func (m *PrometheusMetrics) RecordTokenDelta(ctx context.Context, model, deltaTy
 //
 // Called from token_callback.go after EWMA is computed/updated.
 // Note: Gauge values persist until explicitly updated or the session is closed.
+//
+// ⚠️ CARDINALITY WARNING: This metric uses sessionID as a label, creating one time series
+// per active session. For deployments with millions of concurrent sessions, this can cause
+// high memory usage in Prometheus. Expected usage:
+//   - Small/Medium deployments (<10K sessions): No issue
+//   - Large deployments (10K-100K sessions): Monitor Prometheus memory
+//   - Very large deployments (>100K sessions): Consider disabling or aggregating
+//
+// Best practice: Call ResetEWMA() when sessions close to clean up stale time series.
 func (m *PrometheusMetrics) UpdateEWMA(ctx context.Context, sessionID string, ewma float64) {
 	if sessionID == "" {
 		return
@@ -481,6 +490,12 @@ func (m *PrometheusMetrics) UpdateEWMA(ctx context.Context, sessionID string, ew
 
 // ResetEWMA resets the EWMA gauge for a session (e.g., when session is closed).
 // This prevents stale EWMA values from accumulating in the gauge.
+//
+// ⚠️ IMPORTANT: This method MUST be called when sessions close to prevent unbounded
+// growth of Prometheus time series. Without ResetEWMA, each session that ever existed
+// will have a permanent gauge entry, causing memory issues at scale.
+//
+// Call sites: session close handlers, session cleanup routines, session deletion.
 func (m *PrometheusMetrics) ResetEWMA(ctx context.Context, sessionID string) {
 	if sessionID == "" {
 		return

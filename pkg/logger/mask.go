@@ -17,21 +17,29 @@ var sensitiveFieldKeys = map[string]bool{
 	"email":       true,
 }
 
-// MaskUserID masks a user identifier so that only the first 3 and last 3
-// characters are visible. For short IDs (<=6 chars) the entire value is
-// replaced with "***". This keeps logs useful for debugging while preventing
-// accidental leakage of full identifiers.
+// MaskUserID masks a user identifier to prevent privacy leakage while keeping
+// logs useful for debugging. The masking strategy depends on the format:
 //
-// Examples:
+// For UUID format (8-4-4-4-12): Keep only the first segment (8 chars)
+//   - "550e8400-e29b-41d4-a716-446655440000" -> "550e8400***"
+//   - This prevents correlation attacks while maintaining some debuggability
 //
-//	"abc"            -> "***"
-//	"abcdef"         -> "***"
-//	"abcdefg"        -> "abc***efg"
-//	"550e8400-e29b"  -> "550***29b"  (UUID prefix)
+// For other formats: Keep first 3 and last 3 characters
+//   - "abcdefg" -> "abc***efg"
+//   - For short IDs (<=6 chars) the entire value is replaced with "***"
 func MaskUserID(userID string) string {
 	if userID == "" {
 		return ""
 	}
+
+	// Check if this looks like a UUID format (8-4-4-4-12)
+	// UUID v4 format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+	if len(userID) == 36 && userID[8] == '-' && userID[13] == '-' && userID[18] == '-' && userID[23] == '-' {
+		// UUID format: keep only first segment (8 chars) for security
+		return userID[:8] + "***"
+	}
+
+	// Non-UUID format: keep first 3 and last 3 characters
 	length := utf8.RuneCountInString(userID)
 	if length <= 6 {
 		return "***"

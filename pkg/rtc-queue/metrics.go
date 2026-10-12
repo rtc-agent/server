@@ -12,12 +12,13 @@ import (
 // All collectors are registered automatically via promauto and are safe for
 // concurrent use.
 type queueMetrics struct {
-	publishTotal    *prometheus.CounterVec   // labels: status (success|error)
-	claimTotal      *prometheus.CounterVec   // labels: status (success|empty|error)
-	completeTotal   *prometheus.CounterVec   // labels: status (success|error)
-	cancelTotal     *prometheus.CounterVec   // labels: reason
-	waitDuration    *prometheus.HistogramVec // labels: (none) — publish to claim
-	processDuration *prometheus.HistogramVec // labels: (none) — claim to complete
+	publishTotal       *prometheus.CounterVec   // labels: status (success|error|idempotent_skip)
+	claimTotal         *prometheus.CounterVec   // labels: status (success|empty|error)
+	completeTotal      *prometheus.CounterVec   // labels: status (success|error)
+	cancelTotal        *prometheus.CounterVec   // labels: reason
+	panicRecoveryTotal *prometheus.CounterVec   // labels: status (success|error)
+	waitDuration       *prometheus.HistogramVec // labels: (none) — publish to claim
+	processDuration    *prometheus.HistogramVec // labels: (none) — claim to complete
 }
 
 // global queueMetrics instance (promauto handles registration).
@@ -53,6 +54,13 @@ func newQueueMetrics() *queueMetrics {
 			Name:      "cancel_total",
 			Help:      "Total number of work items cancelled.",
 		}, []string{"reason"}),
+
+		panicRecoveryTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "queue",
+			Name:      "panic_recovery_total",
+			Help:      "Total number of panic recovery attempts in worker goroutines.",
+		}, []string{"status"}), // status: "success", "error"
 
 		waitDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "rtc",
@@ -90,6 +98,11 @@ func (m *queueMetrics) recordComplete(status string) {
 // recordCancel records a cancel operation.
 func (m *queueMetrics) recordCancel(reason string) {
 	m.cancelTotal.WithLabelValues(reason).Inc()
+}
+
+// recordPanicRecovery records a panic recovery attempt.
+func (m *queueMetrics) recordPanicRecovery(status string) {
+	m.panicRecoveryTotal.WithLabelValues(status).Inc()
 }
 
 // recordWaitDuration records the time a work item waited in queue.

@@ -121,14 +121,22 @@ func (uc *OSS3Usecase) CompleteMultipartUploadWithComp(
 // Used for compensation when DB operations fail after backend success.
 // A separate context with timeout is used because the original request context may
 // be cancelled when the response is sent.
+//
+// P1-4 fix: Uses sync.WaitGroup to track pending cleanup tasks, preventing goroutine
+// leaks during application shutdown. Callers can use WaitPendingCleanups() to wait
+// for all pending cleanups to complete.
 func (uc *OSS3Usecase) asyncCleanupBackendObject(bucket, key, reason, userID string) {
 	// Create a detached context with timeout for the cleanup operation.
 	// We use context.Background() because the original ctx may be cancelled
 	// as soon as we return the error response.
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 
+	// P1-4 fix: Track this goroutine to prevent leaks
+	uc.cleanupWg.Add(1)
 	logger.SafeGo("async-backend-cleanup", func() {
+		defer uc.cleanupWg.Done()
+		defer cancel()
+
 		if compErr := uc.backend.DeleteObject(cleanupCtx, bucket, key); compErr != nil {
 			logger.Warn(cleanupCtx, "async backend cleanup failed (orphan reconciler will retry)",
 				zap.String("bucket", bucket),
@@ -144,6 +152,24 @@ func (uc *OSS3Usecase) asyncCleanupBackendObject(bucket, key, reason, userID str
 				zap.String("reason", reason))
 		}
 	})
+}
+
+// WaitPendingCleanups waits for all pending async cleanup tasks to complete.
+// Used during graceful shutdown to ensure no goroutines are leaked.
+// Returns true if all cleanups completed, false if timeout was reached.
+func (uc *OSS3Usecase) WaitPendingCleanups(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		uc.cleanupWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // completeMultipartUploadDBOps performs DB operations for completing a multipart upload.

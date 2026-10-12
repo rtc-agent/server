@@ -179,7 +179,14 @@ func (t *sendMessageToSubAgentTool) InvokableRun(ctx context.Context, argumentsI
 		span.SetStatus(codes.Error, "marshal_work_failed")
 		return "", fmt.Errorf("sendMessageToSubAgent: marshal work: %w", err)
 	}
-	if _, err := t.helpers.queue.Publish(ctx, subSessionID.String(), string(payload), rtcqueue.SubmitWorkPriority); err != nil {
+	// Generate deterministic work ID for idempotent publishing.
+	// This ensures retries don't create duplicate message work items.
+	// Use subSessionID + timestamp as unique key since we don't have message ID here.
+	workID := rtcqueue.GenerateDeterministicWorkID(
+		subSessionID.String(),
+		"sub_msg:"+subSessionID.String(),
+	)
+	if _, err := t.helpers.queue.PublishWithID(ctx, subSessionID.String(), workID, string(payload), rtcqueue.SubmitWorkPriority); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "publish_work_failed")
 		return "", fmt.Errorf("sendMessageToSubAgent: publish work: %w", err)
