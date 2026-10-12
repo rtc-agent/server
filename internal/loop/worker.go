@@ -12,9 +12,10 @@
 // Concurrency model:
 //
 //	asynq guarantees single-node consumption through Redis BRPOPLPUSH semantics.
-//	A task can only be in "processing" state on one worker at a time. Combined with
-//	TaskID-based idempotency (loop.ID), this ensures exactly-once processing without
-//	the need for distributed locks.
+//	A task can only be in "processing" state on one worker at a time. Idempotency
+//	is achieved through deterministic work IDs (loop ID + turn number) in rtc-queue,
+//	ensuring duplicate publishes are safely skipped without requiring LastRunAt-based
+//	checks or distributed locks.
 package loop
 
 import (
@@ -58,8 +59,9 @@ type Worker struct {
 }
 
 // NewWorker creates a loop worker.
-// Note: asynq provides single-node consumption guarantee, so no Redis client
-// is needed for distributed locking. TaskID-based idempotency prevents duplicate processing.
+// Note: Idempotency is ensured by deterministic work IDs in rtc-queue, not by
+// distributed locks or LastRunAt-based checks. This simplifies the design and
+// allows safe retries without delay.
 func NewWorker(queue *rtcqueue.Queue, loopRepo usecase.LoopRepo, sessionRepo usecase.SessionRepo, notificationCreator NotificationCreator) *Worker {
 	return &Worker{
 		queue:               queue,
@@ -80,20 +82,22 @@ const loopTaskTimeout = 30 * time.Second
 //
 // Idempotency: safe to call multiple times. If the loop no longer exists,
 // is not active, or the ID doesn't match, returns nil without side effects.
+// Idempotency is ensured by the deterministic work ID in publishToQueue,
+// which makes duplicate publishes safe (rtc-queue publishScript skips if
+// work already exists with pending/processing status).
 //
 // Concurrency safety: asynq guarantees single-node consumption through Redis
 // BRPOPLPUSH semantics. A task in "processing" state cannot be picked up by
-// another worker. Combined with TaskID-based idempotency (using loop.ID), this
-// ensures exactly-once processing without distributed locks.
+// another worker. Combined with deterministic work IDs, this ensures
+// exactly-once processing without distributed locks.
 //
 // Following the async sub-agent pattern:
 //  1. Validate loop is still active
-//  2. Check idempotency via LastRunAt (secondary safeguard)
-//  3. Update LastRunAt (prevents duplicate triggers if publish fails)
-//  4. Build the loop task prompt
-//  5. Create a user-role notification message in the session
-//  6. Publish WorkKindSubmit to trigger a new turn
-//  7. The LLM sees the notification as the most recent instruction
+//  2. Update LastRunAt (prevents duplicate triggers if publish fails)
+//  3. Build the loop task prompt
+//  4. Create a user-role notification message in the session
+//  5. Publish WorkKindSubmit to trigger a new turn (idempotent via work ID)
+//  6. The LLM sees the notification as the most recent instruction
 //
 // Error handling: On failure, logs detailed context for debugging and traceability.
 // Failed tasks are archived by asynq and can be inspected via asynqmon or manually retried.
@@ -131,12 +135,16 @@ func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error
 		return nil
 	}
 
-	// Idempotency check
-	alreadyProcessed := w.checkIdempotency(ctx, loop, sessionUUID, loopUUID, span)
-	if alreadyProcessed {
-		recordTestIdempotentSkip(time.Since(startTime))
-		return nil
-	}
+	// Note: Idempotency is ensured by the deterministic work ID (see publishToQueue).
+	// The rtc-queue publishScript checks work status and skips publishing if the work
+	// already exists with pending/processing status. This makes duplicate publishes safe,
+	// eliminating the need for a LastRunAt-based idempotency check here.
+	//
+	// Previous implementation checked if LastRunAt was within the interval, but this
+	// could delay recovery: if the worker crashed after updating LastRunAt but before
+	// publishing, the task would be stuck until the recovery mechanism kicked in
+	// (after staleThreshold). The deterministic work ID provides idempotency at the
+	// correct layer (publish), allowing safe retries without delay.
 
 	// Fix(P0-1): Update LastRunAt BEFORE publishing to rtc-queue.
 	// Rationale: If we publish first and then fail to update LastRunAt,
@@ -325,21 +333,6 @@ func (w *Worker) validateLoopState(ctx context.Context, sessionUUID, loopUUID uu
 	}
 
 	return loop, nil
-}
-
-// checkIdempotency performs idempotency check to prevent duplicate processing.
-// Returns true if the task was already processed and should be skipped.
-func (w *Worker) checkIdempotency(ctx context.Context, loop *model.Loop, sessionUUID, loopUUID uuid.UUID, span trace.Span) bool {
-	if loop.LastRunAt != nil && time.Since(*loop.LastRunAt) < time.Duration(loop.IntervalSeconds)*time.Second {
-		span.SetAttributes(attribute.String("outcome", "already_processed"))
-		logger.Debug(ctx, "[loop.Worker] turn already processed, skipping",
-			zap.String("session_id", sessionUUID.String()),
-			zap.String("loop_id", loopUUID.String()),
-			zap.Time("last_run_at", *loop.LastRunAt),
-			zap.Int("interval_seconds", loop.IntervalSeconds))
-		return true
-	}
-	return false
 }
 
 // buildLoopTaskPrompt constructs the notification text for a loop task trigger.

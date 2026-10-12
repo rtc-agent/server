@@ -68,11 +68,6 @@ func recordTaskFailure(duration time.Duration) {
 	loopMetrics.taskDuration.WithLabelValues("failure").Observe(duration.Seconds())
 }
 
-// recordTestIdempotentSkip records a task skipped due to idempotency check.
-func recordTestIdempotentSkip(duration time.Duration) {
-	loopMetrics.taskDuration.WithLabelValues("idempotent_skip").Observe(duration.Seconds())
-}
-
 // recordRecoveryScan records a recovery scan.
 func recordRecoveryScan() {
 	loopMetrics.recoveryScansTotal.Inc()
