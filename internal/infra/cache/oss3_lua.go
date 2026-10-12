@@ -31,17 +31,21 @@ var (
 	//	                             other requests' pending keys during aggregation scan)
 	//	ARGV[6] = doCleanup         (0 or 1; if 1, perform stale entry cleanup with 10% probability)
 	//
-	// Returns: 1 on success, 0 if quota exceeded.
-	// Idempotent: if pending key already exists with same amount, returns 1 without re-reserving.
+	// Returns: table {success, currentUsage}
+	//   - success: 1 on success, 0 if quota exceeded
+	//   - currentUsage: current committed + pending usage (for error messages)
+	// Idempotent: if pending key already exists with same amount, returns {1, currentUsage} without re-reserving.
 	//
 	// Aggregation: The ZSET in KEYS[3] tracks ALL pending reservations for this user.
 	// This solves the multi-concurrent-reserve problem: when multiple Reserve calls happen
 	// in parallel, each call sees the SUM of all pending amounts and correctly enforces quota.
 	//
-	// P0 fix: Stale entry cleanup is now probabilistic (10% of calls) to prevent Redis blocking
-	// under high concurrency. The caller passes a random value (0-9) in ARGV[6]; cleanup only
-	// executes when the value is 0 (10% probability). This amortizes cleanup cost across many
-	// reserve calls while bounding per-call latency.
+	// P0 fix: Stale entry cleanup is now probabilistic (1% of calls) to prevent Redis blocking
+	// under high concurrency. The caller passes a random value (0-99) in ARGV[6]; cleanup only
+	// executes when the value is 0 (1% probability). This amortizes cleanup cost across many
+	// reserve calls while bounding per-call latency. At 1000+ concurrent reserve calls per
+	// second, 1% probability means ~10 cleanup operations per second, preventing Redis from
+	// being overwhelmed by Lua script execution.
 	//
 	// Stale entry cleanup: If a pending key has expired (TTL), its ZSET entry becomes stale
 	// (score > 0 but no backing key). The script detects and cleans up stale entries when
@@ -62,7 +66,23 @@ local existingPending = redis.call('GET', pendingKey)
 if existingPending then
     local existingAmount = tonumber(existingPending)
     if existingAmount == amount then
-        return 1
+        -- Return current usage (committed + pending) for consistency
+        local totalPending = 0
+        local cursor = "0"
+        repeat
+            local result = redis.call('ZSCAN', aggKey, cursor)
+            cursor = result[1]
+            local entries = result[2]
+            for i = 1, #entries, 2 do
+                local member = entries[i]
+                local memberPendingKey = prefix .. member
+                local memberVal = redis.call('GET', memberPendingKey)
+                if memberVal then
+                    totalPending = totalPending + tonumber(memberVal)
+                end
+            end
+        until cursor == "0"
+        return {1, current + totalPending}
     end
 end
 
@@ -108,14 +128,15 @@ repeat
 until cursor == "0"
 
 -- Quota check: committed + all_pending + new_amount must not exceed limit.
-if (current + totalPending + amount) > maxQ then
-    return 0
+local currentUsage = current + totalPending
+if (currentUsage + amount) > maxQ then
+    return {0, currentUsage}
 end
 
 -- Record the pending reservation (with TTL for safety) and add to aggregation ZSET.
 redis.call('SET', pendingKey, amount, 'EX', ttl)
 redis.call('ZADD', aggKey, amount, requestID)
-return 1
+return {1, currentUsage + amount}
 `
 
 	// luaQuotaCommit atomically commits a pending quota reservation.

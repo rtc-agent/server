@@ -160,6 +160,10 @@ func (uc *OSS3Usecase) RevokeCredential(ctx context.Context, accessKeyID string)
 // RevokeCredential and is critical for security-sensitive operations like user bans.
 func (uc *OSS3Usecase) RevokeCredentialsByUserID(ctx context.Context, userID uuid.UUID) (int64, error) {
 	var revokedCount int64
+	// Collect access key IDs inside the transaction so we can invalidate their cache
+	// entries after the transaction commits. The credential structs remain valid in
+	// memory even after the transaction context is released.
+	var accessKeyIDs []string
 
 	// P0-1 fix: Wrap in transaction to ensure atomicity
 	err := uc.db.Transaction(func(tx *gorm.DB) error {
@@ -188,6 +192,7 @@ func (uc *OSS3Usecase) RevokeCredentialsByUserID(ctx context.Context, userID uui
 			if markErr := uc.credRepo.MarkRevoked(txCtx, cred.ID); markErr != nil {
 				return fmt.Errorf("mark credential %s as revoked: %w", cred.AccessKeyID, markErr)
 			}
+			accessKeyIDs = append(accessKeyIDs, cred.AccessKeyID)
 			revokedCount++
 		}
 
@@ -198,9 +203,15 @@ func (uc *OSS3Usecase) RevokeCredentialsByUserID(ctx context.Context, userID uui
 		return revokedCount, err
 	}
 
-	// Note: Cache invalidation is performed after transaction commits.
-	// If cache invalidation fails, credentials are still rejected because
-	// the database records are marked as revoked (soft-delete).
-	// The soft-delete flag ensures security even if cache contains stale data.
+	// P1-5 fix: Invalidate cache for each revoked credential after transaction commits.
+	// Without this, revoked credentials could be served from Redis cache for up to 5 minutes
+	// (maxCredentialCacheTTL). Cache invalidation is best-effort: if it fails, the soft-delete
+	// flag (Revoked=true) in the database still ensures rejection once the cache entry expires
+	// or is refreshed. The SigV4 middleware's ban check provides an additional safety net for
+	// banned users, closing the window for the most critical revocation scenario.
+	for _, akid := range accessKeyIDs {
+		uc.InvalidateCredentialCache(context.Background(), akid)
+	}
+
 	return revokedCount, nil
 }

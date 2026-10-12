@@ -66,6 +66,12 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(
 	defer span.End()
 	r = r.WithContext(ctx)
 
+	// P3-2 fix: Limit request body size to prevent memory exhaustion.
+	// CreateMultipartUpload has no request body per S3 spec, but a malicious client
+	// could send an arbitrarily large body. 4KB is generous for any edge cases.
+	const maxCreateMultipartBody = 4 << 10 // 4 KB
+	r.Body = http.MaxBytesReader(w, r.Body, maxCreateMultipartBody)
+
 	userID := ExtractUserIDFromContext(r.Context())
 
 	// Check concurrent upload limit
