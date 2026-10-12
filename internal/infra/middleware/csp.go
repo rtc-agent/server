@@ -51,6 +51,7 @@ func buildCSPHeader(cfg *config.CSPConfig) string {
 	addDirective("style-src", cfg.StyleSrc)
 	addDirective("img-src", cfg.ImgSrc)
 	addDirective("font-src", cfg.FontSrc)
+	addDirective("media-src", cfg.MediaSrc)
 	addDirective("connect-src", cfg.ConnectSrc)
 	addDirective("frame-src", cfg.FrameSrc)
 	addDirective("frame-ancestors", cfg.FrameAncestors)

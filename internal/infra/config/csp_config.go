@@ -38,6 +38,10 @@ type CSPConfig struct {
 	// Example: ["'self'", "data:"]
 	FontSrc []string `mapstructure:"font_src" yaml:"font_src"`
 
+	// MediaSrc controls which media sources (audio, video) can be loaded.
+	// Example: ["'self'", "data:", "blob:"]
+	MediaSrc []string `mapstructure:"media_src" yaml:"media_src"`
+
 	// ConnectSrc controls which URLs can be loaded using script interfaces
 	// (fetch, XMLHttpRequest, WebSocket, etc.).
 	// Example: ["'self'", "ws:", "wss:", "https://api.example.com"]
