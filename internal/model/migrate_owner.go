@@ -236,7 +236,7 @@ func finalizeOwnerAndCreatorNotNull(db *gorm.DB) error {
 		}
 
 		// Validate the constraint
-		if err := db.Exec(fmt.Sprintf(`VALIDATE CONSTRAINT %s ON %s`, constraintName, tableName)).Error; err != nil {
+		if err := db.Exec(fmt.Sprintf(`ALTER TABLE %s VALIDATE CONSTRAINT %s`, tableName, constraintName)).Error; err != nil {
 			return fmt.Errorf("validate %s constraint on %s: %w", constraintName, tableName, err)
 		}
 		return nil
