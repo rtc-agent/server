@@ -226,6 +226,11 @@ func (c *Config) validateCORS() error {
 			}
 			continue
 		}
+		// Allow localhost wildcard pattern (e.g., "http://localhost:*") for development convenience.
+		// Skip standard URL parsing since "http://localhost:*" is not a valid URL but is a valid pattern.
+		if strings.Contains(origin, "localhost:*") {
+			continue
+		}
 		if _, err := url.Parse(origin); err != nil {
 			return fmt.Errorf("cors.allow_origins[%d] is invalid: %w", i, err)
 		}
