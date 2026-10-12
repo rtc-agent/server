@@ -178,8 +178,9 @@ func (b *TopicBroker) handlePubSubMessage(msg rueidis.PubSubMessage) {
 func (b *TopicBroker) Subscribe(channels ...string) error {
 	for _, ch := range channels {
 		// Interface methods cannot accept context; use an internal context with timeout to prevent Redis commands from blocking indefinitely.
+		// NOTE: cancel() is called explicitly at the end of each iteration to prevent resource leaks
+		// when subscribing to many channels (defer would accumulate until function returns).
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 
 		_, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.subscribe",
 			trace.WithAttributes(AttributeChannel.String(ch)),
@@ -191,6 +192,7 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 			b.pubSubMu.Unlock()
 			recordError(span, err)
 			span.End()
+			cancel()
 			return fmt.Errorf("failed to create pubsub client: %w", err)
 		}
 
@@ -198,6 +200,7 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 		if b.subscribedChans[pubSubKey] {
 			b.pubSubMu.Unlock()
 			span.End()
+			cancel()
 			continue // Already subscribed
 		}
 		client := b.pubSubClient // Save reference for use outside the lock.
@@ -207,6 +210,7 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 		if err := client.Do(ctx, client.B().Subscribe().Channel(pubSubKey).Build()).Error(); err != nil {
 			recordError(span, err)
 			span.End()
+			cancel()
 			return fmt.Errorf("failed to subscribe to %s: %w", pubSubKey, err)
 		}
 
@@ -215,6 +219,7 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 		b.subscribedChans[pubSubKey] = true
 		b.pubSubMu.Unlock()
 		span.End()
+		cancel()
 	}
 	return nil
 }
@@ -222,8 +227,9 @@ func (b *TopicBroker) Subscribe(channels ...string) error {
 // Unsubscribe unsubscribes node from channels.
 func (b *TopicBroker) Unsubscribe(channels ...string) error {
 	for _, ch := range channels {
+		// NOTE: cancel() is called explicitly at the end of each iteration to prevent resource leaks
+		// when unsubscribing from many channels (defer would accumulate until function returns).
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 
 		_, span := b.tracer.Start(ctx, "centrifuge_plus.topic_broker.unsubscribe",
 			trace.WithAttributes(AttributeChannel.String(ch)),
@@ -234,6 +240,7 @@ func (b *TopicBroker) Unsubscribe(channels ...string) error {
 		if b.pubSubClient == nil {
 			b.pubSubMu.Unlock()
 			span.End()
+			cancel()
 			continue
 		}
 
@@ -241,6 +248,7 @@ func (b *TopicBroker) Unsubscribe(channels ...string) error {
 		if !b.subscribedChans[pubSubKey] {
 			b.pubSubMu.Unlock()
 			span.End()
+			cancel()
 			continue // Not subscribed
 		}
 		client := b.pubSubClient // Save reference for use outside the lock.
@@ -251,10 +259,12 @@ func (b *TopicBroker) Unsubscribe(channels ...string) error {
 		if err := client.Do(ctx, client.B().Unsubscribe().Channel(pubSubKey).Build()).Error(); err != nil {
 			recordError(span, err)
 			span.End()
+			cancel()
 			return fmt.Errorf("failed to unsubscribe from %s: %w", pubSubKey, err)
 		}
 
 		span.End()
+		cancel()
 	}
 	return nil
 }
