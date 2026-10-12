@@ -140,7 +140,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 		return nil, apiErr
 	}
 
-	session, isNew, err := h.prepareSession(ctx, req, sessionUUIDPtr, creator, span)
+	session, isNew, err := h.prepareSession(ctx, req, sessionUUIDPtr, creator, content, span)
 	if err != nil {
 		return nil, err
 	}
@@ -246,8 +246,8 @@ func (h *Handler) validateSendMessageRequest(ctx context.Context, req *protocol.
 }
 
 // prepareSession prepares the session for message creation.
-func (h *Handler) prepareSession(ctx context.Context, req *protocol.SendMessageRequest, sessionUUIDPtr *uuid.UUID, creator usecase.UserCreator, span trace.Span) (*converter.Session, bool, error) {
-	content := extractMessageContent(ctx, req.ContentData)
+// content is the extracted text content from ContentData, passed in to avoid redundant parsing.
+func (h *Handler) prepareSession(ctx context.Context, req *protocol.SendMessageRequest, sessionUUIDPtr *uuid.UUID, creator usecase.UserCreator, content string, span trace.Span) (*converter.Session, bool, error) {
 	initialTitle := primitives.TruncateTitle(content, 50)
 	session, isNew, err := primitives.PrepareSession(ctx, h.deps.Deps, sessionUUIDPtr, req.ClientSessionId, creator, initialTitle)
 	if err != nil {
