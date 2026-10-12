@@ -221,8 +221,14 @@ func (h *Handler) validateSendMessageRequest(ctx context.Context, req *protocol.
 		return "", &APIError{Code: ErrorCodeInvalidArgument, Message: "Message content validation failed"}
 	}
 
-	// Validate agent_prompt length early to avoid wasting DB queries on invalid requests
-	const maxAgentPromptLength = 10 * 1024 // 10KB
+	// Validate agent_prompt length early to avoid wasting DB queries on invalid requests.
+	// Default: 100KB. Configurable via ConfigProvider key "api.max_agent_prompt_bytes".
+	maxAgentPromptLength := 100 * 1024 // 100KB default
+	if h.deps.Deps.ConfigProvider != nil {
+		if v, err := h.deps.Deps.ConfigProvider.GetEffectiveInt(ctx, "api.max_agent_prompt_bytes", &userID); err == nil && v > 0 {
+			maxAgentPromptLength = v
+		}
+	}
 	if req.AgentPrompt != nil && len(*req.AgentPrompt) > maxAgentPromptLength {
 		span.SetStatus(codes.Error, "validation_error")
 		return "", &APIError{

@@ -62,11 +62,15 @@ cors:
     - "http://localhost:8000"   # Admin UI dev server
     - "http://localhost:28081"  # Admin UI Docker 环境
     - "http://localhost:8888"   # Main server (self)
+    - "https://pineapplebond.github.io"  # GitHub Pages deployment
 
 # API 配置
 api:
   query_default_limit: 50
   query_max_limit: 100
+  # agent_prompt 最大长度限制（字节），默认 100KB
+  # 可通过数据库 server_config 表配置 api.max_agent_prompt_bytes 动态调整
+  max_agent_prompt_bytes: 102400  # 100KB
   rate_limit:
     requests_per_second: 50.0
     burst_size: 100
