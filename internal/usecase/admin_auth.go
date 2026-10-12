@@ -64,6 +64,13 @@ func (uc *AdminAuthUsecase) SetLoginProtection(lp LoginProtectionInterface) {
 	uc.loginProtection = lp
 }
 
+// SetSigner injects the JWT token signer.
+// This method allows deferred initialization when the signer is not available
+// at construction time (e.g., in dependency injection scenarios).
+func (uc *AdminAuthUsecase) SetSigner(signer AdminTokenSigner) {
+	uc.signer = signer
+}
+
 // LoginResult holds the result of a successful login.
 type LoginResult struct {
 	AccessToken  string
