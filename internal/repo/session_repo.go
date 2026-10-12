@@ -217,15 +217,18 @@ func (r *sessionRepo) UpdateFieldsActive(ctx context.Context, id uuid.UUID, fiel
 		updates[k] = v
 	}
 	updates["updated_at"] = time.Now()
+	// Allow updating closed sessions for fields like deleted_at (soft delete) and title.
+	// The original restriction (status != closed) prevented updating closed sessions,
+	// but soft-delete and title updates should be allowed regardless of status.
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.Session{}).
-		Where("id = ? AND status != ?", id, model.SessionStatusClosed).
+		Where("id = ?", id).
 		Updates(updates)
 	if result.Error != nil {
 		return fmt.Errorf("update session %s fields: %w", id, result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("update session %s fields: %w", id, ErrSessionClosedOrNotFound)
+		return fmt.Errorf("update session %s fields: session not found", id)
 	}
 	return nil
 }
