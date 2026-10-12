@@ -63,7 +63,16 @@ func (h *Handler) tryCollectBatchResume(ctx context.Context, rtc *converter.Rtc)
 	}
 
 	// All RTCs completed — build BatchResumeItems from stored data.
-	return h.buildBatchResumeItems(ctx, rtc, resultsKey, interruptMapKey, batchKey), false
+	items := h.buildBatchResumeItems(ctx, rtc, resultsKey, interruptMapKey, batchKey)
+
+	// If interrupt map was empty (single interrupt scenario), return nil to let
+	// the caller fall back to single resume path using InterruptID/InterruptResult.
+	// This handles the case where registerRtcBatch was called but interruptTurn
+	// didn't write to interrupt map because len(allInterruptContexts) == 1.
+	if len(items) == 0 {
+		return nil, false
+	}
+	return items, false
 }
 
 // buildBatchResumeItems reads batch results and interrupt map from Redis,
@@ -142,10 +151,13 @@ func (h *Handler) resumeActiveTurn(ctx context.Context, rtc *converter.Rtc, acti
 		return
 	}
 	// Generate deterministic work ID for idempotent publishing.
-	// This ensures retries don't create duplicate resume work items.
+	// Use RTC ID instead of turn ID to ensure each RTC submission gets a unique work ID.
+	// This prevents conflicts when the same turn is resumed multiple times
+	// (e.g., when a resumed turn triggers another interrupt).
+	// The same RTC's duplicate submissions will still be correctly deduplicated.
 	workID := rtcqueue.GenerateDeterministicWorkID(
 		rtc.SessionID.String(),
-		"resume:"+activeTurns[len(activeTurns)-1].ID.String(),
+		"resume:"+rtc.ID.String(),
 	)
 	if _, err := h.deps.Queue.PublishWithID(ctx, rtc.SessionID.String(), workID, string(payload), rtcqueue.ResumeWorkPriority); err != nil {
 		logger.Error(ctx, "[resumeTurnAfterRtc] Queue.PublishWithID resume failed",
