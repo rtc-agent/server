@@ -41,10 +41,11 @@ security:
     report_only: false         # Production mode: block violations
     report_uri: "/api/csp-report"
     default_src: ["'self'"]
-    script_src: ["'self'", "'unsafe-inline'", "'unsafe-eval"]  # Umi framework requires inline scripts
+    script_src: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "http://www.googletagmanager.com"]  # Umi framework requires inline scripts + Google Analytics
     style_src: ["'self'", "'unsafe-inline'"]                    # Lit/antd-style requires inline styles
-    img_src: ["'self'", "data:", "blob:"]                      # Support data URIs and blob URLs
-    font_src: ["'self'", "data:"]                              # Inline fonts (e.g., base64 encoded)
+    img_src: ["'self'", "data:", "blob:", "https://mdn.alipayobjects.com", "https://rtc-agent.github.io"]  # Support data URIs, blob URLs, and external images
+    font_src: ["'self'", "data:", "http://mdn.alipayobjects.com"]   # Inline fonts + Alibaba CDN fonts
+    media_src: ["'self'", "data:", "blob:"]                         # Media resources (audio/video)
     connect_src:
       - "'self'"
       - "ws:"                                                  # WebSocket connections
@@ -57,11 +58,11 @@ security:
       # 外部 API（如需要）
       - "https://api.anthropic.com"                            # Claude API
       - "https://api.tavily.com"                               # Tavily search API
+      - "https://rtc-agent.cherish.chat"                       # RTC Agent production server (OAuth2)
+      - "https://www.google-analytics.com"                     # Google Analytics
     frame_src:
-      - "'self'"                                               # Same-origin iframes
-      # iframe 通过反向代理访问（/api/grafana, /api/jaeger, /api/pyroscope）
-      # 实际是同源，不需要额外配置 frame_src
-    frame_ancestors: ["'none'"]                                # Prevent framing (replaces X-Frame-Options)
+      - "*"                                                    # Allow iframe embedding for reverse-proxied services (Grafana, Jaeger, Pyroscope)
+    frame_ancestors: ["'self'"]                                # Allow same-origin framing (for embedded dashboards)
     base_uri: ["'self'"]
     form_action: ["'self'"]
 

@@ -3,6 +3,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
@@ -43,6 +45,14 @@ var bindRoleCmd = &cobra.Command{
 	Run:   runBindRole,
 }
 
+// changePasswordCmd represents the change-password command
+var changePasswordCmd = &cobra.Command{
+	Use:   "change-password",
+	Short: "Change an admin user's password",
+	Long:  `Change the password of an existing admin user by email`,
+	Run:   runChangePassword,
+}
+
 var (
 	createEmail    string
 	createPassword string
@@ -51,6 +61,9 @@ var (
 
 	bindRoleEmail string
 	bindRoleName  string
+
+	changePasswordEmail    string
+	changePasswordPassword string
 )
 
 func init() {
@@ -68,8 +81,15 @@ func init() {
 	_ = bindRoleCmd.MarkFlagRequired("email")
 	_ = bindRoleCmd.MarkFlagRequired("role")
 
+	// change-password command
+	changePasswordCmd.Flags().StringVar(&changePasswordEmail, "email", "", "User email (required)")
+	changePasswordCmd.Flags().StringVar(&changePasswordPassword, "password", "", "New password (required)")
+	_ = changePasswordCmd.MarkFlagRequired("email")
+	_ = changePasswordCmd.MarkFlagRequired("password")
+
 	accountCmd.AddCommand(createCmd)
 	accountCmd.AddCommand(bindRoleCmd)
+	accountCmd.AddCommand(changePasswordCmd)
 }
 
 // runCreate creates a new admin user with the specified email, password, and optional role.
@@ -259,4 +279,82 @@ func runBindRole(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("\n🎉 Success! Admin user %s now has role: %s\n", adminUser.Email, bindRoleName)
 	fmt.Printf("   Please restart the server to reload permissions.\n")
+}
+
+// runChangePassword changes the password of an existing admin user by email.
+// NOTE: fmt.Printf is used here (not structured logging) because this is a CLI command
+// providing formatted output for immediate human consumption. The output includes
+// visual indicators (emojis) and structured layout for better readability on stdout.
+func runChangePassword(cmd *cobra.Command, args []string) {
+	// Load admin config
+	cfg, err := config.LoadAdminConfig(adminCfgFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load admin config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Init logger
+	logger.Init("info", "")
+	defer logger.Sync()
+
+	ctx := context.Background()
+
+	// Init database
+	db, err := gorm.Open(postgres.Open(cfg.Database.DSN), &gorm.Config{
+		Logger: logger.NewGormLogger(false, 200*time.Millisecond),
+	})
+	if err != nil {
+		logger.Fatal(context.Background(), "admin.database_connection_failed", zap.Error(err))
+	}
+
+	// Initialize repositories
+	adminUserRepo := repo.NewAdminUserRepo(db)
+	adminUserRoleRepo := repo.NewAdminUserRoleRepo(db)
+	roleRepo := repo.NewAdminRoleRepo(db)
+
+	// Initialize Casbin enforcer
+	enforcer, err := auth.NewCasbinEnforcer(db)
+	if err != nil {
+		logger.Error(context.Background(), "admin.create_enforcer_failed", zap.Error(err))
+		fmt.Fprintf(os.Stderr, "❌ Failed to create enforcer: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Initialize usecase
+	adminUserUsecase := usecase.NewAdminUserUsecase(
+		db,
+		adminUserRepo,
+		adminUserRoleRepo,
+		roleRepo,
+		enforcer,
+	)
+
+	// Find admin user by email
+	adminUser, err := adminUserRepo.GetByEmail(ctx, changePasswordEmail)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			logger.Error(context.Background(), "admin.admin_user_not_found", zap.String("email", changePasswordEmail))
+			fmt.Fprintf(os.Stderr, "❌ Admin user not found: %s\n", changePasswordEmail)
+			os.Exit(1)
+		}
+		logger.Error(context.Background(), "admin.find_admin_user_failed", zap.Error(err))
+		fmt.Fprintf(os.Stderr, "❌ Failed to find admin user: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Found admin user: %s (ID: %s)\n", adminUser.Email, adminUser.ID)
+
+	// Update password using usecase
+	updatedUser, err := adminUserUsecase.UpdateUser(ctx, adminUser.ID, usecase.UpdateUserInput{
+		Password: &changePasswordPassword,
+	})
+	if err != nil {
+		logger.Error(context.Background(), "admin.change_password_failed", zap.Error(err))
+		fmt.Fprintf(os.Stderr, "❌ Failed to change password: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ Password changed successfully!\n")
+	fmt.Printf("   Email: %s\n", updatedUser.Email)
+	fmt.Printf("   ID:    %s\n", updatedUser.ID.String())
+	fmt.Printf("   ⚠️  This change takes effect immediately\n")
 }

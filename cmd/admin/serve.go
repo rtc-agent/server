@@ -139,7 +139,7 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	// Init repositories and usecases
 	repos := initRepositories(db)
-	usecases := initUsecases(ctx, db, cfg, rdb, repos, enforcer)
+	usecases := initUsecases(ctx, db, cfg, rdb, repos, enforcer, jwtSigner)
 
 	// Init handlers
 	handlers := initHandlers(cfg, usecases, jwtSigner, db)
@@ -297,7 +297,7 @@ type usecases struct {
 }
 
 // initUsecases initializes all usecase dependencies.
-func initUsecases(ctx context.Context, db *gorm.DB, cfg *config.AdminConfig, rdb *redis.Client, repos repositories, enforcer *auth.CasbinEnforcer) usecases {
+func initUsecases(ctx context.Context, db *gorm.DB, cfg *config.AdminConfig, rdb *redis.Client, repos repositories, enforcer *auth.CasbinEnforcer, jwtSigner *auth.AdminJWTSigner) usecases {
 	// Bootstrap default roles and policies
 	if err := usecase.BootstrapAdmin(ctx, db, repos.adminRoleRepo, enforcer); err != nil {
 		bootstrapDegraded.Store(true)
@@ -326,6 +326,7 @@ func initUsecases(ctx context.Context, db *gorm.DB, cfg *config.AdminConfig, rdb
 	// Init usecases
 	adminAuthUsecase := usecase.NewAdminAuthUsecase(db, repos.adminUserRepo, repos.refreshTokenRepo, nil) // jwtSigner will be set later
 	adminAuthUsecase.SetLoginProtection(loginProtection)
+	adminAuthUsecase.SetSigner(jwtSigner) // Inject JWT signer for token refresh operations
 	adminRoleUsecase := usecase.NewAdminRoleUsecase(db, repos.adminRoleRepo, repos.adminUserRoleRepo, repos.auditLogRepo, enforcer)
 	permissionUsecase := usecase.NewPermissionUsecase(repos.adminRoleRepo, enforcer, repos.auditLogRepo)
 	adminUserRoleUsecase := usecase.NewAdminUserRoleUsecase(db, repos.adminUserRepo, repos.adminRoleRepo, repos.adminUserRoleRepo, enforcer, repos.auditLogRepo)
