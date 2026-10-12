@@ -97,8 +97,9 @@ return {work_id, cred}
 
 // publishScript atomically persists a Work item, enqueues it in the
 // session's priority queue, and notifies workers.
-// Supports idempotent publishing: if a work item with the same ID already
-// exists, it will not be overwritten (SETNX semantics).
+// Supports idempotent publishing with status-aware behavior:
+// - If work exists with terminal status (completed/failed/cancelled), allow override
+// - If work exists with active status (pending/processing), skip publishing (idempotent)
 //
 // KEYS[1] = work hash key ("work:<work_id>")
 // KEYS[2] = session queue (zset)
@@ -110,10 +111,15 @@ return {work_id, cred}
 // ARGV[6]  = updated_at (unix seconds)
 // ARGV[7]  = channel name for notification
 // ARGV[8]  = session_id notification payload
-// Returns: 1 if published, 0 if work already exists (idempotent skip)
+// Returns: 1 if published, 0 if work already exists with active status (idempotent skip)
 var publishScript = redis.NewScript(`
--- Idempotency check: if work already exists, skip publishing
-if redis.call("EXISTS", KEYS[1]) == 1 then
+-- Check work status to determine if we can override
+local status = redis.call("HGET", KEYS[1], "status")
+if status == "completed" or status == "failed" or status == "cancelled" then
+    -- Work has terminal status, delete it to allow republishing
+    redis.call("DEL", KEYS[1])
+elseif redis.call("EXISTS", KEYS[1]) == 1 then
+    -- Work exists with active status (pending/processing), skip publishing
     return 0
 end
 local work_id = KEYS[1]:sub(6)
