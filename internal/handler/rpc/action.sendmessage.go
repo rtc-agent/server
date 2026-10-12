@@ -13,7 +13,7 @@ import (
 	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/updates"
+
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -38,6 +38,12 @@ import (
 // Returns empty string for unsupported types or parsing errors.
 // Errors are logged but not propagated to avoid blocking the message send flow.
 func extractMessageContent(ctx context.Context, cd protocol.ContentData) string {
+	// Nil check: cd.Data can be nil for malformed requests or when client
+	// sends an empty ContentData. Return early to avoid panic in type assertions.
+	if cd.Data == nil {
+		return ""
+	}
+
 	switch cd.Type {
 	case protocol.ContentTypeText:
 		s, err := primitives.ContentDataString(cd.Data)
@@ -163,7 +169,7 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 					MessageId:    createdMessage.ID.String(),
 					SyncRequired: &syncRequired,
 				},
-				Updates: updates.DerefUpdates(pushUpdates),
+				Updates: derefUpdatesPtr(pushUpdates),
 			}, nil
 		}
 		return nil, err
@@ -184,12 +190,19 @@ func (h *Handler) SendMessage(ctx context.Context, req *protocol.SendMessageRequ
 			TurnId:    "",
 			MessageId: createdMessage.ID.String(),
 		},
-		Updates: updates.DerefUpdates(pushUpdates),
+		Updates: derefUpdatesPtr(pushUpdates),
 	}, nil
 }
 
 // validateSendMessageRequest validates the SendMessage request and extracts content.
 func (h *Handler) validateSendMessageRequest(ctx context.Context, req *protocol.SendMessageRequest, userID uuid.UUID, span trace.Span) (string, *APIError) {
+	// Validate client_session_id length (optional but bounded to prevent DB query performance issues).
+	// Protocol marks it as "required" but allows empty for new session creation.
+	if apiErr := validateClientSessionID(req.ClientSessionId); apiErr != nil {
+		span.SetStatus(codes.Error, apiErr.Code)
+		return "", apiErr
+	}
+
 	// Validate server_session_id UUID format if present
 	if req.ServerSessionId != nil {
 		if _, apiErr := parseUUID(*req.ServerSessionId, "server_session_id"); apiErr != nil {
@@ -274,7 +287,7 @@ func (h *Handler) prepareSession(ctx context.Context, req *protocol.SendMessageR
 // createMessageAndPublishWork creates the message and publishes work to the queue.
 func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol.SendMessageRequest, session *converter.Session, isNew bool, creator usecase.UserCreator, userID string, workID string, span trace.Span) (*converter.Message, []*protocol.Update, error) {
 	var createdMessage *converter.Message
-	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
+	pushUpdates, err := h.runSessionAndPublish(ctx, func(txCtx context.Context) ([]usecase.SessionChangeItem, error) {
 		if err := h.touchOrCreateSession(txCtx, session, isNew); err != nil {
 			return nil, err
 		}
@@ -320,7 +333,7 @@ func (h *Handler) createMessageAndPublishWork(ctx context.Context, req *protocol
 		return primitives.BuildSendMessageUpdates(session, isNew, nil, messageIDs), nil
 	})
 	if err != nil {
-		if errors.Is(err, updates.ErrPushAfterCommit) {
+		if errors.Is(err, usecase.ErrPushAfterCommit) {
 			logger.Warn(ctx, "rpc.send_message.push_after_commit_failed", zap.Error(err))
 			// Mark that sync is required so the client knows to fetch latest state
 			// We'll set this in the response via a wrapper
@@ -412,6 +425,23 @@ func (h *Handler) createPromptMessageIfNeeded(txCtx context.Context, ctx context
 	return promptMsg
 }
 
+// validateClientSessionID validates the client_session_id field.
+// Empty is allowed (triggers new session creation), but non-empty values
+// are bounded to prevent DB query performance issues from malicious clients.
+func validateClientSessionID(clientSessionID string) *APIError {
+	if clientSessionID == "" {
+		return nil
+	}
+	const maxClientSessionIDLength = 255
+	if len(clientSessionID) > maxClientSessionIDLength {
+		return &APIError{
+			Code:    ErrorCodeInvalidArgument,
+			Message: fmt.Sprintf("client_session_id too long: %d bytes (max %d)", len(clientSessionID), maxClientSessionIDLength),
+		}
+	}
+	return nil
+}
+
 // checkClientIdIdempotency checks if a client_id was already used.
 func (h *Handler) checkClientIdIdempotency(ctx context.Context, clientID string) *APIError {
 	if clientID == "" {
@@ -470,6 +500,11 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 		SpanID:    spanID,
 	})
 	if err != nil {
+		// Log serialization failure details for debugging (e.g., circular references, unsupported types)
+		logger.Warn(txCtx, "rpc.send_message.queue_publish_marshal_failed",
+			zap.String("session", sessionID.String()),
+			zap.String("user_id", userID),
+			zap.Error(err))
 		return h.internalError(txCtx, ErrorCodeSendMarshalPayload, "failed to marshal work payload", err)
 	}
 

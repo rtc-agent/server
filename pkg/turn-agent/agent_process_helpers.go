@@ -18,18 +18,20 @@ import (
 // This is a basic check that can be extended with more sophisticated
 // rate limiting logic in the future.
 //
-// TODO: Integrate with application-level token quota system when available.
-// Currently returns nil (no-op) to allow all requests through.
+// TODO(v2.0): Integrate with application-level token quota system.
+// Current implementation is a no-op (returns nil) to allow all requests through.
+// Planned features:
+//  1. Check session-level token usage against configured limits
+//  2. Check user-level token quota (daily/monthly limits)
+//  3. Return error if limits exceeded (with specific error code)
+//  4. Consider adding rate limiting (requests per minute/hour)
+//  5. Implement token usage tracking and metrics
+//
+// Note: The eino framework may have internal limits, but explicit checking here
+// allows early rejection before consuming resources (DB queries, LLM calls).
 func (a *Agent) checkTokenLimit(ctx context.Context, sessionID string) error {
-	// Future implementation:
-	// 1. Check session-level token usage against configured limits
-	// 2. Check user-level token quota
-	// 3. Return error if limits exceeded
-	// 4. Consider adding rate limiting (requests per minute/hour)
-
-	// For now, this is a no-op check. The eino framework may have internal
-	// limits, but explicit checking here allows early rejection before
-	// consuming resources.
+	// Current: no-op (all requests allowed)
+	// Future: implement token quota checking
 	return nil
 }
 
