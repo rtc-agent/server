@@ -9,11 +9,13 @@ import (
 	"math"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/repo"
+	"github.com/rtc-agent/server/pkg/logger"
 )
 
 // Sentinel errors for server config operations.
@@ -205,7 +207,7 @@ func toInt(v any) (int, error) {
 	case json.Number:
 		i, err := n.Int64()
 		if err != nil {
-			return 0, fmt.Errorf("expected int, got %v", v)
+			return 0, fmt.Errorf("expected int, got %v: %w", v, err)
 		}
 		return int(i), nil
 	default:
@@ -224,7 +226,7 @@ func toFloat(v any) (float64, error) {
 	case json.Number:
 		f, err := n.Float64()
 		if err != nil {
-			return 0, fmt.Errorf("expected float, got %v", v)
+			return 0, fmt.Errorf("expected float, got %v: %w", v, err)
 		}
 		return f, nil
 	default:
@@ -257,4 +259,37 @@ func paginateItems[T any](items []T, page, pageSize int) []T {
 		end = len(items)
 	}
 	return items[offset:end]
+}
+
+// calculateForceOverwriteVersion determines the current and new version for force overwrite mode.
+// When userID is nil (system config), errors are logged but not returned (fallback to version 0).
+// When userID is not nil (user config), ErrNotFound is handled gracefully (version 0),
+// but other errors are returned to surface the issue.
+func (uc *ServerConfigUsecase) calculateForceOverwriteVersion(ctx context.Context, key string, userID *uuid.UUID, oldValueJSON datatypes.JSON) (currentVersion, newVersion int, err error) {
+	if oldValueJSON == nil {
+		return 0, 1, nil
+	}
+
+	currentCfg, getErr := uc.configRepo.Get(ctx, key, userID)
+	if getErr == nil {
+		currentVersion = currentCfg.Version
+	} else if errors.Is(getErr, repo.ErrNotFound) {
+		// Record disappeared between getOldValue and Get (defensive handling).
+		currentVersion = 0
+	} else if userID == nil {
+		// System config: log and fallback to 0
+		logger.Warn(ctx, "config.force_overwrite.get_version_failed",
+			zap.String("key", key),
+			zap.Error(getErr))
+		currentVersion = 0
+	} else {
+		// User config with non-ErrNotFound error: log and return error
+		logger.Warn(ctx, "config.force_overwrite.get_version_failed",
+			zap.String("key", key),
+			zap.String("user_id", userID.String()),
+			zap.Error(getErr))
+		return 0, 0, fmt.Errorf("get current user config %q for force overwrite: %w", key, getErr)
+	}
+
+	return currentVersion, currentVersion + 1, nil
 }

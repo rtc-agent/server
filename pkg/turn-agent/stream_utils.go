@@ -40,7 +40,13 @@ func RecvWithTimeout(
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				ch <- StreamRecvResult{Err: fmt.Errorf("stream recv panic: %v\nstack: %s", r, string(debug.Stack()))}
+				var err error
+				if rErr, ok := r.(error); ok {
+					err = fmt.Errorf("stream recv panic: %w\nstack: %s", rErr, string(debug.Stack()))
+				} else {
+					err = fmt.Errorf("stream recv panic: %v\nstack: %s", r, string(debug.Stack()))
+				}
+				ch <- StreamRecvResult{Err: err}
 			}
 		}()
 		msg, err := recv()
