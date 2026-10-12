@@ -56,7 +56,9 @@ providers:
 cors:
   # Security: Restrict CORS to specific origins instead of wildcard "*".
   # Include frontend apps, web component embedding pages, and local dev servers.
+  # Pattern "http://localhost:*" matches any port on localhost (development convenience).
   allow_origins:
+    - "http://localhost:*"          # Any localhost port (development)
     - "http://localhost:23001"  # Grafana
     - "http://localhost:5173"   # Vite dev server
     - "http://localhost:8000"   # Admin UI dev server
@@ -255,6 +257,7 @@ storage:
     # Security: Restrict CORS to specific origins instead of wildcard "*".
     # Must match the main cors.allow_origins for consistent cross-origin behavior.
     allowed_origins:
+      - "http://localhost:*"          # Any localhost port (development)
       - "http://localhost:23001"  # Grafana
       - "http://localhost:5173"   # Vite dev server
       - "http://localhost:8000"   # Admin UI dev server

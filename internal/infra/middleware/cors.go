@@ -61,10 +61,16 @@ func CORS(allowedOrigins []string, isDevelopment bool) func(http.Handler) http.H
 }
 
 // IsOriginAllowed checks if the origin is in the allowed list.
+// Supports exact matches, wildcard "*", and pattern matching for localhost (e.g., "http://localhost:*").
 // Exported for reuse by other CORS implementations (e.g., OSS3).
 func IsOriginAllowed(origin string, allowed []string) bool {
 	for _, a := range allowed {
 		if strings.EqualFold(a, "*") || strings.EqualFold(a, origin) {
+			return true
+		}
+		// Support pattern matching for localhost with wildcard port
+		// e.g., "http://localhost:*" matches "http://localhost:8080", "http://localhost:40000", etc.
+		if strings.Contains(a, "localhost:*") && strings.HasPrefix(origin, "http://localhost:") {
 			return true
 		}
 	}
