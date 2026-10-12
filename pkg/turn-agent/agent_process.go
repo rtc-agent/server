@@ -95,7 +95,7 @@ func (a *Agent) Process(ctx context.Context, work *rtcqueue.Work, cancel <-chan 
 	defer turnSpan.End()
 
 	// 2.6. Panic recovery.
-	defer a.setupPanicRecovery(turnCtx, p.SessionID, turnID, &retErr)
+	defer a.setupPanicRecovery(p.SessionID, turnID, &retErr)
 
 	// 3-5. Create/get session manager and push work.
 	mgr, isNew, err := a.createAndPushWork(turnCtx, p, turnID, work, turnSpan)
@@ -184,7 +184,7 @@ func (a *Agent) setupTurnContext(ctx context.Context, p WorkPayload, turnID stri
 }
 
 // setupPanicRecovery sets up panic recovery for the turn.
-func (a *Agent) setupPanicRecovery(turnCtx context.Context, sessionID, turnID string, retErr *error) {
+func (a *Agent) setupPanicRecovery(sessionID, turnID string, retErr *error) {
 	r := recover()
 	if r == nil {
 		return

@@ -11,6 +11,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/tool"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -69,7 +70,9 @@ func publishWorkJSON(t *testing.T, ctx context.Context, q *rtcqueue.Queue, sessi
 	t.Helper()
 	data, err := json.Marshal(payload)
 	require.NoError(t, err)
-	id, err := q.Publish(ctx, sessionID, string(data), 1)
+	// Use PublishWithID for idempotent publishing (Publish is deprecated).
+	workID := uuid.NewString()
+	id, err := q.PublishWithID(ctx, sessionID, workID, string(data), 1)
 	require.NoError(t, err)
 	return id
 }

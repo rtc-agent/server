@@ -71,19 +71,6 @@ func (rl *IPRateLimiter) SetTrustedProxies(cidrs []string) error {
 	return nil
 }
 
-// isTrustedProxy checks if the given IP is within a trusted proxy range.
-func (rl *IPRateLimiter) isTrustedProxy(ip net.IP) bool {
-	if len(rl.trustedProxies) == 0 {
-		return false
-	}
-	for _, n := range rl.trustedProxies {
-		if n.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
 // getLimiter returns the rate limiter for the given IP,
 // creating one if it doesn't exist.
 func (rl *IPRateLimiter) getLimiter(ip string) *rate.Limiter {
