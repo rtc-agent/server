@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/centrifugal/centrifuge"
@@ -508,14 +507,15 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 				logger.Info(r.Context(), "CheckOrigin: development mode, allowing all origins")
 				return true
 			}
-			for _, allowed := range s.cfg.CORS.AllowOrigins {
-				if allowed == "*" || strings.EqualFold(allowed, origin) {
-					logger.Info(r.Context(), "CheckOrigin: origin allowed",
-						zap.String("matched", allowed),
-					)
-					return true
-				}
+
+			// Reuse middleware.IsOriginAllowed for consistent origin checking
+			// (supports exact match, wildcard "*", and "http://localhost:*" pattern)
+			allowed := middleware.IsOriginAllowed(origin, s.cfg.CORS.AllowOrigins)
+			if allowed {
+				logger.Info(r.Context(), "CheckOrigin: origin allowed")
+				return true
 			}
+
 			logger.Error(r.Context(), "CheckOrigin: origin NOT allowed",
 				zap.String("origin", origin),
 			)
