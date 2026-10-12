@@ -205,6 +205,29 @@ func (uc *AuthUsecase) RefreshTokenPair(ctx context.Context, plainToken string) 
 	return result, nil
 }
 
+const (
+	// refreshTokenReuseGracePeriod defines the time window after token revocation
+	// during which a reused token is considered a concurrent refresh attempt rather
+	// than a token theft. This prevents aggressive revocation of all user tokens
+	// when multiple concurrent refresh requests occur (e.g., multiple browser tabs,
+	// parallel API calls).
+	//
+	// How it works:
+	// 1. When a refresh token is used, it is revoked (RevokedAt is set)
+	// 2. If the same token is used again within the grace period (1 minute):
+	//    - It's treated as a concurrent refresh race condition
+	//    - Log a warning but do NOT revoke all other tokens
+	//    - User can still authenticate with other active tokens
+	// 3. If the same token is used after the grace period:
+	//    - It's treated as potential token theft
+	//    - Revoke all tokens for this user+device (security protection)
+	//    - User must re-authenticate
+	//
+	// This balances security (detect token theft) with user experience
+	// (avoid false positives from concurrent refresh attempts).
+	refreshTokenReuseGracePeriod = 1 * time.Minute
+)
+
 // validateRefreshTokenInTx is the transactional version of ValidateRefreshToken.
 // Uses SELECT ... FOR UPDATE to prevent concurrent token reuse attacks.
 func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken string) (*RefreshTokenInfo, error) {
@@ -221,34 +244,91 @@ func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken 
 	}
 
 	if rt.Revoked {
-		// SECURITY CRITICAL: Refresh token reuse detected. This strongly indicates
-		// that the token has been stolen and is being used by an attacker.
-		// Immediate alerting and session revocation are required.
-		logger.Error(ctx, "auth.refresh_token_reuse_detected: potential token theft - refresh token was reused",
-			zap.String("token_id", rt.ID.String()),
-			zap.String("user_id", rt.UserID.String()),
-			zap.String("device_id", rt.DeviceID),
-			zap.String("token_hash_prefix", rtHash[:16]),
-			zap.Time("token_expires_at", rt.ExpiresAt),
-			zap.Time("detected_at", time.Now()))
-		// Record Prometheus metric for security monitoring and alerting.
-		// Alert rule suggestion: rate(sec_events_total{event_type="refresh_token_reuse"}) > 0
-		auth.RecordSecurityEvent("refresh_token_reuse")
+		// Check if this is a concurrent refresh attempt within the grace period.
+		// We use RevokedAt to determine how long ago the token was revoked.
+		//
+		// Scenario 1: Concurrent refresh (within grace period)
+		// - Multiple tabs/API calls receive 401 simultaneously
+		// - All try to refresh using the same old refresh_token
+		// - First request succeeds: revokes old token (sets RevokedAt = now)
+		// - Subsequent requests (within 1 minute) find token revoked
+		// - Time since revocation < grace period → treat as race condition
+		//
+		// Scenario 2: Token theft (after grace period)
+		// - Attacker steals refresh_token
+		// - Legitimate user uses token, it gets revoked
+		// - Attacker tries to use stolen token much later
+		// - Time since revocation > grace period → treat as theft
+		var timeSinceRevocation time.Duration
+		var isWithinGracePeriod bool
 
-		// SECURITY: Revoke all active refresh tokens for this user+device to invalidate
-		// potentially stolen sessions. This prevents an attacker from continuing to use
-		// any tokens obtained from the compromised device.
-		if revoked, revokeErr := uc.refreshTokenRepo.RevokeAllByUserAndDevice(ctx, rt.UserID, rt.DeviceID); revokeErr != nil {
-			logger.Error(ctx, "auth.revoke_all_tokens_failed",
-				zap.String("user_id", rt.UserID.String()),
-				zap.String("device_id", rt.DeviceID),
-				zap.Error(revokeErr))
+		if rt.RevokedAt != nil {
+			timeSinceRevocation = time.Since(*rt.RevokedAt)
+			isWithinGracePeriod = timeSinceRevocation <= refreshTokenReuseGracePeriod
 		} else {
-			logger.Error(ctx, "auth.refresh_token_reuse_mitigated: all tokens for this device have been revoked",
+			// RevokedAt is nil for tokens revoked before this field was added.
+			// Fall back to checking token age (CreatedAt) as a heuristic.
+			// If token was created very recently, it's likely a concurrent refresh.
+			tokenAge := time.Since(rt.CreatedAt)
+			isWithinGracePeriod = tokenAge <= refreshTokenReuseGracePeriod
+			timeSinceRevocation = tokenAge // Approximate
+		}
+
+		if isWithinGracePeriod {
+			// Concurrent refresh attempt within grace period, not a theft.
+			// Log for audit but don't revoke all tokens (preserve user experience).
+			logFields := []zap.Field{
 				zap.String("token_id", rt.ID.String()),
 				zap.String("user_id", rt.UserID.String()),
 				zap.String("device_id", rt.DeviceID),
-				zap.Int64("tokens_revoked", revoked))
+				zap.String("token_hash_prefix", rtHash[:16]),
+				zap.Time("token_created_at", rt.CreatedAt),
+				zap.Duration("time_since_revocation", timeSinceRevocation),
+				zap.Duration("grace_period", refreshTokenReuseGracePeriod),
+			}
+			if rt.RevokedAt != nil {
+				logFields = append(logFields, zap.Time("token_revoked_at", *rt.RevokedAt))
+			}
+			logger.Warn(ctx, "auth.refresh_token_concurrent_refresh: revoked token reused within grace period", logFields...)
+			// Record metric for monitoring concurrent refresh patterns
+			auth.RecordSecurityEvent("refresh_token_concurrent_attempt")
+		} else {
+			// SECURITY CRITICAL: Refresh token reuse detected AFTER grace period.
+			// This strongly indicates that the token has been stolen and is being used by an attacker.
+			// Immediate alerting and session revocation are required.
+			logFields := []zap.Field{
+				zap.String("token_id", rt.ID.String()),
+				zap.String("user_id", rt.UserID.String()),
+				zap.String("device_id", rt.DeviceID),
+				zap.String("token_hash_prefix", rtHash[:16]),
+				zap.Time("token_created_at", rt.CreatedAt),
+				zap.Duration("time_since_revocation", timeSinceRevocation),
+				zap.Duration("grace_period", refreshTokenReuseGracePeriod),
+				zap.Time("detected_at", time.Now()),
+			}
+			if rt.RevokedAt != nil {
+				logFields = append(logFields, zap.Time("token_revoked_at", *rt.RevokedAt))
+			}
+			logger.Error(ctx, "auth.refresh_token_reuse_detected: potential token theft - refresh token was reused after grace period", logFields...)
+			// Record Prometheus metric for security monitoring and alerting.
+			// Alert rule suggestion: rate(sec_events_total{event_type="refresh_token_reuse"}) > 0
+			auth.RecordSecurityEvent("refresh_token_reuse")
+
+			// SECURITY: Revoke all active refresh tokens for this user+device to invalidate
+			// potentially stolen sessions. This prevents an attacker from continuing to use
+			// any tokens obtained from the compromised device.
+			if revoked, revokeErr := uc.refreshTokenRepo.RevokeAllByUserAndDevice(ctx, rt.UserID, rt.DeviceID); revokeErr != nil {
+				logger.Error(ctx, "auth.revoke_all_tokens_failed",
+					zap.String("user_id", rt.UserID.String()),
+					zap.String("device_id", rt.DeviceID),
+					zap.Error(revokeErr))
+			} else {
+				logger.Error(ctx, "auth.refresh_token_reuse_mitigated: all tokens for this device have been revoked",
+					zap.String("token_id", rt.ID.String()),
+					zap.String("user_id", rt.UserID.String()),
+					zap.String("device_id", rt.DeviceID),
+					zap.Int64("tokens_revoked", revoked))
+			}
 		}
 
 		return nil, ErrRefreshTokenRevoked

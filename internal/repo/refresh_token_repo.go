@@ -79,10 +79,14 @@ func (r *refreshTokenRepo) FindByHashForUpdate(ctx context.Context, hash string)
 }
 
 func (r *refreshTokenRepo) Revoke(ctx context.Context, id uuid.UUID) error {
+	now := time.Now()
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.RefreshToken{}).
 		Where("id = ? AND revoked = false", id).
-		Update("revoked", true)
+		Updates(map[string]interface{}{
+			"revoked":    true,
+			"revoked_at": now,
+		})
 	if result.Error != nil {
 		return fmt.Errorf("revoke refresh token %s: %w", id, result.Error)
 	}
@@ -94,10 +98,14 @@ func (r *refreshTokenRepo) Revoke(ctx context.Context, id uuid.UUID) error {
 
 // RevokeAllByUserID revokes all refresh tokens for a user.
 func (r *refreshTokenRepo) RevokeAllByUserID(ctx context.Context, userID uuid.UUID) (int64, error) {
+	now := time.Now()
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.RefreshToken{}).
 		Where("user_id = ? AND revoked = false", userID).
-		Update("revoked", true)
+		Updates(map[string]interface{}{
+			"revoked":    true,
+			"revoked_at": now,
+		})
 	if result.Error != nil {
 		return 0, fmt.Errorf("revoke all refresh tokens for user %s: %w", userID, result.Error)
 	}
@@ -107,10 +115,14 @@ func (r *refreshTokenRepo) RevokeAllByUserID(ctx context.Context, userID uuid.UU
 // RevokeAllByUserAndDevice revokes all refresh tokens for a user on a specific device.
 // This is used when token reuse is detected to invalidate all sessions for that device.
 func (r *refreshTokenRepo) RevokeAllByUserAndDevice(ctx context.Context, userID uuid.UUID, deviceID string) (int64, error) {
+	now := time.Now()
 	result := DBFromContext(ctx, r.db).WithContext(ctx).
 		Model(&model.RefreshToken{}).
 		Where("user_id = ? AND device_id = ? AND revoked = false", userID, deviceID).
-		Update("revoked", true)
+		Updates(map[string]interface{}{
+			"revoked":    true,
+			"revoked_at": now,
+		})
 	if result.Error != nil {
 		return 0, fmt.Errorf("revoke all refresh tokens for user %s device %s: %w", userID, deviceID, result.Error)
 	}

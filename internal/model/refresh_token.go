@@ -17,6 +17,7 @@ type RefreshToken struct {
 	DeviceID  string     `gorm:"size:100" json:"device_id"`
 	ExpiresAt time.Time  `json:"expires_at"`
 	Revoked   bool       `gorm:"not null;default:false" json:"revoked"`
+	RevokedAt *time.Time `json:"revoked_at"` // Time when token was revoked, nil if not revoked
 	CreatedAt time.Time  `json:"created_at"`
 	DeletedAt *time.Time `gorm:"index" json:"-"`
 }
