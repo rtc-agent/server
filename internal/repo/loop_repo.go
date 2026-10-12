@@ -124,8 +124,10 @@ func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time)
 		thresholdExpr = "datetime(?, '-' || interval_seconds || ' seconds')"
 	} else {
 		// PostgreSQL: use interval arithmetic
-		scheduledRunTimeExpr = "last_run_at"
-		thresholdExpr = "? - (interval_seconds * interval '1 second')"
+		// Compare: last_run_at + interval < staleThreshold
+		// This avoids type mismatch between timestamp and interval
+		scheduledRunTimeExpr = "last_run_at + (interval_seconds * interval '1 second')"
+		thresholdExpr = "?"
 	}
 
 	// Calculate the cutoff time: last_run_at should be before (staleThreshold - interval)
