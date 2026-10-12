@@ -120,7 +120,7 @@ func (a *einoLLMClientAdapter) Generate(ctx context.Context, prompt string, maxT
 // noThinkingOptions returns model options that disable thinking/reasoning.
 // Follows the same pattern as internal/agent/summarize.go and session_title_summarizer.go.
 func (a *einoLLMClientAdapter) noThinkingOptions() []model.Option {
-	var opts []model.Option
+	opts := make([]model.Option, 0, 1)
 	switch a.llmConfig.Provider {
 	case "claude":
 		opts = append(opts, einoclaude.WithThinkingConfig(

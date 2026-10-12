@@ -27,7 +27,7 @@ import (
 // Reads llm.provider dynamically from ConfigProvider to support runtime changes.
 func (h *helpers) noThinkingOptions(ctx context.Context) []model.Option {
 	provider := h.resolveLLMProvider(ctx)
-	var opts []model.Option
+	opts := make([]model.Option, 0, 1)
 	switch provider {
 	case "claude":
 		opts = append(opts, einoclaude.WithThinkingConfig(

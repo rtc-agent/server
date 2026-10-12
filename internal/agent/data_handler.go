@@ -378,7 +378,7 @@ func (h *helpers) handleMessage(ctx context.Context, sessionID uuid.UUID, turnID
 		}
 
 		// Build one UpdatePublishItem with all message.created events merged.
-		var allItems []protocol.UpdateItem
+		allItems := make([]protocol.UpdateItem, 0, len(createdMsgs))
 		for _, msg := range createdMsgs {
 			allItems = append(allItems, protocol.UpdateItem{
 				Entity: protocol.EntityMessage, Action: protocol.ActionCreated, EntityId: msg.ID.String(),

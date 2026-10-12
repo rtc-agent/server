@@ -274,7 +274,8 @@ func (e *SessionMemoryExtractor) extractMemories(
 	}
 
 	// Convert to memory.Memory.
-	var memories []*memory.Memory
+	totalItems := len(args.Decision) + len(args.Context) + len(args.Progress) + len(args.Issue) + len(args.Learnings)
+	memories := make([]*memory.Memory, 0, totalItems)
 	addMemories := func(memType string, items []memoryItem) {
 		for _, item := range items {
 			tokenCount := estimateMemoryTokens(item.Content)

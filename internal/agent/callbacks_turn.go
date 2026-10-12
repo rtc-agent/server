@@ -44,7 +44,7 @@ func (h *helpers) interruptTurn(ctx context.Context, turnID string, interruptID 
 		if parseErr == nil {
 			interruptMapKey := cache.RtcBatchInterruptMap(turnUUID.String())
 			// Collect all RtcID -> InterruptCtx.ID pairs for atomic HSET + EXPIRE.
-			var args []interface{}
+			args := make([]interface{}, 0, len(allInterruptContexts)*2)
 			for _, ic := range allInterruptContexts {
 				if info, ok := ic.Info.(rtcInterruptInfo); ok && info.RtcID != "" {
 					args = append(args, info.RtcID, ic.ID)

@@ -83,7 +83,7 @@ func (h *helpers) createPostCompactAttachments(
 		path       string
 		toolCallID string
 	}
-	var reads []readCall
+	reads := make([]readCall, 0, len(discarded))
 	for _, msg := range discarded {
 		if msg.Role != schema.Assistant {
 			continue
@@ -119,7 +119,7 @@ func (h *helpers) createPostCompactAttachments(
 
 	// 3. Iterate from most recent, dedup by path, build attachments.
 	seen := make(map[string]struct{})
-	var attachments []*schema.Message
+	attachments := make([]*schema.Message, 0, postCompactMaxFiles)
 	totalTokens := 0
 
 	for i := len(reads) - 1; i >= 0; i-- {

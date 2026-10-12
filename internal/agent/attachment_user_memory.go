@@ -68,8 +68,8 @@ func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, u
 	lang := a.detectUserLanguage(ctx, sessionID)
 
 	// Split by importance: critical/high first, then medium
-	var criticalHigh []*memory.Memory
-	var medium []*memory.Memory
+	criticalHigh := make([]*memory.Memory, 0, len(memories))
+	medium := make([]*memory.Memory, 0, len(memories))
 
 	for _, mem := range memories {
 		switch extractImportanceFromMetadata(mem.Metadata) {
@@ -103,7 +103,7 @@ func (a *UserMemoryAttachment) Build(ctx context.Context, sessionID uuid.UUID, u
 	// Output by category
 	categoryLabels := userMemoryLabels(lang)
 
-	var cats []userMemoryCategory
+	cats := make([]userMemoryCategory, 0, len(model.ValidUserMemoryCategories))
 	for _, cat := range model.ValidUserMemoryCategories {
 		items := categories[cat]
 		if len(items) == 0 {

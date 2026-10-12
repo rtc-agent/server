@@ -77,7 +77,18 @@ type Server struct {
 
 // BuildProviderClients constructs the Provider list from config.
 func BuildProviderClients(cfg *config.Config) []*oauth.ProviderConfig {
-	var list []*oauth.ProviderConfig
+	// Count enabled providers for preallocation
+	enabledCount := 0
+	if cfg.Providers.Mock.Enabled {
+		enabledCount++
+	}
+	if cfg.Providers.GitHub.Enabled {
+		enabledCount++
+	}
+	if cfg.Providers.Google.Enabled {
+		enabledCount++
+	}
+	list := make([]*oauth.ProviderConfig, 0, enabledCount)
 	if cfg.Providers.Mock.Enabled {
 		list = append(list, &oauth.ProviderConfig{
 			Name:         "mock",
@@ -132,7 +143,7 @@ func (s *Server) startConfigSubscriber() {
 	}
 
 	configSubscriber := usecase.NewRedisConfigSubscriber(s.svcCtx.Redis)
-	configSubscriber.RegisterHandler("cache_invalidator", func(event model.ConfigUpdateEvent) {
+	configSubscriber.RegisterHandler("cache_invalidator", func(ctx context.Context, event model.ConfigUpdateEvent) {
 		var userIDPtr *uuid.UUID
 		if event.UserID != nil {
 			if parsedUID, err := uuid.Parse(*event.UserID); err == nil {
@@ -140,7 +151,7 @@ func (s *Server) startConfigSubscriber() {
 			}
 		}
 		cachedProvider.InvalidateCache(event.Key, userIDPtr)
-		logger.Debug(context.Background(), "config.cache_invalidated",
+		logger.Debug(ctx, "config.cache_invalidated",
 			zap.String("key", event.Key),
 			zap.String("operation", event.Operation),
 			zap.Int("version", event.Version),
@@ -452,9 +463,23 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		time.Duration(s.cfg.API.IPRateLimit.LimiterTTLSec)*time.Second,
 	)
 	s.oauth2Handler.SetIPRateLimiter(ipRateLimiter)
+
+	// Token Exchange endpoints use a stricter per-IP rate limiter.
+	// Token Exchange involves external JWT signature verification (CPU-intensive)
+	// and is a high-value target for brute-force attacks against trusted issuers.
+	// See TokenExchangeIPRateLimitConfig for details.
+	tokenExchangeRateLimiter := middleware.NewIPRateLimiter(
+		rate.Limit(s.cfg.API.IPRateLimit.TokenExchange.RequestsPerSecond),
+		s.cfg.API.IPRateLimit.TokenExchange.BurstSize,
+		time.Duration(s.cfg.API.IPRateLimit.LimiterTTLSec)*time.Second,
+	)
+	s.oauth2Handler.SetTokenExchangeIPRateLimiter(tokenExchangeRateLimiter)
+
 	s.oauth2Handler.RegisterRoutes(mux)
 
 	// Start IP rate limiter cleanup goroutine to prevent memory growth.
+	// Both the general OAuth2 limiter and the stricter Token Exchange limiter
+	// are cleaned up in the same goroutine.
 	{
 		ctx, cancel := context.WithCancel(context.Background())
 		s.ipRateLimiterCancel = cancel
@@ -467,6 +492,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 					return
 				case <-ticker.C:
 					ipRateLimiter.Cleanup()
+					tokenExchangeRateLimiter.Cleanup()
 				}
 			}
 		})

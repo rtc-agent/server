@@ -36,7 +36,7 @@ func CSP(cfg *config.CSPConfig) Middleware {
 // and directives are joined with "; ".
 // This is a shared implementation used by both standard library and Gin middlewares.
 func buildCSPHeader(cfg *config.CSPConfig) string {
-	var parts []string
+	parts := make([]string, 0, 12) // 11 directives + report-uri
 
 	// Helper to add a directive if values are present
 	addDirective := func(name string, values []string) {

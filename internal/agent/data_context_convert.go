@@ -590,7 +590,7 @@ func (h *helpers) processFileAttachments(ctx context.Context, msg *turnagent.Mes
 	wg.Wait()
 
 	// Process results in order
-	var textContents []string
+	textContents := make([]string, 0, len(results))
 	successCount := 0
 	failCount := 0
 	for _, res := range results {
