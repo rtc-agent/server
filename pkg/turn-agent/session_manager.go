@@ -3,11 +3,10 @@ package turnagent
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	// "runtime/debug" // DISABLED: only used by commented-out renewal goroutine
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
@@ -15,6 +14,11 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// cleanupTimeout is the maximum duration allowed for session cleanup operations.
+// This timeout accommodates multiple Redis operations (ReleaseSession, notifyPendingWork)
+// each with their own 10s timeouts, plus margin for network latency and retries.
+const cleanupTimeout = 60 * time.Second
 
 // SessionTurnManager manages the lifecycle of a single session's turn loop.
 //
@@ -297,6 +301,7 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 					"session_id": mgr.sessionID,
 					"turn_id":    mgr.turnID,
 					"panic":      fmt.Sprintf("%v", r),
+					"stack":      string(debug.Stack()),
 				})
 			}
 		}()
@@ -308,10 +313,7 @@ func (mgr *SessionTurnManager) Run(ctx context.Context) {
 		if originalSpan != nil && originalSpan.SpanContext().IsValid() {
 			cleanupBaseCtx = trace.ContextWithRemoteSpanContext(cleanupBaseCtx, originalSpan.SpanContext())
 		}
-		// Use 60s timeout to accommodate multiple Redis operations (ReleaseSession,
-		// notifyPendingWork) each with their own 10s timeouts, plus margin for
-		// network latency and retries.
-		cleanupCtx, cleanupCancel := context.WithTimeout(cleanupBaseCtx, 60*time.Second)
+		cleanupCtx, cleanupCancel := context.WithTimeout(cleanupBaseCtx, cleanupTimeout)
 		defer cleanupCancel()
 		mgr.Cleanup(cleanupCtx)
 	}()

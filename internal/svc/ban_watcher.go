@@ -59,7 +59,11 @@ func NewBanWatcher(node *centrifuge.Node, rdb redis.UniversalClient) (*BanWatche
 func (bw *BanWatcher) subscribe() error {
 	// Close old subscription to prevent resource leak
 	if bw.sub != nil {
-		_ = bw.sub.Close()
+		// Close errors are logged but typically not actionable.
+		// The subscription might already be closed or the connection might be broken.
+		if err := bw.sub.Close(); err != nil {
+			logger.Warn(bw.baseCtx, "ban_watcher.old_subscription_close_failed", zap.Error(err))
+		}
 	}
 	// Use a timeout for the subscribe operation to prevent blocking indefinitely
 	// if the Redis connection hangs.
@@ -208,5 +212,25 @@ func (bw *BanWatcher) Close() error {
 		return nil
 	}
 	bw.closed = true
-	return bw.sub.Close()
+
+	// 添加超时保护，防止 Redis 连接阻塞导致 Close 永久阻塞
+	// 5 秒超时足够覆盖正常的 Close 操作（毫秒级），远小于服务器关闭超时（30s）
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- bw.sub.Close()
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		// 接受超时，继续关闭流程
+		// 泄漏的 goroutine 会在 Redis 连接最终关闭时退出
+		logger.Warn(bw.baseCtx, "ban_watcher.subscription_close_timeout",
+			zap.String("timeout", "5s"))
+		return nil
+	}
 }

@@ -80,6 +80,15 @@ type StreamStore struct {
 	// If cleanup is missed (e.g., due to crashes), entries remain but are bounded
 	// by the number of concurrent streaming messages. For long-running processes
 	// with many missed cleanups, consider periodic cleanup via a background goroutine.
+	//
+	// TODO(optimization): Add periodic cleanup for ttlCheckCounter to prevent
+	// potential memory leaks in long-running processes with high stream volume.
+	// Options:
+	//   1. Background goroutine that scans and removes stale entries every hour
+	//   2. LRU cache with bounded size (e.g., sync.Map with size limit)
+	//   3. Move cleanup to a separate metrics collector that runs periodically
+	// Current risk: Low - entries are bounded by concurrent streams, but monitoring
+	// is recommended for production deployments with high message throughput.
 	ttlCheckCounter map[string]int
 	ttlCheckMu      sync.Mutex
 }
