@@ -16,7 +16,7 @@ var loopMetrics = struct {
 	tasksTotal *prometheus.CounterVec
 
 	// taskDuration tracks the duration of loop task processing in seconds.
-	// Labels: outcome (success|failure|idempotent_skip)
+	// Labels: outcome (success|failure)
 	taskDuration *prometheus.HistogramVec
 
 	// recoveryScansTotal counts the number of recovery scans performed.
@@ -39,7 +39,7 @@ var loopMetrics = struct {
 		Name:      "task_duration_seconds",
 		Help:      "Duration of loop task processing in seconds.",
 		Buckets:   prometheus.ExponentialBuckets(0.01, 2, 10), // 10ms ~ 5s
-	}, []string{"outcome"}), // outcome: "success", "failure", "idempotent_skip"
+	}, []string{"outcome"}), // outcome: "success", "failure"
 
 	recoveryScansTotal: promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "rtc",

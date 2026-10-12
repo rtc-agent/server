@@ -38,13 +38,13 @@ var (
 		Name: "cache_analyzer_avg_hit_rate",
 		Help: "Average cache hit rate from the most recent analysis",
 	})
-	totalInputTokens = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "cache_analyzer_total_input_tokens",
-		Help: "Total number of input tokens processed",
+	latestInputTokens = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "cache_analyzer_latest_input_tokens",
+		Help: "Input tokens from the most recent analysis (set, not accumulated)",
 	})
-	totalCacheReadTokens = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "cache_analyzer_total_cache_read_tokens",
-		Help: "Total number of cache read tokens",
+	latestCacheReadTokens = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "cache_analyzer_latest_cache_read_tokens",
+		Help: "Cache read tokens from the most recent analysis (set, not accumulated)",
 	})
 )
 
@@ -95,7 +95,7 @@ func (s *Server) Run() error {
 	r.GET("/export/:session_id", s.handleExportMarkdown)
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
-	addr := ":" + strconv.Itoa(s.port)
+	addr := "127.0.0.1:" + strconv.Itoa(s.port)
 	return r.Run(addr)
 }
 
@@ -148,8 +148,8 @@ func (s *Server) handleReportPage(c *gin.Context) {
 
 	// Record Prometheus metrics
 	avgHitRate.Set(summary.AvgHitRate)
-	totalInputTokens.Add(float64(summary.TotalInputTokens))
-	totalCacheReadTokens.Add(float64(summary.TotalCacheReadTokens))
+	latestInputTokens.Set(float64(summary.TotalInputTokens))
+	latestCacheReadTokens.Set(float64(summary.TotalCacheReadTokens))
 
 	// Generate diff data for each request
 	diffs := generateDiffs(requests)
