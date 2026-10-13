@@ -22,7 +22,7 @@ var ErrStateNotFound = errors.New("state not found")
 //
 //	key   = oauth2:state:{state}   (constructed via cache.OAuth2State)
 //	value = provider name
-//	TTL   = caller-specified (typically 10 minutes)
+//	TTL   = caller-specified (typically 5 minutes)
 //
 // GetDel uses a Lua script for atomic read-and-delete to prevent replay attacks.
 type RedisStore struct {

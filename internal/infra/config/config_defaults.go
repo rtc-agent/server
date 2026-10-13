@@ -120,7 +120,9 @@ func setAuthDefaults(v *viper.Viper) {
 	// Security: 15-minute access token TTL reduces risk window if token is leaked.
 	v.SetDefault("auth.access_token_ttl_seconds", 900)
 	v.SetDefault("auth.refresh_token_ttl", 30*24*time.Hour)
-	v.SetDefault("auth.oauth2_state_ttl", 10*time.Minute)
+	// Security: 5-minute state TTL minimizes CSRF attack window per OAuth2 best practices.
+	// Shorter TTL reduces the time window for attackers to exploit stolen state tokens.
+	v.SetDefault("auth.oauth2_state_ttl", 5*time.Minute)
 	v.SetDefault("auth.allowed_redirect_uris", []string{})
 	// Refresh Token Grace Period: Time window for concurrent refresh attempts.
 	// Default 30s balances security (detect token theft) with UX (avoid false positives).

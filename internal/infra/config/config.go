@@ -384,7 +384,7 @@ type AuthConfig struct {
 	JWTSecret             string        `mapstructure:"jwt_secret"`
 	AccessTokenTTLSeconds int           `mapstructure:"access_token_ttl_seconds"`
 	RefreshTokenTTL       time.Duration `mapstructure:"refresh_token_ttl"` // Default 30 days.
-	OAuth2StateTTL        time.Duration `mapstructure:"oauth2_state_ttl"`  // Default 10 minutes.
+	OAuth2StateTTL        time.Duration `mapstructure:"oauth2_state_ttl"`  // Default 5 minutes.
 	// AllowedRedirectURIs is the OAuth2 redirect_uri whitelist.
 	// Empty means no restriction (development only); production must configure explicitly.
 	AllowedRedirectURIs []string `mapstructure:"allowed_redirect_uris"`

@@ -82,6 +82,16 @@ func (h *OAuth2Handler) SetTokenExchangeHandler(te *TokenExchangeHandler) {
 	h.tokenExchange = te
 }
 
+// SetTokenExchangeIPRateLimiter sets a dedicated IP rate limiter for the Token Exchange handler.
+// This provides stricter rate limiting specifically for Token Exchange requests,
+// separate from the general OAuth2 IP rate limiter.
+// No-op if the Token Exchange handler is not configured.
+func (h *OAuth2Handler) SetTokenExchangeIPRateLimiter(limiter *middleware.IPRateLimiter) {
+	if h.tokenExchange != nil {
+		h.tokenExchange.SetIPRateLimiter(limiter)
+	}
+}
+
 // RegisterRoutes registers OAuth2 routes to the HTTP ServeMux.
 // Public endpoints (/oauth2/token, /oauth2/refresh, /oauth2/authorize) are
 // protected by IP rate limiting if configured.
@@ -194,7 +204,7 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Store in StateStore (key=state, value=JSON{provider, redirect_uri, code_challenge}, TTL=10min).
+	// Store in StateStore (key=state, value=JSON{provider, redirect_uri, code_challenge}, TTL=5min).
 	// The redirect_uri is bound to the state to prevent redirect_uri substitution attacks
 	// per RFC 6749 Section 10.6. The code_challenge is bound for PKCE validation per RFC 7636.
 	ctx := r.Context()
@@ -211,10 +221,10 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Security: ensure state TTL is within safe bounds (5-30 minutes).
-	// Fallback to 10 minutes if not configured or invalid.
+	// Fallback to 5 minutes if not configured or invalid.
 	stateTTL := h.authConfig.OAuth2StateTTL
 	if stateTTL < 5*time.Minute || stateTTL > 30*time.Minute {
-		stateTTL = 10 * time.Minute
+		stateTTL = 5 * time.Minute
 	}
 	if err := h.stateStore.Set(ctx, state, string(stateJSON), stateTTL); err != nil {
 		logger.Error(ctx, "failed to store state", zap.Error(err))
