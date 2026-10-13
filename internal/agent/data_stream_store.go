@@ -28,10 +28,11 @@ func NewStreamStore(rdb redis.UniversalClient, chunkTTL time.Duration, ttlCheckI
 		ttlCheckInterval = 100
 	}
 	return &StreamStore{
-		rdb:              rdb,
-		chunkTTL:         chunkTTL,
-		ttlCheckInterval: ttlCheckInterval,
-		ttlCheckCounter:  make(map[string]int),
+		rdb:                rdb,
+		chunkTTL:           chunkTTL,
+		ttlCheckInterval:   ttlCheckInterval,
+		ttlCheckCounter:    make(map[string]int),
+		ttlCleanupInterval: 10000, // Clean up stale entries every 10k operations
 	}
 }
 
@@ -46,10 +47,11 @@ func (h *helpers) getStreamStore(ctx context.Context) *StreamStore {
 	// ttlCheckInterval is static (not dynamically configurable) to avoid
 	// per-call overhead. Use the configured value from helpers.
 	return &StreamStore{
-		rdb:              h.rdb,
-		chunkTTL:         chunkTTL,
-		ttlCheckInterval: h.streamTTLCheckInterval,
-		ttlCheckCounter:  make(map[string]int),
+		rdb:                h.rdb,
+		chunkTTL:           chunkTTL,
+		ttlCheckInterval:   h.streamTTLCheckInterval,
+		ttlCheckCounter:    make(map[string]int),
+		ttlCleanupInterval: 10000, // Clean up stale entries every 10k operations
 	}
 }
 
@@ -77,20 +79,18 @@ type StreamStore struct {
 	// This reduces Redis RTTs by ~99% for high-throughput streams.
 	//
 	// Memory safety: Entries are cleaned up in DeleteChunks and GetAndDeleteChunks.
-	// If cleanup is missed (e.g., due to crashes), entries remain but are bounded
-	// by the number of concurrent streaming messages. For long-running processes
-	// with many missed cleanups, consider periodic cleanup via a background goroutine.
-	//
-	// TODO(optimization): Add periodic cleanup for ttlCheckCounter to prevent
-	// potential memory leaks in long-running processes with high stream volume.
-	// Options:
-	//   1. Background goroutine that scans and removes stale entries every hour
-	//   2. LRU cache with bounded size (e.g., sync.Map with size limit)
-	//   3. Move cleanup to a separate metrics collector that runs periodically
-	// Current risk: Low - entries are bounded by concurrent streams, but monitoring
-	// is recommended for production deployments with high message throughput.
-	ttlCheckCounter map[string]int
-	ttlCheckMu      sync.Mutex
+	// Additionally, a periodic cleanup runs every ttlCleanupInterval operations
+	// to remove stale entries that may have been missed due to crashes or other
+	// issues. This prevents memory leaks in long-running processes.
+	ttlCheckCounter   map[string]int
+	ttlCheckMu        sync.Mutex
+	ttlCleanupCounter int // Tracks total operations for periodic cleanup
+
+	// ttlCleanupInterval is the number of AppendChunk operations between
+	// full cleanup scans of ttlCheckCounter. Default: 10000.
+	// This ensures stale entries are eventually removed even if DeleteChunks
+	// or GetAndDeleteChunks are not called (e.g., due to crashes).
+	ttlCleanupInterval int
 }
 
 // streamStoreRedisTimeout is the timeout for Redis operations in StreamStore.
@@ -134,6 +134,11 @@ func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error)
 	s.ttlCheckMu.Lock()
 	s.ttlCheckCounter[messageID]++
 	shouldCheck := s.ttlCheckCounter[messageID]%s.ttlCheckInterval == 0
+
+	// Periodic cleanup: scan and remove stale entries to prevent memory leaks.
+	// This runs every ttlCleanupInterval operations regardless of messageID.
+	s.ttlCleanupCounter++
+	shouldCleanup := s.ttlCleanupCounter%s.ttlCleanupInterval == 0
 	s.ttlCheckMu.Unlock()
 
 	if shouldCheck {
@@ -151,6 +156,13 @@ func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error)
 		}
 	}
 
+	// Periodic cleanup of stale ttlCheckCounter entries.
+	// An entry is considered stale if its counter is low (indicating inactivity)
+	// and the corresponding Redis key has expired or does not exist.
+	if shouldCleanup {
+		s.cleanupStaleCounters(ctx)
+	}
+
 	result, err := cache.AppendChunk.Run(
 		ctx, s.rdb,
 		[]string{key},
@@ -160,6 +172,57 @@ func (s *StreamStore) AppendChunk(messageID string, chunk string) (int64, error)
 		return 0, fmt.Errorf("append chunk: %w", err)
 	}
 	return result, nil
+}
+
+// cleanupStaleCounters removes stale entries from ttlCheckCounter.
+// An entry is stale if the corresponding Redis key does not exist or has expired.
+// This prevents memory leaks in long-running processes where DeleteChunks or
+// GetAndDeleteChunks may not be called (e.g., due to crashes).
+//
+// Thread safety: This method acquires ttlCheckMu internally.
+func (s *StreamStore) cleanupStaleCounters(ctx context.Context) {
+	s.ttlCheckMu.Lock()
+	// Collect messageIDs to check (snapshot to avoid holding lock during Redis calls)
+	messageIDs := make([]string, 0, len(s.ttlCheckCounter))
+	for messageID := range s.ttlCheckCounter {
+		messageIDs = append(messageIDs, messageID)
+	}
+	s.ttlCheckMu.Unlock()
+
+	if len(messageIDs) == 0 {
+		return
+	}
+
+	var staleCount int
+	for _, messageID := range messageIDs {
+		key := cache.MessageStream(messageID)
+		// Check if the Redis key exists. If it does not exist (TTL returns -2),
+		// the entry is stale and should be removed.
+		ttlResult, err := s.rdb.TTL(ctx, key).Result()
+		if err != nil {
+			// Redis error - skip this entry, will retry on next cleanup cycle
+			continue
+		}
+		// TTL returns -2 if key does not exist, -1 if no expiry
+		// Remove entry if key does not exist
+		if ttlResult == -2 {
+			s.ttlCheckMu.Lock()
+			delete(s.ttlCheckCounter, messageID)
+			s.ttlCheckMu.Unlock()
+			staleCount++
+		}
+	}
+
+	if staleCount > 0 {
+		logger.Info(ctx, "cleaned up stale ttlCheckCounter entries",
+			zap.Int("stale_entries", staleCount),
+			zap.Int("remaining_entries", func() int {
+				s.ttlCheckMu.Lock()
+				defer s.ttlCheckMu.Unlock()
+				return len(s.ttlCheckCounter)
+			}()),
+		)
+	}
 }
 
 // GetAllChunks reads all buffered chunks for the given message from Redis.
