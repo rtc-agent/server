@@ -10,84 +10,104 @@ import (
 
 // Validate checks required configuration fields, returning the first error found.
 func (c *Config) Validate() error {
-	// Validate server environment.
+	// Phase 1: core infrastructure (server env, DB, Redis, port).
+	if err := c.validateCoreInfrastructure(); err != nil {
+		return err
+	}
+
+	// Phase 2: LLM and agent providers.
+	if err := c.validateProviders(); err != nil {
+		return err
+	}
+
+	// Phase 3: auth, CORS, worker, cross-config, asynq.
+	if err := c.validateRuntimeSettings(); err != nil {
+		return err
+	}
+
+	// Phase 4: optional subsystems (storage, token exchange).
+	if err := c.validateOptionalSubsystems(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateCoreInfrastructure checks server env, database, Redis, and port.
+func (c *Config) validateCoreInfrastructure() error {
 	if err := c.validateServerEnv(); err != nil {
 		return err
 	}
-
-	// Validate database configuration.
 	if c.Database.DSN == "" {
 		return fmt.Errorf("database.dsn is required")
 	}
-
-	// Validate Redis configuration.
 	if err := c.validateRedis(); err != nil {
 		return err
 	}
-
-	// Validate server port range.
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port must be 1-65535, got %d", c.Server.Port)
 	}
+	return nil
+}
 
-	// Validate LLM configuration.
+// validateProviders checks LLM and OAuth provider configuration.
+func (c *Config) validateProviders() error {
 	if err := c.validateLLM(); err != nil {
 		return err
 	}
+	return c.validateOAuthProviders()
+}
 
-	// Validate OAuth providers.
-	if err := c.validateOAuthProviders(); err != nil {
-		return err
-	}
-
-	// Validate auth configuration.
+// validateRuntimeSettings checks auth, CORS, worker, cross-config, and asynq.
+func (c *Config) validateRuntimeSettings() error {
 	if err := c.validateAuth(); err != nil {
 		return err
 	}
-
-	// Validate CORS configuration.
 	if err := c.validateCORS(); err != nil {
 		return err
 	}
-
-	// Validate worker compression threshold configuration.
 	if err := c.Worker.Validate(); err != nil {
 		return err
 	}
+	if err := c.validateCrossConfigConstraints(); err != nil {
+		return err
+	}
+	return c.Asynq.Validate()
+}
 
-	// Validate cross-config constraints: max_output_tokens_for_summary should not exceed llm.max_tokens.
+// validateOptionalSubsystems checks optional subsystems gated by feature flags.
+func (c *Config) validateOptionalSubsystems() error {
+	// Validate storage configuration (only when storage is enabled).
+	if err := c.validateStorage(); err != nil {
+		return err
+	}
+	// Validate token exchange configuration (pass server env for audience validation).
+	return c.TokenExchange.Validate(c.Server.Env)
+}
+
+// validateCrossConfigConstraints checks cross-config invariants.
+// Currently checks that summary token budget does not exceed total LLM budget.
+func (c *Config) validateCrossConfigConstraints() error {
 	if c.Worker.MaxOutputTokensForSummary > 0 && c.LLM.MaxTokens > 0 &&
 		c.Worker.MaxOutputTokensForSummary > c.LLM.MaxTokens {
 		return fmt.Errorf("worker.max_output_tokens_for_summary (%d) should be <= llm.max_tokens (%d)",
 			c.Worker.MaxOutputTokensForSummary, c.LLM.MaxTokens)
 	}
-
-	// Validate asynq configuration.
-	if err := c.Asynq.Validate(); err != nil {
-		return err
-	}
-
-	// Validate storage configuration (only when storage is enabled).
-	if c.Storage.IsEnabled() {
-		// Validate storage encryption configuration.
-		if err := c.Storage.Encryption.Validate(); err != nil {
-			return err
-		}
-		if err := c.Storage.Quota.Validate(); err != nil {
-			return err
-		}
-		if err := c.Storage.RateLimit.Validate(); err != nil {
-			return err
-		}
-	}
-
-	// Validate token exchange configuration (only when external issuers are configured).
-	// Pass server environment so production deployments can enforce audience validation.
-	if err := c.TokenExchange.Validate(c.Server.Env); err != nil {
-		return err
-	}
-
 	return nil
+}
+
+// validateStorage checks storage-related sub-configs when storage is enabled.
+func (c *Config) validateStorage() error {
+	if !c.Storage.IsEnabled() {
+		return nil
+	}
+	if err := c.Storage.Encryption.Validate(); err != nil {
+		return err
+	}
+	if err := c.Storage.Quota.Validate(); err != nil {
+		return err
+	}
+	return c.Storage.RateLimit.Validate()
 }
 
 // validateServerEnv checks that server environment is valid.

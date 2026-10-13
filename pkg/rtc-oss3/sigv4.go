@@ -29,7 +29,7 @@ type Credential struct {
 // Uses AWS SDK v4 signer to re-sign the request for verification,
 // ensuring 100% compatibility with all AWS SDK clients.
 func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, service string) error {
-	// Parse Authorization header
+	// Parse Authorization header and extract credential, signed headers, signature.
 	auth := r.Header.Get("Authorization")
 	cred, signedHeaders, providedSig, err := ParseAuthorizationHeader(auth)
 	if err != nil {
@@ -37,14 +37,7 @@ func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, 
 	}
 
 	// AWS SigV4 requires "host" to be in SignedHeaders
-	hostSigned := false
-	for _, h := range signedHeaders {
-		if h == "host" {
-			hostSigned = true
-			break
-		}
-	}
-	if !hostSigned {
+	if !headerListContains(signedHeaders, "host") {
 		return &S3Error{
 			Code:     "SignatureDoesNotMatch",
 			Message:  "The request must have 'host' in SignedHeaders.",
@@ -52,11 +45,9 @@ func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, 
 		}
 	}
 
-	// Validate credential scope.
-	dateStr := cred.Date
-	scope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStr, region, service)
-	if cred.Scope != scope {
-		return ErrInvalidSignature
+	// Validate credential scope format.
+	if err := validateCredentialScope(cred, region, service); err != nil {
+		return err
 	}
 
 	// Check x-amz-content-sha256 header
@@ -77,7 +68,56 @@ func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, 
 		return ErrInvalidSignature
 	}
 
-	// Clone the request and remove Authorization header for re-signing
+	// Build a clone of the request prepared for re-signing.
+	// This strips proxy-added headers and retains only the headers the client signed.
+	clonedReq := prepareRequestForResigning(r, signedHeaders)
+
+	// Use AWS SDK v4 signer to re-sign the request
+	signer := v4.NewSigner()
+	awsCreds := aws.Credentials{
+		AccessKeyID:     cred.AccessKeyID,
+		SecretAccessKey: secretAccessKey,
+	}
+	if err := signer.SignHTTP(context.Background(), awsCreds, clonedReq, contentSHA256, service, region, signingTime); err != nil {
+		return fmt.Errorf("re-sign request: %w", err)
+	}
+
+	// Extract the computed signature from the re-signed Authorization header
+	_, _, computedSig, err := ParseAuthorizationHeader(clonedReq.Header.Get("Authorization"))
+	if err != nil {
+		return fmt.Errorf("parse re-signed authorization: %w", err)
+	}
+
+	// Compare signatures using constant-time comparison.
+	if !hmac.Equal([]byte(computedSig), []byte(providedSig)) {
+		return ErrInvalidSignature
+	}
+	return nil
+}
+
+// headerListContains reports whether the sorted header slice contains the target header.
+func headerListContains(headers []string, target string) bool {
+	for _, h := range headers {
+		if h == target {
+			return true
+		}
+	}
+	return false
+}
+
+// validateCredentialScope checks the credential scope matches the expected region/service/date.
+// Returns ErrInvalidSignature on mismatch to avoid leaking scope format information.
+func validateCredentialScope(cred *Credential, region, service string) error {
+	expectedScope := fmt.Sprintf("%s/%s/%s/aws4_request", cred.Date, region, service)
+	if cred.Scope != expectedScope {
+		return ErrInvalidSignature
+	}
+	return nil
+}
+
+// prepareRequestForResigning clones the request and keeps only the headers the client
+// originally signed. This mirrors the SDK's behavior so the re-computed signature matches.
+func prepareRequestForResigning(r *http.Request, signedHeaders []string) *http.Request {
 	clonedReq := r.Clone(r.Context())
 	clonedReq.Header.Del("Authorization")
 
@@ -118,29 +158,7 @@ func VerifySigV4Request(r *http.Request, secretAccessKey string, region string, 
 		clonedReq.Header.Set("Transfer-Encoding", strings.Join(clonedReq.TransferEncoding, ","))
 	}
 
-	// Use AWS SDK v4 signer to re-sign the request
-	signer := v4.NewSigner()
-	awsCreds := aws.Credentials{
-		AccessKeyID:     cred.AccessKeyID,
-		SecretAccessKey: secretAccessKey,
-	}
-
-	err = signer.SignHTTP(context.Background(), awsCreds, clonedReq, contentSHA256, service, region, signingTime)
-	if err != nil {
-		return fmt.Errorf("re-sign request: %w", err)
-	}
-
-	// Extract the computed signature from the re-signed Authorization header
-	_, _, computedSig, err := ParseAuthorizationHeader(clonedReq.Header.Get("Authorization"))
-	if err != nil {
-		return fmt.Errorf("parse re-signed authorization: %w", err)
-	}
-
-	// Compare signatures using constant-time comparison.
-	if !hmac.Equal([]byte(computedSig), []byte(providedSig)) {
-		return ErrInvalidSignature
-	}
-	return nil
+	return clonedReq
 }
 
 // VerifySigV4Presigned verifies a presigned URL request.

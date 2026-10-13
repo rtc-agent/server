@@ -125,52 +125,14 @@ func newObservabilityHTTPClient(payloadLog bool, observer LLMResponseObserver) *
 func (t *observabilityTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
 
-	// --- Handle request body ---
-	// We need to buffer the request body so we can:
-	// 1. Extract model name (for metrics)
-	// 2. Log it (if payloadLog=true)
-	// 3. Restore it for the actual transport to read
-	var reqBodyBytes []byte
-	if req.Body != nil {
-		var err error
-		reqBodyBytes, err = io.ReadAll(req.Body)
-		if err != nil {
-			t.logError("llm.http.request_read_error", req.URL.String(), err)
-		}
-		// req.Body.Close errors are intentionally ignored.
-		// The body has been fully read, and close errors on request bodies are not actionable.
-		_ = req.Body.Close()
-		// Restore body so the actual transport can read it
-		req.Body = io.NopCloser(bytes.NewReader(reqBodyBytes))
-	}
-
-	// Extract model name from request body (for metrics)
+	// Buffer request body so we can extract the model, log it, and restore it.
+	reqBodyBytes := t.bufferRequestBody(req)
 	model := extractModelFromBody(reqBodyBytes)
 
-	// --- Payload logging: request ---
-	if t.payloadLog {
-		l := t.payloadLogger()
-		if l != nil {
-			reqFields := []zap.Field{
-				zap.String("event", "llm.http.request"),
-				zap.String("method", req.Method),
-				zap.String("url", req.URL.String()),
-				zap.String("host", req.URL.Host),
-				zap.Time("time", start),
-			}
-			// Add session ID from context if available
-			if sessionID := turnagent.SessionIDFromContext(req.Context()); sessionID != "" {
-				reqFields = append(reqFields, zap.String("session_id", sessionID))
-			}
-			reqFields = append(reqFields, zap.Any("request_headers", redactHeaders(req.Header)))
-			if len(reqBodyBytes) > 0 {
-				reqFields = append(reqFields, zap.String("request_body", compactJSON(reqBodyBytes)))
-			}
-			l.Info("llm.http.request", reqFields...)
-		}
-	}
+	// Payload logging: request.
+	t.logRequestPayload(req, start, reqBodyBytes)
 
-	// --- Execute the actual request ---
+	// Execute the actual request.
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
 		t.logError("llm.http.error", req.URL.String(), err)
@@ -179,88 +141,141 @@ func (t *observabilityTransport) RoundTrip(req *http.Request) (*http.Response, e
 
 	elapsed := time.Since(start)
 
-	// --- Handle response ---
+	// Dispatch to the appropriate response handler based on content type.
 	contentType := resp.Header.Get("Content-Type")
-	isSSE := strings.Contains(contentType, "text/event-stream")
-
-	if isSSE {
-		// For streaming responses, wrap the body to observe chunks as consumed.
-		// Token usage is extracted from the accumulated stream data on EOF.
-		resp.Body = &observabilityReadCloser{
-			rc:         resp.Body,
-			url:        req.URL.String(),
-			model:      model,
-			payloadLog: t.payloadLog,
-			observer:   t.observer,
-			req:        req,
-			startTime:  start,
-			statusCode: resp.StatusCode,
-			isStream:   true,
-		}
-		// Payload logging for streaming
-		if t.payloadLog {
-			l := t.payloadLogger()
-			if l != nil {
-				respFields := []zap.Field{
-					zap.String("event", "llm.http.response"),
-					zap.String("url", req.URL.String()),
-					zap.Int("status_code", resp.StatusCode),
-					zap.Duration("elapsed", elapsed),
-					zap.Any("response_headers", resp.Header),
-					zap.Bool("stream", true),
-				}
-				// Add session ID from context if available
-				if sessionID := turnagent.SessionIDFromContext(req.Context()); sessionID != "" {
-					respFields = append(respFields, zap.String("session_id", sessionID))
-				}
-				l.Debug("llm.http.response (streaming)", respFields...)
-			}
-		}
+	if strings.Contains(contentType, "text/event-stream") {
+		t.handleStreamingResponse(resp, req, model, start, elapsed)
 	} else {
-		// For non-streaming responses, read the full body.
-		var respBodyBytes []byte
-		if resp.Body != nil {
-			respBodyBytes, err = io.ReadAll(resp.Body)
-			if err != nil {
-				t.logError("llm.http.response_body_read_error", req.URL.String(), err)
-			}
-			_ = resp.Body.Close()
-			// Restore body so the caller can read it
-			resp.Body = io.NopCloser(bytes.NewReader(respBodyBytes))
-		}
-
-		// Extract token usage from response
-		usage := extractTokenUsage(respBodyBytes)
-
-		// Notify observer
-		if t.observer != nil {
-			t.observer.Observe(req, model, resp.StatusCode, elapsed, usage)
-		}
-
-		// Payload logging: response
-		if t.payloadLog {
-			l := t.payloadLogger()
-			if l != nil {
-				respFields := []zap.Field{
-					zap.String("event", "llm.http.response"),
-					zap.String("url", req.URL.String()),
-					zap.Int("status_code", resp.StatusCode),
-					zap.Duration("elapsed", elapsed),
-					zap.Any("response_headers", resp.Header),
-				}
-				// Add session ID from context if available
-				if sessionID := turnagent.SessionIDFromContext(req.Context()); sessionID != "" {
-					respFields = append(respFields, zap.String("session_id", sessionID))
-				}
-				if len(respBodyBytes) > 0 {
-					respFields = append(respFields, zap.String("response_body", compactJSON(respBodyBytes)))
-				}
-				l.Debug("llm.http.response", respFields...)
-			}
-		}
+		t.handleBufferedResponse(resp, req, model, elapsed)
 	}
 
 	return resp, nil
+}
+
+// bufferRequestBody reads and restores the request body so it can be inspected
+// (for model extraction / payload logging) and then re-read by the underlying transport.
+func (t *observabilityTransport) bufferRequestBody(req *http.Request) []byte {
+	if req.Body == nil {
+		return nil
+	}
+	bodyBytes, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.logError("llm.http.request_read_error", req.URL.String(), err)
+	}
+	// req.Body.Close errors are intentionally ignored.
+	// The body has been fully read, and close errors on request bodies are not actionable.
+	_ = req.Body.Close()
+	// Restore body so the actual transport can read it.
+	req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	return bodyBytes
+}
+
+// logRequestPayload logs the full request body/headers when payloadLog is enabled.
+func (t *observabilityTransport) logRequestPayload(req *http.Request, start time.Time, bodyBytes []byte) {
+	if !t.payloadLog {
+		return
+	}
+	l := t.payloadLogger()
+	if l == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("event", "llm.http.request"),
+		zap.String("method", req.Method),
+		zap.String("url", req.URL.String()),
+		zap.String("host", req.URL.Host),
+		zap.Time("time", start),
+	}
+	if sessionID := turnagent.SessionIDFromContext(req.Context()); sessionID != "" {
+		fields = append(fields, zap.String("session_id", sessionID))
+	}
+	fields = append(fields, zap.Any("request_headers", redactHeaders(req.Header)))
+	if len(bodyBytes) > 0 {
+		fields = append(fields, zap.String("request_body", compactJSON(bodyBytes)))
+	}
+	l.Info("llm.http.request", fields...)
+}
+
+// handleStreamingResponse wraps the response body so chunks are observed as consumed.
+// Token usage is extracted incrementally on EOF (no unbounded buffering).
+func (t *observabilityTransport) handleStreamingResponse(resp *http.Response, req *http.Request, model string, start time.Time, elapsed time.Duration) {
+	resp.Body = &observabilityReadCloser{
+		rc:         resp.Body,
+		url:        req.URL.String(),
+		model:      model,
+		payloadLog: t.payloadLog,
+		observer:   t.observer,
+		req:        req,
+		startTime:  start,
+		statusCode: resp.StatusCode,
+		isStream:   true,
+	}
+	if !t.payloadLog {
+		return
+	}
+	l := t.payloadLogger()
+	if l == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("event", "llm.http.response"),
+		zap.String("url", req.URL.String()),
+		zap.Int("status_code", resp.StatusCode),
+		zap.Duration("elapsed", elapsed),
+		zap.Any("response_headers", resp.Header),
+		zap.Bool("stream", true),
+	}
+	if sessionID := turnagent.SessionIDFromContext(req.Context()); sessionID != "" {
+		fields = append(fields, zap.String("session_id", sessionID))
+	}
+	l.Debug("llm.http.response (streaming)", fields...)
+}
+
+// handleBufferedResponse reads a non-streaming response body into memory, extracts
+// token usage, notifies the observer, and optionally logs the full payload.
+func (t *observabilityTransport) handleBufferedResponse(resp *http.Response, req *http.Request, model string, elapsed time.Duration) {
+	var respBodyBytes []byte
+	if resp.Body != nil {
+		var err error
+		respBodyBytes, err = io.ReadAll(resp.Body)
+		if err != nil {
+			t.logError("llm.http.response_body_read_error", req.URL.String(), err)
+		}
+		_ = resp.Body.Close()
+		// Restore body so the caller can read it.
+		resp.Body = io.NopCloser(bytes.NewReader(respBodyBytes))
+	}
+
+	usage := extractTokenUsage(respBodyBytes)
+	if t.observer != nil {
+		t.observer.Observe(req, model, resp.StatusCode, elapsed, usage)
+	}
+	t.logResponsePayload(req, resp, elapsed, respBodyBytes)
+}
+
+// logResponsePayload logs the full response body/headers when payloadLog is enabled.
+func (t *observabilityTransport) logResponsePayload(req *http.Request, resp *http.Response, elapsed time.Duration, bodyBytes []byte) {
+	if !t.payloadLog {
+		return
+	}
+	l := t.payloadLogger()
+	if l == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("event", "llm.http.response"),
+		zap.String("url", req.URL.String()),
+		zap.Int("status_code", resp.StatusCode),
+		zap.Duration("elapsed", elapsed),
+		zap.Any("response_headers", resp.Header),
+	}
+	if sessionID := turnagent.SessionIDFromContext(req.Context()); sessionID != "" {
+		fields = append(fields, zap.String("session_id", sessionID))
+	}
+	if len(bodyBytes) > 0 {
+		fields = append(fields, zap.String("response_body", compactJSON(bodyBytes)))
+	}
+	l.Debug("llm.http.response", fields...)
 }
 
 // payloadLogger returns the payload logger, or nil if not initialized.

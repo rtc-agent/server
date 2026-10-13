@@ -124,14 +124,8 @@ func (mgr *SessionTurnManager) genResumeImpl(
 		mgr.resumeCancel()
 	}
 
-	var turnID string
-	if len(newItems) > 0 {
-		turnID = newItems[0].TurnID
-	} else if len(interrupted) > 0 {
-		turnID = interrupted[0].TurnID
-	} else if len(unhandled) > 0 {
-		turnID = unhandled[0].TurnID
-	}
+	// Derive turnID from the first available work item across the three queues.
+	turnID := resolveTurnID(newItems, interrupted, unhandled)
 
 	// Create a fresh context for this resume attempt.
 	//
@@ -172,48 +166,14 @@ func (mgr *SessionTurnManager) genResumeImpl(
 		})
 	}
 
-	resumeCtx = WithSessionID(resumeCtx, mgr.sessionID)
-	if turnID != "" {
-		resumeCtx = WithTurnID(resumeCtx, turnID)
-	}
-
-	// Extract UserID from the first available work item and inject into context.
-	// This ensures file attachments and other user-scoped operations work correctly.
-	var userID string
-	for _, item := range newItems {
-		if item.UserID != "" {
-			userID = item.UserID
-			break
-		}
-	}
-	if userID == "" {
-		for _, item := range interrupted {
-			if item.UserID != "" {
-				userID = item.UserID
-				break
-			}
-		}
-	}
-	if userID == "" {
-		for _, item := range unhandled {
-			if item.UserID != "" {
-				userID = item.UserID
-				break
-			}
-		}
-	}
-	if userID != "" {
-		resumeCtx = WithUserID(resumeCtx, userID)
-	}
+	// Inject session/turn/user identity into the resume context.
+	resumeCtx = mgr.buildResumeRunCtx(resumeCtx, turnID, newItems, interrupted, unhandled)
 
 	if len(mgr.cfg.Callbacks) > 0 {
 		resumeCtx = callbacks.InitCallbacks(resumeCtx, &callbacks.RunInfo{}, mgr.cfg.Callbacks...)
 	}
 
-	allItems := make([]TurnWorkItem, 0, len(interrupted)+len(unhandled)+len(newItems))
-	allItems = append(allItems, interrupted...)
-	allItems = append(allItems, unhandled...)
-	allItems = append(allItems, newItems...)
+	allItems := mergeWorkItems(interrupted, unhandled, newItems)
 
 	// Build ResumeParams from the resume item's interrupt fields.
 	// With batch resume: BatchResumeItems takes precedence over single fields.
@@ -236,52 +196,7 @@ func (mgr *SessionTurnManager) genResumeImpl(
 	// Without this, genResume would use the checkpoint's message snapshot,
 	// missing any new user messages added to the database during the interrupt.
 	runOpts := []adk.AgentRunOption{
-		adk.WithHistoryModifier(func(ctx context.Context, msgs []*schema.Message) []*schema.Message {
-			// Mark this as a resume load so loadMessages can skip command detection
-			// and prompt persistence (avoid duplicates on checkpoint resume).
-			ctx = WithLoadSource(ctx, LoadSourceGenResume)
-
-			// Extract pending tool call IDs from checkpoint messages.
-			// "Pending" means: the checkpoint has an assistant tool_call but no
-			// matching tool result. On resume, eino's ToolNode will re-invoke
-			// the tool and create a tool result message. We must skip these
-			// from DB loading to avoid duplicate tool_result messages.
-			//
-			// This replaces the old crude approach of skipping ALL toolcall_output
-			// on resume, which incorrectly dropped non-RTC tool results.
-			pendingIDs := extractPendingToolCallIDs(msgs)
-			if len(pendingIDs) > 0 {
-				ctx = WithPendingToolCallIDs(ctx, pendingIDs)
-			}
-
-			// Reload messages from database to pick up any new user messages
-			// that were added while the turn was interrupted.
-			freshMsgs, err := mgr.cfg.LoadMessages(ctx, mgr.sessionID)
-			if err != nil {
-				// Log error but return original messages to avoid breaking the turn.
-				// The turn can still complete with stale messages; losing it would be worse.
-				mgr.log(ctx, LogLevelWarn, "gen_resume.history_modifier_load_failed", map[string]any{
-					"session_id": mgr.sessionID,
-					"turn_id":    turnID,
-					"error":      err.Error(),
-					"message":    "Failed to reload messages during checkpoint resume; using checkpoint messages",
-				})
-				return msgs
-			}
-
-			// Convert turn-agent messages to eino schema messages.
-			freshSchemaMsgs := toEinoMessages(freshMsgs)
-
-			mgr.log(ctx, LogLevelInfo, "gen_resume.history_modified", map[string]any{
-				"session_id":      mgr.sessionID,
-				"turn_id":         turnID,
-				"checkpoint_msgs": len(msgs),
-				"reloaded_msgs":   len(freshSchemaMsgs),
-				"message":         "Reloaded messages from database during checkpoint resume",
-			})
-
-			return freshSchemaMsgs
-		}),
+		adk.WithHistoryModifier(mgr.buildHistoryModifier(turnID)),
 	}
 
 	mgr.log(resumeCtx, LogLevelInfo, "gen_resume.result", map[string]any{
@@ -300,6 +215,124 @@ func (mgr *SessionTurnManager) genResumeImpl(
 		ResumeParams: resumeParams,
 		RunOpts:      runOpts,
 	}, nil
+}
+
+// resolveTurnID picks the first non-empty TurnID from the given work-item slices.
+// Priority: newItems > interrupted > unhandled.
+func resolveTurnID(newItems, interrupted, unhandled []TurnWorkItem) string {
+	if len(newItems) > 0 && newItems[0].TurnID != "" {
+		return newItems[0].TurnID
+	}
+	if len(interrupted) > 0 && interrupted[0].TurnID != "" {
+		return interrupted[0].TurnID
+	}
+	if len(unhandled) > 0 && unhandled[0].TurnID != "" {
+		return unhandled[0].TurnID
+	}
+	return ""
+}
+
+// mergeWorkItems concatenates three work-item slices into a single allocation.
+func mergeWorkItems(interrupted, unhandled, newItems []TurnWorkItem) []TurnWorkItem {
+	out := make([]TurnWorkItem, 0, len(interrupted)+len(unhandled)+len(newItems))
+	out = append(out, interrupted...)
+	out = append(out, unhandled...)
+	out = append(out, newItems...)
+	return out
+}
+
+// buildResumeRunCtx injects session/turn/user identity into the resume context.
+func (mgr *SessionTurnManager) buildResumeRunCtx(
+	resumeCtx context.Context,
+	turnID string,
+	newItems, interrupted, unhandled []TurnWorkItem,
+) context.Context {
+	resumeCtx = WithSessionID(resumeCtx, mgr.sessionID)
+	if turnID != "" {
+		resumeCtx = WithTurnID(resumeCtx, turnID)
+	}
+	// Extract UserID from the first available work item and inject into context.
+	// This ensures file attachments and other user-scoped operations work correctly.
+	if userID := findFirstUserID(newItems, interrupted, unhandled); userID != "" {
+		resumeCtx = WithUserID(resumeCtx, userID)
+	}
+	return resumeCtx
+}
+
+// findFirstUserID returns the first non-empty UserID across the given slices.
+// Priority: newItems > interrupted > unhandled.
+func findFirstUserID(newItems, interrupted, unhandled []TurnWorkItem) string {
+	for _, item := range newItems {
+		if item.UserID != "" {
+			return item.UserID
+		}
+	}
+	for _, item := range interrupted {
+		if item.UserID != "" {
+			return item.UserID
+		}
+	}
+	for _, item := range unhandled {
+		if item.UserID != "" {
+			return item.UserID
+		}
+	}
+	return ""
+}
+
+// buildHistoryModifier returns the HistoryModifier callback used during
+// checkpoint resume to reload messages from the database.
+//
+// This fixes the bug where user messages sent during turn execution
+// (while the turn was interrupted waiting for tool results) were not
+// included in the LLM context after checkpoint resume.
+func (mgr *SessionTurnManager) buildHistoryModifier(turnID string) func(context.Context, []*schema.Message) []*schema.Message {
+	return func(ctx context.Context, msgs []*schema.Message) []*schema.Message {
+		// Mark this as a resume load so loadMessages can skip command detection
+		// and prompt persistence (avoid duplicates on checkpoint resume).
+		ctx = WithLoadSource(ctx, LoadSourceGenResume)
+
+		// Extract pending tool call IDs from checkpoint messages.
+		// "Pending" means: the checkpoint has an assistant tool_call but no
+		// matching tool result. On resume, eino's ToolNode will re-invoke
+		// the tool and create a tool result message. We must skip these
+		// from DB loading to avoid duplicate tool_result messages.
+		//
+		// This replaces the old crude approach of skipping ALL toolcall_output
+		// on resume, which incorrectly dropped non-RTC tool results.
+		pendingIDs := extractPendingToolCallIDs(msgs)
+		if len(pendingIDs) > 0 {
+			ctx = WithPendingToolCallIDs(ctx, pendingIDs)
+		}
+
+		// Reload messages from database to pick up any new user messages
+		// that were added while the turn was interrupted.
+		freshMsgs, err := mgr.cfg.LoadMessages(ctx, mgr.sessionID)
+		if err != nil {
+			// Log error but return original messages to avoid breaking the turn.
+			// The turn can still complete with stale messages; losing it would be worse.
+			mgr.log(ctx, LogLevelWarn, "gen_resume.history_modifier_load_failed", map[string]any{
+				"session_id": mgr.sessionID,
+				"turn_id":    turnID,
+				"error":      err.Error(),
+				"message":    "Failed to reload messages during checkpoint resume; using checkpoint messages",
+			})
+			return msgs
+		}
+
+		// Convert turn-agent messages to eino schema messages.
+		freshSchemaMsgs := toEinoMessages(freshMsgs)
+
+		mgr.log(ctx, LogLevelInfo, "gen_resume.history_modified", map[string]any{
+			"session_id":      mgr.sessionID,
+			"turn_id":         turnID,
+			"checkpoint_msgs": len(msgs),
+			"reloaded_msgs":   len(freshSchemaMsgs),
+			"message":         "Reloaded messages from database during checkpoint resume",
+		})
+
+		return freshSchemaMsgs
+	}
 }
 
 // buildResumeParams constructs ResumeParams from newItems, handling both

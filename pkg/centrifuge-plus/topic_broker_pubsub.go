@@ -50,127 +50,142 @@ func (b *TopicBroker) handlePubSubMessage(msg rueidis.PubSubMessage) {
 	rawPayload := msg.Message
 	ch := msg.Channel
 	prefix := b.prefix + ":pubsub:"
-	if trimmed, ok := strings.CutPrefix(ch, prefix); ok {
-		ch = trimmed
-	} else {
+	trimmed, ok := strings.CutPrefix(ch, prefix)
+	if !ok {
+		return
+	}
+	ch = trimmed
+
+	// Dispatch by message type prefix; only publication messages need trace extraction.
+	switch {
+	case strings.HasPrefix(rawPayload, "__p1:"):
+		b.handlePublicationMessage(h, ch, rawPayload)
+	case strings.HasPrefix(rawPayload, "__j1:"):
+		b.handleJoinMessage(h, ch, rawPayload)
+	case strings.HasPrefix(rawPayload, "__l1:"):
+		b.handleLeaveMessage(h, ch, rawPayload)
+	}
+}
+
+// handlePublicationMessage processes a publication ("__p1:") PUB/SUB message.
+// Format: __p1:{offset}:{epoch}:{data_len}__{data}
+// A "__p1:" traceparent prefix may precede the payload for distributed tracing.
+func (b *TopicBroker) handlePublicationMessage(h *centrifuge.BrokerEventHandler, ch, rawPayload string) {
+	// Extract trace parent (if propagated) and create span.
+	payload, traceparentStr := extractTraceParentFromPayload(rawPayload)
+
+	var sc trace.SpanContext
+	if traceparentStr != "" {
+		if parsed, err := decodeTraceParent(traceparentStr); err == nil {
+			sc = parsed
+		}
+	}
+
+	spanCtx := context.Background()
+	if sc.IsValid() {
+		spanCtx = trace.ContextWithRemoteSpanContext(spanCtx, sc)
+	}
+	_, span := b.tracer.Start(spanCtx, "centrifuge_plus.topic_broker.pubsub",
+		trace.WithAttributes(
+			AttributeChannel.String(ch),
+			AttributeMessageType.String("publication"),
+		),
+	)
+	defer span.End()
+
+	// Use length-prefix to safely separate meta from data (avoids __ conflicts in message content).
+	raw := payload[5:] // skip "__p1:"
+	meta, encodedData, ok := strings.Cut(raw, "__")
+	if !ok {
+		b.logger.Warn("pubsub message missing meta/data separator in channel %s", ch)
 		return
 	}
 
-	// Determine message type by prefix; only extract trace parent for publication messages.
-	if strings.HasPrefix(rawPayload, "__p1:") {
-		// Publication message: extract trace parent and create span.
-		payload, traceparentStr := extractTraceParentFromPayload(rawPayload)
-
-		var sc trace.SpanContext
-		if traceparentStr != "" {
-			if parsed, err := decodeTraceParent(traceparentStr); err == nil {
-				sc = parsed
-			}
-		}
-
-		// Create span with remote parent if trace context was propagated.
-		spanCtx := context.Background()
-		if sc.IsValid() {
-			spanCtx = trace.ContextWithRemoteSpanContext(spanCtx, sc)
-		}
-		_, span := b.tracer.Start(spanCtx, "centrifuge_plus.topic_broker.pubsub",
-			trace.WithAttributes(
-				AttributeChannel.String(ch),
-				AttributeMessageType.String("publication"),
-			),
-		)
-		defer span.End()
-
-		// Format: __p1:{offset}:{epoch}:{data_len}__{data}
-		// Use length-prefix to safely separate meta from data (avoids __ conflicts in message content).
-		raw := payload[5:] // skip "__p1:"
-		meta, encodedData, ok := strings.Cut(raw, "__")
-		if !ok {
-			b.logger.Warn("pubsub message missing meta/data separator in channel %s", ch)
-			return
-		}
-
-		parts := strings.SplitN(meta, ":", 3)
-		if len(parts) != 3 {
-			b.logger.Warn("pubsub message invalid meta format in channel %s: %q", ch, meta)
-			return
-		}
-		offset, err := strconv.ParseUint(parts[0], 10, 64)
-		if err != nil {
-			b.logger.Warn("pubsub message invalid offset in channel %s: %v", ch, err)
-			return
-		}
-		epoch := parts[1]
-		dataLen, err := strconv.Atoi(parts[2])
-		if err != nil || dataLen < 0 || dataLen > len(encodedData) {
-			b.logger.Warn("pubsub message invalid data_len in channel %s: err=%v, dataLen=%d, available=%d", ch, err, dataLen, len(encodedData))
-			return
-		}
-		data := encodedData[:dataLen]
-
-		span.SetAttributes(
-			AttributeOffset.Int64(int64(offset)), //nolint:gosec // offset will not exceed int64 range
-			AttributeEpoch.String(epoch),
-		)
-
-		pub := &centrifuge.Publication{
-			Data:   []byte(data),
-			Offset: offset,
-		}
-		sp := centrifuge.StreamPosition{
-			Offset: offset,
-			Epoch:  epoch,
-		}
-		if err := (*h).HandlePublication(ch, pub, sp, false, nil); err != nil {
-			b.logger.Warn("failed to handle publication for channel %s: %v", ch, err)
-			recordError(span, err)
-		}
+	offset, epoch, dataLen, err := parsePublicationMeta(meta, len(encodedData), ch)
+	if err != nil {
+		b.logger.Warn("pubsub message invalid meta in channel %s: %v", ch, err)
 		return
 	}
+	data := encodedData[:dataLen]
 
-	// Join/Leave messages: no need to extract trace parent, process directly.
-	if strings.HasPrefix(rawPayload, "__j1:") {
-		_, span := b.tracer.Start(context.Background(), "centrifuge_plus.topic_broker.pubsub",
-			trace.WithAttributes(
-				AttributeChannel.String(ch),
-				AttributeMessageType.String("join"),
-			),
-		)
-		defer span.End()
+	span.SetAttributes(
+		AttributeOffset.Int64(int64(offset)), //nolint:gosec // offset will not exceed int64 range
+		AttributeEpoch.String(epoch),
+	)
 
-		var info centrifuge.ClientInfo
-		if err := json.Unmarshal([]byte(rawPayload[5:]), &info); err != nil {
-			b.logger.Warn("failed to unmarshal join info: %v", err)
-			recordError(span, err)
-			return
-		}
-		if err := (*h).HandleJoin(ch, &info); err != nil {
-			b.logger.Warn("failed to handle join for channel %s: %v", ch, err)
-			recordError(span, err)
-		}
+	pub := &centrifuge.Publication{
+		Data:   []byte(data),
+		Offset: offset,
+	}
+	sp := centrifuge.StreamPosition{
+		Offset: offset,
+		Epoch:  epoch,
+	}
+	if err := (*h).HandlePublication(ch, pub, sp, false, nil); err != nil {
+		b.logger.Warn("failed to handle publication for channel %s: %v", ch, err)
+		recordError(span, err)
+	}
+}
+
+// parsePublicationMeta parses the "{offset}:{epoch}:{data_len}" meta portion of
+// a publication message, returning the parsed values or an error describing the issue.
+func parsePublicationMeta(meta string, availableBytes int, ch string) (uint64, string, int, error) {
+	parts := strings.SplitN(meta, ":", 3)
+	if len(parts) != 3 {
+		return 0, "", 0, fmt.Errorf("invalid meta format: %q", meta)
+	}
+	offset, err := strconv.ParseUint(parts[0], 10, 64)
+	if err != nil {
+		return 0, "", 0, fmt.Errorf("invalid offset: %w", err)
+	}
+	dataLen, err := strconv.Atoi(parts[2])
+	if err != nil || dataLen < 0 || dataLen > availableBytes {
+		return 0, "", 0, fmt.Errorf("invalid data_len: err=%v, dataLen=%d, available=%d", err, dataLen, availableBytes)
+	}
+	return offset, parts[1], dataLen, nil
+}
+
+// handleJoinMessage processes a join ("__j1:") PUB/SUB message.
+func (b *TopicBroker) handleJoinMessage(h *centrifuge.BrokerEventHandler, ch, rawPayload string) {
+	_, span := b.tracer.Start(context.Background(), "centrifuge_plus.topic_broker.pubsub",
+		trace.WithAttributes(
+			AttributeChannel.String(ch),
+			AttributeMessageType.String("join"),
+		),
+	)
+	defer span.End()
+
+	var info centrifuge.ClientInfo
+	if err := json.Unmarshal([]byte(rawPayload[5:]), &info); err != nil {
+		b.logger.Warn("failed to unmarshal join info: %v", err)
+		recordError(span, err)
 		return
 	}
+	if err := (*h).HandleJoin(ch, &info); err != nil {
+		b.logger.Warn("failed to handle join for channel %s: %v", ch, err)
+		recordError(span, err)
+	}
+}
 
-	if strings.HasPrefix(rawPayload, "__l1:") {
-		_, span := b.tracer.Start(context.Background(), "centrifuge_plus.topic_broker.pubsub",
-			trace.WithAttributes(
-				AttributeChannel.String(ch),
-				AttributeMessageType.String("leave"),
-			),
-		)
-		defer span.End()
+// handleLeaveMessage processes a leave ("__l1:") PUB/SUB message.
+func (b *TopicBroker) handleLeaveMessage(h *centrifuge.BrokerEventHandler, ch, rawPayload string) {
+	_, span := b.tracer.Start(context.Background(), "centrifuge_plus.topic_broker.pubsub",
+		trace.WithAttributes(
+			AttributeChannel.String(ch),
+			AttributeMessageType.String("leave"),
+		),
+	)
+	defer span.End()
 
-		var info centrifuge.ClientInfo
-		if err := json.Unmarshal([]byte(rawPayload[5:]), &info); err != nil {
-			b.logger.Warn("failed to unmarshal leave info: %v", err)
-			recordError(span, err)
-			return
-		}
-		if err := (*h).HandleLeave(ch, &info); err != nil {
-			b.logger.Warn("failed to handle leave for channel %s: %v", ch, err)
-			recordError(span, err)
-		}
+	var info centrifuge.ClientInfo
+	if err := json.Unmarshal([]byte(rawPayload[5:]), &info); err != nil {
+		b.logger.Warn("failed to unmarshal leave info: %v", err)
+		recordError(span, err)
 		return
+	}
+	if err := (*h).HandleLeave(ch, &info); err != nil {
+		b.logger.Warn("failed to handle leave for channel %s: %v", ch, err)
+		recordError(span, err)
 	}
 }
 

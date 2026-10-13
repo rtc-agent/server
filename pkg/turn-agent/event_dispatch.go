@@ -110,13 +110,62 @@ func (mgr *SessionTurnManager) onAgentEvents(
 	})
 
 	// Ensure CompleteWork is called even if we return early due to interrupt/error.
-	completeWorkCalled := false
-	completeWork := func() {
-		if completeWorkCalled {
+	// Use a closure variable (not defer) so we can detect duplicate calls inside
+	// the closure itself without adding another layer.
+	completeWork := mgr.newCompleteWorkFunc(ctx, eventsSpan, tc, turnID)
+	defer completeWork()
+
+	// Idle warning watcher (warning-only, no exit).
+	// AsyncIterator does not support Close()/Cancel(), so we only
+	// log a warning when no events arrive for a prolonged period.
+	activityReceived, idleWatcherDone := mgr.startIdleWatcher(ctx, eventsCtx, turnID)
+	defer close(idleWatcherDone) // Ensure idle watcher exits when onAgentEvents returns
+
+	// Consume events until the iterator is exhausted, interrupted, or fails.
+	eventCount := 0
+	for {
+		mgr.log(eventsCtx, LogLevelDebug, "on_agent_events.waiting_next", map[string]any{
+			"session_id":  mgr.sessionID,
+			"turn_id":     turnID,
+			"context_err": ctx.Err(),
+		})
+
+		ev, ok := mgr.consumeOneEvent(events, activityReceived)
+		if !ok {
+			eventsSpan.SetAttributes(
+				attribute.Int("events.processed", eventCount),
+				attribute.String("events.status", "completed"),
+			)
+			mgr.log(eventsCtx, LogLevelInfo, "on_agent_events.done", map[string]any{
+				"session_id":  mgr.sessionID,
+				"turn_id":     turnID,
+				"event_count": eventCount,
+			})
+			return nil
+		}
+		eventCount++
+
+		if err := mgr.dispatchEvents(eventsCtx, turnID, ev); err != nil {
+			return mgr.handleDispatchError(eventsSpan, eventsCtx, turnID, err, eventCount)
+		}
+	}
+}
+
+// newCompleteWorkFunc returns a closure that completes all work items tracked
+// in tc.Consumed. The closure is idempotent - calling it more than once is a no-op.
+func (mgr *SessionTurnManager) newCompleteWorkFunc(
+	parentCtx context.Context,
+	span trace.Span,
+	tc *adk.TurnContext[TurnWorkItem, *schema.Message],
+	turnID string,
+) func() {
+	called := false
+	return func() {
+		if called {
 			return
 		}
-		completeWorkCalled = true
-		eventsSpan.AddEvent("complete_work")
+		called = true
+		span.AddEvent("complete_work")
 		// Use a timeout context derived from the parent context to ensure CompleteWork
 		// finishes before the request context is fully cancelled. This prevents state
 		// inconsistency where the work is marked complete in the tracker but not in the queue.
@@ -124,12 +173,12 @@ func (mgr *SessionTurnManager) onAgentEvents(
 		// a short timeout to ensure cleanup still happens.
 		var completeCtx context.Context
 		var completeCancel context.CancelFunc
-		if ctx.Err() != nil {
-			// Parent context already cancelled, use background with short timeout
+		if parentCtx.Err() != nil {
+			// Parent context already cancelled, use background with short timeout.
 			completeCtx, completeCancel = context.WithTimeout(context.Background(), 5*time.Second)
 		} else {
-			// Parent context still valid, use it with a reasonable timeout
-			completeCtx, completeCancel = context.WithTimeout(ctx, 10*time.Second)
+			// Parent context still valid, use it with a reasonable timeout.
+			completeCtx, completeCancel = context.WithTimeout(parentCtx, 10*time.Second)
 		}
 		defer completeCancel()
 		for _, item := range tc.Consumed {
@@ -137,7 +186,7 @@ func (mgr *SessionTurnManager) onAgentEvents(
 				continue
 			}
 			if err := mgr.queue.CompleteWork(completeCtx, item.WorkID); err != nil {
-				eventsSpan.RecordError(err)
+				span.RecordError(err)
 				mgr.log(completeCtx, LogLevelError, "on_agent_events.complete_work_failed", map[string]any{
 					"session_id": mgr.sessionID,
 					"turn_id":    turnID,
@@ -154,15 +203,16 @@ func (mgr *SessionTurnManager) onAgentEvents(
 			mgr.tracker.Complete(item.WorkID)
 		}
 	}
-	defer completeWork()
+}
 
-	// Idle warning watcher (warning-only, no exit).
-	// AsyncIterator does not support Close()/Cancel(), so we only
-	// log a warning when no events arrive for a prolonged period.
+// startIdleWatcher launches a background goroutine that warns (but does not exit)
+// when no events arrive for eventIdleWarningTimeout.
+// Returns:
+//   - activityReceived: a channel the event loop must signal on each received event
+//   - idleWatcherDone:  a channel that must be closed when the event loop returns
+func (mgr *SessionTurnManager) startIdleWatcher(parentCtx, eventsCtx context.Context, turnID string) (chan struct{}, chan struct{}) {
 	activityReceived := make(chan struct{}, 1)
 	idleWatcherDone := make(chan struct{})
-	defer close(idleWatcherDone) // Ensure idle watcher exits when onAgentEvents returns
-
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -178,7 +228,7 @@ func (mgr *SessionTurnManager) onAgentEvents(
 		defer timer.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-parentCtx.Done():
 				return
 			case <-idleWatcherDone:
 				return // Explicit exit signal when onAgentEvents returns
@@ -191,7 +241,7 @@ func (mgr *SessionTurnManager) onAgentEvents(
 				}
 				timer.Reset(eventIdleWarningTimeout)
 			case <-timer.C:
-				mgr.log(ctx, LogLevelWarn, "on_agent_events.idle_warning", map[string]any{
+				mgr.log(eventsCtx, LogLevelWarn, "on_agent_events.idle_warning", map[string]any{
 					"session_id": mgr.sessionID,
 					"turn_id":    turnID,
 					"timeout":    eventIdleWarningTimeout.String(),
@@ -200,63 +250,63 @@ func (mgr *SessionTurnManager) onAgentEvents(
 			}
 		}
 	}()
+	return activityReceived, idleWatcherDone
+}
 
-	eventCount := 0
-	for {
-		ctxErr := ctx.Err()
-		mgr.log(eventsCtx, LogLevelDebug, "on_agent_events.waiting_next", map[string]any{
-			"session_id":  mgr.sessionID,
-			"turn_id":     turnID,
-			"context_err": ctxErr,
-		})
-		ev, ok := events.Next()
-		if !ok {
-			eventsSpan.SetAttributes(
-				attribute.Int("events.processed", eventCount),
-				attribute.String("events.status", "completed"),
-			)
-			mgr.log(eventsCtx, LogLevelInfo, "on_agent_events.done", map[string]any{
-				"session_id":  mgr.sessionID,
-				"turn_id":     turnID,
-				"event_count": eventCount,
-			})
-			return nil
-		}
-		eventCount++
-		// Signal the idle watcher that we received an event.
-		select {
-		case activityReceived <- struct{}{}:
-		default:
-		}
-		if err := mgr.dispatchEvents(eventsCtx, turnID, ev); err != nil {
-			var interruptErr *adk.InterruptError
-			if errors.As(err, &interruptErr) {
-				eventsSpan.SetAttributes(
-					attribute.Int("events.processed", eventCount),
-					attribute.String("events.status", "interrupted"),
-				)
-				mgr.log(eventsCtx, LogLevelInfo, "on_agent_events.interrupted", map[string]any{
-					"session_id":   mgr.sessionID,
-					"turn_id":      turnID,
-					"num_contexts": len(interruptErr.InterruptContexts),
-					"event_count":  eventCount,
-				})
-				return err
-			}
-			eventsSpan.RecordError(err)
-			eventsSpan.SetAttributes(
-				attribute.Int("events.processed", eventCount),
-				attribute.String("events.status", "error"),
-			)
-			mgr.log(eventsCtx, LogLevelError, "on_agent_events.dispatch_error", map[string]any{
-				"session_id":  mgr.sessionID,
-				"turn_id":     turnID,
-				"error":       err.Error(),
-				"event_count": eventCount,
-			})
-			return fmt.Errorf("turnagent: PublishEvent: %w", err)
-		}
+// consumeOneEvent pulls the next event from the iterator and signals the idle watcher.
+// Returns (event, true) when an event is available, or (nil, false) when the iterator is exhausted.
+func (mgr *SessionTurnManager) consumeOneEvent(
+	events *adk.AsyncIterator[*adk.AgentEvent],
+	activityReceived chan<- struct{},
+) (*adk.AgentEvent, bool) {
+	ev, ok := events.Next()
+	if !ok {
+		return nil, false
 	}
+	// Signal the idle watcher that we received an event.
+	select {
+	case activityReceived <- struct{}{}:
+	default:
+	}
+	return ev, true
+}
+
+// handleDispatchError translates a dispatch failure into the appropriate return value.
+// For interrupt errors the original *adk.InterruptError is returned unchanged; for all
+// other errors a wrapped error is returned so the caller's event loop terminates.
+func (mgr *SessionTurnManager) handleDispatchError(
+	eventsSpan trace.Span,
+	eventsCtx context.Context,
+	turnID string,
+	err error,
+	eventCount int,
+) error {
+	var interruptErr *adk.InterruptError
+	if errors.As(err, &interruptErr) {
+		eventsSpan.SetAttributes(
+			attribute.Int("events.processed", eventCount),
+			attribute.String("events.status", "interrupted"),
+		)
+		mgr.log(eventsCtx, LogLevelInfo, "on_agent_events.interrupted", map[string]any{
+			"session_id":   mgr.sessionID,
+			"turn_id":      turnID,
+			"num_contexts": len(interruptErr.InterruptContexts),
+			"event_count":  eventCount,
+		})
+		return err
+	}
+	eventsSpan.RecordError(err)
+	eventsSpan.SetAttributes(
+		attribute.Int("events.processed", eventCount),
+		attribute.String("events.status", "error"),
+	)
+	mgr.log(eventsCtx, LogLevelError, "on_agent_events.dispatch_error", map[string]any{
+		"session_id":  mgr.sessionID,
+		"turn_id":     turnID,
+		"error":       err.Error(),
+		"event_count": eventCount,
+	})
+	return fmt.Errorf("turnagent: PublishEvent: %w", err)
 }
 
 // dispatchEvents translates one eino AgentEvent into flattened Event calls.

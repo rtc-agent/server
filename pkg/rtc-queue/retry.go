@@ -87,56 +87,35 @@ func isRetryableRedisError(err error) bool {
 		return false
 	}
 
-	// Check for common transient network errors
+	// Check for transient network errors via Redis error type (unwraps error chain)
 	var redisErr redis.Error
-	if errors.As(err, &redisErr) {
-		// Redis errors that indicate transient issues
-		msg := redisErr.Error()
-		// Connection errors
-		if contains(msg, "connection refused") ||
-			contains(msg, "connection reset") ||
-			contains(msg, "broken pipe") ||
-			contains(msg, "i/o timeout") ||
-			contains(msg, "EOF") ||
-			contains(msg, "no such host") {
-			return true
-		}
-		// Cluster redirection errors during failover
-		if contains(msg, "MOVED") || contains(msg, "ASK") {
-			return true
-		}
-		// Redis is loading
-		if contains(msg, "LOADING") {
-			return true
-		}
-		// Cluster down temporarily
-		if contains(msg, "CLUSTERDOWN") {
-			return true
-		}
-		// Try again (Redis busy)
-		if contains(msg, "TRYAGAIN") {
-			return true
-		}
-		// Busy - script taking too long, safe to retry
-		if contains(msg, "BUSY") {
-			return true
-		}
-		// Master down during failover
-		if contains(msg, "READONLY") {
-			return true
-		}
-	}
-
-	// Also check for generic network errors wrapped without redis.Error
-	errMsg := err.Error()
-	if contains(errMsg, "connection refused") ||
-		contains(errMsg, "connection reset") ||
-		contains(errMsg, "broken pipe") ||
-		contains(errMsg, "i/o timeout") ||
-		contains(errMsg, "EOF") {
+	if errors.As(err, &redisErr) && isTransientRedisMessage(redisErr.Error()) {
 		return true
 	}
 
+	// Also check for generic network errors wrapped without redis.Error
+	return isTransientRedisMessage(err.Error())
+}
+
+// isTransientRedisMessage returns true if the error message indicates a
+// transient network or cluster condition that is safe to retry.
+func isTransientRedisMessage(msg string) bool {
+	// Connection / network errors
+	if contains(msg, "connection refused") ||
+		contains(msg, "connection reset") ||
+		contains(msg, "broken pipe") ||
+		contains(msg, "i/o timeout") ||
+		contains(msg, "EOF") ||
+		contains(msg, "no such host") {
+		return true
+	}
+	// Cluster redirection / failover indicators
+	if contains(msg, "MOVED") || contains(msg, "ASK") ||
+		contains(msg, "LOADING") || contains(msg, "CLUSTERDOWN") ||
+		contains(msg, "TRYAGAIN") || contains(msg, "BUSY") ||
+		contains(msg, "READONLY") {
+		return true
+	}
 	return false
 }
 

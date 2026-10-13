@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -50,6 +51,10 @@ func addOwnerAndCreatorColumns(db *gorm.DB) error {
 }
 
 // Stage 2: backfill existing data (only when user_id column exists).
+// NOTE: PostgreSQL UPDATE statements are atomic - each batch UPDATE either succeeds
+// completely or fails completely. There is no risk of partial updates within a batch.
+// If the migration crashes between batches, the next run will resume from where it
+// left off (idempotent via WHERE owner_ref_id IS NULL condition).
 func backfillOwnerAndCreator(db *gorm.DB) error {
 	// Check whether the user_id column exists (new databases may not have it).
 	var hasUserID bool
@@ -153,149 +158,156 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 func finalizeOwnerAndCreatorNotNull(db *gorm.DB) error {
 	ctx := context.Background()
 
-	// Step 1: Add CHECK constraints with NOT VALID for sessions table
-	// NOT VALID means PostgreSQL won't scan existing rows to verify the constraint
+	// Step 1: Add CHECK constraints with NOT VALID for sessions table.
+	// NOT VALID means PostgreSQL won't scan existing rows to verify the constraint.
 	logger.Info(ctx, "owner.migration.stage3.step1_add_not_valid_constraints")
 
-	// Helper function to add constraint with idempotency check
-	addCheckConstraint := func(tableName, constraintName, columnName string) error {
-		err := db.Exec(fmt.Sprintf(`
-			ALTER TABLE %s
-			ADD CONSTRAINT %s
-			CHECK (%s IS NOT NULL) NOT VALID
-		`, tableName, constraintName, columnName)).Error
-		if err != nil {
-			// Check if constraint already exists (idempotency)
-			if isConstraintExistsError(err) {
-				// Constraint exists - check if it's already validated
-				var isValidated bool
-				if queryErr := db.Raw(`
-					SELECT convalidated
-					FROM pg_constraint
-					WHERE conname = ? AND conrelid = ?::regclass
-				`, constraintName, tableName).Scan(&isValidated).Error; queryErr == nil {
-					if isValidated {
-						logger.Info(ctx, "owner.migration.stage3.constraint_already_validated",
-							zap.String("table", tableName),
-							zap.String("constraint", constraintName))
-						return nil
-					}
-				}
-				logger.Info(ctx, "owner.migration.stage3.constraint_already_exists",
-					zap.String("table", tableName),
-					zap.String("constraint", constraintName))
-				return nil
-			}
-			return fmt.Errorf("add %s %s NOT VALID constraint: %w", tableName, constraintName, err)
+	sessionsConstraints := make([]columnConstraint, 0, 2)
+	sessionsConstraints = append(sessionsConstraints,
+		columnConstraint{Table: "sessions", Constraint: "chk_sessions_owner_kind_not_null", Column: "owner_kind"},
+		columnConstraint{Table: "sessions", Constraint: "chk_sessions_owner_ref_id_not_null", Column: "owner_ref_id"},
+	)
+	messagesConstraints := make([]columnConstraint, 0, 2)
+	messagesConstraints = append(messagesConstraints,
+		columnConstraint{Table: "messages", Constraint: "chk_messages_creator_kind_not_null", Column: "creator_kind"},
+		columnConstraint{Table: "messages", Constraint: "chk_messages_creator_ref_id_not_null", Column: "creator_ref_id"},
+	)
+	allConstraints := make([]columnConstraint, 0, len(sessionsConstraints)+len(messagesConstraints))
+	allConstraints = append(allConstraints, sessionsConstraints...)
+	allConstraints = append(allConstraints, messagesConstraints...)
+
+	// Step 1: Add CHECK constraints with NOT VALID (fast, no table scan).
+	for _, c := range allConstraints {
+		if err := addCheckConstraint(ctx, db, c); err != nil {
+			return err
 		}
-		return nil
 	}
 
-	if err := addCheckConstraint("sessions", "chk_sessions_owner_kind_not_null", "owner_kind"); err != nil {
-		return err
-	}
-	if err := addCheckConstraint("sessions", "chk_sessions_owner_ref_id_not_null", "owner_ref_id"); err != nil {
-		return err
-	}
-
-	// Step 2: Add CHECK constraints with NOT VALID for messages table
-	if err := addCheckConstraint("messages", "chk_messages_creator_kind_not_null", "creator_kind"); err != nil {
-		return err
-	}
-	if err := addCheckConstraint("messages", "chk_messages_creator_ref_id_not_null", "creator_ref_id"); err != nil {
-		return err
-	}
-
-	// Step 3: Validate constraints (can run concurrently with other operations)
-	// VALIDATE CONSTRAINT acquires a SHARE UPDATE EXCLUSIVE lock, which doesn't block reads/writes
-	// Check constraint status first for idempotency - skip if already validated
+	// Step 2: Validate constraints (SHARE UPDATE EXCLUSIVE lock, does not block reads/writes).
+	// Idempotent: skip if constraint is already validated.
 	logger.Info(ctx, "owner.migration.stage3.step2_validate_constraints")
-
-	// Helper function to validate constraint only if not already valid
-	validateConstraintIfNeeded := func(tableName, constraintName string) error {
-		var needsValidation bool
-		if err := db.Raw(`
-			SELECT NOT convalidated
-			FROM pg_constraint
-			WHERE conname = ? AND conrelid = ?::regclass
-		`, constraintName, tableName).Scan(&needsValidation).Error; err != nil {
-			// Constraint might not exist yet, which is fine - we'll create it in step 1
-			logger.Info(ctx, "owner.migration.stage3.constraint_check_skipped",
-				zap.String("table", tableName),
-				zap.String("constraint", constraintName),
-				zap.Error(err))
-			return nil
+	for _, c := range allConstraints {
+		if err := validateConstraintIfNeeded(ctx, db, c); err != nil {
+			return err
 		}
-
-		if !needsValidation {
-			// Constraint is already validated, skip
-			logger.Info(ctx, "owner.migration.stage3.constraint_already_validated",
-				zap.String("table", tableName),
-				zap.String("constraint", constraintName))
-			return nil
-		}
-
-		// Validate the constraint
-		if err := db.Exec(fmt.Sprintf(`ALTER TABLE %s VALIDATE CONSTRAINT %s`, tableName, constraintName)).Error; err != nil {
-			return fmt.Errorf("validate %s constraint on %s: %w", constraintName, tableName, err)
-		}
-		return nil
 	}
 
-	if err := validateConstraintIfNeeded("sessions", "chk_sessions_owner_kind_not_null"); err != nil {
-		return err
-	}
-	if err := validateConstraintIfNeeded("sessions", "chk_sessions_owner_ref_id_not_null"); err != nil {
-		return err
-	}
-	if err := validateConstraintIfNeeded("messages", "chk_messages_creator_kind_not_null"); err != nil {
-		return err
-	}
-	if err := validateConstraintIfNeeded("messages", "chk_messages_creator_ref_id_not_null"); err != nil {
-		return err
-	}
-
-	// Step 4: Convert CHECK constraints to NOT NULL columns
+	// Step 3: Convert CHECK constraints to NOT NULL columns.
 	// After validation, PostgreSQL knows all rows satisfy the constraint, so this is fast
-	// and only requires a brief ACCESS EXCLUSIVE lock
+	// and only requires a brief ACCESS EXCLUSIVE lock.
 	logger.Info(ctx, "owner.migration.stage3.step3_convert_to_not_null")
-
-	if err := db.Exec(`
-		ALTER TABLE sessions
-		ALTER COLUMN owner_kind SET NOT NULL,
-		ALTER COLUMN owner_ref_id SET NOT NULL
-	`).Error; err != nil {
-		return fmt.Errorf("set sessions columns NOT NULL: %w", err)
+	if err := setColumnsNotNull(db, "sessions", []string{"owner_kind", "owner_ref_id"}); err != nil {
+		return err
+	}
+	if err := setColumnsNotNull(db, "messages", []string{"creator_kind", "creator_ref_id"}); err != nil {
+		return err
 	}
 
-	if err := db.Exec(`
-		ALTER TABLE messages
-		ALTER COLUMN creator_kind SET NOT NULL,
-		ALTER COLUMN creator_ref_id SET NOT NULL
-	`).Error; err != nil {
-		return fmt.Errorf("set messages columns NOT NULL: %w", err)
-	}
-
-	// Step 5: Drop CHECK constraints (no longer needed after converting to NOT NULL)
+	// Step 4: Drop CHECK constraints (no longer needed after converting to NOT NULL).
 	logger.Info(ctx, "owner.migration.stage3.step4_drop_check_constraints")
-
-	if err := db.Exec(`
-		ALTER TABLE sessions
-		DROP CONSTRAINT IF EXISTS chk_sessions_owner_kind_not_null,
-		DROP CONSTRAINT IF EXISTS chk_sessions_owner_ref_id_not_null
-	`).Error; err != nil {
-		return fmt.Errorf("drop sessions check constraints: %w", err)
+	if err := dropCheckConstraints(db, "sessions", []string{"chk_sessions_owner_kind_not_null", "chk_sessions_owner_ref_id_not_null"}); err != nil {
+		return err
 	}
-
-	if err := db.Exec(`
-		ALTER TABLE messages
-		DROP CONSTRAINT IF EXISTS chk_messages_creator_kind_not_null,
-		DROP CONSTRAINT IF EXISTS chk_messages_creator_ref_id_not_null
-	`).Error; err != nil {
-		return fmt.Errorf("drop messages check constraints: %w", err)
+	if err := dropCheckConstraints(db, "messages", []string{"chk_messages_creator_kind_not_null", "chk_messages_creator_ref_id_not_null"}); err != nil {
+		return err
 	}
 
 	logger.Info(ctx, "owner.migration.stage3.completed")
+	return nil
+}
+
+// columnConstraint identifies a CHECK constraint by table/constraint/column names.
+type columnConstraint struct {
+	Table      string
+	Constraint string
+	Column     string
+}
+
+// addCheckConstraint adds a CHECK (column IS NOT NULL) NOT VALID constraint to the table.
+// Idempotent: silently succeeds if the constraint already exists.
+func addCheckConstraint(ctx context.Context, db *gorm.DB, c columnConstraint) error {
+	err := db.Exec(fmt.Sprintf(`
+		ALTER TABLE %s
+		ADD CONSTRAINT %s
+		CHECK (%s IS NOT NULL) NOT VALID
+	`, c.Table, c.Constraint, c.Column)).Error
+	if err == nil {
+		return nil
+	}
+	if !isConstraintExistsError(err) {
+		return fmt.Errorf("add %s %s NOT VALID constraint: %w", c.Table, c.Constraint, err)
+	}
+	// Constraint exists - check whether it has already been validated.
+	var isValidated bool
+	if queryErr := db.Raw(`
+		SELECT convalidated
+		FROM pg_constraint
+		WHERE conname = ? AND conrelid = ?::regclass
+	`, c.Constraint, c.Table).Scan(&isValidated).Error; queryErr == nil && isValidated {
+		logger.Info(ctx, "owner.migration.stage3.constraint_already_validated",
+			zap.String("table", c.Table),
+			zap.String("constraint", c.Constraint))
+		return nil
+	}
+	logger.Info(ctx, "owner.migration.stage3.constraint_already_exists",
+		zap.String("table", c.Table),
+		zap.String("constraint", c.Constraint))
+	return nil
+}
+
+// validateConstraintIfNeeded runs VALIDATE CONSTRAINT only if it has not been validated yet.
+func validateConstraintIfNeeded(ctx context.Context, db *gorm.DB, c columnConstraint) error {
+	var needsValidation bool
+	if err := db.Raw(`
+		SELECT NOT convalidated
+		FROM pg_constraint
+		WHERE conname = ? AND conrelid = ?::regclass
+	`, c.Constraint, c.Table).Scan(&needsValidation).Error; err != nil {
+		// Constraint might not exist yet, which is fine - we'll create it in step 1.
+		logger.Info(ctx, "owner.migration.stage3.constraint_check_skipped",
+			zap.String("table", c.Table),
+			zap.String("constraint", c.Constraint),
+			zap.Error(err))
+		return nil
+	}
+	if !needsValidation {
+		logger.Info(ctx, "owner.migration.stage3.constraint_already_validated",
+			zap.String("table", c.Table),
+			zap.String("constraint", c.Constraint))
+		return nil
+	}
+	if err := db.Exec(fmt.Sprintf(`ALTER TABLE %s VALIDATE CONSTRAINT %s`, c.Table, c.Constraint)).Error; err != nil {
+		return fmt.Errorf("validate %s constraint on %s: %w", c.Constraint, c.Table, err)
+	}
+	return nil
+}
+
+// setColumnsNotNull issues ALTER COLUMN ... SET NOT NULL for each named column in a table.
+func setColumnsNotNull(db *gorm.DB, table string, columns []string) error {
+	setClauses := make([]string, 0, len(columns))
+	for _, col := range columns {
+		setClauses = append(setClauses, fmt.Sprintf("ALTER COLUMN %s SET NOT NULL", col))
+	}
+	query := fmt.Sprintf("ALTER TABLE %s %s", table, strings.Join(setClauses, ",\n"))
+	if err := db.Exec(query).Error; err != nil {
+		return fmt.Errorf("set %s columns NOT NULL: %w", table, err)
+	}
+	return nil
+}
+
+// dropCheckConstraints drops the named CHECK constraints from a table (IF EXISTS).
+func dropCheckConstraints(db *gorm.DB, table string, constraints []string) error {
+	if len(constraints) == 0 {
+		return nil
+	}
+	clauses := make([]string, 0, len(constraints))
+	for _, name := range constraints {
+		clauses = append(clauses, fmt.Sprintf("DROP CONSTRAINT IF EXISTS %s", name))
+	}
+	query := fmt.Sprintf("ALTER TABLE %s %s", table, strings.Join(clauses, ",\n"))
+	if err := db.Exec(query).Error; err != nil {
+		return fmt.Errorf("drop %s check constraints: %w", table, err)
+	}
 	return nil
 }
 
