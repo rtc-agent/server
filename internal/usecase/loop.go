@@ -56,9 +56,10 @@ func (uc *LoopUsecase) CancelOrphanedLoops(ctx context.Context, inspector *hibik
 }
 
 // cancelActiveLoop finds and cancels the active loop for a session.
-// NOTE: This is duplicated from loop/cleanup.go:cancelActiveLoop due to circular dependency constraints.
-// loop package imports usecase, so usecase cannot import loop. Both implementations must stay in sync.
-// If you change one, please update the other.
+// NOTE: This is duplicated from loop/cleanup.go:cancelActiveLoop.
+// Both loop and usecase packages need this logic but cannot share due to package boundaries.
+// loop/cleanup.go uses repo.LoopRepo directly, while usecase uses LoopRepo (alias for repo.LoopRepo).
+// Both implementations must stay in sync. If you change one, please update the other.
 func (uc *LoopUsecase) cancelActiveLoop(ctx context.Context, inspector *hibikenasynq.Inspector, sessionID uuid.UUID) {
 	ctx, span := cleanupTracer().Start(ctx, "loopCleanup.cancelActiveLoop",
 		trace.WithAttributes(
