@@ -2,7 +2,9 @@ package usecase
 
 import (
 	"context"
+	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -15,6 +17,7 @@ import (
 // mockAuditLogRepo is a mock implementation of repo.AuditLogRepo for testing.
 type mockAuditLogRepo struct {
 	listFunc func(ctx context.Context, filter repo.AuditLogFilter, page, pageSize int) ([]*model.AuditLog, int64, error)
+	getFunc  func(ctx context.Context, id uuid.UUID) (*model.AuditLog, error)
 }
 
 func (m *mockAuditLogRepo) Create(ctx context.Context, log *model.AuditLog) error {
@@ -22,6 +25,9 @@ func (m *mockAuditLogRepo) Create(ctx context.Context, log *model.AuditLog) erro
 }
 
 func (m *mockAuditLogRepo) Get(ctx context.Context, id uuid.UUID) (*model.AuditLog, error) {
+	if m.getFunc != nil {
+		return m.getFunc(ctx, id)
+	}
 	return nil, nil
 }
 
@@ -127,4 +133,93 @@ func TestAuditLogList_PaginationValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAuditLogGet tests the Get method.
+func TestAuditLogGet(t *testing.T) {
+	ctx := context.Background()
+	logID := uuid.New()
+
+	tests := []struct {
+		name          string
+		setupMock     func() *mockAuditLogRepo
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "success",
+			setupMock: func() *mockAuditLogRepo {
+				return &mockAuditLogRepo{
+					getFunc: func(ctx context.Context, id uuid.UUID) (*model.AuditLog, error) {
+						return &model.AuditLog{
+							ID:           id,
+							OperatorID:   uuid.New(),
+							OperatorIP:   "127.0.0.1",
+							EventType:    "create_user",
+							ResourceType: "user",
+							ResourceID:   uuid.New(),
+							Details:      []byte(`{"test": "data"}`),
+							CreatedAt:    time.Now(),
+						}, nil
+					},
+				}
+			},
+			expectError: false,
+		},
+		{
+			name: "not_found",
+			setupMock: func() *mockAuditLogRepo {
+				return &mockAuditLogRepo{
+					getFunc: func(ctx context.Context, id uuid.UUID) (*model.AuditLog, error) {
+						return nil, sql.ErrNoRows
+					},
+				}
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := tt.setupMock()
+			uc := NewAuditLogUsecase(mockRepo)
+
+			result, err := uc.Get(ctx, logID)
+
+			if tt.expectError {
+				require.Error(t, err)
+				assert.Nil(t, result)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, result)
+				assert.Equal(t, logID, result.ID)
+			}
+		})
+	}
+}
+
+// TestAuditLogList_TimeRangeValidation tests time range validation.
+func TestAuditLogList_TimeRangeValidation(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := &mockAuditLogRepo{
+		listFunc: func(ctx context.Context, filter repo.AuditLogFilter, page, pageSize int) ([]*model.AuditLog, int64, error) {
+			return []*model.AuditLog{}, 0, nil
+		},
+	}
+	uc := NewAuditLogUsecase(mockRepo)
+
+	// Test invalid time range (startTime after endTime)
+	startTime := time.Now()
+	endTime := startTime.Add(-1 * time.Hour) // endTime before startTime
+
+	filter := AuditLogFilter{
+		StartTime: &startTime,
+		EndTime:   &endTime,
+	}
+
+	result, err := uc.List(ctx, filter, 1, 20)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "startTime must be before or equal to endTime")
+	assert.Nil(t, result)
 }
