@@ -9,12 +9,23 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/internal/repo"
 	"github.com/rtc-agent/server/pkg/logger"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
+
+// circuitBreakerGauge tracks the circuit breaker state for DB config provider.
+// 0 = closed (normal operation), 1 = open (degraded mode, falling back to yaml).
+var circuitBreakerGauge = promauto.NewGauge(prometheus.GaugeOpts{
+	Namespace: "rtc",
+	Subsystem: "config_db",
+	Name:      "circuit_breaker_state",
+	Help:      "Circuit breaker state for DB config provider (0=closed/healthy, 1=open/degraded).",
+})
 
 // DBConfigProvider is the V1 ConfigProvider implementation.
 // It reads from the database on every call (no caching).
@@ -27,6 +38,10 @@ type DBConfigProvider struct {
 	circuitOpen       bool
 	lastErrorTime     time.Time
 	mu                sync.Mutex
+
+	// Fallback sampling: log only every Nth fallback to reduce log volume
+	fallbackCount     int
+	fallbackLogSample int // Log every Nth fallback (e.g., 10 means log 1 in 10)
 }
 
 const (
@@ -37,8 +52,9 @@ const (
 // NewDBConfigProvider creates a new DBConfigProvider.
 func NewDBConfigProvider(configRepo repo.ServerConfigRepo, metrics *turnagent.PrometheusMetrics) ConfigProvider {
 	return &DBConfigProvider{
-		configRepo: configRepo,
-		metrics:    metrics,
+		configRepo:        configRepo,
+		metrics:           metrics,
+		fallbackLogSample: 10, // Log every 10th fallback to reduce alert fatigue
 	}
 }
 
@@ -159,11 +175,14 @@ func (p *DBConfigProvider) getEffectiveAny(ctx context.Context, key string, user
 			// DB error: record and potentially open circuit
 			p.recordError(ctx, key)
 			// Degrade to yaml baseline instead of returning error to caller.
-			// This ensures system resilience when DB is temporarily unavailable.
-			logger.Error(ctx, "db_config_user_lookup_failed_degrading_to_yaml",
-				zap.String("config_key", key),
-				zap.String("user_id", userID.String()),
-				zap.Error(err))
+			// This is expected behavior during DB outages (circuit breaker pattern).
+			// Use Warn level (not Error) to avoid alert fatigue, with sampling to reduce volume.
+			if p.shouldLogFallback() {
+				logger.Warn(ctx, "db_config_user_lookup_failed_degrading_to_yaml",
+					zap.String("config_key", key),
+					zap.String("user_id", userID.String()),
+					zap.Error(err))
+			}
 			if p.metrics != nil {
 				p.metrics.RecordConfigFallback(ctx, key, "db_error")
 			}
@@ -182,10 +201,13 @@ func (p *DBConfigProvider) getEffectiveAny(ctx context.Context, key string, user
 		// DB error: record and potentially open circuit
 		p.recordError(ctx, key)
 		// Degrade to yaml baseline instead of returning error to caller.
-		// This ensures system resilience when DB is temporarily unavailable.
-		logger.Error(ctx, "db_config_system_lookup_failed_degrading_to_yaml",
-			zap.String("config_key", key),
-			zap.Error(err))
+		// This is expected behavior during DB outages (circuit breaker pattern).
+		// Use Warn level (not Error) to avoid alert fatigue, with sampling to reduce volume.
+		if p.shouldLogFallback() {
+			logger.Warn(ctx, "db_config_system_lookup_failed_degrading_to_yaml",
+				zap.String("config_key", key),
+				zap.Error(err))
+		}
 		if p.metrics != nil {
 			p.metrics.RecordConfigFallback(ctx, key, "db_error")
 		}
@@ -231,6 +253,7 @@ func (p *DBConfigProvider) recordError(ctx context.Context, key string) {
 
 	if p.consecutiveErrors >= circuitThreshold && !p.circuitOpen {
 		p.circuitOpen = true
+		circuitBreakerGauge.Set(1) // Circuit opened
 		logger.Warn(ctx, "db_config_circuit_opened",
 			zap.String("config_key", key),
 			zap.Int("consecutive_errors", p.consecutiveErrors))
@@ -244,4 +267,22 @@ func (p *DBConfigProvider) resetCircuit() {
 
 	p.consecutiveErrors = 0
 	p.circuitOpen = false
+	p.fallbackCount = 0        // Reset fallback counter
+	circuitBreakerGauge.Set(0) // Circuit closed
+}
+
+// shouldLogFallback increments fallback counter and returns true if this fallback should be logged.
+// Implements sampling: logs every Nth fallback to reduce log volume during sustained outages.
+func (p *DBConfigProvider) shouldLogFallback() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.fallbackCount++
+	// Log if:
+	// 1. This is the first fallback (always log initial degradation)
+	// 2. This is an Nth fallback (sampled logging)
+	if p.fallbackCount == 1 || p.fallbackCount%p.fallbackLogSample == 0 {
+		return true
+	}
+	return false
 }
