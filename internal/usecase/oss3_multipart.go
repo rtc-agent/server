@@ -134,8 +134,8 @@ func (uc *OSS3Usecase) asyncCleanupBackendObject(bucket, key, reason, userID str
 	// P1-4 fix: Track this goroutine to prevent leaks
 	uc.cleanupWg.Add(1)
 	logger.SafeGo("async-backend-cleanup", func() {
-		defer uc.cleanupWg.Done()
-		defer cancel()
+		defer cancel()            // First: cancel context (cleanup resource)
+		defer uc.cleanupWg.Done() // Second: mark goroutine complete
 
 		if compErr := uc.backend.DeleteObject(cleanupCtx, bucket, key); compErr != nil {
 			logger.Warn(cleanupCtx, "async backend cleanup failed (orphan reconciler will retry)",
@@ -159,10 +159,10 @@ func (uc *OSS3Usecase) asyncCleanupBackendObject(bucket, key, reason, userID str
 // Returns true if all cleanups completed, false if timeout was reached.
 func (uc *OSS3Usecase) WaitPendingCleanups(timeout time.Duration) bool {
 	done := make(chan struct{})
-	go func() {
+	logger.SafeGo("oss3-cleanup-wait", func() {
 		uc.cleanupWg.Wait()
 		close(done)
-	}()
+	})
 
 	select {
 	case <-done:

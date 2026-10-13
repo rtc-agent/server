@@ -2,6 +2,8 @@ package dbutil
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -89,14 +91,49 @@ func IsNotFound(err error) bool {
 		errors.Is(err, ErrRoleNotFound)
 }
 
-// IsDuplicateKeyError checks whether the error is a PostgreSQL unique
-// constraint violation (code 23505).
-// Shared by user_repo, oauth2_user_repo, and other repos that need to
-// detect concurrent inserts on unique indexes.
+// IsDuplicateKeyError checks whether the error is a unique constraint violation.
+// It handles both PostgreSQL (code 23505) and SQLite ("UNIQUE constraint failed")
+// dialects. Shared by user_repo, oauth2_user_repo, memory_repo, and other repos
+// that need to detect concurrent inserts on unique indexes.
 func IsDuplicateKeyError(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		return pgErr.Code == "23505"
 	}
+	// SQLite: UNIQUE constraint violations produce a distinct message prefix.
+	if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		return true
+	}
 	return false
+}
+
+// DuplicateKeyInfo extracts constraint details from a unique constraint violation error.
+// Returns empty strings if the error is not a duplicate key error or if details cannot be extracted.
+// This is useful for providing more precise error messages that include the constraint name,
+// helping to distinguish between different unique constraints on the same table.
+func DuplicateKeyInfo(err error) (constraintName, tableName string) {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return pgErr.ConstraintName, pgErr.TableName
+	}
+	// SQLite: Parse constraint name from error message if possible.
+	// Format: "UNIQUE constraint failed: table.column" or "UNIQUE constraint failed: index_name"
+	if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		// SQLite doesn't provide structured constraint info, return what we have.
+		return "", ""
+	}
+	return "", ""
+}
+
+// WrapDuplicateKeyError wraps a duplicate key error with constraint information for better diagnostics.
+// If the error is not a duplicate key error, it returns the original error unchanged.
+func WrapDuplicateKeyError(err error, context string) error {
+	if !IsDuplicateKeyError(err) {
+		return err
+	}
+	constraint, table := DuplicateKeyInfo(err)
+	if constraint != "" {
+		return fmt.Errorf("%s: duplicate key constraint violation on %q (table: %q): %w", context, constraint, table, err)
+	}
+	return fmt.Errorf("%s: duplicate key constraint violation: %w", context, err)
 }

@@ -234,6 +234,12 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeInt,
 		Description: "Auto-compact buffer token count",
 		YamlDefault: 13000,
+		Validator: func(v any) error {
+			if n, ok := v.(int); ok && n <= 0 {
+				return fmt.Errorf("auto_compact_buffer_tokens must be > 0, got %d", n)
+			}
+			return nil
+		},
 	},
 	"worker.max_output_tokens_for_summary": {
 		Key:         "worker.max_output_tokens_for_summary",
@@ -241,6 +247,12 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeInt,
 		Description: "Maximum output tokens for compression summary",
 		YamlDefault: 20000,
+		Validator: func(v any) error {
+			if n, ok := v.(int); ok && n <= 0 {
+				return fmt.Errorf("max_output_tokens_for_summary must be > 0, got %d", n)
+			}
+			return nil
+		},
 	},
 	"worker.background_concurrency": {
 		Key:         "worker.background_concurrency",
@@ -376,6 +388,12 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeInt,
 		Description: "Maximum single file size in bytes",
 		YamlDefault: 104857600, // 100MB
+		Validator: func(v any) error {
+			if n, ok := v.(int); ok && n <= 0 {
+				return fmt.Errorf("max_file_size_bytes must be > 0, got %d", n)
+			}
+			return nil
+		},
 	},
 	"storage.quota.max_user_quota_bytes": {
 		Key:         "storage.quota.max_user_quota_bytes",
@@ -383,6 +401,12 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeInt,
 		Description: "Maximum user storage quota in bytes",
 		YamlDefault: 1073741824, // 1GB
+		Validator: func(v any) error {
+			if n, ok := v.(int); ok && n <= 0 {
+				return fmt.Errorf("max_user_quota_bytes must be > 0, got %d", n)
+			}
+			return nil
+		},
 	},
 	"storage.rate_limit.requests_per_minute": {
 		Key:         "storage.rate_limit.requests_per_minute",

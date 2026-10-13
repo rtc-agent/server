@@ -252,11 +252,12 @@ func (uc *ServerConfigUsecase) executeConfigUpdateTransaction(ctx context.Contex
 		}
 
 		// Create audit log within transaction for atomicity.
+		// IMPORTANT: Both old_value and new_value are normalized for consistent formatting.
 		auditDetails := map[string]any{
 			"key":         key,
 			"user_id":     userID.String(),
 			"old_value":   config.UnmarshalJSONB(oldValueJSON),
-			"new_value":   input.Value,
+			"new_value":   normalizeJSONValue(jsonVal),
 			"version":     *newVersion,
 			"change_note": input.ChangeNote,
 		}

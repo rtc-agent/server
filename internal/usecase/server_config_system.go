@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -120,10 +121,18 @@ func (uc *ServerConfigUsecase) GetSystemConfig(ctx context.Context, key string) 
 //
 // Retry: On optimistic lock conflict, automatically retries up to 3 times.
 // This handles the common case of concurrent config updates from different admin users.
+//
+// IMPORTANT: The retry loop with sleep is OUTSIDE the transaction to avoid holding
+// database locks during the sleep period. Each retry attempt opens a new transaction.
 func (uc *ServerConfigUsecase) UpdateSystemConfig(ctx context.Context, key string, input UpdateConfigInput, operatorID uuid.UUID, operatorIP string) (*SystemConfigItem, error) {
 	entry := config.GetRegistryEntry(key)
 	if entry == nil {
 		return nil, ErrConfigKeyNotFound
+	}
+
+	// Validate ChangeNote length (prevents DB errors and keeps audit logs manageable).
+	if len(input.ChangeNote) > 500 {
+		return nil, fmt.Errorf("%w: change_note exceeds max length 500", ErrValidation)
 	}
 
 	// Validate and marshal value (outside retry loop — value doesn't change between retries).
@@ -155,6 +164,8 @@ func (uc *ServerConfigUsecase) UpdateSystemConfig(ctx context.Context, key strin
 
 		if attempt < maxConfigRetries-1 {
 			// P0-4 fix: Add exponential backoff to reduce contention.
+			// IMPORTANT: This sleep is OUTSIDE the transaction (executeConfigUpdateTx has returned),
+			// so we don't hold database locks during the sleep period.
 			backoff := time.Duration(1<<uint(attempt)) * 100 * time.Millisecond // 100ms, 200ms, 400ms
 			logger.Warn(ctx, "optimistic_lock_conflict_retrying",
 				zap.String("key", key),
@@ -224,11 +235,16 @@ func (uc *ServerConfigUsecase) executeConfigUpdateTx(
 		}
 
 		// Write audit log within the same transaction for atomicity (P0-1 fix).
+		// IMPORTANT: Both old_value and new_value are normalized through json.Marshal+Unmarshal
+		// to ensure consistent formatting in audit logs. This prevents discrepancies where
+		// old_value (from DB) and new_value (from input) might have different representations
+		// (e.g., number vs string, different float precision, etc.).
+		newValueNormalized := normalizeJSONValue(jsonVal)
 		auditDetails := map[string]any{
 			"key":         key,
 			"user_id":     nil,
 			"old_value":   config.UnmarshalJSONB(oldValueJSON),
-			"new_value":   input.Value,
+			"new_value":   newValueNormalized,
 			"version":     newVersion,
 			"change_note": input.ChangeNote,
 		}
@@ -240,6 +256,21 @@ func (uc *ServerConfigUsecase) executeConfigUpdateTx(
 		return nil
 	})
 	return oldValueJSON, newVersion, err
+}
+
+// normalizeJSONValue ensures consistent formatting of JSON values for audit logging.
+// It marshals the value to JSON and unmarshals it back, normalizing number representations
+// and ensuring the same type coercion as UnmarshalJSONB. This prevents discrepancies
+// between old_value (from DB via UnmarshalJSONB) and new_value (from user input).
+func normalizeJSONValue(jsonVal []byte) any {
+	if len(jsonVal) == 0 {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal(jsonVal, &v); err != nil {
+		return string(jsonVal)
+	}
+	return v
 }
 
 // calculateVersionAndExpected determines the new version and expected version for optimistic locking.
@@ -279,6 +310,13 @@ func (uc *ServerConfigUsecase) postUpdateOperations(
 
 	// Publish config update event for multi-instance cache synchronization.
 	// P0-2 fix: Add retry with exponential backoff for publish operations.
+	//
+	// Event ordering: The event includes newVersion, which allows receivers to:
+	// 1. Detect and discard stale events (out-of-order delivery)
+	// 2. Deduplicate events from publish retries (same version = same logical update)
+	// 3. Maintain causal ordering across multiple config updates
+	// Receivers should compare event.Version with their cached version and only
+	// invalidate if event.Version > cachedVersion.
 	if uc.configPublisher != nil {
 		const maxPublishRetries = 3
 		var pubErr error
@@ -351,10 +389,11 @@ func (uc *ServerConfigUsecase) DeleteSystemConfig(ctx context.Context, key strin
 		}
 
 		// Audit log.
+		// IMPORTANT: Normalize deleted_value for consistent formatting (see update audit log).
 		auditDetails := map[string]any{
 			"key":             key,
 			"user_id":         nil,
-			"deleted_value":   deletedValue,
+			"deleted_value":   normalizeJSONValue(deletedCfg.Value),
 			"deleted_version": deletedVersion,
 		}
 		auditLog := repo.NewAuditLog(ctx, operatorID, operatorIP, "config.delete", "server_config", uuid.Nil, auditDetails)
@@ -370,6 +409,7 @@ func (uc *ServerConfigUsecase) DeleteSystemConfig(ctx context.Context, key strin
 
 	// Publish config delete event for multi-instance cache synchronization.
 	// P0-2 fix: Add retry with exponential backoff for publish operations.
+	// Event version (deletedVersion+1) allows receivers to maintain causal ordering.
 	if uc.configPublisher != nil {
 		const maxPublishRetries = 3
 		var pubErr error

@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/rtc-agent/server/internal/dbutil"
 	"github.com/rtc-agent/server/internal/model"
 )
 
@@ -131,6 +132,10 @@ func (r *configRepo) Upsert(ctx context.Context, cfg *model.ServerConfig, expect
 			// Record doesn't exist; fall back to INSERT.
 			if err := db.WithContext(ctx).Create(cfg).Error; err != nil {
 				if IsDuplicateKeyError(err) {
+					constraint, _ := dbutil.DuplicateKeyInfo(err)
+					if constraint != "" {
+						return fmt.Errorf("upsert config %q (constraint %q): %w", cfg.Key, constraint, ErrConflict)
+					}
 					return fmt.Errorf("upsert config %q: %w", cfg.Key, ErrConflict)
 				}
 				return fmt.Errorf("upsert config %q: %w", cfg.Key, err)
@@ -143,6 +148,10 @@ func (r *configRepo) Upsert(ctx context.Context, cfg *model.ServerConfig, expect
 		// First write: INSERT. Primary key conflict → optimistic lock conflict.
 		if err := db.WithContext(ctx).Create(cfg).Error; err != nil {
 			if IsDuplicateKeyError(err) {
+				constraint, _ := dbutil.DuplicateKeyInfo(err)
+				if constraint != "" {
+					return fmt.Errorf("upsert config %q (constraint %q): %w", cfg.Key, constraint, ErrConflict)
+				}
 				return fmt.Errorf("upsert config %q: %w", cfg.Key, ErrConflict)
 			}
 			return fmt.Errorf("upsert config %q: %w", cfg.Key, err)

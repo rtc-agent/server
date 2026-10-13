@@ -29,6 +29,8 @@ import (
 // operatorID is used for audit trail (use uuid.Nil for system bootstrap).
 func (uc *ServerConfigUsecase) BootstrapDynamicConfigs(ctx context.Context, operatorID uuid.UUID) error {
 	now := time.Now()
+	initializedCount := 0
+	skippedCount := 0
 
 	for _, key := range config.AllRegistryKeys() {
 		entry := config.GetRegistryEntry(key)
@@ -40,6 +42,7 @@ func (uc *ServerConfigUsecase) BootstrapDynamicConfigs(ctx context.Context, oper
 		_, err := uc.configRepo.Get(ctx, key, nil)
 		if err == nil {
 			// Already exists, skip.
+			skippedCount++
 			continue
 		}
 		if !errors.Is(err, repo.ErrNotFound) {
@@ -118,10 +121,20 @@ func (uc *ServerConfigUsecase) BootstrapDynamicConfigs(ctx context.Context, oper
 			return fmt.Errorf("bootstrap %q transaction failed: %w", key, err)
 		}
 
-		logger.Info(ctx, "bootstrap.config_initialized",
+		initializedCount++
+
+		// Use Debug level for individual config initialization to reduce log noise.
+		// Summary info is logged at Info level after the loop.
+		logger.Debug(ctx, "bootstrap.config_initialized",
 			zap.String("key", key),
 			zap.Any("value", entry.YamlDefault))
 	}
+
+	// Log a summary at Info level to provide visibility without excessive noise.
+	logger.Info(ctx, "bootstrap.completed",
+		zap.Int("initialized_count", initializedCount),
+		zap.Int("skipped_count", skippedCount),
+		zap.Int("total_registry_keys", len(config.AllRegistryKeys())))
 
 	return nil
 }

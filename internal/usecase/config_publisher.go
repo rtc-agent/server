@@ -80,7 +80,14 @@ func (p *RedisConfigPublisher) PublishConfigUpdate(ctx context.Context, key stri
 
 // ConfigUpdateHandler is a function that handles config update events.
 // Implemented by CachedConfigProvider to invalidate cache entries.
-type ConfigUpdateHandler func(event model.ConfigUpdateEvent)
+// The context parameter allows handlers to respond to timeout cancellation.
+//
+// IMPORTANT: Handlers MUST respect context cancellation. When the context is cancelled
+// (due to timeout), the handler should stop its work promptly and return. Failure to
+// do so may result in goroutine leaks, as the subscriber cannot force-terminate a
+// running handler. The handlerTimeout (default 5s) provides an upper bound, but
+// cooperative cancellation is still required for clean shutdown.
+type ConfigUpdateHandler func(ctx context.Context, event model.ConfigUpdateEvent)
 
 // handlerRegistration wraps a handler with its metadata for metrics and monitoring.
 type handlerRegistration struct {
@@ -95,8 +102,16 @@ type subscriberMetrics struct {
 	handlerTimeouts prometheus.Counter
 }
 
+// publisherMetrics holds Prometheus metrics for config publisher operations.
+type publisherMetrics struct {
+	publishErrors prometheus.Counter
+}
+
 // global subscriberMetrics instance (promauto handles registration).
 var globalSubscriberMetrics = newSubscriberMetrics()
+
+// global publisherMetrics instance (promauto handles registration).
+var globalPublisherMetrics = newPublisherMetrics()
 
 // newSubscriberMetrics creates and registers all subscriber metrics.
 func newSubscriberMetrics() *subscriberMetrics {
@@ -119,6 +134,18 @@ func newSubscriberMetrics() *subscriberMetrics {
 			Subsystem: "config_subscriber",
 			Name:      "handler_timeouts_total",
 			Help:      "Total number of config update handler timeouts.",
+		}),
+	}
+}
+
+// newPublisherMetrics creates and registers all publisher metrics.
+func newPublisherMetrics() *publisherMetrics {
+	return &publisherMetrics{
+		publishErrors: promauto.NewCounter(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "config_publisher",
+			Name:      "publish_errors_total",
+			Help:      "Total number of config update publish failures after all retries.",
 		}),
 	}
 }
@@ -231,26 +258,37 @@ func (s *RedisConfigSubscriber) handleMessage(ctx context.Context, msg *redis.Me
 		zap.String("source", event.Source))
 
 	// Invoke all registered handlers asynchronously with timeout control.
+	// Each handler receives a context with timeout, allowing it to respond to cancellation.
 	// This prevents slow handlers from blocking message processing and ensures
 	// that config updates are processed promptly even if some handlers are slow.
-	// Note: We cannot forcibly stop a goroutine in Go, so handlers that exceed
-	// the timeout will continue running in the background. Handlers should be
-	// designed to complete quickly (e.g., cache invalidation, not network calls).
+	//
+	// Goroutine lifecycle:
+	// - Each handler is executed in its own goroutine via logger.SafeGo.
+	// - The handler context has a timeout (handlerTimeout, default 5s).
+	// - If the handler respects context cancellation, it will exit when the timeout fires.
+	// - If the handler does NOT respect context cancellation, the goroutine may leak.
+	// - The outer wait (wg.Wait) has a safety timeout of 2*handlerTimeout to prevent
+	//   blocking indefinitely, but leaked goroutines will continue running in the background.
+	//
+	// CONTRACT: All ConfigUpdateHandler implementations MUST respect context cancellation.
 	var wg sync.WaitGroup
 	for _, reg := range s.handlers {
 		wg.Add(1)
-		go func(reg handlerRegistration) {
+		logger.SafeGo(fmt.Sprintf("config-handler-%s", reg.name), func() {
 			defer wg.Done()
 			start := time.Now()
 
-			// Use a timer to detect timeout.
-			// The handler itself continues running if it exceeds the timeout,
-			// but we log and move on to prevent blocking other handlers.
+			// Create a context with timeout for this handler execution.
+			// If the handler exceeds the timeout, the context will be cancelled,
+			// allowing the handler to clean up and exit gracefully.
+			handlerCtx, cancel := context.WithTimeout(ctx, s.handlerTimeout)
+			defer cancel()
+
 			done := make(chan struct{})
-			go func() {
+			logger.SafeGo(fmt.Sprintf("config-handler-executor-%s", reg.name), func() {
 				defer close(done)
-				reg.handler(event)
-			}()
+				reg.handler(handlerCtx, event)
+			})
 
 			// Wait for completion or timeout.
 			timer := time.NewTimer(s.handlerTimeout)
@@ -269,18 +307,18 @@ func (s *RedisConfigSubscriber) handleMessage(ctx context.Context, msg *redis.Me
 					zap.String("handler", reg.name),
 					zap.Duration("timeout", s.handlerTimeout),
 					zap.Duration("elapsed", time.Since(start)),
-					zap.String("message", "handler continues running in background"))
+					zap.String("message", "handler context cancelled, should exit soon"))
 			}
-		}(reg)
+		})
 	}
 
 	// Wait for all handlers to complete (with timeout already enforced per-handler).
 	// We use a separate timeout for the overall wait to prevent blocking indefinitely.
 	waitDone := make(chan struct{})
-	go func() {
+	logger.SafeGo("config-publisher-wait", func() {
 		wg.Wait()
 		close(waitDone)
-	}()
+	})
 
 	select {
 	case <-waitDone:
