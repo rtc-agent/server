@@ -75,6 +75,7 @@ var ServiceSet = wire.NewSet(
 	provideJWTSigner,
 	provideCentrifugeNode,
 	provideDualBroker,
+	provideHealthChecker,
 )
 
 // UsecaseSet provides usecase layer dependencies.
@@ -88,6 +89,7 @@ var UsecaseSet = wire.NewSet(
 	provideOSS3Backend,
 	provideOSS3LuaScripts,
 	provideOSS3Usecase,
+	provideSessionChangePublisher,
 )
 
 // AsynqSet provides asynq components for loop task scheduling.
@@ -213,8 +215,9 @@ func provideDualBroker(
 	updatePublisher *updates.UpdatePublisher,
 	jwtSigner *auth.JWTSigner,
 	oauth2UserRepo repo.OAuth2UserRepo,
+	deviceRepo repo.DeviceRepo,
 ) (*centrifugeplus.DualBroker, error) {
-	return svc.AssembleDualBroker(node, cfg, updatePublisher, jwtSigner, oauth2UserRepo)
+	return svc.AssembleDualBroker(node, cfg, updatePublisher, jwtSigner, oauth2UserRepo, deviceRepo)
 }
 
 // chatModelResult wraps the optional ChatModel to handle Wire's error semantics.
@@ -245,6 +248,7 @@ func provideUsecaseDependencies(
 	webSearchManager *websearch.WebSearchManager,
 	webFetchManager *webfetch.WebFetchManager,
 	metrics *turnagent.PrometheusMetrics,
+	sessionPublisher usecase.SessionChangePublisher,
 ) *usecase.Dependencies {
 	// Create CachedConfigProvider for efficient config reads with TTL-based caching
 	// In multi-instance deployments, cache invalidation is handled via Redis Pub/Sub
@@ -306,7 +310,15 @@ func provideUsecaseDependencies(
 		}
 	}
 
+	// Inject the usecase-level SessionChangePublisher so RPC handlers can publish
+	// session changes without importing the updates package directly.
+	deps.SessionChangePublisher = sessionPublisher
+
 	return deps
+}
+
+func provideSessionChangePublisher(up *updates.UpdatePublisher) usecase.SessionChangePublisher {
+	return usecase.NewSessionChangePublisher(up)
 }
 
 func provideQueue(rdb *redis.Client) *rtcqueue.Queue {
@@ -314,7 +326,7 @@ func provideQueue(rdb *redis.Client) *rtcqueue.Queue {
 }
 
 func provideStreamStore(redisClient redis.UniversalClient, cfg *config.Config) *agent.StreamStore {
-	return agent.NewStreamStore(redisClient, cfg.Worker.StreamChunkTTL)
+	return agent.NewStreamStore(redisClient, cfg.Worker.StreamChunkTTL, cfg.Worker.StreamTTLCheckInterval)
 }
 
 func provideAgent(
@@ -336,6 +348,7 @@ func provideAgent(
 		EnableLLMLogging:                logger.IsDebugMode(),
 		CheckpointTTL:                   cfg.Worker.CheckpointTTL,
 		StreamChunkTTL:                  cfg.Worker.StreamChunkTTL,
+		StreamTTLCheckInterval:          cfg.Worker.StreamTTLCheckInterval,
 		Logger:                          agent.NewLogger(),
 		Tracer:                          otel.GetTracerProvider().Tracer("turn-agent"),
 		Metrics:                         metrics,
@@ -706,12 +719,20 @@ func provideRPCHandler(
 	return handler
 }
 
-func provideHTTPHandler(svcCtx *svc.ServiceContext) *httphandler.Handler {
-	return httphandler.NewHandler(
-		svcCtx.DB,
-		svcCtx.Redis,
-		svcCtx.CentrifugeNode,
-	)
+func provideHealthChecker(
+	db *gorm.DB,
+	redisClient redis.UniversalClient,
+	node *centrifuge.Node,
+) *usecase.HealthChecker {
+	return usecase.NewHealthChecker(usecase.HealthCheckerDeps{
+		DB:             db,
+		Redis:          redisClient,
+		CentrifugeNode: node,
+	})
+}
+
+func provideHTTPHandler(healthChecker *usecase.HealthChecker) *httphandler.Handler {
+	return httphandler.NewHandler(healthChecker)
 }
 
 func provideOAuth2Handler(
@@ -728,6 +749,7 @@ func provideOAuth2Handler(
 		svcCtx.RefreshTokenRepo,
 		jwtSigner,
 		cfg.Auth.RefreshTokenTTL,
+		cfg.Auth.RefreshTokenReuseGracePeriod,
 	)
 	handler := httphandler.NewOAuth2Handler(authUC, jwtSigner, stateStore, providerClient, cfg.Auth, cfg.Server.Env)
 
@@ -830,7 +852,7 @@ func provideSTSRateLimiter(rdb *redis.Client, cfg *config.Config) httphandler.Ra
 	const stsRateLimitPerMinute = 100
 
 	if rdb != nil {
-		return httphandler.NewRedisRateLimiter(rdb, stsRateLimitPerMinute)
+		return cache.NewRedisRateLimiter(rdb, stsRateLimitPerMinute)
 	}
 
 	memLimiter := httphandler.NewRateLimiter(httphandler.RateLimitConfig{
@@ -927,8 +949,24 @@ func provideAsynqServer(cfg *config.Config) *hibikenasynq.Server {
 				queueName: 6,
 				"default": 3,
 			},
+			// Custom retry delay function with exponential backoff.
+			// Provides 5s, 10s, 20s delays for retry attempts 1, 2, 3.
+			// This prevents overwhelming downstream services (e.g., LLM APIs)
+			// when they experience temporary unavailability.
+			RetryDelayFunc: retryDelayWithExponentialBackoff,
 		},
 	)
+}
+
+// retryDelayWithExponentialBackoff implements exponential backoff for task retries.
+// Base delay is 5 seconds, doubling with each retry attempt.
+// Formula: 5s * 2^(n-1) where n is the retry count (1, 2, 3, ...)
+// Results in delays: 5s, 10s, 20s, 40s, ...
+func retryDelayWithExponentialBackoff(n int, e error, t *hibikenasynq.Task) time.Duration {
+	baseDelay := 5 * time.Second
+	// Calculate 2^(n-1) to get: 1, 2, 4, 8, ... for n=1, 2, 3, 4, ...
+	multiplier := time.Duration(1 << uint(n-1))
+	return baseDelay * multiplier
 }
 
 // provideAsynqMux creates the asynq ServeMux with loop task handlers registered.

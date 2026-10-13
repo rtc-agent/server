@@ -37,6 +37,9 @@ type AuthUsecase struct {
 	refreshTokenRepo repo.RefreshTokenRepo
 	signer           TokenSigner
 	refreshTokenTTL  time.Duration
+	// refreshTokenReuseGracePeriod is the time window after token revocation during which
+	// a reused token is considered a concurrent refresh attempt rather than token theft.
+	refreshTokenReuseGracePeriod time.Duration
 	// TODO(config): Consider making RefreshTokenTTL dynamically configurable via
 	// ServerConfig rather than startup-only. This would allow security policies
 	// to adjust token lifetimes without service restart.
@@ -50,14 +53,16 @@ func NewAuthUsecase(
 	refreshTokenRepo repo.RefreshTokenRepo,
 	signer TokenSigner,
 	refreshTokenTTL time.Duration,
+	refreshTokenReuseGracePeriod time.Duration,
 ) *AuthUsecase {
 	return &AuthUsecase{
-		db:               db,
-		oauth2UserRepo:   oauth2UserRepo,
-		deviceRepo:       deviceRepo,
-		refreshTokenRepo: refreshTokenRepo,
-		signer:           signer,
-		refreshTokenTTL:  refreshTokenTTL,
+		db:                           db,
+		oauth2UserRepo:               oauth2UserRepo,
+		deviceRepo:                   deviceRepo,
+		refreshTokenRepo:             refreshTokenRepo,
+		signer:                       signer,
+		refreshTokenTTL:              refreshTokenTTL,
+		refreshTokenReuseGracePeriod: refreshTokenReuseGracePeriod,
 	}
 }
 
@@ -205,29 +210,6 @@ func (uc *AuthUsecase) RefreshTokenPair(ctx context.Context, plainToken string) 
 	return result, nil
 }
 
-const (
-	// refreshTokenReuseGracePeriod defines the time window after token revocation
-	// during which a reused token is considered a concurrent refresh attempt rather
-	// than a token theft. This prevents aggressive revocation of all user tokens
-	// when multiple concurrent refresh requests occur (e.g., multiple browser tabs,
-	// parallel API calls).
-	//
-	// How it works:
-	// 1. When a refresh token is used, it is revoked (RevokedAt is set)
-	// 2. If the same token is used again within the grace period (1 minute):
-	//    - It's treated as a concurrent refresh race condition
-	//    - Log a warning but do NOT revoke all other tokens
-	//    - User can still authenticate with other active tokens
-	// 3. If the same token is used after the grace period:
-	//    - It's treated as potential token theft
-	//    - Revoke all tokens for this user+device (security protection)
-	//    - User must re-authenticate
-	//
-	// This balances security (detect token theft) with user experience
-	// (avoid false positives from concurrent refresh attempts).
-	refreshTokenReuseGracePeriod = 1 * time.Minute
-)
-
 // validateRefreshTokenInTx is the transactional version of ValidateRefreshToken.
 // Uses SELECT ... FOR UPDATE to prevent concurrent token reuse attacks.
 func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken string) (*RefreshTokenInfo, error) {
@@ -264,13 +246,13 @@ func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken 
 
 		if rt.RevokedAt != nil {
 			timeSinceRevocation = time.Since(*rt.RevokedAt)
-			isWithinGracePeriod = timeSinceRevocation <= refreshTokenReuseGracePeriod
+			isWithinGracePeriod = timeSinceRevocation <= uc.refreshTokenReuseGracePeriod
 		} else {
 			// RevokedAt is nil for tokens revoked before this field was added.
 			// Fall back to checking token age (CreatedAt) as a heuristic.
 			// If token was created very recently, it's likely a concurrent refresh.
 			tokenAge := time.Since(rt.CreatedAt)
-			isWithinGracePeriod = tokenAge <= refreshTokenReuseGracePeriod
+			isWithinGracePeriod = tokenAge <= uc.refreshTokenReuseGracePeriod
 			timeSinceRevocation = tokenAge // Approximate
 		}
 
@@ -284,7 +266,7 @@ func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken 
 				zap.String("token_hash_prefix", rtHash[:16]),
 				zap.Time("token_created_at", rt.CreatedAt),
 				zap.Duration("time_since_revocation", timeSinceRevocation),
-				zap.Duration("grace_period", refreshTokenReuseGracePeriod),
+				zap.Duration("grace_period", uc.refreshTokenReuseGracePeriod),
 			}
 			if rt.RevokedAt != nil {
 				logFields = append(logFields, zap.Time("token_revoked_at", *rt.RevokedAt))
@@ -303,7 +285,7 @@ func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken 
 				zap.String("token_hash_prefix", rtHash[:16]),
 				zap.Time("token_created_at", rt.CreatedAt),
 				zap.Duration("time_since_revocation", timeSinceRevocation),
-				zap.Duration("grace_period", refreshTokenReuseGracePeriod),
+				zap.Duration("grace_period", uc.refreshTokenReuseGracePeriod),
 				zap.Time("detected_at", time.Now()),
 			}
 			if rt.RevokedAt != nil {

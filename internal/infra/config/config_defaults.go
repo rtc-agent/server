@@ -122,6 +122,10 @@ func setAuthDefaults(v *viper.Viper) {
 	v.SetDefault("auth.refresh_token_ttl", 30*24*time.Hour)
 	v.SetDefault("auth.oauth2_state_ttl", 10*time.Minute)
 	v.SetDefault("auth.allowed_redirect_uris", []string{})
+	// Refresh Token Grace Period: Time window for concurrent refresh attempts.
+	// Default 30s balances security (detect token theft) with UX (avoid false positives).
+	// High-security environments may reduce to 10-30s; development may use 1m.
+	v.SetDefault("auth.refresh_token_reuse_grace_period", 30*time.Second)
 }
 
 func setProviderDefaults(v *viper.Viper) {
@@ -200,6 +204,10 @@ func setAPIDefaults(v *viper.Viper) {
 	v.SetDefault("api.ip_rate_limit.requests_per_second", 5.0)
 	v.SetDefault("api.ip_rate_limit.burst_size", 10)
 	v.SetDefault("api.ip_rate_limit.limiter_ttl_sec", 3600)
+	// Token Exchange uses stricter limits: 3 req/s/IP with burst 5.
+	// See TokenExchangeIPRateLimitConfig for rationale.
+	v.SetDefault("api.ip_rate_limit.token_exchange.requests_per_second", 3.0)
+	v.SetDefault("api.ip_rate_limit.token_exchange.burst_size", 5)
 }
 
 func setTracingDefaults(v *viper.Viper) {

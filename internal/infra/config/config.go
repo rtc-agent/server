@@ -388,6 +388,13 @@ type AuthConfig struct {
 	// AllowedRedirectURIs is the OAuth2 redirect_uri whitelist.
 	// Empty means no restriction (development only); production must configure explicitly.
 	AllowedRedirectURIs []string `mapstructure:"allowed_redirect_uris"`
+
+	// RefreshTokenReuseGracePeriod is the time window after token revocation during which
+	// a reused token is considered a concurrent refresh attempt rather than token theft.
+	// This prevents aggressive revocation of all user tokens when multiple concurrent
+	// refresh requests occur (e.g., multiple browser tabs, parallel API calls).
+	// Default 30s. Shorter values (10-30s) increase security; longer values reduce false positives.
+	RefreshTokenReuseGracePeriod time.Duration `mapstructure:"refresh_token_reuse_grace_period"`
 }
 
 // ProvidersConfig holds the OAuth2 provider configuration set.
@@ -465,6 +472,14 @@ type WorkerConfig struct {
 	// Default 5m. Chunks are short-lived data, deleted after generation completes.
 	// Note: longer thinking/reasoning streams may require a longer TTL to avoid chunk loss.
 	StreamChunkTTL time.Duration `mapstructure:"stream_chunk_ttl"`
+
+	// StreamTTLCheckInterval is the number of AppendChunk calls between TTL checks.
+	// Default 100. Checking every 100 calls provides a good balance between visibility
+	// into TTL drift and Redis load reduction. For a typical stream of 500 chunks,
+	// this reduces TTL checks from 500 to 5. Lower values increase Redis load but
+	// provide faster detection of TTL issues; higher values reduce load but delay
+	// detection of stuck streams or TTL consistency problems.
+	StreamTTLCheckInterval int `mapstructure:"stream_ttl_check_interval"`
 
 	// InterruptAnswerTTL is the interrupt answer TTL in Redis.
 	// Default 10m.
@@ -604,6 +619,26 @@ type IPRateLimitConfig struct {
 
 	// LimiterTTLSec is the TTL for limiter entries in seconds. Default 3600 (1 hour).
 	LimiterTTLSec int `mapstructure:"limiter_ttl_sec"`
+
+	// TokenExchange holds stricter rate limiting for the Token Exchange endpoint.
+	// Token Exchange involves external JWT verification and is a high-value target
+	// for brute-force attacks, so it uses tighter limits than the general OAuth2 endpoints.
+	TokenExchange TokenExchangeIPRateLimitConfig `mapstructure:"token_exchange"`
+}
+
+// TokenExchangeIPRateLimitConfig holds rate limiting configuration specifically
+// for the RFC 8693 Token Exchange endpoint (POST /oauth2/token with grant_type=token-exchange).
+//
+// These limits are intentionally stricter than the general IPRateLimit because:
+//   - Each request triggers external JWT signature verification (CPU-intensive)
+//   - The endpoint is a high-value target for brute-force attacks against trusted issuers
+//   - Legitimate clients rarely exceed 1-2 requests per second
+type TokenExchangeIPRateLimitConfig struct {
+	// RequestsPerSecond is the allowed requests per second per IP. Default 3.
+	RequestsPerSecond float64 `mapstructure:"requests_per_second"`
+
+	// BurstSize is the maximum burst size. Default 5.
+	BurstSize int `mapstructure:"burst_size"`
 }
 
 // TracingConfig holds OpenTelemetry distributed tracing configuration.
