@@ -38,7 +38,9 @@ var loopMetrics = struct {
 		Subsystem: "loop_worker",
 		Name:      "task_duration_seconds",
 		Help:      "Duration of loop task processing in seconds.",
-		Buckets:   prometheus.ExponentialBuckets(0.01, 2, 10), // 10ms ~ 5s
+		// Buckets range from 100ms to 60s to capture P99 latency accurately.
+		// Covers typical task durations and long-tail scenarios.
+		Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60}, // 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s, 30s, 60s
 	}, []string{"outcome"}), // outcome: "success", "failure"
 
 	recoveryScansTotal: promauto.NewCounter(prometheus.CounterOpts{
