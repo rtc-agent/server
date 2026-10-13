@@ -453,6 +453,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeJSON,
 		Description: "Blocked domains list (JSON array)",
 		YamlDefault: []any{},
+		Validator:   ValidateJSON,
 	},
 	"web_fetch.pre_approved_domains": {
 		Key:         "web_fetch.pre_approved_domains",
@@ -460,6 +461,7 @@ var DynamicConfigRegistry = map[string]*ConfigEntry{
 		ValueType:   ValueTypeJSON,
 		Description: "Pre-approved domains list (JSON array)",
 		YamlDefault: []any{},
+		Validator:   ValidateJSON,
 	},
 
 	// ── API ──────────────────────────────────────────────────────────
@@ -556,6 +558,22 @@ func ValidateDuration(v any) error {
 	return nil
 }
 
+// ValidateJSON checks that a value is a valid JSON structure (object or array).
+// Primitive types (string, number, bool, null) are rejected to ensure JSON config
+// values have meaningful structure.
+func ValidateJSON(v any) error {
+	if v == nil {
+		return fmt.Errorf("JSON value cannot be null")
+	}
+	switch v.(type) {
+	case map[string]any, []any:
+		// Valid JSON structures
+		return nil
+	default:
+		return fmt.Errorf("JSON value must be an object or array, got %T", v)
+	}
+}
+
 // GetRegistryEntry returns the registry entry for a key, or nil if not found.
 func GetRegistryEntry(key string) *ConfigEntry {
 	return DynamicConfigRegistry[key]
@@ -641,6 +659,7 @@ func PopulateYamlDefaults(cfg *Config) {
 	setDefault("worker.lock_ttl_sec", cfg.Worker.LockTTLSeconds)
 	setDefault("worker.checkpoint_ttl", cfg.Worker.CheckpointTTL.String())
 	setDefault("worker.stream_chunk_ttl", cfg.Worker.StreamChunkTTL.String())
+	setDefault("worker.stream_ttl_check_interval", cfg.Worker.StreamTTLCheckInterval)
 	setDefault("worker.interrupt_answer_ttl", cfg.Worker.InterruptAnswerTTL.String())
 	setDefault("worker.orphan_trigger_ttl", cfg.Worker.OrphanTriggerTTL.String())
 

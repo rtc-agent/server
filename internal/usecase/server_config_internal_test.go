@@ -341,10 +341,37 @@ func TestConvertValueByType(t *testing.T) {
 	})
 
 	t.Run("converts json", func(t *testing.T) {
+		// Valid JSON object
 		data := map[string]interface{}{"key": "value"}
 		result, err := convertValueByType(data, config.ValueTypeJSON)
 		require.NoError(t, err)
 		assert.Equal(t, data, result)
+
+		// Valid JSON array
+		arrayData := []interface{}{"item1", "item2"}
+		result, err = convertValueByType(arrayData, config.ValueTypeJSON)
+		require.NoError(t, err)
+		assert.Equal(t, arrayData, result)
+
+		// Invalid: null value
+		_, err = convertValueByType(nil, config.ValueTypeJSON)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot be null")
+
+		// Invalid: string primitive
+		_, err = convertValueByType("not a json structure", config.ValueTypeJSON)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "must be an object or array")
+
+		// Invalid: number primitive
+		_, err = convertValueByType(123, config.ValueTypeJSON)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "must be an object or array")
+
+		// Invalid: bool primitive
+		_, err = convertValueByType(true, config.ValueTypeJSON)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "must be an object or array")
 	})
 
 	t.Run("handles unknown type", func(t *testing.T) {

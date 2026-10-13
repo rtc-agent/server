@@ -617,3 +617,87 @@ func TestConfig_ValidateCORS(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   any
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid object",
+			value:   map[string]any{"key": "value"},
+			wantErr: false,
+		},
+		{
+			name:    "valid array",
+			value:   []any{"item1", "item2"},
+			wantErr: false,
+		},
+		{
+			name:    "empty object",
+			value:   map[string]any{},
+			wantErr: false,
+		},
+		{
+			name:    "empty array",
+			value:   []any{},
+			wantErr: false,
+		},
+		{
+			name:    "nested object",
+			value:   map[string]any{"nested": map[string]any{"key": "value"}},
+			wantErr: false,
+		},
+		{
+			name:    "nested array",
+			value:   []any{[]any{1, 2}, []any{3, 4}},
+			wantErr: false,
+		},
+		{
+			name:    "null value",
+			value:   nil,
+			wantErr: true,
+			errMsg:  "cannot be null",
+		},
+		{
+			name:    "string primitive",
+			value:   "not a json structure",
+			wantErr: true,
+			errMsg:  "must be an object or array",
+		},
+		{
+			name:    "number primitive",
+			value:   123,
+			wantErr: true,
+			errMsg:  "must be an object or array",
+		},
+		{
+			name:    "float primitive",
+			value:   3.14,
+			wantErr: true,
+			errMsg:  "must be an object or array",
+		},
+		{
+			name:    "bool primitive",
+			value:   true,
+			wantErr: true,
+			errMsg:  "must be an object or array",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateJSON(tt.value)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateJSON() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && tt.errMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("ValidateJSON() error = %q, want to contain %q", err.Error(), tt.errMsg)
+				}
+			}
+		})
+	}
+}

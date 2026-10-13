@@ -186,6 +186,9 @@ func convertValueByType(value any, valueType string) (any, error) {
 		}
 		return s, nil
 	case config.ValueTypeJSON:
+		if err := config.ValidateJSON(value); err != nil {
+			return nil, err
+		}
 		return value, nil
 	default:
 		return nil, fmt.Errorf("unknown value_type: %s", valueType)
