@@ -58,7 +58,8 @@ var ErrAlreadyTerminal = fmt.Errorf("rtcqueue: work already completed or cancell
 // It provides atomic publish, claim, complete, and cancel operations
 // backed by Redis Lua scripts.
 type Queue struct {
-	rdb *redis.Client
+	rdb         *redis.Client
+	retryConfig RetryConfig
 }
 
 // queueTracer returns the tracer for queue operations.
@@ -67,8 +68,15 @@ func queueTracer() trace.Tracer {
 }
 
 // New constructs a Queue backed by the given Redis client.
+// Uses default retry configuration for transient error recovery.
 func New(rdb *redis.Client) *Queue {
-	return &Queue{rdb: rdb}
+	return NewWithConfig(rdb, DefaultRetryConfig())
+}
+
+// NewWithConfig constructs a Queue with a custom retry configuration.
+// This allows callers to tune retry behavior for their specific environment.
+func NewWithConfig(rdb *redis.Client, retryConfig RetryConfig) *Queue {
+	return &Queue{rdb: rdb, retryConfig: retryConfig}
 }
 
 // Client returns the underlying redis.Client, primarily for tests.
@@ -134,17 +142,22 @@ func (q *Queue) PublishWithID(ctx context.Context, sessionID, workID, data strin
 	queueKey := keyQueue(sessionID)
 
 	// Bound the Redis round-trip to 5s so an unresponsive broker cannot
-	// stall the caller's goroutine indefinitely. The caller
-	// (publishSubmitWork) applies its own exponential-backoff retry on
-	// top of this timeout, so a single slow Redis call will be retried
-	// rather than immediately failing the whole SendMessage request.
+	// stall the caller's goroutine indefinitely.
 	publishCtx, cancel := context.WithTimeout(ctx, PublishTimeout)
 	defer cancel()
 
-	result, err := publishScript.Run(publishCtx, q.rdb, []string{workKey, queueKey},
-		workID, sessionID, data, priority, now, now,
-		ChannelSessionNew, sessionID,
-	).Int()
+	// Wrap the Redis call with retry for transient errors.
+	// This is safe because the Lua script is idempotent: if the work item
+	// already exists with active status, it will be skipped.
+	var result int
+	_, err := WithRetry(publishCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+		var runErr error
+		result, runErr = publishScript.Run(ctx, q.rdb, []string{workKey, queueKey},
+			workID, sessionID, data, priority, now, now,
+			ChannelSessionNew, sessionID,
+		).Int()
+		return struct{}{}, runErr
+	})
 	if err != nil {
 		globalQueueMetrics.recordPublish("error")
 		span.SetStatus(codes.Error, err.Error())
@@ -186,11 +199,19 @@ func (q *Queue) Claim(ctx context.Context, sessionID, workerID string) (*ClaimRe
 	claimCtx, cancel := context.WithTimeout(ctx, ClaimTimeout)
 	defer cancel()
 
-	res, err := claimScript.Run(claimCtx, q.rdb, []string{
-		keyLock(sessionID),
-		keyQueue(sessionID),
-		keyActive(sessionID),
-	}, workerID, DefaultLockTTLSeconds, now).Result()
+	// Wrap the Redis call with retry for transient errors.
+	// This is safe because the Lua script is atomic: if another worker
+	// claims first, the lock will exist and this call will return nil.
+	var res interface{}
+	_, err := WithRetry(claimCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+		var runErr error
+		res, runErr = claimScript.Run(ctx, q.rdb, []string{
+			keyLock(sessionID),
+			keyQueue(sessionID),
+			keyActive(sessionID),
+		}, workerID, DefaultLockTTLSeconds, now).Result()
+		return struct{}{}, runErr
+	})
 	if errors.Is(err, redis.Nil) {
 		span.SetAttributes(attribute.Bool("queue.claimed", false))
 		globalQueueMetrics.recordClaim("empty")
@@ -259,11 +280,20 @@ func (q *Queue) ClaimWithCredential(ctx context.Context, sessionID, workerID, cr
 	claimCtx, cancel := context.WithTimeout(ctx, ClaimTimeout)
 	defer cancel()
 
-	res, err := claimWithCredentialScript.Run(claimCtx, q.rdb, []string{
-		keyLock(sessionID),
-		keyQueue(sessionID),
-		keyActive(sessionID),
-	}, workerID, credential, DefaultLockTTLSeconds, now).Result()
+	// Wrap the Redis call with retry for transient errors.
+	// This is safe because the Lua script is atomic: credential check
+	// happens inside the script, and if another worker interferes,
+	// the script will return nil.
+	var res interface{}
+	_, err := WithRetry(claimCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+		var runErr error
+		res, runErr = claimWithCredentialScript.Run(ctx, q.rdb, []string{
+			keyLock(sessionID),
+			keyQueue(sessionID),
+			keyActive(sessionID),
+		}, workerID, credential, DefaultLockTTLSeconds, now).Result()
+		return struct{}{}, runErr
+	})
 	if errors.Is(err, redis.Nil) {
 		span.SetAttributes(attribute.Bool("queue.claimed", false))
 		globalQueueMetrics.recordClaim("empty")
@@ -314,7 +344,14 @@ func (q *Queue) LoadWork(ctx context.Context, workID string) (*Work, error) {
 	)
 	defer span.End()
 
-	fields, err := q.rdb.HGetAll(ctx, keyWork(workID)).Result()
+	// Wrap the Redis call with retry for transient errors.
+	// This is safe because HGETALL is a read-only operation.
+	var fields map[string]string
+	_, err := WithRetry(ctx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+		var runErr error
+		fields, runErr = q.rdb.HGetAll(ctx, keyWork(workID)).Result()
+		return struct{}{}, runErr
+	})
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("rtcqueue: load work: %w", err)
@@ -347,10 +384,18 @@ func (q *Queue) Complete(ctx context.Context, workID string) error {
 	completeCtx, cancel := context.WithTimeout(ctx, CompleteTimeout)
 	defer cancel()
 
-	n, err := completeScript.Run(completeCtx, q.rdb, []string{keyWork(workID)},
-		time.Now().Unix(),
-		ChannelSessionNew,
-	).Int()
+	// Wrap the Redis call with retry for transient errors.
+	// This is safe because the Lua script is idempotent: if the work
+	// is already completed, it will return 0 (not found).
+	var n int
+	_, err := WithRetry(completeCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+		var runErr error
+		n, runErr = completeScript.Run(ctx, q.rdb, []string{keyWork(workID)},
+			time.Now().Unix(),
+			ChannelSessionNew,
+		).Int()
+		return struct{}{}, runErr
+	})
 	if err != nil {
 		globalQueueMetrics.recordComplete("error")
 		span.SetStatus(codes.Error, err.Error())
@@ -396,14 +441,23 @@ func (q *Queue) CompleteWork(ctx context.Context, workID string) error {
 	completeCtx, cancel := context.WithTimeout(ctx, CompleteTimeout)
 	defer cancel()
 
-	n, err := completeWorkScript.Run(completeCtx, q.rdb, []string{
-		keyWork(workID),
-		keyActive(work.SessionID),
-	}, time.Now().Unix()).Int()
-	if err != nil {
+	// Wrap the Redis call with retry for transient errors.
+	// This is safe because the Lua script is idempotent: if the work
+	// is already completed, it will return 0 (not found).
+	var n int
+	var retryErr error
+	_, retryErr = WithRetry(completeCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+		var runErr error
+		n, runErr = completeWorkScript.Run(ctx, q.rdb, []string{
+			keyWork(workID),
+			keyActive(work.SessionID),
+		}, time.Now().Unix()).Int()
+		return struct{}{}, runErr
+	})
+	if retryErr != nil {
 		globalQueueMetrics.recordComplete("error")
-		span.SetStatus(codes.Error, err.Error())
-		return fmt.Errorf("rtcqueue: complete work: %w", err)
+		span.SetStatus(codes.Error, retryErr.Error())
+		return fmt.Errorf("rtcqueue: complete work: %w", retryErr)
 	}
 	if n == 0 {
 		globalQueueMetrics.recordComplete("error")
@@ -448,10 +502,18 @@ func (q *Queue) Cancel(ctx context.Context, workID, reason string) error {
 	cancelCtx, cancel := context.WithTimeout(ctx, CancelTimeout)
 	defer cancel()
 
-	n, err := cancelScript.Run(cancelCtx, q.rdb, []string{keyWork(workID)},
-		msg.Timestamp,
-		string(payload),
-	).Int()
+	// Wrap the Redis call with retry for transient errors.
+	// This is safe because the Lua script is idempotent: if the work
+	// is already cancelled, it will return -1 (already terminal).
+	var n int
+	_, err = WithRetry(cancelCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+		var runErr error
+		n, runErr = cancelScript.Run(ctx, q.rdb, []string{keyWork(workID)},
+			msg.Timestamp,
+			string(payload),
+		).Int()
+		return struct{}{}, runErr
+	})
 	if err != nil {
 		globalQueueMetrics.recordCancel("error")
 		span.SetStatus(codes.Error, err.Error())
@@ -501,9 +563,19 @@ func (q *Queue) CancelSession(ctx context.Context, sessionID, reason string) err
 
 	// 1. Atomically remove all pending work items from the session queue and
 	// mark them as cancelled.
-	_, err := cancelSessionScript.Run(cancelCtx, q.rdb, []string{keyQueue(sessionID)},
-		now,
-	).Result()
+	// Wrap with retry for transient errors. This is safe because the script
+	// is idempotent: if items are already cancelled, they won't be found.
+	_, err := func() (interface{}, error) {
+		var res interface{}
+		_, retryErr := WithRetry(cancelCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+			var runErr error
+			res, runErr = cancelSessionScript.Run(ctx, q.rdb, []string{keyQueue(sessionID)},
+				now,
+			).Result()
+			return struct{}{}, runErr
+		})
+		return res, retryErr
+	}()
 	if err != nil && !errors.Is(err, redis.Nil) {
 		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("rtcqueue: cancel session pending: %w", err)
@@ -514,11 +586,21 @@ func (q *Queue) CancelSession(ctx context.Context, sessionID, reason string) err
 	// a cancel notification, and releases both the lock and the pointer —
 	// all atomically. If no work is active the script returns nil and we
 	// are done.
-	_, err = cancelSessionActiveScript.Run(cancelCtx, q.rdb, []string{
-		keyLock(sessionID),
-		keyActive(sessionID),
-		ChannelSessionCancel(sessionID),
-	}, reason, now).Result()
+	// Wrap with retry for transient errors. This is safe because the script
+	// is idempotent: if the work is already cancelled, the pointer is gone.
+	_, err = func() (interface{}, error) {
+		var res interface{}
+		_, retryErr := WithRetry(cancelCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+			var runErr error
+			res, runErr = cancelSessionActiveScript.Run(ctx, q.rdb, []string{
+				keyLock(sessionID),
+				keyActive(sessionID),
+				ChannelSessionCancel(sessionID),
+			}, reason, now).Result()
+			return struct{}{}, runErr
+		})
+		return res, retryErr
+	}()
 	if err != nil && !errors.Is(err, redis.Nil) {
 		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("rtcqueue: cancel session active: %w", err)
@@ -548,9 +630,17 @@ func (q *Queue) RenewLock(ctx context.Context, sessionID, workerID string) (bool
 	renewCtx, cancel := context.WithTimeout(ctx, RenewLockTimeout)
 	defer cancel()
 
-	n, err := renewLockScript.Run(renewCtx, q.rdb, []string{keyLock(sessionID)},
-		workerID, DefaultLockTTLSeconds,
-	).Int()
+	// Wrap the Redis call with retry for transient errors.
+	// This is safe because the script is idempotent: if the lock is
+	// lost, the script will return 0.
+	var n int
+	_, err := WithRetry(renewCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+		var runErr error
+		n, runErr = renewLockScript.Run(ctx, q.rdb, []string{keyLock(sessionID)},
+			workerID, DefaultLockTTLSeconds,
+		).Int()
+		return struct{}{}, runErr
+	})
 	if errors.Is(err, redis.Nil) {
 		span.SetAttributes(attribute.Bool("lock.renewed", false))
 		return false, nil
@@ -579,9 +669,17 @@ func (q *Queue) RenewLockWithCredential(ctx context.Context, sessionID, workerID
 	renewCtx, cancel := context.WithTimeout(ctx, RenewLockTimeout)
 	defer cancel()
 
-	n, err := renewLockWithCredentialScript.Run(renewCtx, q.rdb, []string{keyLock(sessionID)},
-		workerID, credential, DefaultLockTTLSeconds,
-	).Int()
+	// Wrap the Redis call with retry for transient errors.
+	// This is safe because the script is idempotent: if the lock is
+	// lost or credential mismatches, the script will return 0.
+	var n int
+	_, err := WithRetry(renewCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+		var runErr error
+		n, runErr = renewLockWithCredentialScript.Run(ctx, q.rdb, []string{keyLock(sessionID)},
+			workerID, credential, DefaultLockTTLSeconds,
+		).Int()
+		return struct{}{}, runErr
+	})
 	if errors.Is(err, redis.Nil) {
 		span.SetAttributes(attribute.Bool("lock.renewed", false))
 		return false, nil
@@ -699,10 +797,18 @@ func (q *Queue) ReleaseSession(ctx context.Context, sessionID, workerID, credent
 	releaseCtx, cancel := context.WithTimeout(ctx, ReleaseTimeout)
 	defer cancel()
 
-	result, err := releaseSessionWithCredentialScript.Run(releaseCtx, q.rdb, []string{
-		keyLock(sessionID),
-		keyActive(sessionID),
-	}, workerID, credential).Int()
+	// Wrap the Redis call with retry for transient errors.
+	// This is safe because the script is idempotent: if the lock is
+	// already released or owned by someone else, it will return 0.
+	var result int
+	_, err := WithRetry(releaseCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+		var runErr error
+		result, runErr = releaseSessionWithCredentialScript.Run(ctx, q.rdb, []string{
+			keyLock(sessionID),
+			keyActive(sessionID),
+		}, workerID, credential).Int()
+		return struct{}{}, runErr
+	})
 
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
@@ -733,7 +839,12 @@ func (q *Queue) ForceReleaseSession(ctx context.Context, sessionID string) error
 	forceCtx, cancel := context.WithTimeout(ctx, ReleaseTimeout)
 	defer cancel()
 
-	err := q.rdb.Del(forceCtx, keyLock(sessionID), keyActive(sessionID)).Err()
+	// Wrap the Redis call with retry for transient errors.
+	// This is safe because DEL is idempotent: deleting non-existent keys
+	// returns 0, which is acceptable for a force release.
+	_, err := WithRetry(forceCtx, q.retryConfig, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, q.rdb.Del(ctx, keyLock(sessionID), keyActive(sessionID)).Err()
+	})
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 	}

@@ -3,6 +3,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -46,7 +47,9 @@ func NewRedisOTPStore(rdb *redis.Client, maxSendPerIP, maxVerifyAttempts int, lo
 // OTP is already stored for this email.
 func (s *RedisOTPStore) Store(ctx context.Context, emailAddr, otp string, ttl time.Duration) error {
 	key := fmt.Sprintf("admin:otp:code:%s", emailAddr)
-	stored, err := s.rdb.SetNX(ctx, key, otp, ttl).Result()
+	stored, err := withRedisRetry(ctx, "otp_store", func(ctx context.Context) (bool, error) {
+		return s.rdb.SetNX(ctx, key, otp, ttl).Result()
+	})
 	if err != nil {
 		return fmt.Errorf("redis setnx otp: %w", err)
 	}
@@ -64,8 +67,10 @@ func (s *RedisOTPStore) Store(ctx context.Context, emailAddr, otp string, ttl ti
 // Returns ErrOTPNotFound if not found or expired.
 func (s *RedisOTPStore) Get(ctx context.Context, emailAddr string) (string, error) {
 	key := fmt.Sprintf("admin:otp:code:%s", emailAddr)
-	otp, err := s.rdb.Get(ctx, key).Result()
-	if err == redis.Nil {
+	otp, err := withRedisRetry(ctx, "otp_get", func(ctx context.Context) (string, error) {
+		return s.rdb.Get(ctx, key).Result()
+	})
+	if errors.Is(err, redis.Nil) {
 		return "", ErrOTPNotFound
 	}
 	if err != nil {
@@ -77,7 +82,10 @@ func (s *RedisOTPStore) Get(ctx context.Context, emailAddr string) (string, erro
 // Delete removes the stored OTP for the given email.
 func (s *RedisOTPStore) Delete(ctx context.Context, emailAddr string) {
 	key := fmt.Sprintf("admin:otp:code:%s", emailAddr)
-	if err := s.rdb.Del(ctx, key).Err(); err != nil {
+	_, err := withRedisRetry(ctx, "otp_delete", func(ctx context.Context) (int64, error) {
+		return s.rdb.Del(ctx, key).Result()
+	})
+	if err != nil {
 		logger.Warn(ctx, "redis_otp_delete_failed",
 			zap.String("email", emailAddr),
 			zap.Error(err))
