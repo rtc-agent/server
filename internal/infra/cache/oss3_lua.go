@@ -29,7 +29,7 @@ var (
 	//	ARGV[4] = requestID         (unique request identifier, used as ZSET member)
 	//	ARGV[5] = pendingKeyPrefix  (e.g. "oss3:quota:pending:{uid}:", for constructing
 	//	                             other requests' pending keys during aggregation scan)
-	//	ARGV[6] = doCleanup         (0 or 1; if 1, perform stale entry cleanup with 10% probability)
+	//	ARGV[6] = doCleanup         (0 or 1; if 1, perform stale entry cleanup with 1% probability, controlled by caller via rand.Intn(100) == 0)
 	//
 	// Returns: table {success, currentUsage}
 	//   - success: 1 on success, 0 if quota exceeded

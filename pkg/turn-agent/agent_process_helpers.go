@@ -12,6 +12,7 @@ import (
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 )
 
 // checkTokenLimit checks if the session has exceeded its token quota.
@@ -322,6 +323,9 @@ func (a *Agent) pushOrReplace(
 
 	pushed, _ = replacedMgr.Loop().Push(workItem)
 	if !pushed {
+		zap.L().Warn("turnagent.push_failed_after_replacement",
+			zap.String("session_id", workItem.SessionID),
+			zap.String("turn_id", workItem.TurnID))
 		return nil, false, fmt.Errorf("turnagent: failed to push work item after replacement")
 	}
 

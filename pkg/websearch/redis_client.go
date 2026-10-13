@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // RedisConfig defines Redis connection configuration
@@ -127,8 +129,11 @@ func (r *RedisClient) Stop() {
 			r.internalCancel()
 		}
 		r.wg.Wait()
-		// Close Redis client here.
-		_ = r.client.Close()
+		// Close Redis client and log any errors
+		if err := r.client.Close(); err != nil {
+			logger.Warn(context.Background(), "redis_client.close_failed",
+				zap.Error(err))
+		}
 	})
 }
 

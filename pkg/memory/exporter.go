@@ -12,6 +12,8 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // ExportOptions defines options for exporting memories
@@ -144,8 +146,15 @@ func (e *Exporter) Export(ctx context.Context, opts ExportOptions, w io.Writer) 
 	tw := tar.NewWriter(gzWriter)
 
 	if err := e.writeBundle(ctx, tw, bundleName, opts, memories); err != nil {
-		_ = tw.Close()
-		_ = gzWriter.Close()
+		// On error path, close and log any errors
+		if closeErr := tw.Close(); closeErr != nil {
+			logger.Warn(context.Background(), "exporter.close_tar_failed",
+				zap.Error(closeErr))
+		}
+		if closeErr := gzWriter.Close(); closeErr != nil {
+			logger.Warn(context.Background(), "exporter.close_gzip_failed",
+				zap.Error(closeErr))
+		}
 		return err
 	}
 

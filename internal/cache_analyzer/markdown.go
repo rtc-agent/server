@@ -3,11 +3,15 @@ package cache_analyzer
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/rtc-agent/server/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // writeSystemDiffs writes system diffs to the string builder in markdown format.
@@ -399,7 +403,10 @@ func getFullRequestBody(logFiles []string, sessionID string, requestIndex int) s
 				currentIndex++
 			}
 		}
-		_ = file.Close()
+		if err := file.Close(); err != nil {
+			logger.Warn(context.Background(), "cache_analyzer.file_close_failed",
+				zap.Error(err))
+		}
 	}
 
 	return fmt.Sprintf("// Error: Request not found (looking for index %d, found %d requests for session %s)", requestIndex, totalFound, sessionID)

@@ -134,7 +134,10 @@ func AutoMigrate(db *gorm.DB) error {
 		&TemporaryCredential{},
 	); err != nil {
 		// Record failed migration
-		_ = recordMigration(db, time.Since(startTime), "failed")
+		if err := recordMigration(db, time.Since(startTime), "failed"); err != nil {
+			logger.Warn(context.Background(), "failed to record migration status",
+				zap.String("status", "failed"), zap.Error(err))
+		}
 		return err
 	}
 
@@ -158,13 +161,19 @@ func AutoMigrate(db *gorm.DB) error {
 	// Add composite index on memory_links to optimise queries by from_id + relation.
 	// CONCURRENTLY avoids table lock during index creation.
 	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_memory_links_from_relation ON memory_links(from_id, relation)").Error; err != nil {
-		_ = recordMigration(db, time.Since(startTime), "failed")
+		if err := recordMigration(db, time.Since(startTime), "failed"); err != nil {
+			logger.Warn(context.Background(), "failed to record migration status",
+				zap.String("status", "failed"), zap.Error(err))
+		}
 		return fmt.Errorf("create index idx_memory_links_from_relation: %w", err)
 	}
 
 	// Add unique constraint on memory_links to prevent duplicate links.
 	if err := db.Exec("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uniq_memory_links_from_to ON memory_links(from_id, to_id)").Error; err != nil {
-		_ = recordMigration(db, time.Since(startTime), "failed")
+		if err := recordMigration(db, time.Since(startTime), "failed"); err != nil {
+			logger.Warn(context.Background(), "failed to record migration status",
+				zap.String("status", "failed"), zap.Error(err))
+		}
 		return fmt.Errorf("create index uniq_memory_links_from_to: %w", err)
 	}
 
@@ -197,17 +206,26 @@ func AutoMigrate(db *gorm.DB) error {
 	// Composite indexes for query performance.
 	// CONCURRENTLY avoids table lock during index creation on large tables.
 	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_messages_session_offset ON messages(session_id, global_offset)").Error; err != nil {
-		_ = recordMigration(db, time.Since(startTime), "failed")
+		if err := recordMigration(db, time.Since(startTime), "failed"); err != nil {
+			logger.Warn(context.Background(), "failed to record migration status",
+				zap.String("status", "failed"), zap.Error(err))
+		}
 		return fmt.Errorf("create index idx_messages_session_offset: %w", err)
 	}
 	// Note: idx_sessions_owner (owner_kind, owner_ref_id) was merged into idx_sessions_owner_created
 	// (owner_kind, owner_ref_id, created_at) in cmd/migrate.go to reduce index redundancy.
 	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_admin_audit_logs_operator_time ON admin_audit_logs(operator_id, created_at)").Error; err != nil {
-		_ = recordMigration(db, time.Since(startTime), "failed")
+		if err := recordMigration(db, time.Since(startTime), "failed"); err != nil {
+			logger.Warn(context.Background(), "failed to record migration status",
+				zap.String("status", "failed"), zap.Error(err))
+		}
 		return fmt.Errorf("create index idx_admin_audit_logs_operator_time: %w", err)
 	}
 	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_admin_audit_logs_resource_time ON admin_audit_logs(resource_type, created_at)").Error; err != nil {
-		_ = recordMigration(db, time.Since(startTime), "failed")
+		if err := recordMigration(db, time.Since(startTime), "failed"); err != nil {
+			logger.Warn(context.Background(), "failed to record migration status",
+				zap.String("status", "failed"), zap.Error(err))
+		}
 		return fmt.Errorf("create index idx_admin_audit_logs_resource_time: %w", err)
 	}
 

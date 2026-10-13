@@ -265,7 +265,7 @@ func parseTrustedProxies(proxies []string) []*net.IPNet {
 	if len(proxies) == 0 {
 		return nil
 	}
-	var nets []*net.IPNet
+	nets := make([]*net.IPNet, 0, len(proxies))
 	for _, p := range proxies {
 		// Try parsing as CIDR first
 		if _, ipNet, err := net.ParseCIDR(p); err == nil {
