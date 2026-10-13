@@ -298,7 +298,8 @@ func (s *Server) Start() error {
 
 	// Mount middleware (Chain mode: first is outermost, last is closest to handler).
 	// Order: Recovery → RequestID → SecurityHeaders → CORS → HTTPMetrics → RateLimit → RequestLogger → CSP
-	isDev := s.cfg.Server.Env == "development"
+	// Use centralized dev bypass check for security
+	isDev := s.cfg.IsDevBypassAllowed()
 	// Use configurable rate limiting parameters
 	rateLimiter := middleware.NewRateLimiter(
 		rate.Limit(s.cfg.API.RateLimit.RequestsPerSecond),
@@ -499,12 +500,14 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	}
 
 	// Interrupt endpoints (frontend submits interrupt answers).
-	isDevInterrupt := s.cfg.Server.Env == "development"
-	s.interruptHandler.RegisterRoutes(mux, isDevInterrupt)
+	// Use centralized dev bypass check for security
+	allowDevBypassInterrupt := s.cfg.IsDevBypassAllowed()
+	s.interruptHandler.RegisterRoutes(mux, allowDevBypassInterrupt)
 
 	// Memories endpoints (Memory export).
-	isDevMemories := s.cfg.Server.Env == "development"
-	s.memoriesHandler.RegisterRoutes(mux, isDevMemories)
+	// Use centralized dev bypass check for security
+	allowDevBypassMemories := s.cfg.IsDevBypassAllowed()
+	s.memoriesHandler.RegisterRoutes(mux, allowDevBypassMemories)
 
 	// STS endpoints (temporary credentials, presigned URLs) — on main API port.
 	if s.stsHandler != nil {

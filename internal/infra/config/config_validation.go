@@ -99,6 +99,51 @@ func (c *Config) validateServerEnv() error {
 	}
 }
 
+// IsDevBypassAllowed returns true if JWT dev bypass (X-User-ID/X-Device-ID headers)
+// should be permitted. This is only allowed in development environment.
+//
+// SECURITY: This method centralizes the dev bypass decision to prevent accidental
+// enablement in production. It performs a defensive check against the environment
+// even if the caller has already checked cfg.Server.Env == "development".
+//
+// Dev bypass allows requests to skip JWT validation by providing user identity
+// via HTTP headers. This is useful for local development and testing, but must
+// NEVER be enabled in production or staging environments.
+func (c *Config) IsDevBypassAllowed() bool {
+	// Defense-in-depth: explicitly check for production and staging environments
+	// to prevent dev bypass from being accidentally enabled.
+	switch c.Server.Env {
+	case "production", "staging", "prod":
+		// Never allow dev bypass in production-like environments
+		return false
+	case "development", "dev":
+		// Only allow in explicit development environment
+		return true
+	default:
+		// Unknown environments should default to secure (no bypass)
+		return false
+	}
+}
+
+// ValidateDevBypassSafety performs additional safety checks for dev bypass configuration.
+// This is called during startup to provide early warning if dev bypass might be
+// accidentally enabled in production-like environments.
+//
+// Returns a warning string if dev bypass is enabled in a non-development environment,
+// or empty string if configuration is safe.
+func (c *Config) ValidateDevBypassSafety() string {
+	// Check if we're in a production-like environment but dev bypass would be allowed
+	// by a naive environment check (e.g., if someone adds a new environment value)
+	if c.Server.Env != "development" && c.Server.Env != "dev" {
+		// We're in production/staging/etc - dev bypass should not be allowed
+		// This is a defensive check; IsDevBypassAllowed() already handles this
+		if c.IsDevBypassAllowed() {
+			return "CRITICAL: IsDevBypassAllowed() returned true in non-development environment"
+		}
+	}
+	return ""
+}
+
 // validateLLM checks LLM configuration fields.
 func (c *Config) validateLLM() error {
 	if c.LLM.APIKey == "" {

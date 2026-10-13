@@ -351,3 +351,106 @@ func TestTokenExchangeConfig_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestConfig_IsDevBypassAllowed(t *testing.T) {
+	tests := []struct {
+		name     string
+		env      string
+		expected bool
+	}{
+		{
+			name:     "development environment allows bypass",
+			env:      "development",
+			expected: true,
+		},
+		{
+			name:     "dev shorthand allows bypass",
+			env:      "dev",
+			expected: true,
+		},
+		{
+			name:     "production environment blocks bypass",
+			env:      "production",
+			expected: false,
+		},
+		{
+			name:     "prod shorthand blocks bypass",
+			env:      "prod",
+			expected: false,
+		},
+		{
+			name:     "staging environment blocks bypass",
+			env:      "staging",
+			expected: false,
+		},
+		{
+			name:     "unknown environment blocks bypass (secure default)",
+			env:      "test",
+			expected: false,
+		},
+		{
+			name:     "empty environment blocks bypass (secure default)",
+			env:      "",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Server: ServerConfig{
+					Env: tt.env,
+				},
+			}
+			result := cfg.IsDevBypassAllowed()
+			if result != tt.expected {
+				t.Errorf("IsDevBypassAllowed() with env=%q = %v, want %v", tt.env, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestConfig_ValidateDevBypassSafety(t *testing.T) {
+	tests := []struct {
+		name        string
+		env         string
+		wantWarning bool
+	}{
+		{
+			name:        "development environment - no warning",
+			env:         "development",
+			wantWarning: false,
+		},
+		{
+			name:        "production environment - no warning (bypass correctly blocked)",
+			env:         "production",
+			wantWarning: false,
+		},
+		{
+			name:        "staging environment - no warning (bypass correctly blocked)",
+			env:         "staging",
+			wantWarning: false,
+		},
+		{
+			name:        "unknown environment - no warning (bypass correctly blocked by secure default)",
+			env:         "unknown",
+			wantWarning: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Server: ServerConfig{
+					Env: tt.env,
+				},
+			}
+			warning := cfg.ValidateDevBypassSafety()
+			hasWarning := warning != ""
+			if hasWarning != tt.wantWarning {
+				t.Errorf("ValidateDevBypassSafety() with env=%q: got warning=%v, want warning=%v",
+					tt.env, hasWarning, tt.wantWarning)
+			}
+		})
+	}
+}

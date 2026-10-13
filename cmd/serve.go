@@ -53,9 +53,35 @@ func runServe(cmd *cobra.Command, args []string) {
 	// config.GetRegistryEntry().YamlDefault reflects the actual yaml values.
 	config.PopulateYamlDefaults(cfg)
 
+	// SECURITY CHECK: Validate dev bypass safety before proceeding
+	if warning := cfg.ValidateDevBypassSafety(); warning != "" {
+		fmt.Fprintf(os.Stderr, "[SECURITY] %s\n", warning)
+		os.Exit(1)
+	}
+
 	// Init logger
 	logger.Init(cfg.Log.Level, cfg.Log.ServerLogFile)
 	defer logger.Sync()
+
+	// SECURITY WARNING: Log when JWT dev bypass is enabled
+	// This is a critical security feature that allows skipping JWT validation
+	if cfg.IsDevBypassAllowed() {
+		logger.Warn(context.Background(),
+			"JWT DEV BYPASS ENABLED: X-User-ID/X-Device-ID headers will bypass JWT validation",
+			zap.String("environment", cfg.Server.Env),
+			zap.String("warning", "This feature must NEVER be enabled in production"),
+			zap.String("recommendation", "Set server.env=production to disable dev bypass"),
+		)
+		// Also print to stderr for visibility during startup
+		fmt.Fprintf(os.Stderr, "[SECURITY] WARNING: JWT dev bypass is ENABLED (environment=%s)\n", cfg.Server.Env)
+		fmt.Fprintf(os.Stderr, "[SECURITY] Requests can bypass JWT authentication using X-User-ID/X-Device-ID headers\n")
+		fmt.Fprintf(os.Stderr, "[SECURITY] This is ONLY appropriate for local development\n")
+	} else {
+		logger.Info(context.Background(),
+			"JWT dev bypass is DISABLED - all requests require valid JWT tokens",
+			zap.String("environment", cfg.Server.Env),
+		)
+	}
 
 	// Init LLM payload logger (dev only — writes full LLM request/response to logs/llm-payload.log)
 	logger.InitLLMPayloadLogger(logger.LLMPayloadConfig{
@@ -128,7 +154,10 @@ func runServe(cmd *cobra.Command, args []string) {
 			// Signal the main goroutine to exit.
 			// Using signal.Notify + kill self preserves the deferred cleanup
 			// (logger.Sync, rdb.Close) that logger.Fatal would bypass.
-			_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+			// Kill errors are logged but not actionable: the process is already in error state.
+			if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+				logger.Error(context.Background(), "Failed to send SIGTERM signal", zap.Error(err))
+			}
 		}
 	})
 

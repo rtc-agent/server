@@ -929,16 +929,18 @@ func provideSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg 
 	if oss3UC == nil {
 		return nil
 	}
-	isDev := cfg.Server.Env == "development"
-	return httphandler.NewSTSHandler(oss3UC, signer, isDev, svcCtx.OAuth2UserRepo, rateLimiter)
+	// Use centralized dev bypass check for security
+	allowDevBypass := cfg.IsDevBypassAllowed()
+	return httphandler.NewSTSHandler(oss3UC, signer, allowDevBypass, svcCtx.OAuth2UserRepo, rateLimiter)
 }
 
 func provideSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config, svcCtx *svc.ServiceContext, rateLimiter httphandler.RateLimiterInterface) *httphandler.STSPresignHandler {
 	if oss3UC == nil {
 		return nil
 	}
-	isDev := cfg.Server.Env == "development"
-	return httphandler.NewSTSPresignHandler(oss3UC, signer, isDev, svcCtx.OAuth2UserRepo, rateLimiter)
+	// Use centralized dev bypass check for security
+	allowDevBypass := cfg.IsDevBypassAllowed()
+	return httphandler.NewSTSPresignHandler(oss3UC, signer, allowDevBypass, svcCtx.OAuth2UserRepo, rateLimiter)
 }
 
 func provideServer(
