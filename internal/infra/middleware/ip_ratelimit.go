@@ -71,9 +71,13 @@ func (rl *IPRateLimiter) SetTrustedProxies(cidrs []string) error {
 	return nil
 }
 
-// getLimiter returns the rate limiter for the given IP,
+// GetLimiter returns the rate limiter for the given IP,
 // creating one if it doesn't exist.
-func (rl *IPRateLimiter) getLimiter(ip string) *rate.Limiter {
+//
+// This is exported so that handlers can apply per-IP rate limiting
+// at specific points within their logic (e.g., Token Exchange endpoint).
+// For wrapping entire handlers, prefer Middleware() or WrapHandlerFunc().
+func (rl *IPRateLimiter) GetLimiter(ip string) *rate.Limiter {
 	now := time.Now()
 	if v, ok := rl.limiters.Load(ip); ok {
 		entry := v.(*ipLimiterEntry)
@@ -184,13 +188,13 @@ func (rl *IPRateLimiter) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := rl.extractClientIP(r)
-			limiter := rl.getLimiter(ip)
+			limiter := rl.GetLimiter(ip)
 			if !limiter.Allow() {
 				ipRateLimitRejected.Inc()
 				logger.Warn(r.Context(), "IP rate limit exceeded",
 					zap.String("remote_addr", r.RemoteAddr),
 					zap.String("client_ip", ip))
-				httputil.WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many requests from your IP")
+				httputil.WriteError(r.Context(), w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many requests from your IP")
 				return
 			}
 			next.ServeHTTP(w, r)

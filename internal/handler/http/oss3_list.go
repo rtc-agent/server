@@ -1,10 +1,11 @@
 package httphandler
 
 import (
+	"context"
 	"encoding/xml"
+	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
 	"go.opentelemetry.io/otel"
@@ -50,7 +51,7 @@ func (h *OSS3Handler) handleListObjects(w http.ResponseWriter, r *http.Request, 
 	result, err := h.oss3UC.Backend().ListObjects(r.Context(), bucket, opts)
 	if err != nil {
 		// Check if this is a continuation token decode error (InvalidArgument)
-		if isV2 && opts.ContinuationToken != "" && strings.Contains(err.Error(), "invalid continuation token") {
+		if isV2 && opts.ContinuationToken != "" && errors.Is(err, rtcoss3.ErrInvalidContinuationToken) {
 			rtcoss3.WriteS3Error(w, rtcoss3.ErrInvalidArgument, r.URL.Path, "")
 			return
 		}
@@ -60,9 +61,9 @@ func (h *OSS3Handler) handleListObjects(w http.ResponseWriter, r *http.Request, 
 
 	// Branch on V1 vs V2 for response serialization
 	if isV2 {
-		writeListBucketResultV2XML(w, bucket, prefix, q.Get("start-after"), q.Get("continuation-token"), maxKeys, delimiter, result)
+		writeListBucketResultV2XML(r.Context(), w, bucket, prefix, q.Get("start-after"), q.Get("continuation-token"), maxKeys, delimiter, result)
 	} else {
-		writeListBucketResultV1XML(w, bucket, prefix, q.Get("marker"), maxKeys, delimiter, result)
+		writeListBucketResultV1XML(r.Context(), w, bucket, prefix, q.Get("marker"), maxKeys, delimiter, result)
 	}
 }
 
@@ -127,6 +128,7 @@ type xmlListBucketResultV2 struct {
 
 // writeListBucketResultV1XML serialises a V1 ListBucketResult XML response.
 func writeListBucketResultV1XML(
+	ctx context.Context,
 	w http.ResponseWriter,
 	bucket, prefix, marker string,
 	maxKeys int,
@@ -157,11 +159,12 @@ func writeListBucketResultV1XML(
 		})
 	}
 
-	writeXMLResponse(w, http.StatusOK, resp)
+	writeXMLResponse(w, http.StatusOK, resp, ctx)
 }
 
 // writeListBucketResultV2XML serialises a V2 ListBucketResult XML response.
 func writeListBucketResultV2XML(
+	ctx context.Context,
 	w http.ResponseWriter,
 	bucket, prefix, startAfter, continuationToken string,
 	maxKeys int,
@@ -194,5 +197,5 @@ func writeListBucketResultV2XML(
 		})
 	}
 
-	writeXMLResponse(w, http.StatusOK, resp)
+	writeXMLResponse(w, http.StatusOK, resp, ctx)
 }

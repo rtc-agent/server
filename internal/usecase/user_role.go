@@ -196,7 +196,7 @@ func (uc *AdminUserRoleUsecase) AssignRoles(ctx context.Context, input AssignRol
 			for _, role := range newRoles {
 				roleNames = append(roleNames, role.Name)
 			}
-			if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+			if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(ctx,
 				operatorID, operatorIP, "assign_roles", "admin_user", input.UserID,
 				map[string]any{"role_ids": newRoleIDs, "role_names": roleNames},
 			)); err != nil {
@@ -264,7 +264,7 @@ func (uc *AdminUserRoleUsecase) RemoveRole(ctx context.Context, input RemoveRole
 
 	// Audit log
 	if uc.auditLogRepo != nil {
-		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(ctx,
 			operatorID, operatorIP, "revoke_role", "admin_user", input.UserID,
 			map[string]any{"role_id": input.RoleID.String(), "role_name": role.Name},
 		)); err != nil {

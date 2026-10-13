@@ -67,7 +67,7 @@ func (h *STSHandler) RegisterRoutes(mux *http.ServeMux) {
 func (h *STSHandler) IssueTemporaryCredentials(w http.ResponseWriter, r *http.Request) {
 	userID, ok := contextx.GetUserID(r.Context())
 	if !ok {
-		httputil.WriteError(w, http.StatusUnauthorized, "credentials.unauthorized", "authentication required")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "credentials.unauthorized", "authentication required")
 		return
 	}
 
@@ -77,7 +77,7 @@ func (h *STSHandler) IssueTemporaryCredentials(w http.ResponseWriter, r *http.Re
 			zap.String("user_id", userID.String()),
 			zap.Error(err),
 		)
-		httputil.WriteError(w, http.StatusInternalServerError, "credentials.internal_error", "failed to issue credentials")
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "credentials.internal_error", "failed to issue credentials")
 		return
 	}
 

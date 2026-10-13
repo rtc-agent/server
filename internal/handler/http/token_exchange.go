@@ -65,7 +65,31 @@ type tokenExchangeResponse struct {
 }
 
 // HandleTokenExchange processes the RFC 8693 Token Exchange request.
+//
+// Rate limiting strategy (defense in depth):
+//   - Outer layer: The OAuth2 handler wraps POST /oauth2/token with a general IP
+//     rate limiter (api.ip_rate_limit, default 5 req/s/IP). This limits overall
+//     abuse across all grant types.
+//   - Inner layer: This handler applies a stricter per-IP rate limiter
+//     (api.ip_rate_limit.token_exchange, default 3 req/s/IP). This specifically
+//     protects Token Exchange because each request triggers external JWT signature
+//     verification (CPU-intensive) and the endpoint is a high-value target for
+//     brute-force attacks against trusted issuers.
 func (h *TokenExchangeHandler) HandleTokenExchange(w http.ResponseWriter, r *http.Request) {
+	// Apply dedicated Token Exchange rate limiter if configured.
+	// This provides stricter limits than the outer OAuth2 rate limiter.
+	if h.ipRateLimiter != nil {
+		ip := middleware.ExtractClientIP(r, nil) // no trusted proxies for now
+		limiter := h.ipRateLimiter.GetLimiter(ip)
+		if !limiter.Allow() {
+			logger.Warn(r.Context(), "token_exchange.ip_rate_limit_exceeded",
+				zap.String("remote_addr", r.RemoteAddr),
+				zap.String("client_ip", ip))
+			httputil.WriteError(r.Context(), w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many token exchange requests from your IP")
+			return
+		}
+	}
+
 	req, err := h.parseRequest(w, r)
 	if err != nil {
 		return // parseRequest already wrote the error response.
@@ -73,23 +97,23 @@ func (h *TokenExchangeHandler) HandleTokenExchange(w http.ResponseWriter, r *htt
 
 	// Validate grant_type per RFC 8693 — must be the exact token exchange URI.
 	if req.GrantType != GrantTypeTokenExchange {
-		httputil.WriteError(w, http.StatusBadRequest, usecase.ErrInvalidRequest,
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, usecase.ErrInvalidRequest,
 			"grant_type must be "+GrantTypeTokenExchange)
 		return
 	}
 
 	if req.SubjectToken == "" {
-		httputil.WriteError(w, http.StatusBadRequest, usecase.ErrInvalidRequest, "subject_token is required")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, usecase.ErrInvalidRequest, "subject_token is required")
 		return
 	}
 	if req.SubjectTokenType == "" {
-		httputil.WriteError(w, http.StatusBadRequest, usecase.ErrInvalidRequest, "subject_token_type is required")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, usecase.ErrInvalidRequest, "subject_token_type is required")
 		return
 	}
 	// device_id is a required RTC Agent extension (not part of RFC 8693).
 	// The server embeds it in the JWT so RTCs can be filtered per-device.
 	if req.DeviceID == "" {
-		httputil.WriteError(w, http.StatusBadRequest, usecase.ErrInvalidRequest, "device_id is required")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, usecase.ErrInvalidRequest, "device_id is required")
 		return
 	}
 
@@ -103,15 +127,15 @@ func (h *TokenExchangeHandler) HandleTokenExchange(w http.ResponseWriter, r *htt
 				zap.String("error", teErr.Code),
 				zap.String("description", teErr.Description),
 			)
-			httputil.WriteError(w, teErr.HTTPStatus, teErr.Code, teErr.Description)
+			httputil.WriteError(r.Context(), w, teErr.HTTPStatus, teErr.Code, teErr.Description)
 			return
 		}
 		logger.Error(ctx, "token_exchange.internal_error", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, usecase.ErrServerError, "internal server error")
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, usecase.ErrServerError, "internal server error")
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, tokenExchangeResponse{
+	httputil.WriteJSON(r.Context(), w, http.StatusOK, tokenExchangeResponse{
 		AccessToken:     result.AccessToken,
 		IssuedTokenType: result.IssuedTokenType,
 		TokenType:       result.TokenType,
@@ -127,7 +151,7 @@ func (h *TokenExchangeHandler) parseRequest(w http.ResponseWriter, r *http.Reque
 	contentType := r.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "application/json") {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httputil.WriteError(w, http.StatusBadRequest, usecase.ErrInvalidRequest, "invalid JSON body")
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest, usecase.ErrInvalidRequest, "invalid JSON body")
 			return nil, err
 		}
 		return &req, nil
@@ -135,7 +159,7 @@ func (h *TokenExchangeHandler) parseRequest(w http.ResponseWriter, r *http.Reque
 
 	// Form-encoded.
 	if err := r.ParseForm(); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, usecase.ErrInvalidRequest, "cannot parse form")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, usecase.ErrInvalidRequest, "cannot parse form")
 		return nil, err
 	}
 	req.GrantType = r.FormValue("grant_type")

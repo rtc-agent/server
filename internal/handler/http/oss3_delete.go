@@ -3,8 +3,8 @@ package httphandler
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff/v5"
@@ -110,7 +110,8 @@ func (h *OSS3Handler) handleDeleteObjects(w http.ResponseWriter, r *http.Request
 	var req deleteRequest
 	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
 		// Check if the error is due to request body being too large
-		if strings.Contains(err.Error(), "http: request body too large") {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
 			rtcoss3.WriteS3Error(w, rtcoss3.ErrEntityTooLarge, r.URL.Path, "")
 			return
 		}
@@ -211,7 +212,7 @@ func (h *OSS3Handler) handleDeleteObjects(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	writeXMLResponse(w, http.StatusOK, resp)
+	writeXMLResponse(w, http.StatusOK, resp, r.Context())
 }
 
 // deleteFileRecordWithRetry attempts to delete a file record from the DB with retry logic.

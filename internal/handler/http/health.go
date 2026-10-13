@@ -6,16 +6,13 @@
 package httphandler
 
 import (
-	"context"
 	"net/http"
 	"time"
 
-	"github.com/centrifugal/centrifuge"
-	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
-	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/infra/httputil"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -25,32 +22,32 @@ import (
 var readyzLimiter = rate.NewLimiter(rate.Every(time.Second/10), 10)
 
 // Handler is the HTTP request handler.
+//
+// NOTE: Handler holds only the usecase-level HealthChecker — it intentionally
+// avoids any direct dependency on *gorm.DB / redis.UniversalClient / *centrifuge.Node
+// so that the layering rule (Handler -> Usecase -> Repo) is preserved.
+// Infrastructure probes are delegated to usecase.HealthChecker.
 type Handler struct {
-	db             *gorm.DB
-	redis          redis.UniversalClient
-	centrifugeNode *centrifuge.Node
+	healthChecker *usecase.HealthChecker
 }
 
 // NewHandler creates a new HTTP handler.
-func NewHandler(db *gorm.DB, redis redis.UniversalClient, centrifugeNode *centrifuge.Node) *Handler {
-	return &Handler{
-		db:             db,
-		redis:          redis,
-		centrifugeNode: centrifugeNode,
-	}
+func NewHandler(healthChecker *usecase.HealthChecker) *Handler {
+	return &Handler{healthChecker: healthChecker}
 }
 
 // Healthz is the liveness probe endpoint.
 // It returns whether the service is running without checking dependencies.
 // Used for K8s livenessProbe.
 func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httputil.WriteJSON(r.Context(), w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // Readyz is the readiness probe endpoint.
-// It checks whether dependencies (DB, Redis, Centrifuge) are available.
-// Used for K8s readinessProbe. Includes rate limiting to prevent
-// overloading downstream dependencies with frequent checks.
+// It delegates dependency checks to the usecase.HealthChecker, which pings
+// DB/Redis/Centrifuge and returns an aggregated status.
+// Includes rate limiting to prevent overloading downstream dependencies with
+// frequent checks.
 func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 	// Rate limiting: reject excessive requests to prevent DoS
 	if !readyzLimiter.Allow() {
@@ -58,54 +55,18 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
-
-	checks := make(map[string]string)
-	allReady := true
-
-	// Check database connectivity.
-	if err := h.db.WithContext(ctx).Exec("SELECT 1").Error; err != nil {
-		checks["db"] = "error"
-		allReady = false
-		logger.Warn(ctx, "Readyz: DB check failed", zap.Error(err))
-	} else {
-		checks["db"] = "ok"
-	}
-
-	// Check Redis connectivity.
-	if err := h.redis.Ping(ctx).Err(); err != nil {
-		checks["redis"] = "error"
-		allReady = false
-		logger.Warn(ctx, "Readyz: Redis check failed", zap.Error(err))
-	} else {
-		checks["redis"] = "ok"
-	}
-
-	// Check Centrifuge node status.
-	if h.centrifugeNode == nil {
-		checks["centrifuge"] = "not configured"
-		allReady = false
-	} else {
-		// Centrifuge node has no direct Ping method; check if the node is
-		// running via Info(). If the node has shut down, Info() returns an error.
-		if _, err := h.centrifugeNode.Info(); err != nil {
-			checks["centrifuge"] = "error"
-			allReady = false
-			logger.Warn(ctx, "Readyz: Centrifuge check failed", zap.Error(err))
-		} else {
-			checks["centrifuge"] = "ok"
-		}
-	}
+	health := h.healthChecker.Readiness(r.Context())
 
 	status := http.StatusOK
-	response := map[string]any{"status": "ready", "checks": checks}
-
-	if !allReady {
+	if !health.AllReady {
 		status = http.StatusServiceUnavailable
-		response["status"] = "not ready"
-		logger.Warn(ctx, "Readyz check failed", zap.Any("checks", checks))
+		logger.Warn(r.Context(), "Readyz check failed", zap.Any("checks", health.Components))
 	}
 
-	httputil.WriteJSON(w, status, response)
+	response := map[string]any{
+		"status": map[bool]string{true: "ready", false: "not ready"}[health.AllReady],
+		"checks": health.Components,
+	}
+
+	httputil.WriteJSON(r.Context(), w, status, response)
 }

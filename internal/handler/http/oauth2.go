@@ -132,7 +132,7 @@ func (h *OAuth2Handler) isAllowedRedirectURI(uri string) bool {
 // Returns the list of currently enabled providers.
 func (h *OAuth2Handler) handleProviders(w http.ResponseWriter, r *http.Request) {
 	providers := h.providerClient.GetProviders()
-	httputil.WriteJSON(w, http.StatusOK, map[string][]string{
+	httputil.WriteJSON(r.Context(), w, http.StatusOK, map[string][]string{
 		"providers": providers,
 	})
 }
@@ -142,7 +142,7 @@ func (h *OAuth2Handler) handleProviders(w http.ResponseWriter, r *http.Request) 
 func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	provider := r.URL.Query().Get("provider")
 	if provider == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "provider parameter is required")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_request", "provider parameter is required")
 		return
 	}
 	redirectURI := r.URL.Query().Get("redirect_uri")
@@ -163,7 +163,7 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 			zap.String("provider", provider),
 			zap.String("redirect_uri", redirectURI),
 			zap.String("error", "PKCE is required in production environment per RFC 8252"))
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request",
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_request",
 			"code_challenge is required (PKCE must be enabled)")
 		return
 	}
@@ -180,11 +180,11 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	if redirectURI != "" {
 		parsed, err := url.Parse(redirectURI)
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			httputil.WriteError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri must be a valid absolute URL")
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri must be a valid absolute URL")
 			return
 		}
 		if !h.isAllowedRedirectURI(redirectURI) {
-			httputil.WriteError(w, http.StatusBadRequest, "disallowed_redirect_uri", "redirect_uri is not in the allowed list")
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest, "disallowed_redirect_uri", "redirect_uri is not in the allowed list")
 			return
 		}
 	}
@@ -193,14 +193,14 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	state, err := generateState()
 	if err != nil {
 		logger.Error(r.Context(), "failed to generate state", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to generate state")
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "server_error", "failed to generate state")
 		return
 	}
 
 	// Build provider authorization URL (also validates provider existence).
 	redirectURL, err := h.providerClient.GetAuthorizationURL(provider, state, redirectURI, codeChallenge, codeChallengeMethod)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("unsupported provider: %s", provider))
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("unsupported provider: %s", provider))
 		return
 	}
 
@@ -217,7 +217,7 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	stateJSON, err := json.Marshal(stateData)
 	if err != nil {
 		logger.Error(ctx, "failed to marshal state data", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to store state")
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "server_error", "failed to store state")
 		return
 	}
 	// Security: ensure state TTL is within safe bounds (5-30 minutes).
@@ -228,11 +228,11 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := h.stateStore.Set(ctx, state, string(stateJSON), stateTTL); err != nil {
 		logger.Error(ctx, "failed to store state", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to store state")
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "server_error", "failed to store state")
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, protocol.OAuth2AuthorizeResponse{
+	httputil.WriteJSON(r.Context(), w, http.StatusOK, protocol.OAuth2AuthorizeResponse{
 		RedirectUrl: redirectURL,
 		State:       state,
 	})
@@ -253,7 +253,7 @@ func (h *OAuth2Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 			h.tokenExchange.HandleTokenExchange(w, r)
 			return
 		}
-		httputil.WriteError(w, http.StatusBadRequest, "unsupported_grant_type",
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "unsupported_grant_type",
 			"token exchange is not configured")
 		return
 	}
@@ -261,12 +261,12 @@ func (h *OAuth2Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 	// Default: Authorization Code Grant.
 	req, err := parseTokenExchangeRequest(w, r)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "failed to parse request")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_request", "failed to parse request")
 		return
 	}
 
 	if req.Code == "" || req.State == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "code and state are required")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_request", "code and state are required")
 		return
 	}
 
@@ -280,7 +280,7 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 	// 1. Validate state from StateStore (retrieve associated provider and redirect_uri), then delete.
 	stateValue, err := h.stateStore.GetDel(ctx, req.State)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "state is invalid or expired")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_request", "state is invalid or expired")
 		return
 	}
 
@@ -305,22 +305,22 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 	// authorization request did not include one.
 	if storedRedirectURI == "" {
 		if req.RedirectUri != "" {
-			httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri must not be present when not set during authorization")
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_grant", "redirect_uri must not be present when not set during authorization")
 			return
 		}
 	} else if req.RedirectUri != storedRedirectURI {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri does not match authorization request")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_grant", "redirect_uri does not match authorization request")
 		return
 	}
 
 	// Validate PKCE code_verifier if code_challenge was provided during authorization (RFC 7636).
 	if storedCodeChallenge != "" {
 		if req.CodeVerifier == nil || *req.CodeVerifier == "" {
-			httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "code_verifier is required")
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_grant", "code_verifier is required")
 			return
 		}
 		if !verifyCodeChallenge(storedCodeChallenge, storedCodeChallengeMethod, *req.CodeVerifier) {
-			httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "code_verifier does not match code_challenge")
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_grant", "code_verifier does not match code_challenge")
 			return
 		}
 	}
@@ -333,7 +333,7 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 	userInfo, err := h.providerClient.ExchangeCode(ctx, provider, req.Code, req.RedirectUri, codeVerifier)
 	if err != nil {
 		logger.Error(ctx, "ExchangeCode failed", zap.String("provider", provider), zap.Error(err))
-		httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "authorization code exchange failed")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "invalid_grant", "authorization code exchange failed")
 		return
 	}
 
@@ -341,7 +341,7 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 	userResult, err := h.authUsecase.FindOrCreateUser(ctx, provider, userInfo)
 	if err != nil {
 		logger.Error(ctx, "failed to find or create user", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "authentication failed")
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "server_error", "authentication failed")
 		return
 	}
 
@@ -351,7 +351,7 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 			zap.String("provider", provider),
 			zap.String("user_id", userResult.UserID.String()),
 			zap.Time("banned_at", *userResult.BannedAt))
-		httputil.WriteError(w, http.StatusForbidden, "access_denied", "account has been banned")
+		httputil.WriteError(r.Context(), w, http.StatusForbidden, "access_denied", "account has been banned")
 		return
 	}
 
@@ -371,12 +371,12 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 	resp, err := h.authUsecase.IssueTokenPair(ctx, userResult.UserID, req.DeviceId)
 	if err != nil {
 		logger.Error(ctx, "failed to issue token", zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "server_error", "failed to issue token")
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "server_error", "failed to issue token")
 		return
 	}
 
 	logger.Info(ctx, "authorization_code authentication succeeded", zap.String("provider", provider), zap.String("user_id", userResult.UserID.String()))
-	httputil.WriteJSON(w, http.StatusOK, protocol.OAuth2TokenExchangeResponse{
+	httputil.WriteJSON(r.Context(), w, http.StatusOK, protocol.OAuth2TokenExchangeResponse{
 		AccessToken:  resp.AccessToken,
 		RefreshToken: resp.RefreshToken,
 		ExpiresIn:    resp.ExpiresIn,
@@ -390,12 +390,12 @@ func (h *OAuth2Handler) handleAuthorizationCodeGrant(w http.ResponseWriter, r *h
 func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	req, err := parseRefreshRequest(w, r)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "failed to parse request body")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_request", "failed to parse request body")
 		return
 	}
 
 	if req.RefreshToken == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "refresh_token is required")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_request", "refresh_token is required")
 		return
 	}
 
@@ -407,23 +407,23 @@ func (h *OAuth2Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, usecase.ErrInvalidRefreshToken):
-			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token is invalid")
+			httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "invalid_grant", "refresh_token is invalid")
 		case errors.Is(err, usecase.ErrRefreshTokenRevoked):
-			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has been revoked")
+			httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "invalid_grant", "refresh_token has been revoked")
 		case errors.Is(err, usecase.ErrRefreshTokenExpired):
-			httputil.WriteError(w, http.StatusUnauthorized, "invalid_grant", "refresh_token has expired")
+			httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "invalid_grant", "refresh_token has expired")
 		case errors.Is(err, usecase.ErrAccountBanned):
-			httputil.WriteError(w, http.StatusForbidden, "access_denied", "account has been banned")
+			httputil.WriteError(r.Context(), w, http.StatusForbidden, "access_denied", "account has been banned")
 		default:
 			logger.Error(ctx, "failed to refresh token pair", zap.Error(err))
-			httputil.WriteError(w, http.StatusInternalServerError, "server_error", "internal error")
+			httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "server_error", "internal error")
 		}
 		return
 	}
 
 	logger.Info(ctx, "refresh_token rotation succeeded", zap.String("user_id", resp.UserID.String()))
 	// Return the new token pair. The response includes both access_token and refresh_token.
-	httputil.WriteJSON(w, http.StatusOK, protocol.OAuth2TokenExchangeResponse{
+	httputil.WriteJSON(r.Context(), w, http.StatusOK, protocol.OAuth2TokenExchangeResponse{
 		AccessToken:  resp.AccessToken,
 		RefreshToken: resp.RefreshToken,
 		ExpiresIn:    resp.ExpiresIn,

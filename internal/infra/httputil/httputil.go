@@ -17,11 +17,11 @@ import (
 //
 // Sets Content-Type to application/json, writes the status code, and encodes data into the response body.
 // Logs an error on encoding failure (headers already sent, cannot change status code).
-func WriteJSON(w http.ResponseWriter, status int, data any) {
+func WriteJSON(ctx context.Context, w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		logger.Error(context.Background(), "WriteJSON: failed to encode response",
+		logger.Error(ctx, "WriteJSON: failed to encode response",
 			zap.Int("status", status), zap.Error(err))
 	}
 }
@@ -30,7 +30,7 @@ func WriteJSON(w http.ResponseWriter, status int, data any) {
 //
 // Response format: {"error": errCode, "error_description": description}.
 // Also sets Cache-Control / Pragma headers to prevent clients from caching error responses.
-func WriteError(w http.ResponseWriter, status int, errCode, description string) {
+func WriteError(ctx context.Context, w http.ResponseWriter, status int, errCode, description string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
@@ -42,7 +42,7 @@ func WriteError(w http.ResponseWriter, status int, errCode, description string) 
 		resp["error_description"] = description
 	}
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		logger.Error(context.Background(), "WriteError: failed to encode response",
+		logger.Error(ctx, "WriteError: failed to encode response",
 			zap.Int("status", status), zap.String("err_code", errCode), zap.Error(err))
 	}
 }

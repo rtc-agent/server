@@ -180,7 +180,7 @@ func (uc *RtcUserUsecase) BanUser(ctx context.Context, input BanUserInput, admin
 
 	// 4. Write audit log
 	if uc.auditLogRepo != nil {
-		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(ctx,
 			adminUserID, adminIP, "ban_user", "rtc_user", input.UserID,
 			map[string]any{"reason": input.Reason, "revoked_tokens": revokedCount, "revoked_oss3_credentials": revokedCredentialsCount},
 		)); err != nil {
@@ -226,7 +226,7 @@ func (uc *RtcUserUsecase) UnbanUser(ctx context.Context, userID uuid.UUID, admin
 
 	// 4. Write audit log
 	if uc.auditLogRepo != nil {
-		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(ctx,
 			adminUserID, adminIP, "unban_user", "rtc_user", userID, nil,
 		)); err != nil {
 			logger.Error(ctx, "unban_user.audit_log_failed", zap.Error(err))

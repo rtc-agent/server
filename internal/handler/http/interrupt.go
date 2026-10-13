@@ -64,11 +64,11 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 
 	sessionID, err := uuid.Parse(sessionIDStr)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "interrupt.invalid_session_id", "invalid session ID")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "interrupt.invalid_session_id", "invalid session ID")
 		return
 	}
 	if interruptID == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "interrupt.invalid_interrupt_id", "invalid interrupt ID")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "interrupt.invalid_interrupt_id", "invalid interrupt ID")
 		return
 	}
 
@@ -76,16 +76,16 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 		Answer string `json:"answer"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "interrupt.invalid_request_body", "invalid request body")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "interrupt.invalid_request_body", "invalid request body")
 		return
 	}
 	if req.Answer == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "interrupt.empty_answer", "answer must not be empty")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "interrupt.empty_answer", "answer must not be empty")
 		return
 	}
 	// Validate answer length to prevent excessive Redis memory usage
 	if len(req.Answer) > 10000 {
-		httputil.WriteError(w, http.StatusBadRequest, "interrupt.answer_too_long", "answer must be <= 10000 characters")
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest, "interrupt.answer_too_long", "answer must be <= 10000 characters")
 		return
 	}
 
@@ -94,7 +94,7 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 	// Verify session ownership: caller must own the session
 	userID, ok := contextx.GetUserID(ctx)
 	if !ok {
-		httputil.WriteError(w, http.StatusUnauthorized, "auth.required", "authentication required")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "auth.required", "authentication required")
 		return
 	}
 
@@ -108,11 +108,11 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 	// Delegate to use case (handles ownership validation and SET+PUBLISH)
 	if err := h.interruptUC.SubmitAnswer(ctx, userID, sessionID, interruptID, req.Answer); err != nil {
 		if errors.Is(err, usecase.ErrInterruptSessionNotFound) {
-			httputil.WriteError(w, http.StatusNotFound, "interrupt.session_not_found", "session not found")
+			httputil.WriteError(r.Context(), w, http.StatusNotFound, "interrupt.session_not_found", "session not found")
 			return
 		}
 		if errors.Is(err, usecase.ErrInterruptForbidden) {
-			httputil.WriteError(w, http.StatusForbidden, "auth.forbidden", "not authorized for this session")
+			httputil.WriteError(r.Context(), w, http.StatusForbidden, "auth.forbidden", "not authorized for this session")
 			return
 		}
 		if errors.Is(err, usecase.ErrInterruptStoreFailed) {
@@ -120,7 +120,7 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 				zap.String("session", sessionID.String()),
 				zap.String("interrupt", interruptID),
 				zap.Error(err))
-			httputil.WriteError(w, http.StatusInternalServerError, "interrupt.store_failed", "store answer failed, please retry later")
+			httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "interrupt.store_failed", "store answer failed, please retry later")
 			return
 		}
 		// Unexpected error
@@ -128,9 +128,9 @@ func (h *InterruptHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) 
 			zap.String("session", sessionID.String()),
 			zap.String("interrupt", interruptID),
 			zap.Error(err))
-		httputil.WriteError(w, http.StatusInternalServerError, "interrupt.internal_error", "internal error")
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "interrupt.internal_error", "internal error")
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	httputil.WriteJSON(r.Context(), w, http.StatusAccepted, map[string]string{"status": "accepted"})
 }

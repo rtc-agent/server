@@ -3,9 +3,9 @@ package httphandler
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/rtc-agent/server/pkg/logger"
 	rtcoss3 "github.com/rtc-agent/server/pkg/rtc-oss3"
@@ -44,7 +44,8 @@ func (h *OSS3MultipartHandler) parseCompleteUploadRequest(
 	var req completeRequest
 	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
 		// Check if the error is due to request body being too large
-		if strings.Contains(err.Error(), "http: request body too large") {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
 			rtcoss3.WriteS3Error(w, rtcoss3.ErrEntityTooLarge, r.URL.Path, "")
 			return nil
 		}
@@ -295,7 +296,7 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 		}
 
 		// Return success with existing file's ETag
-		writeCompleteMultipartResult(w, bucket, key, existingMeta.ETag)
+		writeCompleteMultipartResult(ctx, w, bucket, key, existingMeta.ETag)
 		return
 	}
 
@@ -310,14 +311,14 @@ func (h *OSS3MultipartHandler) handleCompleteMultipartUpload(
 	}
 
 	// Return XML response per S3 spec
-	writeCompleteMultipartResult(w, bucket, key, etag)
+	writeCompleteMultipartResult(r.Context(), w, bucket, key, etag)
 
 	RecordMultipartUploadEnd()
 }
 
 // writeCompleteMultipartResult writes the CompleteMultipartUpload XML response.
 // Shared by the normal completion path and the instant upload path.
-func writeCompleteMultipartResult(w http.ResponseWriter, bucket, key, etag string) {
+func writeCompleteMultipartResult(ctx context.Context, w http.ResponseWriter, bucket, key, etag string) {
 	type completeResult struct {
 		XMLName  xml.Name `xml:"CompleteMultipartUploadResult"`
 		Location string   `xml:"Location"`
@@ -331,5 +332,5 @@ func writeCompleteMultipartResult(w http.ResponseWriter, bucket, key, etag strin
 		Key:      key,
 		ETag:     etag,
 	}
-	writeXMLResponse(w, http.StatusOK, resp)
+	writeXMLResponse(w, http.StatusOK, resp, ctx)
 }

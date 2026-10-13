@@ -78,7 +78,7 @@ func (uc *PermissionUsecase) CreatePermission(ctx context.Context, input CreateP
 
 	// Audit log
 	if uc.auditLogRepo != nil {
-		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(ctx,
 			operatorID, operatorIP, "create_permission", "permission", roleID,
 			map[string]any{"role_name": role.Name, "resource": input.Resource, "action": input.Action},
 		)); err != nil {
@@ -123,7 +123,7 @@ func (uc *PermissionUsecase) DeletePermission(ctx context.Context, input DeleteP
 
 	// Audit log
 	if uc.auditLogRepo != nil {
-		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+		if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(ctx,
 			operatorID, operatorIP, "delete_permission", "permission", roleID,
 			map[string]any{"role_name": roleName, "resource": input.Resource, "action": input.Action},
 		)); err != nil {

@@ -135,7 +135,7 @@ func (h *OSS3MultipartHandler) handleCreateMultipartUpload(
 		Key:      key,
 		UploadID: result.UploadID,
 	}
-	writeXMLResponse(w, http.StatusOK, resp)
+	writeXMLResponse(w, http.StatusOK, resp, r.Context())
 }
 
 // ServeHTTP routes multipart upload requests to the appropriate handler.

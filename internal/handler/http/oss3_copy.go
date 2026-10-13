@@ -171,7 +171,7 @@ func (h *OSS3Handler) handleCopyObject(
 	}
 
 	// Return XML response per S3 spec
-	writeCopyObjectResultXML(w, result.ETag, result.LastModified)
+	writeCopyObjectResultXML(r.Context(), w, result.ETag, result.LastModified)
 }
 
 // xmlCopyResult is the XML envelope returned by a successful CopyObject.
@@ -183,10 +183,10 @@ type xmlCopyResult struct {
 
 // writeCopyObjectResultXML serialises a CopyObjectResult XML response.
 // Uses S3TimeFormat for consistency with other S3 responses.
-func writeCopyObjectResultXML(w http.ResponseWriter, etag string, lastModified time.Time) {
+func writeCopyObjectResultXML(ctx context.Context, w http.ResponseWriter, etag string, lastModified time.Time) {
 	resp := xmlCopyResult{
 		ETag:         etag,
 		LastModified: lastModified.UTC().Format(rtcoss3.S3TimeFormat),
 	}
-	writeXMLResponse(w, http.StatusOK, resp)
+	writeXMLResponse(w, http.StatusOK, resp, ctx)
 }

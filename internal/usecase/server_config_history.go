@@ -155,7 +155,7 @@ func (uc *ServerConfigUsecase) rollbackToV0(tx *gorm.DB, txCtx context.Context, 
 		"target_version":  0,
 		"change_note":     input.ChangeNote,
 	}
-	auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.rollback", "server_config", uuid.Nil, auditDetails)
+	auditLog := repo.NewAuditLog(ctx, operatorID, operatorIP, "config.rollback", "server_config", uuid.Nil, auditDetails)
 	if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
 		return 0, fmt.Errorf("create rollback to v0 audit log: %w", err), false
 	}
@@ -223,7 +223,7 @@ func (uc *ServerConfigUsecase) rollbackToHistoricalVersion(tx *gorm.DB, txCtx co
 		"version":                  newVersion,
 		"change_note":              input.ChangeNote,
 	}
-	auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.rollback", "server_config", uuid.Nil, auditDetails)
+	auditLog := repo.NewAuditLog(ctx, operatorID, operatorIP, "config.rollback", "server_config", uuid.Nil, auditDetails)
 	if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
 		return nil, 0, fmt.Errorf("create rollback audit log: %w", err), false
 	}

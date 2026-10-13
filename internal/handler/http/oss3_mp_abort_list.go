@@ -176,5 +176,5 @@ func (h *OSS3MultipartHandler) handleListParts(
 		})
 	}
 
-	writeXMLResponse(w, http.StatusOK, resp)
+	writeXMLResponse(w, http.StatusOK, resp, r.Context())
 }

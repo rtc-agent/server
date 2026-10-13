@@ -67,7 +67,7 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 
 	// Check if memory is configured
 	if !h.memoryUC.IsMemoryConfigured() {
-		httputil.WriteJSON(w, http.StatusNotImplemented, map[string]string{
+		httputil.WriteJSON(r.Context(), w, http.StatusNotImplemented, map[string]string{
 			"error": "memory.not_configured",
 		})
 		return
@@ -79,7 +79,7 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 	// Parse request body
 	var req ExportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{
+		httputil.WriteJSON(r.Context(), w, http.StatusBadRequest, map[string]string{
 			"error": "memory.invalid_json",
 		})
 		return
@@ -87,7 +87,7 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 
 	// Validate scope
 	if !memory.IsValidScopeType(memory.ScopeType(req.Scope)) {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{
+		httputil.WriteJSON(r.Context(), w, http.StatusBadRequest, map[string]string{
 			"error": "memory.invalid_scope",
 		})
 		return
@@ -96,7 +96,7 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 	// Validate scopeId
 	scopeID, err := uuid.Parse(req.ScopeID)
 	if err != nil {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{
+		httputil.WriteJSON(r.Context(), w, http.StatusBadRequest, map[string]string{
 			"error": "memory.invalid_scope_id",
 		})
 		return
@@ -104,7 +104,7 @@ func (h *MemoriesHandler) ExportMemories(w http.ResponseWriter, r *http.Request)
 
 	// Validate format
 	if req.Format != "okf-bundle" {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{
+		httputil.WriteJSON(r.Context(), w, http.StatusBadRequest, map[string]string{
 			"error": "memory.unsupported_format",
 		})
 		return

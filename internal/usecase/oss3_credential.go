@@ -210,7 +210,7 @@ func (uc *OSS3Usecase) RevokeCredentialsByUserID(ctx context.Context, userID uui
 	// or is refreshed. The SigV4 middleware's ban check provides an additional safety net for
 	// banned users, closing the window for the most critical revocation scenario.
 	for _, akid := range accessKeyIDs {
-		uc.InvalidateCredentialCache(context.Background(), akid)
+		uc.InvalidateCredentialCache(ctx, akid)
 	}
 
 	return revokedCount, nil

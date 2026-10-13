@@ -145,21 +145,8 @@ func (uc *ServerConfigUsecase) GetUserConfig(ctx context.Context, userID uuid.UU
 // SetUserConfigOverride sets a user-level config override.
 // input.Version < 0 means force overwrite (still uses optimistic lock with current version).
 func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID uuid.UUID, key string, input UpdateConfigInput, operatorID uuid.UUID, operatorIP string) (*UserConfigItem, error) {
-	entry := config.GetRegistryEntry(key)
-	if entry == nil {
-		return nil, ErrConfigKeyNotFound
-	}
-
-	// Verify user exists.
-	if _, err := uc.oauth2UserRepo.FindByID(ctx, userID); err != nil {
-		if errors.Is(err, repo.ErrNotFound) || errors.Is(err, repo.ErrOAuth2UserNotFound) {
-			return nil, ErrUserNotFound
-		}
-		return nil, fmt.Errorf("check user existence: %w", err)
-	}
-
-	// Validate and marshal value.
-	jsonVal, err := marshalAndValidateValue(input.Value, entry)
+	// Validate input and prepare for transaction.
+	entry, jsonVal, err := uc.validateAndPrepareConfigUpdate(ctx, userID, key, input)
 	if err != nil {
 		return nil, err
 	}
@@ -167,45 +154,67 @@ func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID
 	now := time.Now()
 
 	// Variables to capture from transaction for post-tx operations.
-	var (
-		oldValueJSON datatypes.JSON
-		newVersion   int
-	)
+	var newVersion int
 
 	// Execute core operations in transaction: get old value + upsert config + history.
-	// Non-core operations (TrimHistory, AuditLog) are moved outside to reduce lock hold time.
-	err = uc.db.Transaction(func(tx *gorm.DB) error {
+	if err := uc.executeConfigUpdateTransaction(ctx, userID, key, input, operatorID, operatorIP, entry, jsonVal, now, &newVersion); err != nil {
+		return nil, err
+	}
+
+	// Post-transaction operations (non-core, failures logged but don't fail the operation).
+	if err := uc.configRepo.TrimHistory(ctx, key, &userID, 100); err != nil {
+		logger.Warn(ctx, "config.trim_history_failed", zap.Error(err))
+	}
+
+	// Publish config update event for multi-instance cache synchronization.
+	uc.publishConfigUpdateWithRetry(ctx, key, &userID, newVersion, "update")
+
+	return uc.GetUserConfig(ctx, userID, key)
+}
+
+// validateAndPrepareConfigUpdate validates the config update request and marshals the value.
+func (uc *ServerConfigUsecase) validateAndPrepareConfigUpdate(ctx context.Context, userID uuid.UUID, key string, input UpdateConfigInput) (*config.ConfigEntry, []byte, error) {
+	entry := config.GetRegistryEntry(key)
+	if entry == nil {
+		return nil, nil, ErrConfigKeyNotFound
+	}
+
+	// Verify user exists.
+	if _, err := uc.oauth2UserRepo.FindByID(ctx, userID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) || errors.Is(err, repo.ErrOAuth2UserNotFound) {
+			return nil, nil, ErrUserNotFound
+		}
+		return nil, nil, fmt.Errorf("check user existence: %w", err)
+	}
+
+	// Validate and marshal value.
+	jsonVal, err := marshalAndValidateValue(input.Value, entry)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return entry, jsonVal, nil
+}
+
+// executeConfigUpdateTransaction executes the config update within a transaction.
+func (uc *ServerConfigUsecase) executeConfigUpdateTransaction(ctx context.Context, userID uuid.UUID, key string, input UpdateConfigInput, operatorID uuid.UUID, operatorIP string, entry *config.ConfigEntry, jsonVal []byte, now time.Time, newVersion *int) error {
+	return uc.db.Transaction(func(tx *gorm.DB) error {
 		txCtx := dbutil.WithTx(ctx, tx)
 
 		// Capture old value within the same transaction for history.
-		// Pass entry to provide yaml default when DB has no record (first write).
-		oldValueJSON = uc.getOldValue(txCtx, key, &userID, entry)
+		oldValueJSON := uc.getOldValue(txCtx, key, &userID, entry)
 
 		var expectedVersion int
 		if input.Version < 0 {
 			// Force overwrite: use current version for optimistic lock instead of skipping it.
-			// This prevents race conditions where concurrent writes could overwrite each other.
-			currentVersion := 0
-			if oldValueJSON != nil {
-				currentCfg, getErr := uc.configRepo.Get(txCtx, key, &userID)
-				if getErr == nil {
-					currentVersion = currentCfg.Version
-				} else if errors.Is(getErr, repo.ErrNotFound) {
-					// Record disappeared between getOldValue and Get (should not happen within tx, but be defensive).
-					currentVersion = 0
-				} else {
-					// Non-ErrNotFound DB error: log and return to surface the issue (P1-2 fix).
-					logger.Warn(ctx, "config.force_overwrite.get_version_failed",
-						zap.String("key", key),
-						zap.String("user_id", userID.String()),
-						zap.Error(getErr))
-					return fmt.Errorf("get current user config %q for force overwrite: %w", key, getErr)
-				}
+			currentVersion, newVer, err := uc.calculateForceOverwriteVersion(ctx, key, &userID, oldValueJSON)
+			if err != nil {
+				return err
 			}
-			newVersion = currentVersion + 1
-			expectedVersion = currentVersion // Use currentVersion, not -1
+			*newVersion = newVer
+			expectedVersion = currentVersion
 		} else {
-			newVersion = input.Version + 1
+			*newVersion = input.Version + 1
 			expectedVersion = input.Version
 		}
 
@@ -216,7 +225,7 @@ func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID
 			ValueType:   entry.ValueType,
 			Category:    entry.Category,
 			Description: entry.Description,
-			Version:     newVersion,
+			Version:     *newVersion,
 			UpdatedBy:   &operatorID,
 			UpdatedAt:   now,
 		}
@@ -233,7 +242,7 @@ func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID
 			UserID:     &userID,
 			OldValue:   oldValueJSON,
 			NewValue:   datatypes.JSON(jsonVal),
-			Version:    newVersion,
+			Version:    *newVersion,
 			ChangedBy:  operatorID,
 			ChangedAt:  now,
 			ChangeNote: input.ChangeNote,
@@ -242,65 +251,58 @@ func (uc *ServerConfigUsecase) SetUserConfigOverride(ctx context.Context, userID
 			return fmt.Errorf("create user config history: %w", err)
 		}
 
-		// P0-1 fix: Create audit log within transaction for atomicity.
+		// Create audit log within transaction for atomicity.
 		auditDetails := map[string]any{
 			"key":         key,
 			"user_id":     userID.String(),
 			"old_value":   config.UnmarshalJSONB(oldValueJSON),
 			"new_value":   input.Value,
-			"version":     newVersion,
+			"version":     *newVersion,
 			"change_note": input.ChangeNote,
 		}
-		auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.update", "server_config", uuid.Nil, auditDetails)
+		auditLog := repo.NewAuditLog(ctx, operatorID, operatorIP, "config.update", "server_config", uuid.Nil, auditDetails)
 		if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
 			return fmt.Errorf("create user config audit log: %w", err)
 		}
 
 		return nil
 	})
-	if err != nil {
-		return nil, err
+}
+
+// publishConfigUpdateWithRetry publishes config update event with exponential backoff retry.
+// P0-2 fix: Add retry for publish operations to handle transient failures.
+func (uc *ServerConfigUsecase) publishConfigUpdateWithRetry(ctx context.Context, key string, userID *uuid.UUID, version int, operation string) {
+	if uc.configPublisher == nil {
+		return
 	}
 
-	// Post-transaction operations (non-core, failures logged but don't fail the operation).
-
-	// Trim history to 100 entries.
-	if err := uc.configRepo.TrimHistory(ctx, key, &userID, 100); err != nil {
-		logger.Warn(ctx, "config.trim_history_failed", zap.Error(err))
-	}
-
-	// Publish config update event for multi-instance cache synchronization.
-	// P0-2 fix: Add retry with exponential backoff for publish operations.
-	if uc.configPublisher != nil {
-		const maxPublishRetries = 3
-		var pubErr error
-		for attempt := 0; attempt < maxPublishRetries; attempt++ {
-			pubErr = uc.configPublisher.PublishConfigUpdate(ctx, key, &userID, newVersion, "update")
-			if pubErr == nil {
-				break
-			}
-			if attempt < maxPublishRetries-1 {
-				backoff := time.Duration(1<<uint(attempt)) * 50 * time.Millisecond // 50ms, 100ms
-				logger.Warn(ctx, "config.publish_update_failed_retrying",
-					zap.String("key", key),
-					zap.String("user_id", userID.String()),
-					zap.Int("attempt", attempt+1),
-					zap.Int("max_retries", maxPublishRetries),
-					zap.Duration("backoff", backoff),
-					zap.Error(pubErr))
-				time.Sleep(backoff)
-			}
+	const maxPublishRetries = 3
+	var pubErr error
+	for attempt := 0; attempt < maxPublishRetries; attempt++ {
+		pubErr = uc.configPublisher.PublishConfigUpdate(ctx, key, userID, version, operation)
+		if pubErr == nil {
+			return
 		}
-		if pubErr != nil {
-			logger.Error(ctx, "config.publish_update_failed_after_retries",
+		if attempt < maxPublishRetries-1 {
+			backoff := time.Duration(1<<uint(attempt)) * 50 * time.Millisecond
+			logger.Warn(ctx, "config.publish_update_failed_retrying",
 				zap.String("key", key),
 				zap.String("user_id", userID.String()),
-				zap.Int("version", newVersion),
+				zap.Int("attempt", attempt+1),
+				zap.Int("max_retries", maxPublishRetries),
+				zap.Duration("backoff", backoff),
 				zap.Error(pubErr))
+			time.Sleep(backoff)
 		}
 	}
 
-	return uc.GetUserConfig(ctx, userID, key)
+	if pubErr != nil {
+		logger.Error(ctx, "config.publish_update_failed_after_retries",
+			zap.String("key", key),
+			zap.String("user_id", userID.String()),
+			zap.Int("version", version),
+			zap.Error(pubErr))
+	}
 }
 
 // DeleteUserConfigOverride deletes a user-level config override.
@@ -350,7 +352,7 @@ func (uc *ServerConfigUsecase) DeleteUserConfigOverride(ctx context.Context, use
 			"deleted_value":   deletedValue,
 			"deleted_version": deletedVersion,
 		}
-		auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.delete", "server_config", uuid.Nil, auditDetails)
+		auditLog := repo.NewAuditLog(ctx, operatorID, operatorIP, "config.delete", "server_config", uuid.Nil, auditDetails)
 		if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
 			return fmt.Errorf("create audit log on delete: %w", err)
 		}
@@ -362,35 +364,7 @@ func (uc *ServerConfigUsecase) DeleteUserConfigOverride(ctx context.Context, use
 	}
 
 	// Publish config delete event for multi-instance cache synchronization.
-	// P0-2 fix: Add retry with exponential backoff for publish operations.
-	if uc.configPublisher != nil {
-		const maxPublishRetries = 3
-		var pubErr error
-		for attempt := 0; attempt < maxPublishRetries; attempt++ {
-			pubErr = uc.configPublisher.PublishConfigUpdate(ctx, key, &userID, deletedVersion+1, "delete")
-			if pubErr == nil {
-				break
-			}
-			if attempt < maxPublishRetries-1 {
-				backoff := time.Duration(1<<uint(attempt)) * 50 * time.Millisecond // 50ms, 100ms
-				logger.Warn(ctx, "config.publish_delete_failed_retrying",
-					zap.String("key", key),
-					zap.String("user_id", userID.String()),
-					zap.Int("attempt", attempt+1),
-					zap.Int("max_retries", maxPublishRetries),
-					zap.Duration("backoff", backoff),
-					zap.Error(pubErr))
-				time.Sleep(backoff)
-			}
-		}
-		if pubErr != nil {
-			logger.Error(ctx, "config.publish_delete_failed_after_retries",
-				zap.String("key", key),
-				zap.String("user_id", userID.String()),
-				zap.Int("version", deletedVersion+1),
-				zap.Error(pubErr))
-		}
-	}
+	uc.publishConfigUpdateWithRetry(ctx, key, &userID, deletedVersion+1, "delete")
 
 	return deletedValue, deletedVersion, nil
 }

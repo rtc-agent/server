@@ -232,7 +232,7 @@ func (uc *ServerConfigUsecase) executeConfigUpdateTx(
 			"version":     newVersion,
 			"change_note": input.ChangeNote,
 		}
-		auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.update", "server_config", uuid.Nil, auditDetails)
+		auditLog := repo.NewAuditLog(ctx, operatorID, operatorIP, "config.update", "server_config", uuid.Nil, auditDetails)
 		if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
 			return fmt.Errorf("create audit log: %w", err)
 		}
@@ -252,18 +252,11 @@ func (uc *ServerConfigUsecase) calculateVersionAndExpected(
 ) int {
 	if input.Version < 0 {
 		// Force overwrite: use current version for optimistic lock instead of skipping it.
-		currentVersion := 0
-		if oldValueJSON != nil {
-			if currentCfg, getErr := uc.configRepo.Get(txCtx, key, nil); getErr == nil {
-				currentVersion = currentCfg.Version
-			} else {
-				// Failed to get current version, start from 0 and log for investigation.
-				logger.Warn(txCtx, "config.force_overwrite.get_version_failed",
-					zap.String("key", key),
-					zap.Error(getErr))
-			}
+		currentVersion, newVer, err := uc.calculateForceOverwriteVersion(txCtx, key, nil, oldValueJSON)
+		if err != nil {
+			return 0
 		}
-		*newVersion = currentVersion + 1
+		*newVersion = newVer
 		return currentVersion // Use currentVersion, not -1
 	}
 
@@ -310,6 +303,7 @@ func (uc *ServerConfigUsecase) postUpdateOperations(
 				zap.String("key", key),
 				zap.Int("version", newVersion),
 				zap.Error(pubErr))
+			globalPublisherMetrics.publishErrors.Inc()
 		}
 	}
 }
@@ -363,7 +357,7 @@ func (uc *ServerConfigUsecase) DeleteSystemConfig(ctx context.Context, key strin
 			"deleted_value":   deletedValue,
 			"deleted_version": deletedVersion,
 		}
-		auditLog := repo.NewAuditLog(operatorID, operatorIP, "config.delete", "server_config", uuid.Nil, auditDetails)
+		auditLog := repo.NewAuditLog(ctx, operatorID, operatorIP, "config.delete", "server_config", uuid.Nil, auditDetails)
 		if err := uc.auditLogRepo.Create(txCtx, auditLog); err != nil {
 			return fmt.Errorf("create audit log on delete: %w", err)
 		}
@@ -400,6 +394,7 @@ func (uc *ServerConfigUsecase) DeleteSystemConfig(ctx context.Context, key strin
 				zap.String("key", key),
 				zap.Int("version", deletedVersion+1),
 				zap.Error(pubErr))
+			globalPublisherMetrics.publishErrors.Inc()
 		}
 	}
 

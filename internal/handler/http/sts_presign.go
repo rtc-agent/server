@@ -96,7 +96,7 @@ type presignResponse struct {
 func (h *STSPresignHandler) GeneratePresignedURL(w http.ResponseWriter, r *http.Request) {
 	userID, ok := contextx.GetUserID(r.Context())
 	if !ok {
-		httputil.WriteError(w, http.StatusUnauthorized, "presign.unauthorized", "authentication required")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "presign.unauthorized", "authentication required")
 		return
 	}
 

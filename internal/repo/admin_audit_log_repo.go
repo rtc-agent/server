@@ -103,13 +103,13 @@ func (r *auditLogRepo) List(ctx context.Context, filter AuditLogFilter, page, pa
 // NewAuditLog creates an AuditLog with standard fields populated.
 // This is a helper for usecases to construct audit log entries consistently.
 // If details serialization fails, logs an error and stores a fallback value.
-func NewAuditLog(operatorID uuid.UUID, operatorIP, eventType, resourceType string, resourceID uuid.UUID, details any) *model.AuditLog {
+func NewAuditLog(ctx context.Context, operatorID uuid.UUID, operatorIP, eventType, resourceType string, resourceID uuid.UUID, details any) *model.AuditLog {
 	var raw datatypes.JSON
 	if details != nil {
 		b, err := json.Marshal(details)
 		if err != nil {
 			// Log serialization error but don't fail - audit log should still be created
-			logger.Error(context.Background(), "audit_log.details_serialization_failed",
+			logger.Error(ctx, "audit_log.details_serialization_failed",
 				zap.String("event_type", eventType),
 				zap.String("resource_type", resourceType),
 				zap.String("resource_id", resourceID.String()),

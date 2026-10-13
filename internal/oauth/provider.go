@@ -7,6 +7,7 @@
 package oauth
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -167,7 +168,7 @@ func (p *Provider) handleAuthorizeConfirm(w http.ResponseWriter, r *http.Request
 	}
 
 	// No redirect_uri, return JSON directly.
-	httputil.WriteJSON(w, http.StatusOK, map[string]string{
+	httputil.WriteJSON(r.Context(), w, http.StatusOK, map[string]string{
 		"code":  code,
 		"state": state,
 	})
@@ -197,10 +198,10 @@ func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 			Email        string `json:"email"`
 		}
 		if jsonErr := json.NewDecoder(r.Body).Decode(&body); jsonErr != nil {
-			httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "cannot parse request parameters")
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest, "invalid_request", "cannot parse request parameters")
 			return
 		}
-		p.processExchange(w, body.ClientID, body.ClientSecret, body.Code, body.RedirectURI, body.Username, body.Email)
+		p.processExchange(r.Context(), w, body.ClientID, body.ClientSecret, body.Code, body.RedirectURI, body.Username, body.Email)
 		return
 	}
 
@@ -211,19 +212,19 @@ func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	username := r.FormValue("username")
 	email := r.FormValue("email")
 
-	p.processExchange(w, clientID, clientSecret, code, redirectURI, username, email)
+	p.processExchange(r.Context(), w, clientID, clientSecret, code, redirectURI, username, email)
 }
 
 // processExchange handles authorization code exchange.
-func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret, code, redirectURI, username, email string) {
+func (p *Provider) processExchange(ctx context.Context, w http.ResponseWriter, clientID, clientSecret, code, redirectURI, username, email string) {
 	// Validate client credentials.
 	if clientID != p.config.ClientID || clientSecret != p.config.ClientSecret {
-		httputil.WriteError(w, http.StatusUnauthorized, "invalid_client", "invalid client credentials")
+		httputil.WriteError(ctx, w, http.StatusUnauthorized, "invalid_client", "invalid client credentials")
 		return
 	}
 
 	if code == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "code is required")
+		httputil.WriteError(ctx, w, http.StatusBadRequest, "invalid_request", "code is required")
 		return
 	}
 
@@ -232,22 +233,22 @@ func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret
 	defer p.mu.Unlock()
 	codeData, ok := p.codes[code]
 	if !ok {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "authorization code is invalid")
+		httputil.WriteError(ctx, w, http.StatusBadRequest, "invalid_grant", "authorization code is invalid")
 		return
 	}
 	if codeData.Used {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "authorization code has been used")
+		httputil.WriteError(ctx, w, http.StatusBadRequest, "invalid_grant", "authorization code has been used")
 		return
 	}
 	if time.Now().After(codeData.ExpiresAt) {
 		delete(p.codes, code)
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "authorization code has expired")
+		httputil.WriteError(ctx, w, http.StatusBadRequest, "invalid_grant", "authorization code has expired")
 		return
 	}
 	// Validate redirect_uri matches the one bound to the authorization code (RFC 6749 Section 10.6).
 	// Only validate if both the code and the exchange request have a redirect_uri.
 	if codeData.RedirectURI != "" && redirectURI != "" && codeData.RedirectURI != redirectURI {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri does not match")
+		httputil.WriteError(ctx, w, http.StatusBadRequest, "invalid_grant", "redirect_uri does not match")
 		return
 	}
 	codeData.Used = true
@@ -262,7 +263,7 @@ func (p *Provider) processExchange(w http.ResponseWriter, clientID, clientSecret
 	}
 
 	// Return user info directly.
-	httputil.WriteJSON(w, http.StatusOK, map[string]string{
+	httputil.WriteJSON(ctx, w, http.StatusOK, map[string]string{
 		"provider_user_id": userID,
 		"username":         username,
 		"email":            email,

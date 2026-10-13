@@ -161,7 +161,7 @@ func (rl *RateLimiter) Middleware() func(http.Handler) http.Handler {
 				logger.Warn(r.Context(), "rate limit exceeded",
 					zap.String("user_id", userID.String()),
 				)
-				httputil.WriteError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many requests")
+				httputil.WriteError(r.Context(), w, http.StatusTooManyRequests, "rate_limit_exceeded", "too many requests")
 				return
 			}
 			next.ServeHTTP(w, r)

@@ -79,7 +79,7 @@ func (uc *AdminRoleUsecase) CreateRole(ctx context.Context, input CreateRoleInpu
 	}
 
 	// Audit log
-	if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+	if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(ctx,
 		operatorID, operatorIP, "create_role", "role", role.ID,
 		map[string]any{"name": role.Name, "display_name": role.DisplayName},
 	)); err != nil {
@@ -121,7 +121,7 @@ func (uc *AdminRoleUsecase) UpdateRole(ctx context.Context, roleID uuid.UUID, in
 	}
 
 	// Audit log
-	if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+	if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(ctx,
 		operatorID, operatorIP, "update_role", "role", role.ID,
 		map[string]any{"display_name": role.DisplayName, "is_enabled": role.IsEnabled},
 	)); err != nil {
@@ -197,7 +197,7 @@ func (uc *AdminRoleUsecase) DeleteRole(ctx context.Context, roleID uuid.UUID, op
 	}
 
 	// Audit log (best-effort, outside transaction)
-	if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(
+	if err := uc.auditLogRepo.Create(ctx, repo.NewAuditLog(ctx,
 		operatorID, operatorIP, "delete_role", "role", roleID,
 		map[string]any{"name": role.Name},
 	)); err != nil {
