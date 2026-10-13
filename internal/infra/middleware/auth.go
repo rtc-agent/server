@@ -160,7 +160,7 @@ func SetBanCache(ctx context.Context, userID uuid.UUID, banned bool) {
 // signer is the JWT signer; allowDevBypass should only be true in development,
 // allowing X-User-ID / X-Device-ID headers to bypass JWT validation (must be false in production).
 // banChecker optionally checks if user is banned (can be nil to skip check).
-func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool, banChecker UserBanChecker) func(http.Handler) http.Handler {
+func JWTAuth(signer *auth.JWTSigner, allowDevBypass bool, banChecker UserBanChecker, serverEnv string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var userID uuid.UUID

@@ -53,7 +53,7 @@ func newTestPresignHandler(t *testing.T) *STSPresignHandler {
 	uc, err := usecase.NewOSS3Usecase(backend, nil, nil, nil, nil, nil, nil, cfg)
 	require.NoError(t, err)
 
-	return NewSTSPresignHandler(uc, nil, false, nil, nil) // nil oauth2UserRepo - ban check disabled in tests, nil rateLimiter - no rate limiting in tests
+	return NewSTSPresignHandler(uc, nil, false, nil, nil, "test") // nil oauth2UserRepo - ban check disabled in tests, nil rateLimiter - no rate limiting in tests
 }
 
 // doPresignRequest sends a POST /api/presigned-url request with the given body and context.

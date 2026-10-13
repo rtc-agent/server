@@ -256,6 +256,21 @@ func (uc *TokenExchangeUsecase) verifyJWTWithJWKS(
 	kid string,
 	issuerCfg *config.ExternalIssuerConfig,
 ) (jwt.MapClaims, error) {
+	// SECURITY: Reject tokens without kid early to avoid unnecessary JWKS refresh operations.
+	// JWTs without kid in the header cannot be verified against specific keys in the JWKS,
+	// so we fail fast here rather than attempting expensive network operations.
+	if kid == "" {
+		logger.Warn(ctx, "token_exchange.missing_kid_rejected",
+			zap.String("issuer", issuerCfg.Issuer),
+			zap.String("reason", "JWT header missing kid claim"),
+			zap.String("risk", "cannot verify token without key identifier"))
+		return nil, &TokenExchangeError{
+			Code:        ErrInvalidGrant,
+			Description: "JWT header missing required kid (key ID) claim",
+			HTTPStatus:  401,
+		}
+	}
+
 	// First attempt: use cached keys.
 	claims, err := uc.verifyWithCachedKeys(ctx, tokenString, kid, issuerCfg)
 	if err == nil {
@@ -266,15 +281,6 @@ func (uc *TokenExchangeUsecase) verifyJWTWithJWKS(
 		zap.String("issuer", issuerCfg.Issuer), zap.Error(err))
 
 	// Second attempt: refresh JWKS and retry.
-	if kid == "" {
-		// No kid in header; re-fetch full JWKS.
-		return nil, &TokenExchangeError{
-			Code:        ErrInvalidGrant,
-			Description: "JWT verification failed and no kid in header for refresh",
-			HTTPStatus:  401,
-		}
-	}
-
 	_, refreshErr := uc.jwksClient.RefreshKey(ctx, issuerCfg.Issuer, issuerCfg.JWKSURI, kid)
 	if refreshErr != nil {
 		// Check if it's an endpoint unreachable error -> 503.

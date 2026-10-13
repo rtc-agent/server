@@ -224,6 +224,17 @@ func (h *OAuth2Handler) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	// Fallback to 5 minutes if not configured or invalid.
 	stateTTL := h.authConfig.OAuth2StateTTL
 	if stateTTL < 5*time.Minute || stateTTL > 30*time.Minute {
+		// Log warning for invalid configuration to alert operators
+		if stateTTL != 0 { // Only warn if explicitly configured (not zero value)
+			logger.Warn(r.Context(), "oauth2.invalid_state_ttl_configured",
+				zap.Duration("configured_ttl", stateTTL),
+				zap.Duration("min_allowed", 5*time.Minute),
+				zap.Duration("max_allowed", 30*time.Minute),
+				zap.Duration("fallback_ttl", 5*time.Minute),
+				zap.String("reason", "state TTL outside safe bounds"),
+				zap.String("risk", "invalid configuration may impact security or usability"),
+				zap.String("remediation", "configure OAuth2StateTTL between 5m and 30m"))
+		}
 		stateTTL = 5 * time.Minute
 	}
 	if err := h.stateStore.Set(ctx, state, string(stateJSON), stateTTL); err != nil {

@@ -22,16 +22,18 @@ type STSHandler struct {
 	isDev       bool
 	banChecker  middleware.UserBanChecker
 	rateLimiter RateLimiterInterface
+	serverEnv   string
 }
 
 // NewSTSHandler creates a new STS handler.
-func NewSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool, banChecker middleware.UserBanChecker, rateLimiter RateLimiterInterface) *STSHandler {
+func NewSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool, banChecker middleware.UserBanChecker, rateLimiter RateLimiterInterface, serverEnv string) *STSHandler {
 	return &STSHandler{
 		oss3UC:      oss3UC,
 		signer:      signer,
 		isDev:       isDev,
 		banChecker:  banChecker,
 		rateLimiter: rateLimiter,
+		serverEnv:   serverEnv,
 	}
 }
 
@@ -42,7 +44,7 @@ func (h *STSHandler) RegisterRoutes(mux *http.ServeMux) {
 		return
 	}
 
-	authMiddleware := middleware.JWTAuth(h.signer, h.isDev, h.banChecker)
+	authMiddleware := middleware.JWTAuth(h.signer, h.isDev, h.banChecker, h.serverEnv)
 
 	// POST /api/credentials/temporary — issue temporary S3 credentials
 	// Rate limiting is applied before authentication to prevent credential exhaustion attacks

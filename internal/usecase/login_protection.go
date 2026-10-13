@@ -29,6 +29,12 @@ type LoginProtectionConfig struct {
 	// Deprecated: Backend selection is now controlled by config in initLoginProtection.
 	// This field is retained for backwards compatibility but no longer used.
 	Env string
+	// FailClosed controls the behavior when Redis is unreachable (Redis-backed implementation only).
+	// When true, login attempts are rejected if Redis cannot be reached (fail-closed, more secure).
+	// When false, login attempts are allowed if Redis is down (fail-open, more available).
+	// SECURITY: In production environments, FailClosed should be true to prevent brute-force
+	// attacks when Redis is unavailable. Default is false for backward compatibility.
+	FailClosed bool
 }
 
 // LoginProtection implements IP + email dual lockout for brute-force prevention.

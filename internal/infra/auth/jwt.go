@@ -60,12 +60,21 @@ func NewJWTSigner(secret string, accessTTL time.Duration, env string) (*JWTSigne
 		return nil, errors.New("auth: access token TTL must be positive")
 	}
 
-	// Security warning for production environments using symmetric algorithm
+	// SECURITY: Enforce asymmetric algorithms in production environments.
+	// HS256 is a symmetric algorithm that requires the same secret on both signing
+	// and verifying sides. For production multi-service deployments, asymmetric
+	// algorithms (RS256/ES256/EdDSA) are required for better security isolation.
 	if env == "production" {
+		return nil, errors.New("auth: HS256 symmetric algorithm is not allowed in production environment; use RS256, ES256, or EdDSA instead")
+	}
+
+	// Log warning for non-production environments using symmetric algorithm
+	if env != "development" && env != "test" {
 		logger.Warn(context.Background(),
 			"jwt.using_symmetric_algorithm",
 			zap.String("algorithm", "HS256"),
-			zap.String("recommendation", "consider using RS256 or ES256 in production"),
+			zap.String("environment", env),
+			zap.String("recommendation", "consider using RS256 or ES256 for better security isolation"),
 			zap.String("risk", "symmetric keys must be kept secret on both signing and verifying sides"),
 		)
 	}
@@ -87,6 +96,7 @@ func (s *JWTSigner) SignAccessToken(userID uuid.UUID, deviceID string) (string, 
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    "rtc-agent",
 			Audience:  jwt.ClaimStrings{"rtc-agent"},
+			ID:        uuid.New().String(), // JTI for precise token revocation if compromised
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

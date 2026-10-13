@@ -26,16 +26,18 @@ type STSPresignHandler struct {
 	isDev       bool
 	banChecker  middleware.UserBanChecker
 	rateLimiter RateLimiterInterface
+	serverEnv   string
 }
 
 // NewSTSPresignHandler creates a new presigned URL handler.
-func NewSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool, banChecker middleware.UserBanChecker, rateLimiter RateLimiterInterface) *STSPresignHandler {
+func NewSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, isDev bool, banChecker middleware.UserBanChecker, rateLimiter RateLimiterInterface, serverEnv string) *STSPresignHandler {
 	return &STSPresignHandler{
 		oss3UC:      oss3UC,
 		signer:      signer,
 		isDev:       isDev,
 		banChecker:  banChecker,
 		rateLimiter: rateLimiter,
+		serverEnv:   serverEnv,
 	}
 }
 
@@ -46,7 +48,7 @@ func (h *STSPresignHandler) RegisterRoutes(mux *http.ServeMux) {
 		return
 	}
 
-	authMiddleware := middleware.JWTAuth(h.signer, h.isDev, h.banChecker)
+	authMiddleware := middleware.JWTAuth(h.signer, h.isDev, h.banChecker, h.serverEnv)
 
 	// POST /api/presigned-url — generate a presigned URL
 	// Rate limiting is applied before authentication to prevent DoS attacks

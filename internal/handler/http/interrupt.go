@@ -30,11 +30,12 @@ type InterruptHandler struct {
 	interruptUC *usecase.InterruptUsecase
 	signer      *auth.JWTSigner
 	banChecker  middleware.UserBanChecker
+	serverEnv   string
 }
 
 // NewInterruptHandler creates an InterruptHandler.
-func NewInterruptHandler(interruptUC *usecase.InterruptUsecase, signer *auth.JWTSigner, banChecker middleware.UserBanChecker) *InterruptHandler {
-	return &InterruptHandler{interruptUC: interruptUC, signer: signer, banChecker: banChecker}
+func NewInterruptHandler(interruptUC *usecase.InterruptUsecase, signer *auth.JWTSigner, banChecker middleware.UserBanChecker, serverEnv string) *InterruptHandler {
+	return &InterruptHandler{interruptUC: interruptUC, signer: signer, banChecker: banChecker, serverEnv: serverEnv}
 }
 
 // RegisterRoutes registers interrupt-related routes on the given ServeMux.
@@ -43,7 +44,7 @@ func NewInterruptHandler(interruptUC *usecase.InterruptUsecase, signer *auth.JWT
 // When allowDevBypass is true (development only), requests may use X-User-ID /
 // X-Device-ID headers instead of a Bearer token.
 func (h *InterruptHandler) RegisterRoutes(mux *http.ServeMux, allowDevBypass bool) {
-	authMiddleware := middleware.JWTAuth(h.signer, allowDevBypass, h.banChecker)
+	authMiddleware := middleware.JWTAuth(h.signer, allowDevBypass, h.banChecker, h.serverEnv)
 	handler := authMiddleware(http.HandlerFunc(h.SubmitAnswer))
 	mux.Handle("POST /api/sessions/{sessionID}/interrupts/{interruptID}/answer", handler)
 }

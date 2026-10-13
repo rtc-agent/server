@@ -804,15 +804,16 @@ func provideInterruptHandler(
 	jwtSigner *auth.JWTSigner,
 ) *httphandler.InterruptHandler {
 	interruptUC := usecase.NewInterruptUsecase(redisClient, cfg.Worker, svcCtx.SessionRepo)
-	return httphandler.NewInterruptHandler(interruptUC, jwtSigner, svcCtx.OAuth2UserRepo)
+	return httphandler.NewInterruptHandler(interruptUC, jwtSigner, svcCtx.OAuth2UserRepo, cfg.Server.Env)
 }
 
 func provideMemoriesHandler(
+	cfg *config.Config,
 	svcCtx *svc.ServiceContext,
 	jwtSigner *auth.JWTSigner,
 ) *httphandler.MemoriesHandler {
 	memoryUC := usecase.NewMemoryUsecase(svcCtx.MemoryRepo, svcCtx.SessionRepo)
-	return httphandler.NewMemoriesHandler(memoryUC, jwtSigner, svcCtx.OAuth2UserRepo)
+	return httphandler.NewMemoriesHandler(memoryUC, jwtSigner, svcCtx.OAuth2UserRepo, cfg.Server.Env)
 }
 
 func provideOSS3Backend(cfg *config.Config) (rtcoss3.Backend, error) {
@@ -883,7 +884,7 @@ func provideSTSHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg 
 	}
 	// Use centralized dev bypass check for security
 	allowDevBypass := cfg.IsDevBypassAllowed()
-	return httphandler.NewSTSHandler(oss3UC, signer, allowDevBypass, svcCtx.OAuth2UserRepo, rateLimiter)
+	return httphandler.NewSTSHandler(oss3UC, signer, allowDevBypass, svcCtx.OAuth2UserRepo, rateLimiter, cfg.Server.Env)
 }
 
 func provideSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigner, cfg *config.Config, svcCtx *svc.ServiceContext, rateLimiter httphandler.RateLimiterInterface) *httphandler.STSPresignHandler {
@@ -892,7 +893,7 @@ func provideSTSPresignHandler(oss3UC *usecase.OSS3Usecase, signer *auth.JWTSigne
 	}
 	// Use centralized dev bypass check for security
 	allowDevBypass := cfg.IsDevBypassAllowed()
-	return httphandler.NewSTSPresignHandler(oss3UC, signer, allowDevBypass, svcCtx.OAuth2UserRepo, rateLimiter)
+	return httphandler.NewSTSPresignHandler(oss3UC, signer, allowDevBypass, svcCtx.OAuth2UserRepo, rateLimiter, cfg.Server.Env)
 }
 
 func provideServer(

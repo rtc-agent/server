@@ -3,12 +3,14 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
@@ -29,6 +31,7 @@ type RedisLoginProtection struct {
 	rdb          *redis.Client
 	maxAttempts  int
 	lockDuration time.Duration
+	failClosed   bool // when true, reject logins if Redis is unreachable (more secure)
 }
 
 // NewRedisLoginProtection creates a Redis-backed login protection.
@@ -43,6 +46,7 @@ func NewRedisLoginProtection(rdb *redis.Client, cfg LoginProtectionConfig) *Redi
 		rdb:          rdb,
 		maxAttempts:  cfg.MaxAttempts,
 		lockDuration: cfg.LockDuration,
+		failClosed:   cfg.FailClosed,
 	}
 }
 
@@ -55,9 +59,15 @@ func (lp *RedisLoginProtection) CheckLoginAllowed(ctx context.Context, ip, email
 	ipKey := fmt.Sprintf("admin:login:lock:ip:%s", ip)
 	ipLocked, ipTTLErr := lp.isKeyLocked(ctx, ipKey)
 	if ipTTLErr != nil {
+		// Redis is unavailable: apply fail-closed or fail-open strategy based on configuration
+		lp.handleRedisError(ctx, "ip", ip, email, ipTTLErr)
+		if lp.failClosed {
+			return errors.New("login protection service temporarily unavailable, please try again later")
+		}
 		// Fail-open: allow login if Redis is unavailable (with warning)
 		logger.Warn(ctx, "redis_login_protection_check_ip_error",
 			zap.String("ip", ip),
+			zap.Bool("fail_closed", lp.failClosed),
 			zap.Error(ipTTLErr))
 	}
 	if ipLocked {
@@ -69,8 +79,14 @@ func (lp *RedisLoginProtection) CheckLoginAllowed(ctx context.Context, ip, email
 	emailKey := fmt.Sprintf("admin:login:lock:email:%s", email)
 	emailLocked, emailTTLErr := lp.isKeyLocked(ctx, emailKey)
 	if emailTTLErr != nil {
+		// Redis is unavailable: apply fail-closed or fail-open strategy based on configuration
+		lp.handleRedisError(ctx, "email", ip, email, emailTTLErr)
+		if lp.failClosed {
+			return errors.New("login protection service temporarily unavailable, please try again later")
+		}
 		logger.Warn(ctx, "redis_login_protection_check_email_error",
 			zap.String("email", email),
+			zap.Bool("fail_closed", lp.failClosed),
 			zap.Error(emailTTLErr))
 	}
 	if emailLocked {
@@ -79,6 +95,22 @@ func (lp *RedisLoginProtection) CheckLoginAllowed(ctx context.Context, ip, email
 	}
 
 	return nil
+}
+
+// handleRedisError records Redis failure metrics for security monitoring.
+// Called when Redis operations fail to track the number of fail-open/fail-closed events.
+func (lp *RedisLoginProtection) handleRedisError(ctx context.Context, checkType, ip, email string, err error) {
+	// Record Prometheus metric for Redis failure monitoring
+	auth.RecordSecurityEvent("login_protection_redis_fail")
+
+	if lp.failClosed {
+		logger.Error(ctx, "redis_login_protection_fail_closed",
+			zap.String("check_type", checkType),
+			zap.String("ip", ip),
+			zap.String("email", email),
+			zap.Bool("fail_closed", true),
+			zap.Error(err))
+	}
 }
 
 // isKeyLocked checks if a Redis key exists and has a positive TTL (i.e., is actively locked).
