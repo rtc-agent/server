@@ -454,3 +454,119 @@ func TestConfig_ValidateDevBypassSafety(t *testing.T) {
 		})
 	}
 }
+
+func TestConfig_ValidateCORS(t *testing.T) {
+	// newMinimalValidConfig creates a config with minimal valid settings
+	// to isolate CORS validation from other validation rules.
+	newMinimalValidConfig := func(env string, allowOrigins []string) *Config {
+		cfg := &Config{
+			Database: DatabaseConfig{
+				DSN: "postgres://test",
+			},
+			Server: ServerConfig{
+				Port: 8080,
+				Env:  env,
+			},
+			Redis: RedisConfig{
+				Addr: "localhost:6379",
+			},
+			Auth: AuthConfig{
+				JWTSecret:             "test-secret-key-32bytes-long!!!!",
+				AccessTokenTTLSeconds: 3600,
+				AllowedRedirectURIs:   []string{"https://app.example.com/callback"}, // Required for production
+			},
+			LLM: LLMConfig{
+				APIKey: "test-key",
+			},
+			Providers: ProvidersConfig{
+				Mock: MockProviderConfig{
+					Enabled:      env == "development", // Mock provider only allowed in development
+					ClientID:     "test-client-id",
+					ClientSecret: "test-client-secret",
+				},
+				GitHub: GitHubProviderConfig{
+					Enabled:      env == "production", // GitHub provider for production
+					ClientID:     "test-github-client-id",
+					ClientSecret: "test-github-client-secret",
+				},
+			},
+			CORS: CORSConfig{
+				AllowOrigins: allowOrigins,
+			},
+		}
+		// Add Redis password for production to avoid warnings
+		if env == "production" {
+			cfg.Redis.Password = "test-password"
+		}
+		return cfg
+	}
+
+	tests := []struct {
+		name            string
+		env             string
+		allowOrigins    []string
+		wantErr         bool
+		wantErrContains string
+	}{
+		{
+			name:         "development - localhost wildcard allowed",
+			env:          "development",
+			allowOrigins: []string{"http://localhost:*"},
+			wantErr:      false,
+		},
+		{
+			name:         "development - wildcard * allowed",
+			env:          "development",
+			allowOrigins: []string{"*"},
+			wantErr:      false,
+		},
+		{
+			name:            "production - localhost wildcard blocked",
+			env:             "production",
+			allowOrigins:    []string{"http://localhost:*"},
+			wantErr:         true,
+			wantErrContains: "localhost:*",
+		},
+		{
+			name:            "production - wildcard * blocked",
+			env:             "production",
+			allowOrigins:    []string{"*"},
+			wantErr:         true,
+			wantErrContains: "*",
+		},
+		{
+			name:         "production - explicit origins allowed",
+			env:          "production",
+			allowOrigins: []string{"https://app.example.com", "https://admin.example.com"},
+			wantErr:      false,
+		},
+		{
+			name:         "production - explicit localhost port allowed",
+			env:          "production",
+			allowOrigins: []string{"http://localhost:3000"},
+			wantErr:      false,
+		},
+		{
+			name:         "production - empty origins allowed with warning",
+			env:          "production",
+			allowOrigins: []string{},
+			wantErr:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := newMinimalValidConfig(tt.env, tt.allowOrigins)
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() with env=%q, origins=%v: got err=%v, wantErr=%v",
+					tt.env, tt.allowOrigins, err, tt.wantErr)
+			}
+			if tt.wantErrContains != "" && err != nil {
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Errorf("Validate() error = %q, want to contain %q", err.Error(), tt.wantErrContains)
+				}
+			}
+		})
+	}
+}

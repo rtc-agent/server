@@ -271,9 +271,13 @@ func (c *Config) validateCORS() error {
 			}
 			continue
 		}
-		// Allow localhost wildcard pattern (e.g., "http://localhost:*") for development convenience.
-		// Skip standard URL parsing since "http://localhost:*" is not a valid URL but is a valid pattern.
+		// Security: localhost wildcard pattern (e.g., "http://localhost:*") is convenient for
+		// development but poses a security risk in production/staging by allowing any localhost
+		// port to make cross-origin requests. Block it in non-development environments.
 		if strings.Contains(origin, "localhost:*") {
+			if c.Server.Env != "development" && c.Server.Env != "dev" {
+				return fmt.Errorf("cors.allow_origins must not contain \"localhost:*\" pattern in %s environment: specify explicit localhost ports (e.g., http://localhost:3000)", c.Server.Env)
+			}
 			continue
 		}
 		if _, err := url.Parse(origin); err != nil {
