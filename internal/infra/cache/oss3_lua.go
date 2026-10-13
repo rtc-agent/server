@@ -68,10 +68,10 @@ if existingPending then
     if existingAmount == amount then
         -- Return current usage (committed + pending) for consistency
         local totalPending = 0
-        local cursor = "0"
+        local cursor = 0
         repeat
             local result = redis.call('ZSCAN', aggKey, cursor)
-            cursor = result[1]
+            cursor = tonumber(result[1])
             local entries = result[2]
             for i = 1, #entries, 2 do
                 local member = entries[i]
@@ -81,15 +81,34 @@ if existingPending then
                     totalPending = totalPending + tonumber(memberVal)
                 end
             end
-        until cursor == "0"
+        until cursor == 0
         return {1, current + totalPending}
+    else
+        -- Conflict: pending key exists but with different amount
+        -- Return current usage without re-reserving (reject the request)
+        local totalPending = 0
+        local cursor = 0
+        repeat
+            local result = redis.call('ZSCAN', aggKey, cursor)
+            cursor = tonumber(result[1])
+            local entries = result[2]
+            for i = 1, #entries, 2 do
+                local member = entries[i]
+                local memberPendingKey = prefix .. member
+                local memberVal = redis.call('GET', memberPendingKey)
+                if memberVal then
+                    totalPending = totalPending + tonumber(memberVal)
+                end
+            end
+        until cursor == 0
+        return {0, current + totalPending}
     end
 end
 
 -- Sum ALL pending amounts from the aggregation ZSET, with lazy cleanup of stale entries.
 -- A stale entry is one whose pending key has expired (TTL) but whose ZSET score remains.
 --
--- P0 fix: Cleanup is probabilistic (10% of calls) to prevent Redis blocking under high load.
+-- P0 fix: Cleanup is probabilistic (1% of calls, controlled by caller via ARGV[6]) to prevent Redis blocking under high load.
 -- When doCleanup is 1, limit cleanup to max 100 stale entries per call to avoid blocking Redis.
 -- When doCleanup is 0, skip cleanup entirely and only sum live entries.
 --
@@ -101,13 +120,13 @@ end
 -- - Bounded latency: Each reserve call takes at most O(100) extra work for cleanup,
 --   keeping latency predictable.
 local totalPending = 0
-local cursor = "0"
+local cursor = 0
 local maxClean = 100
 local cleaned = 0
 local shouldClean = (doCleanup == 1)
 repeat
     local result = redis.call('ZSCAN', aggKey, cursor)
-    cursor = result[1]
+    cursor = tonumber(result[1])
     local entries = result[2]
     for i = 1, #entries, 2 do
         local member = entries[i]
@@ -125,7 +144,7 @@ repeat
             totalPending = totalPending + tonumber(memberVal)
         end
     end
-until cursor == "0"
+until cursor == 0
 
 -- Quota check: committed + all_pending + new_amount must not exceed limit.
 local currentUsage = current + totalPending
