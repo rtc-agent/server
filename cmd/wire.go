@@ -291,6 +291,15 @@ func provideUsecaseDependencies(
 		svcCtx.ScriptExecutionRepo,
 	)
 
+	// Initialize FileUsecase for RPC handler file validation operations.
+	deps.FileUsecase = usecase.NewFileUsecase(svcCtx.FileRepo)
+
+	// Initialize LoopUsecase for RPC handler loop cleanup operations.
+	deps.LoopUsecase = usecase.NewLoopUsecase(svcCtx.LoopRepo, svcCtx.GoalRepo)
+
+	// Initialize RtcBatchResumeUsecase for RPC handler batch resume operations.
+	deps.RtcBatchResumeUsecase = usecase.NewRtcBatchResumeUsecase(svcCtx.Redis)
+
 	// Wire ChatModelFactory for dynamic per-turn config resolution.
 	// When ChatModelFactory is non-nil, createAgent and background LLM calls
 	// resolve model settings from the dynamic config registry (DB > yaml)

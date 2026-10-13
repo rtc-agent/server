@@ -69,12 +69,14 @@ func (h *Handler) summarizeTitleAsync(ctx context.Context, session *converter.Se
 	if h.deps.Deps.ChatModel == nil && h.deps.Deps.ChatModelFactory == nil {
 		return
 	}
+	if h.deps.Deps.RtcSessionUsecase == nil {
+		return // RtcSessionUsecase not configured, skip title summarization
+	}
 	// Use dynamic config for title summarization when available.
 	chatModel := agent.ResolveChatModel(ctx, h.deps.Deps)
 	summarizer := agent.NewSessionTitleSummarizer(
 		chatModel,
-		h.deps.Deps.SessionRepo,
-		h.deps.Deps.MessageRepo,
+		h.deps.Deps.RtcSessionUsecase,
 		h.deps.Deps.ConfigProvider,
 		h.deps.Deps.LLMConfig.Provider,
 		h.deps.Deps.TokenCallbackHandler,

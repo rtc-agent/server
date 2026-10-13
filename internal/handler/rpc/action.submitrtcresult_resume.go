@@ -10,7 +10,6 @@ import (
 	"github.com/cenkalti/backoff/v5"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/converter"
-	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 	rtcqueue "github.com/rtc-agent/server/pkg/rtc-queue"
@@ -22,92 +21,47 @@ import (
 // Returns (items, true) if the batch is still in progress (caller should return),
 // or (items, false) if the caller should continue with normal resume logic.
 func (h *Handler) tryCollectBatchResume(ctx context.Context, rtc *converter.Rtc) ([]turnagent.BatchResumeItem, bool) {
-	if h.deps.Deps.Redis == nil {
+	if h.deps.Deps.RtcBatchResumeUsecase == nil {
 		return nil, false
 	}
-
-	batchKey := cache.RtcBatchPending(rtc.TurnID.String())
-	resultsKey := cache.RtcBatchResults(rtc.TurnID.String())
-	interruptMapKey := cache.RtcBatchInterruptMap(rtc.TurnID.String())
 
 	resultStr := string(rtc.Result)
 	if rtc.Status == string(protocol.RtcStatusFailed) && rtc.ErrorMessage != "" {
 		resultStr = rtc.ErrorMessage
 	}
 
-	remaining, scriptErr := cache.BatchComplete.Run(
-		ctx, h.deps.Deps.Redis,
-		[]string{batchKey, resultsKey},
-		rtc.ID.String(), resultStr, 600,
-	).Int64()
-
-	if scriptErr != nil {
-		logger.Warn(ctx, "[resumeTurnAfterRtc] batch complete script failed",
+	result, err := h.deps.Deps.RtcBatchResumeUsecase.TryCollectBatchResume(
+		ctx,
+		rtc.ID.String(),
+		rtc.TurnID.String(),
+		string(rtc.Result),
+		rtc.Status,
+		resultStr,
+	)
+	if err != nil {
+		logger.Warn(ctx, "[resumeTurnAfterRtc] batch resume failed",
 			zap.String("rtc", rtc.ID.String()),
 			zap.String("turn", rtc.TurnID.String()),
-			zap.Error(scriptErr))
+			zap.Error(err))
 		return nil, false
 	}
-	if remaining == -1 {
+
+	if !result.Exists {
 		// Batch key doesn't exist (TTL expired or never created).
 		return nil, false
 	}
 
-	logger.Info(ctx, "[resumeTurnAfterRtc] batch progress",
-		zap.String("rtc", rtc.ID.String()),
-		zap.String("turn", rtc.TurnID.String()),
-		zap.Int64("remaining", remaining))
-
-	if remaining > 0 {
-		return nil, true // More RTCs to go.
+	if result.InProgress {
+		// More RTCs to go.
+		return nil, true
 	}
 
-	// All RTCs completed — build BatchResumeItems from stored data.
-	items := h.buildBatchResumeItems(ctx, rtc, resultsKey, interruptMapKey, batchKey)
-
-	// If interrupt map was empty (single interrupt scenario), return nil to let
-	// the caller fall back to single resume path using InterruptID/InterruptResult.
-	// This handles the case where registerRtcBatch was called but interruptTurn
-	// didn't write to interrupt map because len(allInterruptContexts) == 1.
-	if len(items) == 0 {
-		return nil, false
-	}
-	return items, false
-}
-
-// buildBatchResumeItems reads batch results and interrupt map from Redis,
-// then cleans up all batch-related keys.
-func (h *Handler) buildBatchResumeItems(ctx context.Context, rtc *converter.Rtc, resultsKey, interruptMapKey, batchKey string) []turnagent.BatchResumeItem {
-	results, resultsErr := h.deps.Deps.Redis.HGetAll(ctx, resultsKey).Result()
-	if resultsErr != nil {
-		logger.Warn(ctx, "[resumeTurnAfterRtc] batch results read failed (degrading to single resume)",
-			zap.String("turn", rtc.TurnID.String()), zap.Error(resultsErr))
-	}
-	interruptMap, mapErr := h.deps.Deps.Redis.HGetAll(ctx, interruptMapKey).Result()
-	if mapErr != nil {
-		logger.Warn(ctx, "[resumeTurnAfterRtc] batch interrupt map read failed (degrading to single resume)",
-			zap.String("turn", rtc.TurnID.String()), zap.Error(mapErr))
-	}
-
-	items := make([]turnagent.BatchResumeItem, 0, len(interruptMap))
-	for rtcID, interruptID := range interruptMap {
-		result := results[rtcID]
-		items = append(items, turnagent.BatchResumeItem{
-			InterruptID: interruptID,
-			Result:      result,
-		})
-		logger.Info(ctx, "[resumeTurnAfterRtc] batch item",
-			zap.String("rtc_id", rtcID),
-			zap.String("interrupt_id", interruptID),
-			zap.Int("result_len", len(result)))
-	}
-
-	h.deps.Deps.Redis.Del(ctx, batchKey, resultsKey, interruptMapKey)
+	// All RTCs completed — return the batch items.
 	logger.Info(ctx, "[resumeTurnAfterRtc] batch complete, resuming turn",
 		zap.String("turn", rtc.TurnID.String()),
 		zap.String("session", rtc.SessionID.String()),
-		zap.Int("batch_size", len(items)))
-	return items
+		zap.Int("batch_size", len(result.Items)))
+	return result.Items, false
 }
 
 // resumeActiveTurn publishes a Resume work item for the active (interrupted) turn.
@@ -231,8 +185,11 @@ func (h *Handler) resolveInterruptID(ctx context.Context, rtc *converter.Rtc, ac
 
 // publishOrphanSubmit publishes a Submit work item when no active turn exists.
 func (h *Handler) publishOrphanSubmit(ctx context.Context, rtc *converter.Rtc, userID string) {
-	orphanKey := cache.RtcOrphanTriggered(rtc.ID.String())
-	ok, setnxErr := h.deps.Deps.Redis.SetNX(ctx, orphanKey, "1", h.deps.Deps.WorkerConfig.OrphanTriggerTTL).Result()
+	if h.deps.Deps.RtcBatchResumeUsecase == nil {
+		return
+	}
+
+	ok, setnxErr := h.deps.Deps.RtcBatchResumeUsecase.SetOrphanTrigger(ctx, rtc.ID.String(), h.deps.Deps.WorkerConfig.OrphanTriggerTTL)
 	if setnxErr != nil {
 		logger.Error(ctx, "[resumeTurnAfterRtc] setnx orphan key",
 			zap.String("rtc", rtc.ID.String()), zap.Error(setnxErr))
@@ -265,9 +222,9 @@ func (h *Handler) publishOrphanSubmit(ctx context.Context, rtc *converter.Rtc, u
 		"orphan:"+rtc.ID.String(),
 	)
 	if _, err := h.deps.Queue.PublishWithID(ctx, rtc.SessionID.String(), workID, string(payload), rtcqueue.SubmitWorkPriority); err != nil {
-		if delErr := h.deps.Deps.Redis.Del(ctx, orphanKey).Err(); delErr != nil {
+		if delErr := h.deps.Deps.RtcBatchResumeUsecase.DeleteOrphanTrigger(ctx, rtc.ID.String()); delErr != nil {
 			logger.Warn(ctx, "[resumeTurnAfterRtc] failed to del orphan key",
-				zap.String("key", orphanKey), zap.Error(delErr))
+				zap.String("rtc", rtc.ID.String()), zap.Error(delErr))
 		}
 		logger.Error(ctx, "[resumeTurnAfterRtc] Queue.PublishWithID submit failed",
 			zap.String("rtc", rtc.ID.String()),

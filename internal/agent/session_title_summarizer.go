@@ -36,8 +36,7 @@ const maxConversationText = 1000
 // SessionTitleSummarizer generates session title summaries.
 type SessionTitleSummarizer struct {
 	chatModel            einomodel.ToolCallingChatModel
-	sessionRepo          usecase.SessionRepo
-	messageRepo          usecase.MessageRepo
+	sessionUsecase       *usecase.RtcSessionUsecase
 	configProvider       config.ConfigProvider
 	llmProviderFallback  string // static fallback when configProvider is nil or fails
 	maxMessages          int    // maximum messages for summary generation
@@ -49,16 +48,14 @@ type SessionTitleSummarizer struct {
 // configProvider may be nil; in that case llmProviderFallback is used.
 func NewSessionTitleSummarizer(
 	chatModel einomodel.ToolCallingChatModel,
-	sessionRepo usecase.SessionRepo,
-	messageRepo usecase.MessageRepo,
+	sessionUsecase *usecase.RtcSessionUsecase,
 	configProvider config.ConfigProvider,
 	llmProviderFallback string,
 	tokenCallbackHandler callbacks.Handler,
 ) *SessionTitleSummarizer {
 	return &SessionTitleSummarizer{
 		chatModel:            chatModel,
-		sessionRepo:          sessionRepo,
-		messageRepo:          messageRepo,
+		sessionUsecase:       sessionUsecase,
 		configProvider:       configProvider,
 		llmProviderFallback:  llmProviderFallback,
 		maxMessages:          10,
@@ -111,7 +108,7 @@ func (s *SessionTitleSummarizer) SummarizeIfNeeded(ctx context.Context, sessionI
 	}
 
 	// Get session messages (most recent N).
-	modelMessages, err := s.messageRepo.ListRecentBySession(ctx, sessionID, s.maxMessages)
+	modelMessages, err := s.sessionUsecase.ListRecentMessagesBySession(ctx, sessionID, s.maxMessages)
 	if err != nil {
 		return "", fmt.Errorf("list messages: %w", err)
 	}

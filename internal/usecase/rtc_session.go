@@ -370,3 +370,15 @@ func (uc *RtcSessionUsecase) DeleteMemoryByScope(ctx context.Context, scope memo
 func (uc *RtcSessionUsecase) CreateScriptExecution(ctx context.Context, exec *model.ScriptExecution) error {
 	return uc.scriptExecutionRepo.Create(ctx, exec)
 }
+
+// ListRecentMessagesBySession returns the most recent N messages for a session.
+// This is used by the title summarizer to generate session titles.
+func (uc *RtcSessionUsecase) ListRecentMessagesBySession(ctx context.Context, sessionID uuid.UUID, limit int) ([]*model.Message, error) {
+	return uc.messageRepo.ListRecentBySession(ctx, sessionID, limit)
+}
+
+// UpdateSessionTitle updates the title of a session.
+// This is used by the title summarizer after generating a new title.
+func (uc *RtcSessionUsecase) UpdateSessionTitle(ctx context.Context, sessionID uuid.UUID, title string) error {
+	return uc.sessionRepo.Update(ctx, sessionID, map[string]any{"title": title})
+}

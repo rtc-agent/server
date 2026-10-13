@@ -210,7 +210,10 @@ func (h *Handler) validateFileAttachments(
 	if umc.Files == nil || len(*umc.Files) == 0 {
 		return nil
 	}
-	if err := primitives.ValidateFilesExist(ctx, h.deps.Deps.FileRepo, *umc.Files, userID); err != nil {
+	if h.deps.Deps.FileUsecase == nil {
+		return nil // FileUsecase not configured, skip validation
+	}
+	if err := h.deps.Deps.FileUsecase.ValidateFilesExist(ctx, *umc.Files, userID); err != nil {
 		return &APIError{Code: ErrorCodeFileNotFound, Message: "One or more referenced files were not found"}
 	}
 	return nil

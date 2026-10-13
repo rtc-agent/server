@@ -376,6 +376,12 @@ func provideUsecaseDependencies(
 		svcCtx.ScriptExecutionRepo,
 	)
 
+	deps.FileUsecase = usecase.NewFileUsecase(svcCtx.FileRepo)
+
+	deps.LoopUsecase = usecase.NewLoopUsecase(svcCtx.LoopRepo, svcCtx.GoalRepo)
+
+	deps.RtcBatchResumeUsecase = usecase.NewRtcBatchResumeUsecase(svcCtx.Redis)
+
 	if chatModelResult2.model != nil {
 		deps.ChatModelFactory = server.NewChatModelFactory(cfg.LLM, metrics, logger.IsDebugMode())
 	}

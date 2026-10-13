@@ -57,6 +57,18 @@ type Dependencies struct {
 	// (Handler -> Usecase -> Repo).
 	RtcSessionUsecase *RtcSessionUsecase
 
+	// FileUsecase provides file-related operations for RPC handlers.
+	// This usecase wraps file repo operations to maintain proper layer separation.
+	FileUsecase *FileUsecase
+
+	// LoopUsecase provides loop-related operations for RPC handlers.
+	// This usecase wraps loop/goal repo operations to maintain proper layer separation.
+	LoopUsecase *LoopUsecase
+
+	// RtcBatchResumeUsecase provides batch resume operations for RPC handlers.
+	// This usecase wraps Redis operations for batch resume functionality.
+	RtcBatchResumeUsecase *RtcBatchResumeUsecase
+
 	// ChatModel is the eino ChatModel for LLM interactions.
 	// Deprecated: prefer ChatModelFactory for dynamic config support.
 	// Kept for backwards compatibility when factory is not available.
@@ -112,6 +124,11 @@ type Dependencies struct {
 	// WebFetchManager provides web page fetching capabilities.
 	// Optional: if nil, web fetch tool will not be available.
 	WebFetchManager *webfetch.WebFetchManager
+
+	// SessionChangePublisher publishes session-scoped changes atomically with
+	// a DB transaction. Handler/RPC code should prefer this over UpdatePublisher
+	// to avoid importing the updates package directly (preserves layering).
+	SessionChangePublisher SessionChangePublisher
 }
 
 // ChatModelFactoryInterface creates ChatModel instances with dynamic overrides.

@@ -7,8 +7,7 @@ import (
 	"time"
 
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/loop"
-	"github.com/rtc-agent/server/internal/updates"
+
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -74,13 +73,15 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 	// 1. Close the session and delete session memories.
 	// Session memories are transient (used for context compression within a session).
 	// Once the session is closed, they are no longer needed and should be cleaned up.
-	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
+	pushUpdates, err := h.runSessionAndPublish(ctx, func(txCtx context.Context) ([]usecase.SessionChangeItem, error) {
 		if err := primitives.UpdateSessionStatus(txCtx, h.deps.Deps, session.ID, protocol.SessionStatusClosed); err != nil {
 			return nil, h.internalError(txCtx, ErrorCodeCloseUpdateStatus, "failed to update session status", err)
 		}
 
 		// Record session close metric (normal close initiated by user)
 		h.deps.Metrics.RecordSessionClosed(txCtx, "normal")
+		// Reset EWMA gauge to prevent stale Prometheus labels
+		h.deps.Metrics.ResetEWMA(txCtx, session.ID.String())
 
 		// Delete session memories (soft delete; they have served their purpose for compression).
 		if err := h.deps.Deps.RtcSessionUsecase.DeleteMemoryByScope(txCtx, memory.ScopeSession, session.ID); err != nil {
@@ -92,7 +93,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 		return primitives.BuildSessionCloseUpdates(session), nil
 	})
 	if err != nil {
-		if errors.Is(err, updates.ErrPushAfterCommit) {
+		if errors.Is(err, usecase.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[CloseSession] push failed after commit (data safe)", zap.Error(err))
 		} else if apiErr, ok := err.(*APIError); ok {
 			return nil, apiErr
@@ -140,7 +141,7 @@ func (h *Handler) CloseSession(ctx context.Context, req *protocol.CloseSessionRe
 
 	return &protocol.CloseSessionResponse{
 		Result:  protocol.CloseSessionResult{Success: true},
-		Updates: updates.DerefUpdates(pushUpdates),
+		Updates: derefUpdatesPtr(pushUpdates),
 	}, nil
 }
 
@@ -155,5 +156,7 @@ func (h *Handler) stopActiveTurns(ctx context.Context, sessionID uuid.UUID) {
 
 	// 3. Cancel active loops and goals for the session.
 	// This ensures no orphaned asynq tasks remain after session close.
-	loop.CancelAllForSession(ctx, h.deps.Deps.LoopRepo, h.deps.Deps.GoalRepo, h.deps.AsynqInspector, sessionID)
+	if h.deps.Deps.LoopUsecase != nil {
+		h.deps.Deps.LoopUsecase.CancelOrphanedLoops(ctx, h.deps.AsynqInspector, sessionID)
+	}
 }
