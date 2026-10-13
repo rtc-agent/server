@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/internal/infra/contextx"
-	"github.com/rtc-agent/server/internal/updates"
+	appmodel "github.com/rtc-agent/server/internal/model"
+
 	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/internal/usecase/primitives"
 	"github.com/rtc-agent/server/pkg/logger"
@@ -118,11 +118,11 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 			zap.String("session", rtc.SessionID.String()), zap.Error(sessionLoadErr))
 	}
 
-	pushUpdates, err := h.deps.Deps.UpdatePublisher.RunAndPublish(ctx, func(txCtx context.Context) ([]updates.UpdatePublishItem, error) {
+	pushUpdates, err := h.runSessionAndPublish(ctx, func(txCtx context.Context) ([]usecase.SessionChangeItem, error) {
 		return h.updateRtcAndCreateOutput(txCtx, rtc, rtcUUID, targetStatus, resultJSON, req.Error, sessionBefore)
 	})
 	if err != nil {
-		if errors.Is(err, updates.ErrPushAfterCommit) {
+		if errors.Is(err, usecase.ErrPushAfterCommit) {
 			logger.Warn(ctx, "[SubmitRtcResult] push failed after commit (data safe)", zap.Error(err))
 		} else if apiErr, ok := err.(*APIError); ok {
 			return nil, apiErr
@@ -145,7 +145,7 @@ func (h *Handler) SubmitRtcResult(ctx context.Context, req *protocol.SubmitRtcRe
 
 	return &protocol.SubmitRtcResultResponse{
 		Result:  protocol.SubmitRtcResultResult{Success: true},
-		Updates: updates.DerefUpdates(pushUpdates),
+		Updates: derefUpdatesPtr(pushUpdates),
 	}, nil
 }
 
@@ -184,7 +184,7 @@ func (h *Handler) checkIdempotentSubmit(ctx context.Context, rtc *converter.Rtc,
 
 // updateRtcAndCreateOutput performs the transactional update: marks the RTC result,
 // creates the toolcall_output message, and builds update items for event publishing.
-func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *converter.Rtc, rtcUUID uuid.UUID, targetStatus protocol.RtcStatus, resultJSON *string, reqError *string, session *converter.Session) ([]updates.UpdatePublishItem, error) {
+func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *converter.Rtc, rtcUUID uuid.UUID, targetStatus protocol.RtcStatus, resultJSON *string, reqError *string, session *converter.Session) ([]usecase.SessionChangeItem, error) {
 	if err := primitives.UpdateRtcResult(txCtx, h.deps.Deps, rtcUUID, targetStatus, resultJSON, converter.DerefStr(reqError)); err != nil {
 		return nil, h.internalError(txCtx, ErrorCodeSubmitUpdateRtcResult, "failed to update rtc result", err)
 	}
@@ -210,12 +210,13 @@ func (h *Handler) updateRtcAndCreateOutput(txCtx context.Context, rtc *converter
 		// Previously, DB stored raw JSON while ReAct resume returned formatted text,
 		// causing tool_result content inconsistency and cache invalidation.
 		if rtc.ToolName == "askUser" {
-			tempRtc := &converter.Rtc{
+			// Create a temporary model.Rtc for the formatter
+			tempModelRtc := &appmodel.Rtc{
 				ToolName: rtc.ToolName,
-				Result:   converter.JSONBString(*resultJSON),
+				Result:   appmodel.JSONBString(*resultJSON),
 				Status:   string(targetStatus),
 			}
-			toolOutput = agent.FormatAskUserResult(tempRtc)
+			toolOutput = usecase.FormatAskUserResultForHandler(tempModelRtc)
 		} else {
 			toolOutput = *resultJSON
 		}

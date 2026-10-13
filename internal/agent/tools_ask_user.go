@@ -9,8 +9,15 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/rtc-agent/server/internal/model"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/protocol"
 )
+
+func init() {
+	// Register FormatAskUserResult with usecase layer to avoid circular dependencies.
+	// Handler layer calls usecase.FormatAskUserResultForHandler which delegates to this function.
+	usecase.FormatAskUserResultFunc = FormatAskUserResult
+}
 
 // askUserTool implements Claude Code's AskUserQuestion tool semantics over RTC.
 //

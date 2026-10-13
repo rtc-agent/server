@@ -62,21 +62,84 @@ linters:
 
     # =============================================================================
     # Architecture Guard: 分层架构守护规则
-    # 确保 Handler 不直接访问 Repo（数据访问层）
-    # Handler 可以访问 Agent/Loop（领域服务层）
+    # 确保依赖方向单向: Handler -> Usecase -> Repo
+    # Handler 禁止直接访问 Repo / DB / Redis / updates / svc
     # =============================================================================
     depguard:
       rules:
-        # 规则: Handler 层不能直接导入 Repo（数据访问层）
-        # Repo 应该通过 Usecase 或领域服务访问
+        # 规则 1: Handler 层不能直接导入 Repo（数据访问层）
+        # Repo 应该通过 Usecase 或领域服务层访问
         # 测试文件除外（测试需要 mock repo 是正常需求）
         handler-no-repo:
           files:
             - "**/internal/handler/**/*.go"
-            - "!**/*_test.go"  # 排除测试文件
+            - "!**/*_test.go"
           deny:
             - pkg: "github.com/rtc-agent/server/internal/repo"
               desc: "Handler 层不能直接访问 Repo，请通过 Usecase 或领域服务层调用"
+
+        # 规则 1.5: Handler 层不能直接导入 Agent（业务逻辑层）
+        # Agent 包的函数应通过 Usecase 层的 adapter 函数访问
+        # 测试文件除外（测试需要直接调用 agent 函数是正常需求）
+        handler-no-agent:
+          files:
+            - "**/internal/handler/**/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/rtc-agent/server/internal/agent"
+              desc: "Handler 层不能直接访问 Agent，请通过 Usecase 层的 adapter 函数调用"
+
+        # 规则 2: Handler 层不能直接使用 *gorm.DB（基础设施层）
+        # DB 读写应封装在 Repo/Usecase 中；health/readiness 通过 HealthChecker usecase 访问
+        handler-no-gorm:
+          files:
+            - "**/internal/handler/**/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "gorm.io/gorm"
+              desc: "Handler 层不能直接依赖 *gorm.DB，请通过 Usecase（如 HealthChecker）访问"
+
+        # 规则 3: Handler 层不能直接使用 Redis 客户端（基础设施层）
+        # Redis 操作应封装在 Usecase 或 infra/cache 中
+        handler-no-redis:
+          files:
+            - "**/internal/handler/**/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/redis/go-redis"
+              desc: "Handler 层不能直接依赖 Redis 客户端，请通过 Usecase 或 infra/cache 调用"
+
+        # 规则 4: Handler 层不能直接使用 updates 包（事务性发布编排）
+        # RunAndPublish 的 DB 事务编排应在 Usecase 层完成
+        handler-no-updates:
+          files:
+            - "**/internal/handler/**/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/rtc-agent/server/internal/updates"
+              desc: "Handler 层不能直接使用 updates.UpdatePublisher，请将事务编排下沉到 Usecase"
+
+        # 规则 5: Repo 层不能反向依赖 Usecase / Handler / svc（保持数据访问层纯粹）
+        repo-no-upward:
+          files:
+            - "**/internal/repo/**/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/rtc-agent/server/internal/usecase"
+              desc: "Repo 层不能向上依赖 Usecase"
+            - pkg: "github.com/rtc-agent/server/internal/handler"
+              desc: "Repo 层不能向上依赖 Handler"
+            - pkg: "github.com/rtc-agent/server/internal/svc"
+              desc: "Repo 层不能向上依赖 svc"
+
+        # 规则 6: pkg/ 公共包不能导入 internal/（保证可独立发布）
+        pkg-no-internal:
+          files:
+            - "**/pkg/**/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/rtc-agent/server/internal"
+              desc: "pkg/ 公共包不能导入 internal/，会破坏包的独立发布性"
 
   exclusions:
     rules:

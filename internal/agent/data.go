@@ -15,6 +15,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/rtc-agent/server/internal/agent/command"
+	"github.com/rtc-agent/server/internal/usecase"
 	"github.com/rtc-agent/server/pkg/protocol"
 	turnagent "github.com/rtc-agent/server/pkg/turn-agent"
 )
@@ -293,7 +294,13 @@ func (l *toolCallLogger) InvokableRun(ctx context.Context, argumentsInJSON strin
 
 	toolName := l.toolName(ctx)
 
+	// Record metrics: start time for duration measurement
+	startTime := time.Now()
+
 	result, err := invokable.InvokableRun(ctx, argumentsInJSON, opts...)
+
+	// Record metrics: duration and status
+	duration := time.Since(startTime)
 	if err != nil {
 		l.helpers.logger.Warn(ctx, "tool.call_failed", map[string]any{
 			"tool_name":  toolName,
@@ -301,7 +308,11 @@ func (l *toolCallLogger) InvokableRun(ctx context.Context, argumentsInJSON strin
 			"turn_id":    l.turnID.String(),
 			"error":      err.Error(),
 		})
+		recordToolCallFailure(toolName, duration)
+	} else {
+		recordToolCallSuccess(toolName, duration)
 	}
+
 	return result, err
 }
 
@@ -531,7 +542,7 @@ func (h *helpers) resolveChatModel(ctx context.Context) (einomodel.ToolCallingCh
 		}
 	}
 
-	overrides, err := resolveOverrides(ctx, h.deps.ConfigProvider, userIDPtr)
+	overrides, err := usecase.ResolveOverrides(ctx, h.deps.ConfigProvider, userIDPtr)
 	if err != nil {
 		return nil, fmt.Errorf("resolve config overrides: %w", err)
 	}

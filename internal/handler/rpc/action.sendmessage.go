@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v5"
-	"github.com/rtc-agent/server/internal/agent"
 	"github.com/rtc-agent/server/internal/converter"
 	"github.com/rtc-agent/server/internal/infra/contextx"
 
@@ -73,8 +72,8 @@ func (h *Handler) summarizeTitleAsync(ctx context.Context, session *converter.Se
 		return // RtcSessionUsecase not configured, skip title summarization
 	}
 	// Use dynamic config for title summarization when available.
-	chatModel := agent.ResolveChatModel(ctx, h.deps.Deps)
-	summarizer := agent.NewSessionTitleSummarizer(
+	chatModel := usecase.ResolveChatModelForHandler(ctx, h.deps.Deps)
+	summarizer := usecase.NewSessionTitleSummarizerForHandler(
 		chatModel,
 		h.deps.Deps.RtcSessionUsecase,
 		h.deps.Deps.ConfigProvider,

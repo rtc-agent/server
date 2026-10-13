@@ -26,6 +26,27 @@ import (
 	"go.uber.org/zap"
 )
 
+func init() {
+	// Register NewSessionTitleSummarizer with usecase layer to avoid circular dependencies.
+	// Handler layer calls usecase.NewSessionTitleSummarizerForHandler which delegates to this function.
+	usecase.NewSessionTitleSummarizerFunc = func(
+		chatModel einomodel.ToolCallingChatModel,
+		sessionUsecase *usecase.RtcSessionUsecase,
+		configProvider config.ConfigProvider,
+		llmProviderFallback string,
+		tokenCallbackHandler interface{},
+	) usecase.SessionTitleSummarizerInterface {
+		// Convert interface{} to callbacks.Handler
+		var handler callbacks.Handler
+		if tokenCallbackHandler != nil {
+			if h, ok := tokenCallbackHandler.(callbacks.Handler); ok {
+				handler = h
+			}
+		}
+		return NewSessionTitleSummarizer(chatModel, sessionUsecase, configProvider, llmProviderFallback, handler)
+	}
+}
+
 //go:embed prompts/session-title-summarize.md
 var sessionTitleSummarizePrompt string
 

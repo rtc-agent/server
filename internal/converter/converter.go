@@ -46,11 +46,13 @@ func DerefStr(s *string) string { return model.DerefStr(s) }
 // Protocol conversion functions (re-exported from model)
 // ============================================================
 //
-// TODO: Move protocol conversion to usecase layer.
+// TODO(P2): Move protocol conversion to usecase layer.
+// Priority: P2 - Planned for Q1 2026 architectural cleanup.
 // Currently using converter package as an adapter to maintain proper layer separation
 // (Handler -> Usecase -> Repo). Future: usecase methods should return protocol types
 // directly, eliminating the need for this adapter layer. This would require creating
 // corresponding protocol return types for each usecase method.
+// Tracking: Consider batching this refactor with other usecase layer enhancements.
 
 // ToProtocolSession converts a domain Session to a protocol Session.
 func ToProtocolSession(m *Session) protocol.Session { return model.ToProtocolSession(m) }
