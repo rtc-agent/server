@@ -320,10 +320,7 @@ func (a *Agent) pushOrReplace(
 		isNew = true
 	}
 
-	pushed, pushErr := replacedMgr.Loop().Push(workItem)
-	if pushErr != nil {
-		return nil, false, fmt.Errorf("turnagent: push after replacement: %v", pushErr)
-	}
+	pushed, _ = replacedMgr.Loop().Push(workItem)
 	if !pushed {
 		return nil, false, fmt.Errorf("turnagent: failed to push work item after replacement")
 	}
