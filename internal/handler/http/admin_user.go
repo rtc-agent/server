@@ -139,7 +139,7 @@ func (h *AdminUserHandler) ListUsers(c *gin.Context) {
 
 // CreateUser creates a new admin user.
 func (h *AdminUserHandler) CreateUser(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req CreateAdminUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
@@ -201,7 +201,7 @@ func (h *AdminUserHandler) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req UpdateAdminUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
@@ -253,7 +253,7 @@ func (h *AdminUserHandler) UpdateCurrentUser(c *gin.Context) {
 		return
 	}
 
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req UpdateAdminUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))

@@ -11,7 +11,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/rtc-agent/server/internal/infra/auth"
 	"github.com/rtc-agent/server/internal/usecase"
@@ -24,24 +23,26 @@ type AdminAuthHandler struct {
 	adminUserUsecase        *usecase.AdminUserUsecase
 	emailOTPUsecase         *usecase.EmailOTPUsecase // optional, nil if email not configured
 	jwtSigner               *auth.AdminJWTSigner
-	db                      *gorm.DB
+	healthChecker           *usecase.HealthChecker // used by /health; avoids raw *gorm.DB in handler
 	permissionSystemEnabled bool
 	passwordEnabled         bool
 	cookieSecure            bool
 }
 
 // NewAdminAuthHandler creates a new AdminAuthHandler.
+// The healthChecker is used by the /health endpoint to verify DB reachability
+// without exposing *gorm.DB to the handler layer.
 func NewAdminAuthHandler(
 	adminAuthUsecase *usecase.AdminAuthUsecase,
 	adminUserUsecase *usecase.AdminUserUsecase,
 	jwtSigner *auth.AdminJWTSigner,
-	db *gorm.DB,
+	healthChecker *usecase.HealthChecker,
 ) *AdminAuthHandler {
 	return &AdminAuthHandler{
 		adminAuthUsecase: adminAuthUsecase,
 		adminUserUsecase: adminUserUsecase,
 		jwtSigner:        jwtSigner,
-		db:               db,
+		healthChecker:    healthChecker,
 	}
 }
 
@@ -105,9 +106,9 @@ func (h *AdminAuthHandler) GetLoginConfig(c *gin.Context) {
 	})
 }
 
-// maxAdminRequestBodySize is the maximum allowed size for admin auth request bodies.
+// maxRequestBodySize is the maximum allowed size for request bodies.
 // Prevents malicious clients from sending oversized payloads that could exhaust memory.
-const maxAdminRequestBodySize = 1 << 20 // 1MB
+const maxRequestBodySize = 1 << 20 // 1MB
 
 // sanitizeBindingError converts a Gin binding error into a safe, user-facing message.
 // Internal struct field names (e.g. "LoginRequest.Password") are intentionally omitted
@@ -128,7 +129,7 @@ func sanitizeBindingError(err error) string {
 
 // Login handles POST /api/auth/login
 func (h *AdminAuthHandler) Login(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "invalid_request", sanitizeBindingError(err))
@@ -247,7 +248,7 @@ func (h *AdminAuthHandler) GetCurrentUser(c *gin.Context) {
 
 // RefreshToken handles POST /api/auth/refresh
 func (h *AdminAuthHandler) RefreshToken(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req RefreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "invalid_request", sanitizeBindingError(err))
@@ -287,7 +288,7 @@ func (h *AdminAuthHandler) RefreshToken(c *gin.Context) {
 
 // Logout handles POST /api/auth/logout
 func (h *AdminAuthHandler) Logout(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req LogoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "invalid_request", sanitizeBindingError(err))
@@ -334,20 +335,12 @@ func (h *AdminAuthHandler) JWKS(c *gin.Context) {
 // usual HTTP 200 + error code pattern. This is intentional: health endpoints are consumed
 // by infrastructure monitoring systems (Kubernetes liveness/readiness probes, load balancers,
 // Prometheus exporters) that rely on standard HTTP status codes to determine service health.
+//
+// Layering: The actual DB ping is delegated to the usecase.HealthChecker so the handler
+// does not hold a raw *gorm.DB reference (see health.go).
 func (h *AdminAuthHandler) Health(c *gin.Context) {
-	// Check database connectivity via a lightweight query.
-	sqlDB, err := h.db.DB()
-	if err != nil {
-		logger.Error(c.Request.Context(), "admin_auth.health_db_unavailable", zap.Error(err))
-		c.JSON(http.StatusServiceUnavailable, ResponseStructure{
-			Success:      false,
-			ErrorCode:    "database_unavailable",
-			ErrorMessage: "Database unavailable",
-		})
-		return
-	}
-	if err := sqlDB.Ping(); err != nil {
-		logger.Error(c.Request.Context(), "admin_auth.health_ping_failed", zap.Error(err))
+	if h.healthChecker == nil || !h.healthChecker.DatabaseReachable(c.Request.Context()) {
+		logger.Error(c.Request.Context(), "admin_auth.health_db_unavailable")
 		c.JSON(http.StatusServiceUnavailable, ResponseStructure{
 			Success:      false,
 			ErrorCode:    "database_unavailable",
@@ -400,6 +393,12 @@ func (h *AdminAuthHandler) JWTAuthMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+
+		// NOTE: Admin JWT does not require device_id validation.
+		// Unlike user tokens, admin tokens are not bound to specific devices.
+		// Admin operations are performed by human administrators who may access
+		// the system from multiple devices. Device binding would impede operational
+		// flexibility without providing meaningful security benefits for admin accounts.
 
 		// Store user info in context for handlers
 		c.Set("user_id", claims.UserID.String())

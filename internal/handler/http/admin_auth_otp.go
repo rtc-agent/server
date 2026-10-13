@@ -14,7 +14,7 @@ import (
 
 // SendOTP handles POST /api/auth/otp/send
 func (h *AdminAuthHandler) SendOTP(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req SendOTPRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "invalid_request", sanitizeBindingError(err))
@@ -55,7 +55,7 @@ func (h *AdminAuthHandler) SendOTP(c *gin.Context) {
 
 // LoginWithOTP handles POST /api/auth/login/otp
 func (h *AdminAuthHandler) LoginWithOTP(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req OTPLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "invalid_request", sanitizeBindingError(err))

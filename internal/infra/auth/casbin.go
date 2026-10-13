@@ -21,7 +21,7 @@ import (
 //   - g = user-role grouping (g, userID, roleID)
 //   - Role inheritance via g() matcher function
 //
-// TODO(security): Multi-tenant support
+// SECURITY LIMITATION: Multi-tenant isolation not supported
 //
 //	For multi-tenant deployments, this model MUST be extended to include domain/tenant
 //	isolation to prevent cross-tenant permission leakage. Required changes:
@@ -34,6 +34,9 @@ import (
 //	7. Consider using Casbin's built-in domain support: https://casbin.org/docs/rbac-with-domains/
 //	Without this, all tenants share the same permission namespace, which is a critical
 //	security risk in multi-tenant deployments.
+//
+// TODO(security): Implement multi-tenant support before production multi-tenant deployment.
+// Current status: Single-tenant deployment only. All users/roles share the same permission namespace.
 const CasbinModelText = `
 [request_definition]
 r = sub, obj, act

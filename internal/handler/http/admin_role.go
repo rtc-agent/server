@@ -131,7 +131,7 @@ func (h *AdminRoleHandler) Get(c *gin.Context) {
 
 // Create creates a new role.
 func (h *AdminRoleHandler) Create(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req CreateRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
@@ -198,7 +198,7 @@ func (h *AdminRoleHandler) Update(c *gin.Context) {
 		return
 	}
 
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req UpdateRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))

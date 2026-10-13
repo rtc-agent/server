@@ -145,7 +145,7 @@ func (h *TokenExchangeHandler) HandleTokenExchange(w http.ResponseWriter, r *htt
 
 // parseRequest parses the Token Exchange request from JSON or form-encoded body.
 func (h *TokenExchangeHandler) parseRequest(w http.ResponseWriter, r *http.Request) (*tokenExchangeRequest, error) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestBodySize)
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 	var req tokenExchangeRequest
 
 	contentType := r.Header.Get("Content-Type")

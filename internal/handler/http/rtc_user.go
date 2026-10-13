@@ -187,7 +187,7 @@ func (h *RtcUserHandler) BanUser(c *gin.Context) {
 		return
 	}
 
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var input BanUserInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		Error(c, "invalid_param", "reason is required")

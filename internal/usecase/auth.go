@@ -248,11 +248,19 @@ func (uc *AuthUsecase) validateRefreshTokenInTx(ctx context.Context, plainToken 
 			timeSinceRevocation = time.Since(*rt.RevokedAt)
 			isWithinGracePeriod = timeSinceRevocation <= uc.refreshTokenReuseGracePeriod
 		} else {
-			// RevokedAt is nil for tokens revoked before this field was added.
-			// Fall back to checking token age (CreatedAt) as a heuristic.
-			// If token was created very recently, it's likely a concurrent refresh.
+			// RevokedAt is nil for tokens revoked before this field was added (legacy data).
+			// Fall back to checking token age (CreatedAt) as a heuristic for concurrent refresh detection.
+			//
+			// Legacy data compatibility: Use a more lenient threshold (7 days) to account for
+			// tokens that may have been revoked long ago but lack the RevokedAt field.
+			// This heuristic assumes tokens older than 7 days are unlikely to be legitimate
+			// concurrent refresh attempts.
+			//
+			// TODO(security): Remove this legacy compatibility logic in v2.0 after all pre-RevokedAt
+			// tokens have expired or been migrated. Target removal date: Q2 2026.
 			tokenAge := time.Since(rt.CreatedAt)
-			isWithinGracePeriod = tokenAge <= uc.refreshTokenReuseGracePeriod
+			const legacyTokenThreshold = 7 * 24 * time.Hour // 7 days for legacy tokens
+			isWithinGracePeriod = tokenAge <= legacyTokenThreshold
 			timeSinceRevocation = tokenAge // Approximate
 		}
 

@@ -71,7 +71,7 @@ func (h *UserConfigHandler) Update(c *gin.Context) {
 		return
 	}
 	key := c.Param("key")
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req updateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
@@ -162,7 +162,7 @@ func (h *UserConfigHandler) Rollback(c *gin.Context) {
 		return
 	}
 	key := c.Param("key")
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req rollbackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))

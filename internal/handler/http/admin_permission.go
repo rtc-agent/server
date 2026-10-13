@@ -100,7 +100,7 @@ func (h *PermissionHandler) List(c *gin.Context) {
 
 // Create adds a new permission policy.
 func (h *PermissionHandler) Create(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req CreatePermissionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
@@ -166,7 +166,7 @@ func (h *PermissionHandler) Delete(c *gin.Context) {
 
 // Check checks whether a user has a specific permission.
 func (h *PermissionHandler) Check(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req CheckPermissionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))

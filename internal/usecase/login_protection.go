@@ -185,10 +185,18 @@ func (lp *LoginProtection) cleanupLoop() {
 	}
 }
 
-// formatDuration formats a duration for human-readable display.
+// formatDuration formats a duration for human-readable display in English.
 func formatDuration(d time.Duration) string {
 	if d >= time.Minute {
-		return fmt.Sprintf("%d 分钟", int(d.Minutes()+0.5))
+		minutes := int(d.Minutes() + 0.5)
+		if minutes == 1 {
+			return "1 minute"
+		}
+		return fmt.Sprintf("%d minutes", minutes)
 	}
-	return fmt.Sprintf("%d 秒", int(d.Seconds()+0.5))
+	seconds := int(d.Seconds() + 0.5)
+	if seconds == 1 {
+		return "1 second"
+	}
+	return fmt.Sprintf("%d seconds", seconds)
 }

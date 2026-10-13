@@ -45,6 +45,13 @@ var (
 //
 // The limiter uses an in-memory token bucket algorithm with automatic cleanup of
 // stale entries to prevent memory growth.
+//
+// LIMITATION: In-memory rate limiting does not scale across multiple instances.
+//
+//	TODO(production): For multi-instance deployments, replace with Redis-based distributed
+//	rate limiting to ensure rate limits are shared across all server instances. Without this,
+//	an attacker can bypass rate limits by distributing requests across multiple instances.
+//	Consider using Redis INCR + EXPIRE for atomic counter operations with automatic expiration.
 type AuthFailureLimiter struct {
 	limiters       sync.Map // map[string]*authLimiterEntry
 	r              rate.Limit

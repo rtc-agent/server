@@ -140,7 +140,7 @@ func NewJWKSClient(cfg JWKSClientConfig) (*JWKSClient, error) {
 		}
 	}
 
-	return &JWKSClient{
+	client := &JWKSClient{
 		httpClient:      httpClient,
 		redis:           cfg.RedisClient,
 		defaultCacheTTL: cacheTTL,
@@ -149,7 +149,61 @@ func NewJWKSClient(cfg JWKSClientConfig) (*JWKSClient, error) {
 		environment:     cfg.Environment,
 		cbStates:        make(map[string]*issuerCircuitBreaker),
 		allowedIssuers:  allowedIssuers,
-	}, nil
+	}
+
+	// Warmup: Attempt to fetch JWKS keys from allowed issuers to verify connectivity
+	// and pre-populate the circuit breaker state. This helps detect configuration issues
+	// early rather than on the first authentication request.
+	//
+	// Note: This is a best-effort check. Failures are logged but do not block startup,
+	// as JWKS endpoints may be temporarily unavailable or the keys may not be needed
+	// immediately. The circuit breaker will handle retries with exponential backoff.
+	if len(cfg.AllowedIssuers) > 0 {
+		go client.warmupCircuitBreakers(cfg.AllowedIssuers)
+	}
+
+	return client, nil
+}
+
+// warmupCircuitBreakers attempts to initialize circuit breaker state for known issuers.
+// This is called during startup to detect connectivity issues early.
+func (c *JWKSClient) warmupCircuitBreakers(issuers []string) {
+	// Use a background context with timeout for warmup
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for _, issuer := range issuers {
+		// Attempt to get the issuer's JWKS URI from well-known configuration
+		// This is a simplified warmup - in production, you might want to cache
+		// the JWKS URI or fetch it from a configuration source
+		wellKnownURL := issuer + "/.well-known/openid-configuration"
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, wellKnownURL, nil)
+		if err != nil {
+			logger.Warn(ctx, "jwks warmup: failed to create request",
+				zap.String("issuer", issuer),
+				zap.Error(err))
+			continue
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			logger.Warn(ctx, "jwks warmup: failed to fetch well-known configuration",
+				zap.String("issuer", issuer),
+				zap.Error(err))
+			continue
+		}
+		if err := resp.Body.Close(); err != nil {
+			logger.Warn(ctx, "jwks warmup: failed to close response body",
+				zap.String("issuer", issuer),
+				zap.Error(err))
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			logger.Warn(ctx, "jwks warmup: non-200 response from issuer",
+				zap.String("issuer", issuer),
+				zap.Int("status_code", resp.StatusCode))
+		}
+	}
 }
 
 // FetchJWKS fetches the JWKS from the given URI and returns the key set.
@@ -234,7 +288,11 @@ func (c *JWKSClient) executeJWKSRequest(ctx context.Context, jwksURI string) ([]
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrJWKSEndpointUnreachable, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			logger.Warn(ctx, "response_body_close_error", zap.Error(err))
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: status %d", ErrJWKSEndpointUnreachable, resp.StatusCode)

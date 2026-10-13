@@ -71,7 +71,7 @@ type updateConfigRequest struct {
 // Update updates a system config value.
 func (h *ServerConfigHandler) Update(c *gin.Context) {
 	key := c.Param("key")
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req updateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
@@ -156,7 +156,7 @@ type rollbackRequest struct {
 // Rollback rolls back a config to a historical version.
 func (h *ServerConfigHandler) Rollback(c *gin.Context) {
 	key := c.Param("key")
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAdminRequestBodySize)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodySize)
 	var req rollbackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Error(c, "validation_error", sanitizeBindingError(err))
