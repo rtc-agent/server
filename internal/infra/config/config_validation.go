@@ -82,7 +82,8 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate token exchange configuration (only when external issuers are configured).
-	if err := c.TokenExchange.Validate(); err != nil {
+	// Pass server environment so production deployments can enforce audience validation.
+	if err := c.TokenExchange.Validate(c.Server.Env); err != nil {
 		return err
 	}
 
@@ -290,7 +291,10 @@ func (c *Config) validateCORS() error {
 // Validate checks TokenExchangeConfig fields.
 // Each external issuer must have a valid name, issuer, and JWKS URI.
 // JWKS URIs must use HTTPS in production to prevent cache poisoning.
-func (c *TokenExchangeConfig) Validate() error {
+// SECURITY: In production, ExpectedAudience must be configured for each issuer to prevent
+// cross-service token misuse — a JWT intended for another service could otherwise be
+// exchanged for an RTC token.
+func (c *TokenExchangeConfig) Validate(serverEnv string) error {
 	for i, iss := range c.ExternalIssuers {
 		if iss.Name == "" {
 			return fmt.Errorf("token_exchange.external_issuers[%d].name is required", i)
@@ -319,6 +323,14 @@ func (c *TokenExchangeConfig) Validate() error {
 			if !isLocal && !hasNoDots {
 				return fmt.Errorf("token_exchange.external_issuers[%d].jwks_uri must use HTTPS for external hosts, got %q", i, u.Scheme)
 			}
+		}
+		// SECURITY: Enforce audience configuration in production.
+		// Without ExpectedAudience, any JWT from this issuer (even one minted for a different
+		// service) can be exchanged for an RTC token — a classic confused deputy attack.
+		// The runtime check in usecase.validateAudienceConfiguration provides defense-in-depth,
+		// but startup validation catches misconfigurations before traffic is served.
+		if serverEnv == "production" && iss.ExpectedAudience == "" {
+			return fmt.Errorf("token_exchange.external_issuers[%d].expected_audience is required in production environment (issuer %q): set it to restrict which JWTs can be exchanged", i, iss.Issuer)
 		}
 	}
 	return nil

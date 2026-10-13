@@ -259,6 +259,7 @@ func TestTokenExchangeConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name            string
 		config          TokenExchangeConfig
+		serverEnv       string
 		wantErr         bool
 		wantErrContains string
 	}{
@@ -277,6 +278,7 @@ func TestTokenExchangeConfig_Validate(t *testing.T) {
 					},
 				},
 			},
+			serverEnv: "development",
 		},
 		{
 			name: "missing issuer name",
@@ -331,11 +333,56 @@ func TestTokenExchangeConfig_Validate(t *testing.T) {
 			wantErr:         true,
 			wantErrContains: "must use HTTPS",
 		},
+		{
+			name: "production requires expected_audience",
+			config: TokenExchangeConfig{
+				ExternalIssuers: []ExternalIssuerConfig{
+					{
+						Name:    "google",
+						Issuer:  "https://accounts.google.com",
+						JWKSURI: "https://www.googleapis.com/oauth2/v3/certs",
+						// ExpectedAudience intentionally empty
+					},
+				},
+			},
+			serverEnv:       "production",
+			wantErr:         true,
+			wantErrContains: "expected_audience is required in production",
+		},
+		{
+			name: "production with expected_audience is valid",
+			config: TokenExchangeConfig{
+				ExternalIssuers: []ExternalIssuerConfig{
+					{
+						Name:             "google",
+						Issuer:           "https://accounts.google.com",
+						JWKSURI:          "https://www.googleapis.com/oauth2/v3/certs",
+						ExpectedAudience: "my-rtc-app-client-id",
+					},
+				},
+			},
+			serverEnv: "production",
+			wantErr:   false,
+		},
+		{
+			name: "development without expected_audience is valid",
+			config: TokenExchangeConfig{
+				ExternalIssuers: []ExternalIssuerConfig{
+					{
+						Name:    "google",
+						Issuer:  "https://accounts.google.com",
+						JWKSURI: "https://www.googleapis.com/oauth2/v3/certs",
+					},
+				},
+			},
+			serverEnv: "development",
+			wantErr:   false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
+			err := tt.config.Validate(tt.serverEnv)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")

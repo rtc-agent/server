@@ -63,6 +63,18 @@ func NewTokenExchangeUsecase(
 	issuerMap := make(map[string]*config.ExternalIssuerConfig, len(cfg.ExternalIssuers))
 	for i := range cfg.ExternalIssuers {
 		issuerMap[cfg.ExternalIssuers[i].Issuer] = &cfg.ExternalIssuers[i]
+		// Startup warning: log issuers missing expected_audience in non-production environments.
+		// In production, this is already blocked at startup by config.TokenExchangeConfig.Validate,
+		// so reaching here without ExpectedAudience implies a non-production environment.
+		// The per-request warning in validateAudienceConfiguration provides defense-in-depth.
+		if cfg.ExternalIssuers[i].ExpectedAudience == "" && serverEnv != "production" {
+			logger.Warn(context.Background(), "token_exchange.expected_audience_not_configured",
+				zap.String("issuer", cfg.ExternalIssuers[i].Issuer),
+				zap.String("provider", cfg.ExternalIssuers[i].Name),
+				zap.String("server_env", serverEnv),
+				zap.String("warning", "audience validation disabled; configure expected_audience in production to prevent cross-service token misuse"),
+			)
+		}
 	}
 	return &TokenExchangeUsecase{
 		oauth2UserRepo: oauth2UserRepo,
@@ -400,16 +412,15 @@ func validateNBFClaim(claims jwt.MapClaims) error {
 }
 
 // validateAudienceClaim validates the audience (aud) claim against the expected audience.
-// SECURITY: When ExpectedAudience is not configured, logs a critical warning in production.
+// SECURITY: When ExpectedAudience is not configured, returns an error in production environments.
 func (uc *TokenExchangeUsecase) validateAudienceClaim(
 	ctx context.Context,
 	claims jwt.MapClaims,
 	issuerCfg *config.ExternalIssuerConfig,
 ) error {
 	if issuerCfg.ExpectedAudience == "" {
-		// SECURITY: Log when audience validation is skipped.
-		uc.logAudienceValidationDisabled(ctx, issuerCfg)
-		return nil
+		// SECURITY: Validate audience configuration based on environment.
+		return uc.validateAudienceConfiguration(ctx, issuerCfg)
 	}
 
 	aud, _ := claims["aud"].([]interface{})
@@ -426,30 +437,31 @@ func (uc *TokenExchangeUsecase) validateAudienceClaim(
 	return fmt.Errorf("jwt aud claim does not match expected audience")
 }
 
-// logAudienceValidationDisabled logs a warning or error when audience validation is disabled.
-// In production, this is a critical security misconfiguration.
-func (uc *TokenExchangeUsecase) logAudienceValidationDisabled(
+// validateAudienceConfiguration checks if audience validation is properly configured.
+// In production, missing ExpectedAudience is a critical security misconfiguration.
+func (uc *TokenExchangeUsecase) validateAudienceConfiguration(
 	ctx context.Context,
 	issuerCfg *config.ExternalIssuerConfig,
-) {
+) error {
 	if uc.serverEnv == "production" {
-		// SECURITY: In production, log an error when audience validation is skipped.
+		// SECURITY: In production, reject requests when audience validation is disabled.
 		// This is a critical security misconfiguration that allows any JWT from this issuer
 		// to be exchanged, even if it was intended for a different service.
-		// Operators should configure expected_audience immediately.
 		logger.Error(ctx, "token_exchange.audience_validation_disabled",
 			zap.String("issuer", issuerCfg.Issuer),
 			zap.String("severity", "CRITICAL"),
 			zap.String("reason", "expected_audience_not_configured"),
 			zap.String("risk", "any JWT from this issuer can be exchanged, even if intended for other services"),
 			zap.String("remediation", "configure expected_audience in token_exchange config to restrict which JWTs can be exchanged"))
-	} else {
-		// In non-production environments, log as warning for awareness
-		logger.Warn(ctx, "token_exchange.audience_validation_skipped",
-			zap.String("issuer", issuerCfg.Issuer),
-			zap.String("reason", "expected_audience_not_configured"),
-			zap.String("warning", "audience validation is disabled; configure expected_audience in production"))
+		return fmt.Errorf("audience validation disabled in production: expected_audience must be configured for issuer %s", issuerCfg.Issuer)
 	}
+
+	// In non-production environments, log as warning for awareness
+	logger.Warn(ctx, "token_exchange.audience_validation_skipped",
+		zap.String("issuer", issuerCfg.Issuer),
+		zap.String("reason", "expected_audience_not_configured"),
+		zap.String("warning", "audience validation is disabled; configure expected_audience in production"))
+	return nil
 }
 
 // extractedUserInfo holds user info extracted from JWT claims.
