@@ -807,11 +807,18 @@ func provideOAuth2Handler(
 	handler := httphandler.NewOAuth2Handler(authUC, jwtSigner, stateStore, providerClient, cfg.Auth, cfg.Server.Env)
 
 	if len(cfg.TokenExchange.ExternalIssuers) > 0 {
+		// Build allowed issuers list from config for JWKS client whitelist.
+		allowedIssuers := make([]string, 0, len(cfg.TokenExchange.ExternalIssuers))
+		for _, issuer := range cfg.TokenExchange.ExternalIssuers {
+			allowedIssuers = append(allowedIssuers, issuer.Issuer)
+		}
+
 		jwksClient, err := auth.NewJWKSClient(auth.JWKSClientConfig{
 			RedisClient:     svcCtx.Redis,
 			DefaultCacheTTL: time.Hour,
 			LockTTL:         10 * time.Second,
 			Environment:     cfg.Server.Env,
+			AllowedIssuers:  allowedIssuers,
 		})
 		if err != nil {
 			logger.Fatal(context.Background(), "init JWKS client", zap.Error(err))

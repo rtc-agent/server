@@ -233,6 +233,107 @@ func TestJWKSClient_NilRedisReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "redis client is required")
 }
 
+func TestJWKSClient_AllowedIssuers_GetKey(t *testing.T) {
+	set := generateRSAJWKS(t, "test-key-1")
+	jwksJSON, err := json.Marshal(set)
+	require.NoError(t, err)
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(jwksJSON)
+	}))
+	defer srv.Close()
+
+	rdb := newTestRedisClient(t)
+	client, err := auth.NewJWKSClient(auth.JWKSClientConfig{
+		RedisClient:     rdb,
+		HTTPClient:      srv.Client(),
+		DefaultCacheTTL: time.Minute,
+		AllowedIssuers:  []string{"https://allowed.example.com"},
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Test 1: Allowed issuer should succeed.
+	key, err := client.GetKey(ctx, "https://allowed.example.com", srv.URL, "test-key-1")
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+
+	// Test 2: Disallowed issuer should fail.
+	_, err = client.GetKey(ctx, "https://malicious.example.com", srv.URL, "test-key-1")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, auth.ErrJWKSUnauthorizedIssuer)
+	assert.Contains(t, err.Error(), "not in the allowed list")
+}
+
+func TestJWKSClient_AllowedIssuers_RefreshKey(t *testing.T) {
+	set := generateRSAJWKS(t, "test-key-2")
+	jwksJSON, err := json.Marshal(set)
+	require.NoError(t, err)
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(jwksJSON)
+	}))
+	defer srv.Close()
+
+	rdb := newTestRedisClient(t)
+	client, err := auth.NewJWKSClient(auth.JWKSClientConfig{
+		RedisClient:     rdb,
+		HTTPClient:      srv.Client(),
+		DefaultCacheTTL: time.Minute,
+		LockTTL:         time.Second,
+		AllowedIssuers:  []string{"https://allowed.example.com"},
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Test 1: Allowed issuer should succeed.
+	key, err := client.RefreshKey(ctx, "https://allowed.example.com", srv.URL, "test-key-2")
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+
+	// Test 2: Disallowed issuer should fail.
+	_, err = client.RefreshKey(ctx, "https://malicious.example.com", srv.URL, "test-key-2")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, auth.ErrJWKSUnauthorizedIssuer)
+	assert.Contains(t, err.Error(), "not in the allowed list")
+}
+
+func TestJWKSClient_NoAllowedIssuers_AllowsAll(t *testing.T) {
+	set := generateRSAJWKS(t, "test-key-3")
+	jwksJSON, err := json.Marshal(set)
+	require.NoError(t, err)
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(jwksJSON)
+	}))
+	defer srv.Close()
+
+	rdb := newTestRedisClient(t)
+	client, err := auth.NewJWKSClient(auth.JWKSClientConfig{
+		RedisClient:     rdb,
+		HTTPClient:      srv.Client(),
+		DefaultCacheTTL: time.Minute,
+		// No AllowedIssuers specified - should allow all.
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Any issuer should work when no whitelist is configured.
+	key, err := client.GetKey(ctx, "https://any-issuer.example.com", srv.URL, "test-key-3")
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+
+	key, err = client.GetKey(ctx, "https://another-issuer.example.com", srv.URL, "test-key-3")
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+}
+
 // Silence unused import warning for ecdsa/elliptic in tests.
 var _ = func() (*ecdsa.PrivateKey, error) {
 	return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

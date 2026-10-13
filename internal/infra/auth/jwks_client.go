@@ -38,6 +38,10 @@ var (
 
 	// ErrJWKSInvalidResponse indicates the JWKS response was malformed.
 	ErrJWKSInvalidResponse = errors.New("jwks invalid response")
+
+	// ErrJWKSUnauthorizedIssuer indicates the issuer is not in the allowed list.
+	// This is a security measure to prevent issuer confusion attacks.
+	ErrJWKSUnauthorizedIssuer = errors.New("jwks unauthorized issuer")
 )
 
 // safeReleaseLua is a Lua script for safe distributed lock release.
@@ -60,6 +64,10 @@ type JWKSClientConfig struct {
 	// Environment is the runtime environment (production/development).
 	// Used to emit security warnings for insecure configurations.
 	Environment string
+	// AllowedIssuers is an optional whitelist of trusted issuer URLs.
+	// If set, GetKey and RefreshKey will reject issuers not in this list.
+	// This provides defense-in-depth against issuer confusion attacks.
+	AllowedIssuers []string
 }
 
 // issuerCircuitBreaker tracks per-issuer circuit breaker state for JWKS refresh.
@@ -89,6 +97,10 @@ type JWKSClient struct {
 	// Per-issuer circuit breaker state (exponential backoff for refresh failures)
 	cbMu     sync.Mutex
 	cbStates map[string]*issuerCircuitBreaker
+
+	// allowedIssuers is an optional whitelist of trusted issuer URLs.
+	// If non-nil, GetKey and RefreshKey reject issuers not in this set.
+	allowedIssuers map[string]bool
 }
 
 // NewJWKSClient creates a new JWKSClient with the given configuration.
@@ -112,6 +124,16 @@ func NewJWKSClient(cfg JWKSClientConfig) (*JWKSClient, error) {
 	if maxSize <= 0 {
 		maxSize = 1 << 20 // 1MB
 	}
+
+	// Build allowed issuers map for O(1) lookup (nil if empty to indicate no restriction).
+	var allowedIssuers map[string]bool
+	if len(cfg.AllowedIssuers) > 0 {
+		allowedIssuers = make(map[string]bool, len(cfg.AllowedIssuers))
+		for _, issuer := range cfg.AllowedIssuers {
+			allowedIssuers[issuer] = true
+		}
+	}
+
 	return &JWKSClient{
 		httpClient:      httpClient,
 		redis:           cfg.RedisClient,
@@ -120,6 +142,7 @@ func NewJWKSClient(cfg JWKSClientConfig) (*JWKSClient, error) {
 		maxResponseSize: maxSize,
 		environment:     cfg.Environment,
 		cbStates:        make(map[string]*issuerCircuitBreaker),
+		allowedIssuers:  allowedIssuers,
 	}, nil
 }
 
@@ -132,36 +155,69 @@ func NewJWKSClient(cfg JWKSClientConfig) (*JWKSClient, error) {
 // - Docker internal service names (hostnames without dots)
 // Response size is capped at MaxResponseSize.
 func (c *JWKSClient) FetchJWKS(ctx context.Context, jwksURI string) (jwk.Set, error) {
-	// Security: enforce HTTPS for external hosts to prevent MITM cache poisoning.
-	// Allow HTTP for local/Docker internal services in development.
-	if !strings.HasPrefix(jwksURI, "https://") {
-		u, err := url.Parse(jwksURI)
-		if err != nil {
-			return nil, fmt.Errorf("invalid jwks URI: %w", err)
-		}
-		if u.Scheme != "http" {
-			return nil, fmt.Errorf("jwks URI must use HTTP or HTTPS: %s", jwksURI)
-		}
-		// Allow HTTP only for local/Docker internal services
-		host := u.Hostname()
-		isLocal := host == "localhost" || host == "127.0.0.1" ||
-			strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".orb.local")
-		hasNoDots := !strings.Contains(host, ".") // Docker internal services
-		if !isLocal && !hasNoDots {
-			return nil, fmt.Errorf("jwks URI must use HTTPS for external hosts: %s", jwksURI)
-		}
-		// SECURITY: In production, warn when HTTP is used for non-localhost services.
-		// This helps operators identify potential misconfigurations that could lead to MITM attacks.
-		// Only localhost (127.0.0.1/localhost) is exempt from this warning.
-		isLoopback := host == "localhost" || host == "127.0.0.1"
-		if c.environment == "production" && !isLoopback {
-			logger.Warn(ctx, "jwks.insecure_http_uri",
-				zap.String("uri", jwksURI),
-				zap.String("environment", c.environment),
-				zap.String("recommendation", "use HTTPS for all JWKS endpoints in production"))
-		}
+	// Validate URI security (HTTPS required for external hosts).
+	if err := c.validateJWKSURI(ctx, jwksURI); err != nil {
+		return nil, err
 	}
 
+	// Execute HTTP request and validate response.
+	data, err := c.executeJWKSRequest(ctx, jwksURI)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate JWKS schema before parsing to prevent cache poisoning.
+	if !validateJWKSSchema(data) {
+		return nil, fmt.Errorf("%w: invalid JWKS schema", ErrJWKSInvalidResponse)
+	}
+
+	set, err := jwk.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrJWKSInvalidResponse, err)
+	}
+
+	return set, nil
+}
+
+// validateJWKSURI validates the security of a JWKS URI.
+// HTTPS is required for external hosts to prevent MITM attacks.
+// HTTP is allowed for localhost, .local domains, and Docker internal services.
+func (c *JWKSClient) validateJWKSURI(ctx context.Context, jwksURI string) error {
+	if strings.HasPrefix(jwksURI, "https://") {
+		return nil
+	}
+
+	u, err := url.Parse(jwksURI)
+	if err != nil {
+		return fmt.Errorf("invalid jwks URI: %w", err)
+	}
+	if u.Scheme != "http" {
+		return fmt.Errorf("jwks URI must use HTTP or HTTPS: %s", jwksURI)
+	}
+
+	// Allow HTTP only for local/Docker internal services.
+	host := u.Hostname()
+	isLocal := host == "localhost" || host == "127.0.0.1" ||
+		strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".orb.local")
+	hasNoDots := !strings.Contains(host, ".") // Docker internal services
+	if !isLocal && !hasNoDots {
+		return fmt.Errorf("jwks URI must use HTTPS for external hosts: %s", jwksURI)
+	}
+
+	// Warn in production when HTTP is used for non-localhost services.
+	isLoopback := host == "localhost" || host == "127.0.0.1"
+	if c.environment == "production" && !isLoopback {
+		logger.Warn(ctx, "jwks.insecure_http_uri",
+			zap.String("uri", jwksURI),
+			zap.String("environment", c.environment),
+			zap.String("recommendation", "use HTTPS for all JWKS endpoints in production"))
+	}
+
+	return nil
+}
+
+// executeJWKSRequest executes the HTTP request to fetch JWKS and validates the response.
+func (c *JWKSClient) executeJWKSRequest(ctx context.Context, jwksURI string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURI, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build jwks request: %w", err)
@@ -179,36 +235,29 @@ func (c *JWKSClient) FetchJWKS(ctx context.Context, jwksURI string) (jwk.Set, er
 	}
 
 	// Validate Content-Type to prevent response smuggling.
-	ct := resp.Header.Get("Content-Type")
-	if ct == "" {
-		// Strict: require Content-Type header to be present
-		return nil, fmt.Errorf("%w: missing content-type header", ErrJWKSInvalidResponse)
-	}
-	if !strings.HasPrefix(ct, "application/json") && !strings.HasPrefix(ct, "application/jwk-set+json") {
-		return nil, fmt.Errorf("%w: unexpected content-type %q", ErrJWKSInvalidResponse, ct)
+	if err := validateJWKSContentType(resp.Header.Get("Content-Type")); err != nil {
+		return nil, err
 	}
 
 	// Limit response size to prevent memory exhaustion.
 	limitedReader := io.LimitReader(resp.Body, c.maxResponseSize)
-
-	// Read all data
 	data, err := io.ReadAll(limitedReader)
 	if err != nil {
 		return nil, fmt.Errorf("%w: read body: %w", ErrJWKSInvalidResponse, err)
 	}
 
-	// SECURITY: Validate JWKS schema before parsing to prevent cache poisoning.
-	// The response must be a valid JSON object with a "keys" array.
-	if !validateJWKSSchema(data) {
-		return nil, fmt.Errorf("%w: invalid JWKS schema", ErrJWKSInvalidResponse)
-	}
+	return data, nil
+}
 
-	set, err := jwk.Parse(data)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrJWKSInvalidResponse, err)
+// validateJWKSContentType validates the Content-Type header of a JWKS response.
+func validateJWKSContentType(ct string) error {
+	if ct == "" {
+		return fmt.Errorf("%w: missing content-type header", ErrJWKSInvalidResponse)
 	}
-
-	return set, nil
+	if !strings.HasPrefix(ct, "application/json") && !strings.HasPrefix(ct, "application/jwk-set+json") {
+		return fmt.Errorf("%w: unexpected content-type %q", ErrJWKSInvalidResponse, ct)
+	}
+	return nil
 }
 
 // validateJWKSSchema validates the basic structure of a JWKS response.
@@ -277,9 +326,37 @@ func isValidSignatureAlgorithm(alg string) bool {
 	}
 }
 
+// validateIssuer checks if the issuer is allowed.
+// Returns nil if no whitelist is configured (allowedIssuers is nil).
+// Returns ErrJWKSUnauthorizedIssuer if the issuer is not in the whitelist.
+func (c *JWKSClient) validateIssuer(issuer string) error {
+	// If no whitelist is configured, all issuers are allowed.
+	if c.allowedIssuers == nil {
+		return nil
+	}
+	if !c.allowedIssuers[issuer] {
+		return fmt.Errorf("%w: issuer %q is not in the allowed list", ErrJWKSUnauthorizedIssuer, issuer)
+	}
+	return nil
+}
+
 // GetKey retrieves a specific key by issuer and key ID.
 // It first checks the Redis cache, then falls back to fetching the full JWKS.
+//
+// Security: If an issuer whitelist was configured, this method validates that
+// the issuer is in the whitelist before proceeding. This prevents issuer
+// confusion attacks where a malicious actor could attempt to fetch keys from
+// an untrusted issuer.
 func (c *JWKSClient) GetKey(ctx context.Context, issuer, jwksURI, kid string) (jwk.Key, error) {
+	// Validate issuer against whitelist (defense-in-depth).
+	if err := c.validateIssuer(issuer); err != nil {
+		logger.Warn(ctx, "jwks.get_key.rejected",
+			zap.String("issuer", issuer),
+			zap.String("kid", kid),
+			zap.Error(err))
+		return nil, err
+	}
+
 	// Try cache first.
 	cachedKey, err := c.getCachedKey(ctx, issuer, kid)
 	if err == nil && cachedKey != nil {
@@ -308,7 +385,21 @@ func (c *JWKSClient) GetKey(ctx context.Context, issuer, jwksURI, kid string) (j
 // Uses a distributed lock to prevent concurrent refreshes across instances.
 // Implements per-issuer circuit breaker with exponential backoff to prevent
 // thundering herd when the JWKS endpoint is failing.
+//
+// Security: If an issuer whitelist was configured, this method validates that
+// the issuer is in the whitelist before proceeding. This prevents issuer
+// confusion attacks where a malicious actor could attempt to fetch keys from
+// an untrusted issuer.
 func (c *JWKSClient) RefreshKey(ctx context.Context, issuer, jwksURI, kid string) (jwk.Key, error) {
+	// Validate issuer against whitelist (defense-in-depth).
+	if err := c.validateIssuer(issuer); err != nil {
+		logger.Warn(ctx, "jwks.refresh_key.rejected",
+			zap.String("issuer", issuer),
+			zap.String("kid", kid),
+			zap.Error(err))
+		return nil, err
+	}
+
 	// Check circuit breaker before attempting refresh.
 	if backoff, remaining := c.getCircuitBreakerBackoff(issuer); backoff > 0 {
 		logger.Warn(ctx, "jwks: circuit breaker open, skipping refresh",
