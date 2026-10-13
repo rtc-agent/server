@@ -34,9 +34,9 @@ var (
 		Help:    "Duration of analysis requests",
 		Buckets: prometheus.DefBuckets,
 	})
-	avgHitRate = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "cache_analyzer_avg_hit_rate",
-		Help: "Average cache hit rate from the most recent analysis",
+	overallHitRate = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "cache_analyzer_overall_hit_rate",
+		Help: "Overall cache hit rate from the most recent analysis",
 	})
 	latestInputTokens = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "cache_analyzer_latest_input_tokens",
@@ -147,7 +147,7 @@ func (s *Server) handleReportPage(c *gin.Context) {
 	summary := calculateSummary(requests)
 
 	// Record Prometheus metrics
-	avgHitRate.Set(summary.AvgHitRate)
+	overallHitRate.Set(summary.OverallHitRate)
 	latestInputTokens.Set(float64(summary.TotalInputTokens))
 	latestCacheReadTokens.Set(float64(summary.TotalCacheReadTokens))
 
@@ -167,8 +167,6 @@ func (s *Server) handleReportPage(c *gin.Context) {
 // Summary represents the summary statistics.
 type Summary struct {
 	TotalRequests         int
-	AvgHitRate            float64
-	AvgHitRateStr         string
 	SessionCount          int
 	TotalInputTokens      int
 	TotalCacheReadTokens  int
@@ -206,8 +204,6 @@ func calculateSummary(requests []*LLMRequest) *Summary {
 
 	return &Summary{
 		TotalRequests:         total,
-		AvgHitRate:            overallHitRate, // Keep for backward compatibility
-		AvgHitRateStr:         formatPercent(overallHitRate),
 		SessionCount:          len(sessions),
 		TotalInputTokens:      totalInputTokens,
 		TotalCacheReadTokens:  totalCacheReadTokens,
