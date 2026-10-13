@@ -208,6 +208,10 @@ func (m *mockLoopRepo) FindExpiredLoops(_ context.Context) ([]*model.Loop, error
 	return nil, nil
 }
 
+func (m *mockLoopRepo) IncrementRecoveryAttempts(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+
 // Ensure mockLoopRepo implements usecase.LoopRepo.
 var _ usecase.LoopRepo = (*mockLoopRepo)(nil)
 

@@ -75,8 +75,13 @@ func scanAndRecoverWithLock(ctx context.Context, deps RecoveryDeps) {
 	// running recovery scans concurrently. Lock TTL is slightly less
 	// than the interval to ensure it expires before the next scan.
 	lockTTL := deps.Interval - 1*time.Second
-	if lockTTL <= 0 {
-		lockTTL = 30 * time.Second
+	if lockTTL < 10*time.Second {
+		if deps.Interval > 0 {
+			logger.Warn(ctx, "[loop.Recovery] interval too short for safe distributed lock",
+				zap.Duration("interval", deps.Interval),
+				zap.Duration("lock_ttl", lockTTL))
+		}
+		lockTTL = max(deps.Interval*2, 30*time.Second)
 	}
 
 	// Generate a unique holder ID to verify lock ownership during release.
@@ -360,12 +365,10 @@ func reenqueueLoop(ctx context.Context, deps RecoveryDeps, loop *model.Loop) {
 	// This simplifies state management and avoids race conditions.
 	//
 	// Only increment recovery_attempts to track how many times this loop has been re-enqueued.
-	if err := deps.LoopRepo.Update(ctx, loop.ID, map[string]any{
-		"recovery_attempts": loop.RecoveryAttempts + 1,
-	}); err != nil {
+	if err := deps.LoopRepo.IncrementRecoveryAttempts(ctx, loop.ID); err != nil {
 		span.SetStatus(codes.Error, "internal_error")
 		span.RecordError(err)
-		logger.Error(ctx, "[loop.Recovery] update recovery_attempts failed",
+		logger.Error(ctx, "[loop.Recovery] increment recovery_attempts failed",
 			zap.String("loop_id", loop.ID.String()),
 			zap.Error(err))
 		recordRecoveryFailure()

@@ -30,6 +30,9 @@ type LoopRepo interface {
 	FindStaleLoops(ctx context.Context, staleThreshold time.Time) ([]*model.Loop, error)
 	// FindExpiredLoops returns active loops whose expires_at has passed.
 	FindExpiredLoops(ctx context.Context) ([]*model.Loop, error)
+	// IncrementRecoveryAttempts atomically increments the recovery_attempts counter.
+	// This avoids race conditions when multiple recovery processes run concurrently.
+	IncrementRecoveryAttempts(ctx context.Context, id uuid.UUID) error
 }
 
 type loopRepo struct {
@@ -132,9 +135,11 @@ func (r *loopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.Time)
 
 	// Calculate the cutoff time: last_run_at should be before (staleThreshold - interval)
 	// This ensures we don't mark a loop as stale if it's still within its normal execution interval.
-	// Additionally, exclude loops created within the last minute to avoid recovering
+	// Additionally, exclude loops created within the last 30 seconds to avoid recovering
 	// newly created loops whose first execution may not have completed yet.
-	createdAtProtection := time.Now().Add(-1 * time.Minute)
+	// Note: This is a fixed protection window. A dynamic value based on interval_seconds
+	// would be ideal but requires more complex SQL. 30 seconds balances safety vs. recovery speed.
+	createdAtProtection := time.Now().Add(-30 * time.Second)
 
 	// For never-run loops, use a longer threshold (5 minutes) to avoid premature recovery.
 	// This allows time for the first scheduled execution to complete.
@@ -173,6 +178,19 @@ func (r *loopRepo) FindExpiredLoops(ctx context.Context) ([]*model.Loop, error) 
 		return nil, fmt.Errorf("find expired loops: %w", err)
 	}
 	return loops, nil
+}
+
+// IncrementRecoveryAttempts atomically increments the recovery_attempts counter.
+// This avoids race conditions when multiple recovery processes run concurrently.
+func (r *loopRepo) IncrementRecoveryAttempts(ctx context.Context, id uuid.UUID) error {
+	err := DBFromContext(ctx, r.db).WithContext(ctx).
+		Model(&model.Loop{}).
+		Where("id = ?", id).
+		Update("recovery_attempts", gorm.Expr("recovery_attempts + 1")).Error
+	if err != nil {
+		return fmt.Errorf("increment recovery attempts for loop %s: %w", id, err)
+	}
+	return nil
 }
 
 // Ensure interface compliance.

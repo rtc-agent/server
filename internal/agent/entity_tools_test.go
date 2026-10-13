@@ -64,6 +64,9 @@ func (m *mockLoopRepo) FindStaleLoops(ctx context.Context, staleThreshold time.T
 func (m *mockLoopRepo) FindExpiredLoops(ctx context.Context) ([]*model.Loop, error) {
 	return nil, nil
 }
+func (m *mockLoopRepo) IncrementRecoveryAttempts(ctx context.Context, id uuid.UUID) error {
+	return nil
+}
 
 // ─── Mock TaskScheduler ───
 

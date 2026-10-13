@@ -56,6 +56,7 @@ type Worker struct {
 	loopRepo            usecase.LoopRepo
 	sessionRepo         usecase.SessionRepo
 	notificationCreator NotificationCreator
+	taskTimeout         time.Duration // Timeout for processing a single loop task
 }
 
 // NewWorker creates a loop worker.
@@ -68,15 +69,16 @@ func NewWorker(queue *rtcqueue.Queue, loopRepo usecase.LoopRepo, sessionRepo use
 		loopRepo:            loopRepo,
 		sessionRepo:         sessionRepo,
 		notificationCreator: notificationCreator,
+		taskTimeout:         30 * time.Second, // Default timeout
 	}
 }
 
-// loopTaskTimeout is the overall timeout for processing a loop task.
-// This prevents infinite blocking if downstream services hang.
-// The timeout covers: payload parsing, loop validation, notification creation,
-// and publishing to rtc-queue. It does NOT cover actual LLM execution (which
-// happens in a separate worker triggered by the published work item).
-const loopTaskTimeout = 30 * time.Second
+// WithTaskTimeout sets a custom timeout for loop task processing.
+// This allows configuration based on deployment needs.
+func (w *Worker) WithTaskTimeout(timeout time.Duration) *Worker {
+	w.taskTimeout = timeout
+	return w
+}
 
 // HandleLoopTask processes loop:execute tasks.
 //
@@ -104,7 +106,7 @@ const loopTaskTimeout = 30 * time.Second
 func (w *Worker) HandleLoopTask(ctx context.Context, t *hibikenasynq.Task) error {
 	startTime := time.Now()
 
-	ctx, cancel := context.WithTimeout(ctx, loopTaskTimeout)
+	ctx, cancel := context.WithTimeout(ctx, w.taskTimeout)
 	defer cancel()
 
 	sessionUUID, loopUUID, traceID, spanID, err := parseLoopTaskPayload(ctx, t)

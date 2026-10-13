@@ -1021,9 +1021,13 @@ func provideAsynqServer(cfg *config.Config) *asynq.Server {
 // Base delay is 5 seconds, doubling with each retry attempt.
 // Formula: 5s * 2^(n-1) where n is the retry count (1, 2, 3, ...)
 // Results in delays: 5s, 10s, 20s, 40s, ...
+// Cap at 2^20 to prevent overflow: 5s * 2^20 ≈ 60 days
 func retryDelayWithExponentialBackoff(n int, e error, t *asynq.Task) time.Duration {
 	baseDelay := 5 * time.Second
-
+	const maxShift = 20 // Prevent overflow: 5s * 2^20 ≈ 60 days
+	if n > maxShift {
+		n = maxShift
+	}
 	multiplier := time.Duration(1 << uint(n-1))
 	return baseDelay * multiplier
 }
