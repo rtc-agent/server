@@ -19,6 +19,26 @@ import (
 	"github.com/rtc-agent/server/pkg/logger"
 )
 
+// BanWatcherConfig holds configuration for BanWatcher reconnection behavior.
+type BanWatcherConfig struct {
+	// MaxRetries is the maximum number of reconnection attempts.
+	// 0 means unlimited retries (default behavior for backward compatibility).
+	MaxRetries int
+	// InitialBackoff is the initial delay between reconnection attempts.
+	InitialBackoff time.Duration
+	// MaxBackoff is the maximum delay between reconnection attempts.
+	MaxBackoff time.Duration
+}
+
+// DefaultBanWatcherConfig returns the default configuration.
+func DefaultBanWatcherConfig() BanWatcherConfig {
+	return BanWatcherConfig{
+		MaxRetries:     0, // Unlimited retries by default
+		InitialBackoff: time.Second,
+		MaxBackoff:     30 * time.Second,
+	}
+}
+
 // BanWatcher listens for user ban events and disconnects users from Centrifuge.
 type BanWatcher struct {
 	node    *centrifuge.Node
@@ -27,18 +47,35 @@ type BanWatcher struct {
 	mu      sync.Mutex
 	closed  bool
 	baseCtx context.Context
+	config  BanWatcherConfig
 }
 
 // NewBanWatcher creates a BanWatcher that listens for ban events.
-func NewBanWatcher(node *centrifuge.Node, rdb redis.UniversalClient) (*BanWatcher, error) {
+// Optional config can be provided to customize reconnection behavior.
+// If no config is provided, default values are used.
+func NewBanWatcher(node *centrifuge.Node, rdb redis.UniversalClient, config ...BanWatcherConfig) (*BanWatcher, error) {
 	if rdb == nil {
 		return nil, fmt.Errorf("redis client is required for ban watcher")
+	}
+
+	// Use provided config or default
+	cfg := DefaultBanWatcherConfig()
+	if len(config) > 0 {
+		cfg = config[0]
+		// Apply defaults for zero values
+		if cfg.InitialBackoff == 0 {
+			cfg.InitialBackoff = time.Second
+		}
+		if cfg.MaxBackoff == 0 {
+			cfg.MaxBackoff = 30 * time.Second
+		}
 	}
 
 	bw := &BanWatcher{
 		node:    node,
 		rdb:     rdb,
 		baseCtx: context.Background(),
+		config:  cfg,
 	}
 
 	// Subscribe to ban channel
@@ -81,6 +118,8 @@ func (bw *BanWatcher) subscribe() error {
 // listenWithReconnect runs the listener with automatic reconnection on failure.
 // Uses cenkalti/backoff for exponential backoff with jitter.
 func (bw *BanWatcher) listenWithReconnect() {
+	retryCount := 0
+
 	for {
 		bw.mu.Lock()
 		if bw.closed {
@@ -100,13 +139,27 @@ func (bw *BanWatcher) listenWithReconnect() {
 		}
 		bw.mu.Unlock()
 
+		// Check if max retries reached (0 means unlimited)
+		if bw.config.MaxRetries > 0 && retryCount >= bw.config.MaxRetries {
+			logger.Error(bw.baseCtx, "ban_watcher.max_retries_reached_giving_up",
+				zap.Int("max_retries", bw.config.MaxRetries),
+				zap.Int("total_attempts", retryCount))
+			// Exit the reconnection loop gracefully
+			// The watcher will remain in a degraded state until manually restarted or server restarts
+			return
+		}
+
 		// Connection lost, attempt to reconnect with exponential backoff
 		bo := backoff.NewExponentialBackOff()
-		bo.InitialInterval = time.Second
-		bo.MaxInterval = 30 * time.Second
+		bo.InitialInterval = bw.config.InitialBackoff
+		bo.MaxInterval = bw.config.MaxBackoff
 
+		retryCount++
 		logger.Warn(bw.baseCtx, "ban_watcher.connection_lost_reconnecting",
-			zap.Duration("initial_backoff", bo.InitialInterval))
+			zap.Int("retry_attempt", retryCount),
+			zap.Int("max_retries", bw.config.MaxRetries),
+			zap.Duration("initial_backoff", bo.InitialInterval),
+			zap.Duration("max_backoff", bo.MaxInterval))
 
 		_, err := backoff.Retry(bw.baseCtx, func() (struct{}, error) {
 			bw.mu.Lock()
@@ -117,26 +170,32 @@ func (bw *BanWatcher) listenWithReconnect() {
 
 			if err := bw.subscribe(); err != nil {
 				bw.mu.Unlock()
-				logger.Error(bw.baseCtx, "ban_watcher.resubscribe_failed",
+				logger.Warn(bw.baseCtx, "ban_watcher.resubscribe_failed",
+					zap.Int("retry_attempt", retryCount),
 					zap.Error(err))
 				return struct{}{}, err
 			}
 			bw.mu.Unlock()
 
-			logger.Info(bw.baseCtx, "ban_watcher.resubscribed_successfully")
+			logger.Info(bw.baseCtx, "ban_watcher.resubscribed_successfully",
+				zap.Int("retry_attempts", retryCount))
 			return struct{}{}, nil
 		},
 			backoff.WithBackOff(bo),
-			backoff.WithMaxTries(0), // Unlimited retries
+			backoff.WithMaxTries(uint(bw.config.MaxRetries)), // 0 means unlimited
 		)
 
 		if err != nil {
 			// Permanent error or closed watcher
+			logger.Error(bw.baseCtx, "ban_watcher.reconnection_failed",
+				zap.Int("total_attempts", retryCount),
+				zap.Error(err))
 			return
 		}
 
-		// Successfully resubscribed — loop back to bw.listen() at the top,
-		// which will read from the newly created subscription.
+		// Successfully resubscribed — reset retry counter and loop back to bw.listen()
+		retryCount = 0
+		logger.Info(bw.baseCtx, "ban_watcher.connection_restored")
 	}
 }
 
