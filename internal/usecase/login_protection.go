@@ -29,7 +29,8 @@ type LoginProtectionConfig struct {
 	// LockDuration is how long the lockout lasts.
 	LockDuration time.Duration
 	// Env is the runtime environment (development/production).
-	// Used to emit security warnings when memory-based storage is used in production.
+	// Deprecated: Backend selection is now controlled by config in initLoginProtection.
+	// This field is retained for backwards compatibility but no longer used.
 	Env string
 }
 
@@ -50,6 +51,11 @@ type LoginProtection struct {
 }
 
 // NewLoginProtection creates a new LoginProtection instance.
+//
+// Note: For production deployments with multiple server instances, use Redis-backed
+// implementation (NewRedisLoginProtection) instead. Memory-based storage does not
+// share state across instances, allowing attackers to bypass lockout by rotating
+// requests across replicas.
 func NewLoginProtection(cfg LoginProtectionConfig) *LoginProtection {
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = 5
@@ -64,24 +70,6 @@ func NewLoginProtection(cfg LoginProtectionConfig) *LoginProtection {
 		maxAttempts:     cfg.MaxAttempts,
 		lockDuration:    cfg.LockDuration,
 		stopCh:          make(chan struct{}),
-	}
-	// SECURITY: In-memory login protection state is lost on process restart.
-	// An attacker could reset brute-force counters by triggering a server restart.
-	// For production deployments, use a Redis-backed implementation instead.
-	if cfg.Env == "production" {
-		logger.Warn(context.Background(), "login_protection.using_memory_storage",
-			zap.String("warning", "attack_counters_reset_on_restart"),
-			zap.String("risk", "attacker_can_bypass_brute_force_protection_by_triggering_process_restart"),
-			zap.Int("max_attempts", cfg.MaxAttempts),
-			zap.Duration("lock_duration", cfg.LockDuration),
-			zap.String("recommendation", "use_redis_backended_login_protection_in_production"),
-			zap.String("config_key", "LOGIN_PROTECTION_BACKEND"),
-			zap.String("config_value_required", "redis"))
-	} else {
-		logger.Info(context.Background(), "login_protection.using_memory_storage",
-			zap.String("env", cfg.Env),
-			zap.Int("max_attempts", cfg.MaxAttempts),
-			zap.Duration("lock_duration", cfg.LockDuration))
 	}
 	go lp.cleanupLoop()
 	return lp

@@ -46,6 +46,11 @@ type AdminSecurityConfig struct {
 	// LoginLockDuration is the lockout duration in seconds after exceeding max attempts.
 	// Defaults to 900 (15 minutes).
 	LoginLockDuration int `mapstructure:"login_lock_duration"`
+	// LoginProtectionBackend controls the storage backend for login brute-force protection.
+	// Valid values: "auto" (use Redis if available, otherwise memory), "redis" (require Redis),
+	// "memory" (force in-memory, even in production — NOT recommended).
+	// Default: "auto". In production, "redis" is strongly recommended for multi-instance deployments.
+	LoginProtectionBackend string `mapstructure:"login_protection_backend"`
 	// CookieSecure controls the Secure flag on authentication cookies.
 	// When true, cookies are only sent over HTTPS. Enable in production with TLS.
 	// Default: false (suitable for development). Set true for production HTTPS deployments.

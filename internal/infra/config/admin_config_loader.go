@@ -94,6 +94,11 @@ func (c *AdminConfig) setSecurityDefaults(v *viper.Viper) {
 	if c.Security.LoginLockDuration <= 0 {
 		c.Security.LoginLockDuration = 900 // 15 minutes
 	}
+	// LoginProtectionBackend defaults to "auto" (use Redis if available).
+	// Only set default if not explicitly configured in the config file.
+	if !v.IsSet("security.login_protection_backend") {
+		c.Security.LoginProtectionBackend = "auto"
+	}
 	// CookieSecure defaults to true in production, false in development.
 	// Only set default if not explicitly configured in the config file.
 	if !v.IsSet("security.cookie_secure") {
@@ -194,6 +199,14 @@ func (c *AdminConfig) Validate() error {
 	// Validate server config
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port must be between 1 and 65535")
+	}
+
+	// Validate login protection backend
+	switch c.Security.LoginProtectionBackend {
+	case "auto", "redis", "memory":
+		// Valid backend
+	default:
+		return fmt.Errorf("security.login_protection_backend must be one of: auto, redis, memory")
 	}
 
 	// Note: PrivateKeyPath and PublicKeyPath are optional (ephemeral keys generated if not provided)

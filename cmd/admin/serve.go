@@ -22,6 +22,7 @@ import (
 
 	httphandler "github.com/rtc-agent/server/internal/handler/http"
 	"github.com/rtc-agent/server/internal/infra/auth"
+	"github.com/rtc-agent/server/internal/infra/cache"
 	"github.com/rtc-agent/server/internal/infra/config"
 	"github.com/rtc-agent/server/internal/infra/email"
 	"github.com/rtc-agent/server/internal/infra/middleware"
@@ -185,7 +186,10 @@ func runServe(cmd *cobra.Command, args []string) {
 			zap.Duration("idle_timeout", httpIdleTimeout))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error(ctx, "admin.server_failed", zap.Error(err))
-			_ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
+			// Kill errors are logged but not actionable: the process is already in error state.
+			if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+				logger.Error(ctx, "admin.failed_to_send_sigterm", zap.Error(err))
+			}
 		}
 	})
 
@@ -225,7 +229,11 @@ func initRedis(ctx context.Context, cfg *config.AdminConfig) *redis.Client {
 	})
 	defer func() {
 		if rdb != nil {
-			_ = rdb.Close()
+			// Redis Close errors are logged but typically not actionable during shutdown.
+			// We log them for observability but don't fail the operation.
+			if err := rdb.Close(); err != nil {
+				logger.Warn(ctx, "admin.redis_close_failed", zap.Error(err))
+			}
 		}
 	}()
 
@@ -373,7 +381,7 @@ func initUsecases(ctx context.Context, db *gorm.DB, cfg *config.AdminConfig, rdb
 func initRateLimiter(ctx context.Context, cfg *config.AdminConfig, rdb *redis.Client) httphandler.RateLimiterInterface {
 	if rdb != nil {
 		logger.Info(ctx, "admin.redis_rate_limiter_enabled")
-		return httphandler.NewRedisRateLimiter(rdb, cfg.Security.RateLimitPerMinute)
+		return cache.NewRedisRateLimiter(rdb, cfg.Security.RateLimitPerMinute)
 	}
 	memLimiter := httphandler.NewRateLimiter(httphandler.RateLimitConfig{
 		MaxRequestsPerMinute: cfg.Security.RateLimitPerMinute,
@@ -390,18 +398,56 @@ func initLoginProtection(ctx context.Context, cfg *config.AdminConfig, rdb *redi
 		LockDuration: time.Duration(cfg.Security.LoginLockDuration) * time.Second,
 		Env:          cfg.Server.Env,
 	}
-	if rdb != nil {
-		logger.Info(ctx, "admin.redis_login_protection_enabled")
+
+	backend := cfg.Security.LoginProtectionBackend
+	if backend == "" {
+		backend = "auto"
+	}
+
+	// Determine whether to use Redis based on config and availability
+	useRedis := false
+	switch backend {
+	case "redis":
+		// Explicit Redis requirement
+		if rdb == nil {
+			logger.Error(ctx, "admin.login_protection_redis_required_but_unavailable",
+				zap.String("backend", backend),
+				zap.String("risk", "server_starting_without_login_protection"))
+			// Return a no-op implementation to avoid nil pointer issues
+			return usecase.NewLoginProtection(lpCfg)
+		}
+		useRedis = true
+	case "memory":
+		// Explicit memory requirement (not recommended for production)
+		if cfg.Server.Env == "production" {
+			logger.Warn(ctx, "admin.login_protection_memory_explicitly_configured_in_production",
+				zap.String("risk", "multi_instance_deployments_will_not_share_lockout_state"),
+				zap.String("recommendation", "set security.login_protection_backend to 'redis' or 'auto'"))
+		}
+		useRedis = false
+	default: // "auto"
+		// Auto-detect: use Redis if available
+		if rdb != nil {
+			useRedis = true
+		} else if cfg.Server.Env == "production" {
+			logger.Warn(ctx, "admin.login_protection_memory_fallback_in_production",
+				zap.String("risk", "multi_instance_deployments_will_not_share_lockout_state"),
+				zap.String("recommendation", "configure redis for distributed login protection"))
+		}
+	}
+
+	if useRedis {
+		logger.Info(ctx, "admin.redis_login_protection_enabled",
+			zap.String("backend", "redis"),
+			zap.Int("max_attempts", lpCfg.MaxAttempts),
+			zap.Duration("lock_duration", lpCfg.LockDuration))
 		return usecase.NewRedisLoginProtection(rdb, lpCfg)
 	}
-	// Memory-based login protection does not share state across instances.
-	// In production with multiple replicas, an attacker can rotate requests
-	// across instances to bypass lockout. Warn so operators can enable Redis.
-	if cfg.Server.Env == "production" {
-		logger.Warn(ctx, "admin.memory_login_protection_unsafe_in_multi_instance_deployments_consider_redis")
-	} else {
-		logger.Info(ctx, "admin.memory_login_protection_enabled_single_instance_only")
-	}
+
+	logger.Info(ctx, "admin.memory_login_protection_enabled",
+		zap.String("backend", "memory"),
+		zap.Int("max_attempts", lpCfg.MaxAttempts),
+		zap.Duration("lock_duration", lpCfg.LockDuration))
 	return usecase.NewLoginProtection(lpCfg)
 }
 
@@ -454,7 +500,10 @@ func initEmailOTPUsecase(ctx context.Context, cfg *config.AdminConfig, rdb *redi
 
 // initHandlers initializes all HTTP handlers.
 func initHandlers(cfg *config.AdminConfig, usecases usecases, jwtSigner *auth.AdminJWTSigner, db *gorm.DB) handlerDeps {
-	adminAuthHandler := httphandler.NewAdminAuthHandler(usecases.adminAuthUsecase, usecases.adminUserUsecase, jwtSigner, db)
+	// HealthChecker wraps the raw *gorm.DB so the handler does not import gorm
+	// directly. Admin does not use Centrifuge, so we only populate the DB field.
+	healthChecker := usecase.NewHealthChecker(usecase.HealthCheckerDeps{DB: db})
+	adminAuthHandler := httphandler.NewAdminAuthHandler(usecases.adminAuthUsecase, usecases.adminUserUsecase, jwtSigner, healthChecker)
 	adminRoleHandler := httphandler.NewAdminRoleHandler(usecases.adminRoleUsecase)
 	permissionHandler := httphandler.NewPermissionHandler(usecases.permissionUsecase)
 	adminUserRoleHandler := httphandler.NewAdminUserRoleHandler(usecases.adminUserRoleUsecase)
