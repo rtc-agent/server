@@ -15,6 +15,10 @@ import (
 // The generated ID is a UUID v5-like identifier derived from the concatenation
 // of session ID and unique key, using SHA-256 for better distribution.
 //
+// IMPORTANT: The uniqueKey MUST be truly unique for each logical work item.
+// If using timestamps, ensure sufficient precision (e.g., nanoseconds + random suffix).
+// For retry scenarios, use the same uniqueKey to achieve idempotency.
+//
 // Example:
 //
 //	workID := GenerateDeterministicWorkID(sessionID, messageID)

@@ -564,17 +564,22 @@ func (h *Handler) publishSubmitWork(txCtx context.Context, sessionID uuid.UUID, 
 }
 
 // generateDeterministicWorkIDForSend generates a deterministic work ID for
-// SendMessage operations. Uses session ID and current timestamp to ensure
-// uniqueness across different calls while allowing retries to produce the
-// same ID.
+// SendMessage operations. Uses session ID, current timestamp, and a random
+// suffix to ensure uniqueness across different calls while allowing retries
+// to produce the same ID.
 //
 // Note: This is a pragmatic solution. Ideally we would use message ID, but
 // the work is published before message creation completes. The timestamp
-// provides sufficient uniqueness for our use case.
+// provides temporal uniqueness, while the random suffix prevents collisions
+// in high-concurrency scenarios where multiple requests arrive within the
+// same microsecond.
 func generateDeterministicWorkIDForSend(sessionID uuid.UUID) string {
-	// Use microsecond precision timestamp for uniqueness
+	// Use microsecond precision timestamp + random suffix for uniqueness.
+	// The random suffix (8 hex chars = 32 bits) provides ~4 billion unique
+	// values per microsecond, which is sufficient for any realistic load.
 	timestamp := time.Now().UnixMicro()
-	uniqueKey := fmt.Sprintf("send:%d", timestamp)
+	randomSuffix := uuid.Must(uuid.NewRandom()).String()[:8]
+	uniqueKey := fmt.Sprintf("send:%d:%s", timestamp, randomSuffix)
 	return rtcqueue.GenerateDeterministicWorkID(sessionID.String(), uniqueKey)
 }
 

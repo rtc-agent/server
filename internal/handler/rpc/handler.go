@@ -142,9 +142,30 @@ func (e *APIError) ErrorMessage() string {
 
 // ========== HandleRPC ==========
 
+// maxRPCRequestBodySize is the maximum allowed size for RPC request bodies (1MB).
+// This prevents malicious clients from sending excessively large requests that could
+// cause memory exhaustion or slow processing. Centrifuge RPC typically transmits
+// requests via WebSocket, but size limits are still important for resource protection.
+const maxRPCRequestBodySize = 1 << 20 // 1MB
+
 // HandleRPC is the RPC routing dispatch entry point.
 func (h *Handler) HandleRPC(ctx context.Context, method string, data []byte) ([]byte, error) {
 	start := time.Now()
+
+	// Enforce request body size limit to prevent resource exhaustion attacks.
+	// This is especially important for methods that accept large payloads (e.g., SendMessage with attachments).
+	if len(data) > maxRPCRequestBodySize {
+		userID, _ := contextx.GetUserID(ctx)
+		logger.Warn(ctx, "rpc.request_too_large",
+			zap.String("method", method),
+			zap.String("user_id", userID.String()),
+			zap.Int("size_bytes", len(data)),
+			zap.Int("max_size_bytes", maxRPCRequestBodySize))
+		return nil, &APIError{
+			Code:    ErrorCodeInvalidRequest,
+			Message: fmt.Sprintf("request body too large: %d bytes (max %d)", len(data), maxRPCRequestBodySize),
+		}
+	}
 
 	userID, _ := contextx.GetUserID(ctx)
 	deviceID, _ := contextx.GetDeviceID(ctx)

@@ -8,9 +8,11 @@ import (
 
 	"github.com/rtc-agent/server/internal/model"
 	"github.com/rtc-agent/server/internal/usecase"
+	"github.com/rtc-agent/server/pkg/logger"
 	"github.com/rtc-agent/server/pkg/protocol"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // PrepareSession reuses an existing session or constructs a new one for creation.
@@ -77,8 +79,18 @@ func PrepareSession(
 
 // assertCreatorOwns checks whether the session owner matches the creator.
 // Returns ErrPermissionDenied if the creator does not own the session.
+// Logs detailed information on permission denial for debugging and audit purposes.
 func assertCreatorOwns(session *model.Session, creator usecase.Creator) error {
 	if session.OwnerKind != string(creator.Kind()) || session.OwnerRefID != creator.ReferenceID() {
+		// Log detailed permission denial for debugging and security audit.
+		// Includes all relevant identifiers to help trace unauthorized access attempts.
+		logger.Warn(context.Background(), "permission_denied.session_ownership_mismatch",
+			zap.String("session_id", session.ID.String()),
+			zap.String("expected_owner_kind", session.OwnerKind),
+			zap.String("expected_owner_ref_id", session.OwnerRefID),
+			zap.String("actual_creator_kind", string(creator.Kind())),
+			zap.String("actual_creator_ref_id", creator.ReferenceID()),
+		)
 		return fmt.Errorf("session %s: %w", session.ID, ErrPermissionDenied)
 	}
 	return nil
