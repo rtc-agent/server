@@ -49,7 +49,7 @@ type RPCHandler interface {
 // AssembleDualBroker assembles the DualBroker core logic: create Redis shard,
 // build DualBroker, and configure event handlers. Shared between the Wire
 // path (provideDualBroker) and the non-Wire path (servicecontext.go).
-func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore centrifugeplus.HistoryStore, jwtSigner *auth.JWTSigner, oauth2UserRepo repo.OAuth2UserRepo) (*centrifugeplus.DualBroker, error) {
+func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore centrifugeplus.HistoryStore, jwtSigner *auth.JWTSigner, oauth2UserRepo repo.OAuth2UserRepo, deviceRepo repo.DeviceRepo) (*centrifugeplus.DualBroker, error) {
 	redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
 		Address: cfg.Redis.Addr,
 	})
@@ -76,7 +76,16 @@ func AssembleDualBroker(node *centrifuge.Node, cfg *config.Config, historyStore 
 		return nil, fmt.Errorf("create broker: %w", err)
 	}
 
-	if err := setupCentrifuge(node, broker, jwtSigner, cfg.Server.RPCTimeout, oauth2UserRepo); err != nil {
+	// Create WebSocket authentication failure rate limiter.
+	// Strategy: 10 failures per minute per IP, with 5-minute block on exceedance.
+	authRateLimiter := NewAuthFailureLimiter(
+		10.0/60.0,      // 10 tokens per minute (0.1667 tokens per second)
+		10,             // burst: allow 10 quick retries
+		30*time.Minute, // TTL: cleanup unused entries after 30 minutes
+		5*time.Minute,  // block duration: 5 minutes when limit exceeded
+	)
+
+	if err := setupCentrifuge(node, broker, jwtSigner, cfg.Server.RPCTimeout, oauth2UserRepo, deviceRepo, authRateLimiter); err != nil {
 		return nil, fmt.Errorf("setup centrifuge: %w", err)
 	}
 
@@ -109,14 +118,15 @@ func parseClientInfo(info []byte) *clientInfo {
 // verification, channel subscription validation).
 func setupCentrifuge(
 	node *centrifuge.Node, broker *centrifugeplus.DualBroker,
-	signer *auth.JWTSigner, rpcTimeout time.Duration, oauth2UserRepo repo.OAuth2UserRepo,
+	signer *auth.JWTSigner, rpcTimeout time.Duration, oauth2UserRepo repo.OAuth2UserRepo, deviceRepo repo.DeviceRepo,
+	authRateLimiter *AuthFailureLimiter,
 ) error {
 	node.SetBroker(broker)
 
 	// Create metrics collector (promauto registers automatically).
 	metrics := newCentrifugeMetrics()
 
-	node.OnConnecting(createOnConnectingHandler(signer, metrics, oauth2UserRepo))
+	node.OnConnecting(createOnConnectingHandler(signer, metrics, oauth2UserRepo, deviceRepo, authRateLimiter))
 	node.OnConnect(createOnConnectHandler(broker, rpcTimeout, metrics))
 
 	if err := node.Run(); err != nil {
@@ -146,8 +156,8 @@ func (l *centrifugeLogger) Error(msg string, args ...any) {
 }
 
 // createOnConnectingHandler returns the OnConnecting callback: JWT verification
-// -> extract identity -> write to Credentials.
-func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetrics, oauth2UserRepo repo.OAuth2UserRepo) func(stdcontext.Context, centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+// -> extract identity -> validate device -> write to Credentials.
+func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetrics, oauth2UserRepo repo.OAuth2UserRepo, deviceRepo repo.DeviceRepo, authRateLimiter *AuthFailureLimiter) func(stdcontext.Context, centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 	return func(ctx stdcontext.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		start := time.Now()
 
@@ -156,15 +166,45 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 			zap.Bool("has_token", len(e.Token) > 0),
 		)
 
+		// Extract client IP for rate limiting
+		clientIP := authRateLimiter.extractClientIP(ctx)
+
+		// Check if IP is blocked due to too many failed attempts
+		if authRateLimiter.IsBlocked(ctx, clientIP) {
+			wsAuthRateLimitRejected.Inc()
+			wsAuthFailureTotal.WithLabelValues("rate_limited").Inc()
+			metrics.recordConnecting("rate_limited", time.Since(start))
+			logger.Warn(ctx, "[Centrifuge] Connection rejected: IP rate limited",
+				zap.String("client_ip", clientIP),
+			)
+			return centrifuge.ConnectReply{}, DisconnectReasonTooManyAttempts
+		}
+
 		claims, err := signer.ParseAccessToken(e.Token)
 		if err != nil {
+			// Record authentication failure for rate limiting
+			if authRateLimiter.RecordFailure(ctx, clientIP) {
+				wsAuthRateLimitRejected.Inc()
+				wsAuthFailureTotal.WithLabelValues("rate_limited").Inc()
+				metrics.recordConnecting("rate_limited", time.Since(start))
+				logger.Warn(ctx, "[Centrifuge] Connection rejected: IP rate limited after failed auth",
+					zap.String("client_ip", clientIP),
+				)
+				return centrifuge.ConnectReply{}, DisconnectReasonTooManyAttempts
+			}
+
+			wsAuthFailureTotal.WithLabelValues("invalid_token").Inc()
 			metrics.recordConnecting("error", time.Since(start))
 			logger.Error(ctx, "[Centrifuge] JWT verification failed, rejecting connection",
 				zap.Error(err),
 				zap.String("token_preview", truncateForLog(e.Token)),
+				zap.String("client_ip", clientIP),
 			)
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 		}
+
+		// Authentication successful - record it
+		authRateLimiter.RecordSuccess(ctx, clientIP)
 
 		// Check if user is banned (skip if repo not available, e.g. in tests)
 		if oauth2UserRepo != nil {
@@ -197,23 +237,31 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 					Reason: "account banned",
 				}
 			}
-			// NOTE: Ban cache invalidation on admin ban/unban is handled by
-			// usecase.RtcUserUsecase (middleware.SetBanCache / InvalidateBanCache)
-			// combined with Redis Pub/Sub broadcast via model.BanChannel. The
-			// svc.BanWatcher subscribes to this channel on every node and
-			// invalidates the local cache + disconnects active sessions, so
-			// subsequent reconnections see the updated state immediately
-			// without waiting for TTL expiry. No action required here.
+		}
+
+		// Validate DeviceID if present in JWT claims.
+		// SECURITY: Prevents token replay attacks from different devices.
+		// If DeviceID is specified in the JWT, it must be registered for this user.
+		if claims.DeviceID != "" && deviceRepo != nil {
+			validateCtx, validateCancel := stdcontext.WithTimeout(stdcontext.Background(), 3*time.Second)
+			defer validateCancel()
+
+			_, err := deviceRepo.FindByUserAndDeviceID(validateCtx, claims.UserID, claims.DeviceID)
+			if err != nil {
+				metrics.recordConnecting("device_validation_failed", time.Since(start))
+				logger.Warn(ctx, "[Centrifuge] DeviceID validation failed, rejecting connection",
+					zap.Error(err),
+					zap.String("user_id", claims.UserID.String()),
+					zap.String("device_id", claims.DeviceID),
+				)
+				return centrifuge.ConnectReply{}, centrifuge.Disconnect{
+					Code:   4502,
+					Reason: "device not registered",
+				}
+			}
 		}
 
 		metrics.recordConnecting("success", time.Since(start))
-
-		// NOTE: DeviceID is extracted from JWT claims and stored in clientInfo,
-		// but is not currently used for connection binding validation.
-		// TODO(device-binding): Consider validating DeviceID at critical operations
-		// (e.g. RPC calls, subscription to sensitive channels) to ensure the
-		// connecting device matches the expected device for this user. This
-		// prevents token-replay attacks from different devices.
 
 		ci := &clientInfo{
 			UserID:   claims.UserID,
@@ -240,7 +288,7 @@ func createOnConnectingHandler(signer *auth.JWTSigner, metrics *centrifugeMetric
 	}
 }
 
-// truncateForLog truncates a string to the first 20 characters for logging
+// truncateForLog truncates a string to the first 8 characters for logging
 // (avoids recording full sensitive or verbose data). Uses []rune to ensure
 // UTF-8 safety (byte-level slicing could break multi-byte characters).
 func truncateForLog(s string) string {
@@ -248,10 +296,10 @@ func truncateForLog(s string) string {
 		return "<empty>"
 	}
 	runes := []rune(s)
-	if len(runes) <= 20 {
+	if len(runes) <= 8 {
 		return s
 	}
-	return string(runes[:20]) + "..."
+	return string(runes[:8]) + "..."
 }
 
 // createOnConnectHandler returns the OnConnect callback: subscription
