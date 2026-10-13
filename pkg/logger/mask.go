@@ -12,9 +12,15 @@ import (
 // before being written to any log output. Keep this list in sync with the
 // project's privacy requirements.
 var sensitiveFieldKeys = map[string]bool{
-	"user_id":     true,
-	"user_id_raw": true,
-	"email":       true,
+	"user_id":       true,
+	"user_id_raw":   true,
+	"email":         true,
+	"session_token": true,
+	"access_token":  true,
+	"refresh_token": true,
+	"api_key":       true,
+	"password":      true,
+	"secret_key":    true,
 }
 
 // MaskUserID masks a user identifier to prevent privacy leakage while keeping

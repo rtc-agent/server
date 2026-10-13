@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -36,16 +37,23 @@ type GormLogger struct {
 	ctx                  context.Context
 	ignoreRecordNotFound bool
 	slowThreshold        time.Duration
+	onSlowQuery          func(operation string, elapsed time.Duration) // optional callback for slow queries
 }
 
 // NewGormLogger creates a GORM logger adapter.
 // ignoreRecordNotFound: whether to ignore ErrRecordNotFound errors (suppress log output).
 // slowThreshold: slow query threshold; queries exceeding this duration are logged as warnings.
-func NewGormLogger(ignoreRecordNotFound bool, slowThreshold time.Duration) *GormLogger {
+// onSlowQuery: optional callback invoked when a slow query is detected. Used for metrics collection.
+func NewGormLogger(ignoreRecordNotFound bool, slowThreshold time.Duration, onSlowQuery ...func(operation string, elapsed time.Duration)) *GormLogger {
+	var callback func(string, time.Duration)
+	if len(onSlowQuery) > 0 {
+		callback = onSlowQuery[0]
+	}
 	return &GormLogger{
 		ctx:                  context.Background(),
 		ignoreRecordNotFound: ignoreRecordNotFound,
 		slowThreshold:        slowThreshold,
+		onSlowQuery:          callback,
 	}
 }
 
@@ -62,6 +70,7 @@ func (l *GormLogger) LogMode(level gormlogger.LogLevel) gormlogger.Interface {
 		ctx:                  l.ctx,
 		ignoreRecordNotFound: l.ignoreRecordNotFound,
 		slowThreshold:        l.slowThreshold,
+		onSlowQuery:          l.onSlowQuery,
 	}
 }
 
@@ -128,9 +137,33 @@ func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (stri
 	// Slow query warning.
 	if l.slowThreshold > 0 && elapsed > l.slowThreshold {
 		Warn(ctx, "[gorm] Slow query", fields...)
+		// Invoke slow query callback for metrics collection.
+		if l.onSlowQuery != nil {
+			operation := extractSQLOperation(sql)
+			l.onSlowQuery(operation, elapsed)
+		}
 		return
 	}
 
 	// Normal query info (Debug level).
 	Debug(ctx, "[gorm] SQL executed", fields...)
+}
+
+// extractSQLOperation extracts the SQL operation type from a SQL statement.
+// Returns one of: "select", "insert", "update", "delete", "raw".
+func extractSQLOperation(sql string) string {
+	// Normalize to uppercase for case-insensitive matching.
+	upper := strings.ToUpper(strings.TrimSpace(sql))
+	switch {
+	case strings.HasPrefix(upper, "SELECT"):
+		return "select"
+	case strings.HasPrefix(upper, "INSERT"):
+		return "insert"
+	case strings.HasPrefix(upper, "UPDATE"):
+		return "update"
+	case strings.HasPrefix(upper, "DELETE"):
+		return "delete"
+	default:
+		return "raw"
+	}
 }

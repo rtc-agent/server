@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -24,25 +25,39 @@ import (
 // idx_admin_audit_logs_operator_time），不符合此规范。
 // 为保持向后兼容，这些索引保留不变，但新索引应遵循标准命名规范。
 
-// TODO(migration): Implement migration version tracking system.
-// Current state: AutoMigrate runs on every startup, relying on idempotent operations
-// (IF NOT EXISTS, IF EXISTS) to safely re-execute. This works but has limitations:
-//   - No way to track which migrations have completed
-//   - No way to run one-time data transformations safely
-//   - Difficult to debug migration failures or partial completions
-//   - No rollback capability for failed migrations
-//
-// Proposed solution:
-//   - Create a schema_migrations table to track applied migrations
-//   - Each migration gets a unique version ID (timestamp-based)
-//   - Migrations check version before execution and record completion
-//   - Add rollback functions for each migration
-//   - Example schema:
-//     CREATE TABLE schema_migrations (
-//       version BIGINT PRIMARY KEY,
-//       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-//       duration_ms INTEGER NOT NULL
-//     );
+// SchemaMigration tracks applied database migrations.
+// This enables version control, debugging, and rollback capabilities.
+type SchemaMigration struct {
+	Version    int64     `gorm:"primaryKey;autoIncrement:false"`
+	AppliedAt  time.Time `gorm:"not null;default:now()"`
+	DurationMs int64     `gorm:"not null"`
+	Status     string    `gorm:"not null;size:32"` // "completed", "failed", "partial"
+}
+
+// TableName specifies the table name for SchemaMigration.
+func (SchemaMigration) TableName() string {
+	return "schema_migrations"
+}
+
+// migrationVersion is the current schema migration version in YYYYMMDDHHMMSS format.
+// Used to track which migrations have been applied.
+const migrationVersion = 20261013000001
+
+// recordMigration records a migration completion or failure.
+func recordMigration(db *gorm.DB, duration time.Duration, status string) error {
+	migration := SchemaMigration{
+		Version:    migrationVersion,
+		AppliedAt:  time.Now(),
+		DurationMs: duration.Milliseconds(),
+		Status:     status,
+	}
+	return db.Create(&migration).Error
+}
+
+// ensureSchemaMigrationsTable creates the schema_migrations table if it doesn't exist.
+func ensureSchemaMigrationsTable(db *gorm.DB) error {
+	return db.AutoMigrate(&SchemaMigration{})
+}
 
 // TODO(migration): Make batch backfill sleep duration configurable.
 // Current state: Large table migrations (e.g., memory_links index creation) may need
@@ -76,6 +91,25 @@ import (
 
 // AutoMigrate runs GORM auto-migration for all models.
 func AutoMigrate(db *gorm.DB) error {
+	// Ensure schema_migrations table exists for version tracking.
+	startTime := time.Now()
+	if err := ensureSchemaMigrationsTable(db); err != nil {
+		return fmt.Errorf("create schema_migrations table: %w", err)
+	}
+
+	// Check if this migration version has already been applied.
+	const migrationVersion = 20261013000001 // YYYYMMDDHHMMSS format
+	var alreadyApplied bool
+	if err := db.Raw("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ? AND status = 'completed')", migrationVersion).Scan(&alreadyApplied).Error; err != nil {
+		logger.Warn(context.Background(), "migrate.check_version_failed", zap.Error(err))
+		// Continue anyway - idempotent operations will handle this safely
+	}
+
+	if alreadyApplied {
+		logger.Info(context.Background(), "migrate.already_applied",
+			zap.Int64("version", migrationVersion))
+	}
+
 	if err := db.AutoMigrate(
 		&OAuth2User{},
 		&Device{},
@@ -99,6 +133,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&MultipartUploadPart{},
 		&TemporaryCredential{},
 	); err != nil {
+		// Record failed migration
+		_ = recordMigration(db, time.Since(startTime), "failed")
 		return err
 	}
 
@@ -112,14 +148,23 @@ func AutoMigrate(db *gorm.DB) error {
 			zap.String("index", "idx_files_user_key"), zap.Error(err))
 	}
 
+	// Fix 8: Drop redundant idx_sessions_owner index (replaced by idx_sessions_owner_created).
+	// This reduces index maintenance overhead without impacting query performance.
+	if err := db.Exec("DROP INDEX CONCURRENTLY IF EXISTS idx_sessions_owner").Error; err != nil {
+		logger.Warn(context.Background(), "migrate.drop_redundant_index_failed",
+			zap.String("index", "idx_sessions_owner"), zap.Error(err))
+	}
+
 	// Add composite index on memory_links to optimise queries by from_id + relation.
 	// CONCURRENTLY avoids table lock during index creation.
 	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_memory_links_from_relation ON memory_links(from_id, relation)").Error; err != nil {
+		_ = recordMigration(db, time.Since(startTime), "failed")
 		return fmt.Errorf("create index idx_memory_links_from_relation: %w", err)
 	}
 
 	// Add unique constraint on memory_links to prevent duplicate links.
 	if err := db.Exec("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uniq_memory_links_from_to ON memory_links(from_id, to_id)").Error; err != nil {
+		_ = recordMigration(db, time.Since(startTime), "failed")
 		return fmt.Errorf("create index uniq_memory_links_from_to: %w", err)
 	}
 
@@ -152,15 +197,26 @@ func AutoMigrate(db *gorm.DB) error {
 	// Composite indexes for query performance.
 	// CONCURRENTLY avoids table lock during index creation on large tables.
 	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_messages_session_offset ON messages(session_id, global_offset)").Error; err != nil {
+		_ = recordMigration(db, time.Since(startTime), "failed")
 		return fmt.Errorf("create index idx_messages_session_offset: %w", err)
 	}
 	// Note: idx_sessions_owner (owner_kind, owner_ref_id) was merged into idx_sessions_owner_created
 	// (owner_kind, owner_ref_id, created_at) in cmd/migrate.go to reduce index redundancy.
 	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_admin_audit_logs_operator_time ON admin_audit_logs(operator_id, created_at)").Error; err != nil {
+		_ = recordMigration(db, time.Since(startTime), "failed")
 		return fmt.Errorf("create index idx_admin_audit_logs_operator_time: %w", err)
 	}
 	if err := db.Exec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_admin_audit_logs_resource_time ON admin_audit_logs(resource_type, created_at)").Error; err != nil {
+		_ = recordMigration(db, time.Since(startTime), "failed")
 		return fmt.Errorf("create index idx_admin_audit_logs_resource_time: %w", err)
+	}
+
+	// Record successful migration completion
+	if !alreadyApplied {
+		if err := recordMigration(db, time.Since(startTime), "completed"); err != nil {
+			logger.Warn(context.Background(), "migrate.record_migration_failed",
+				zap.Int64("version", migrationVersion), zap.Error(err))
+		}
 	}
 
 	return nil

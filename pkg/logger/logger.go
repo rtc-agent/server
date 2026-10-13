@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -165,25 +166,38 @@ func Init(level string, serverLogFile ...string) {
 // Sync flushes the log buffer.
 func Sync() {
 	if log != nil {
+		// Sync errors are intentionally ignored: this is called during shutdown,
+		// and flush failures are not actionable. The process is exiting anyway.
 		_ = log.Sync()
 	}
 }
 
-// extractTraceFields extracts OpenTelemetry trace information from the context.
-// Returns fields containing trace_id and span_id (if a valid span exists).
+// extractTraceFields extracts OpenTelemetry trace information and request_id from the context.
+// Returns fields containing trace_id, span_id (if a valid span exists), and request_id (if present).
 func extractTraceFields(ctx context.Context) []zap.Field {
 	if ctx == nil {
 		return nil
 	}
+
+	var fields []zap.Field
+
+	// Extract request_id from context if present.
+	if requestID, ok := ctx.Value("request_id").(string); ok && requestID != "" {
+		fields = append(fields, zap.String("request_id", requestID))
+	}
+
+	// Extract OpenTelemetry trace information.
 	span := trace.SpanFromContext(ctx)
 	if span == nil || !span.SpanContext().IsValid() {
-		return nil
+		return fields
 	}
 	sc := span.SpanContext()
-	return []zap.Field{
+	fields = append(fields,
 		zap.String("trace_id", sc.TraceID().String()),
 		zap.String("span_id", sc.SpanID().String()),
-	}
+	)
+
+	return fields
 }
 
 // resolveCaller walks the call stack and returns the first non-logger frame.
@@ -288,7 +302,14 @@ func Warn(ctx context.Context, msg string, fields ...zap.Field) {
 }
 
 // Error logs an error-level message.
-// If any field contains gorm.ErrRecordNotFound, it is downgraded to Warn.
+//
+// Special behavior: If any field contains gorm.ErrRecordNotFound, the log level
+// is automatically downgraded to Warn. This is because ErrRecordNotFound is often
+// used as control flow (e.g., .First() when record doesn't exist) rather than
+// representing a true error condition.
+//
+// If you need explicit control over the log level regardless of the error type,
+// use ErrorOrWarn() instead.
 func Error(ctx context.Context, msg string, fields ...zap.Field) {
 	if containsErrRecordNotFound(fields) {
 		if ce := log.Check(zapcore.WarnLevel, msg); ce != nil {
@@ -301,6 +322,80 @@ func Error(ctx context.Context, msg string, fields ...zap.Field) {
 		ce.Caller = resolveCaller()
 		ce.Write(append(extractTraceFields(ctx), fields...)...)
 	}
+}
+
+// ErrorOrWarn logs a message at either Error or Warn level, chosen explicitly
+// by the caller. Unlike Error(), this method does NOT automatically downgrade
+// based on the error type - the caller has full control.
+//
+// Use this when you want to override the default ErrRecordNotFound downgrade
+// behavior, or when the log level decision should be based on business logic
+// rather than error type.
+func ErrorOrWarn(ctx context.Context, msg string, level zapcore.Level, fields ...zap.Field) {
+	if level != zapcore.ErrorLevel && level != zapcore.WarnLevel {
+		// Fallback to Error if invalid level provided
+		level = zapcore.ErrorLevel
+	}
+	if ce := log.Check(level, msg); ce != nil {
+		ce.Caller = resolveCaller()
+		ce.Write(append(extractTraceFields(ctx), fields...)...)
+	}
+}
+
+// ErrorWithComponent logs an error-level message with a component label.
+// The component field helps categorize errors by subsystem (e.g., "auth", "database", "queue", "agent").
+// This is useful for filtering and alerting in large-scale deployments.
+//
+// Like Error(), this method automatically downgrades to Warn if any field contains
+// gorm.ErrRecordNotFound. Use ErrorOrWarnWithComponent() for explicit control.
+func ErrorWithComponent(ctx context.Context, msg string, component string, fields ...zap.Field) {
+	componentField := zap.String("component", component)
+	allFields := append([]zap.Field{componentField}, fields...)
+	Error(ctx, msg, allFields...)
+}
+
+// ErrorOrWarnWithComponent logs a message at either Error or Warn level with a component label.
+// The caller has explicit control over the log level, and the component field helps categorize
+// errors by subsystem (e.g., "auth", "database", "queue", "agent").
+func ErrorOrWarnWithComponent(ctx context.Context, msg string, component string, level zapcore.Level, fields ...zap.Field) {
+	componentField := zap.String("component", component)
+	allFields := append([]zap.Field{componentField}, fields...)
+	ErrorOrWarn(ctx, msg, level, allFields...)
+}
+
+// InfoSampled logs an info-level message with a given sample rate (0.0 to 1.0).
+// Only logs if a random value falls below the sample rate. This is useful for
+// high-frequency paths (e.g., WebSocket message processing) where logging every
+// event would be too verbose and impact performance.
+//
+// Example: InfoSampled(ctx, "message received", fields, 0.1) logs approximately 10% of messages.
+//
+// Note: Uses a global random number generator. For cryptographic purposes, use crypto/rand instead.
+func InfoSampled(ctx context.Context, msg string, fields []zap.Field, sampleRate float64) {
+	if sampleRate <= 0.0 {
+		return
+	}
+	if sampleRate < 1.0 {
+		// Generate a random value in [0.0, 1.0) and skip logging if above threshold.
+		if rand.Float64() >= sampleRate {
+			return
+		}
+	}
+	Info(ctx, msg, fields...)
+}
+
+// WarnSampled logs a warning-level message with a given sample rate (0.0 to 1.0).
+// Similar to InfoSampled, but for warning-level messages.
+func WarnSampled(ctx context.Context, msg string, fields []zap.Field, sampleRate float64) {
+	if sampleRate <= 0.0 {
+		return
+	}
+	if sampleRate < 1.0 {
+		if rand.Float64() >= sampleRate {
+			return
+		}
+	}
+	Warn(ctx, msg, fields...)
 }
 
 // containsErrRecordNotFound checks if any zap.Field contains gorm.ErrRecordNotFound.

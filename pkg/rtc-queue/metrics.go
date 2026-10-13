@@ -19,6 +19,8 @@ type queueMetrics struct {
 	panicRecoveryTotal *prometheus.CounterVec   // labels: status (success|error)
 	waitDuration       *prometheus.HistogramVec // labels: (none) — publish to claim
 	processDuration    *prometheus.HistogramVec // labels: (none) — claim to complete
+	queueDepth         *prometheus.GaugeVec     // labels: (none) — current queue size
+	queueLatency       *prometheus.HistogramVec // labels: (none) — time in queue
 }
 
 // global queueMetrics instance (promauto handles registration).
@@ -77,6 +79,21 @@ func newQueueMetrics() *queueMetrics {
 			Help:      "Time work items spend being processed (claim to complete).",
 			Buckets:   prometheus.ExponentialBuckets(0.1, 2, 12), // 100ms ~ 400s
 		}, nil),
+
+		queueDepth: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "rtc",
+			Subsystem: "queue",
+			Name:      "depth",
+			Help:      "Current number of work items waiting in the queue.",
+		}, nil),
+
+		queueLatency: promauto.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "rtc",
+			Subsystem: "queue",
+			Name:      "latency_seconds",
+			Help:      "Time work items spend waiting in queue before being claimed.",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 12), // 10ms ~ 40s
+		}, nil),
 	}
 }
 
@@ -113,4 +130,14 @@ func (m *queueMetrics) recordWaitDuration(d time.Duration) {
 // recordProcessDuration records the time a work item spent being processed.
 func (m *queueMetrics) recordProcessDuration(d time.Duration) {
 	m.processDuration.WithLabelValues().Observe(d.Seconds())
+}
+
+// setQueueDepth sets the current queue depth gauge.
+func (m *queueMetrics) setQueueDepth(depth float64) {
+	m.queueDepth.WithLabelValues().Set(depth)
+}
+
+// recordQueueLatency records the time a work item waited in queue before being claimed.
+func (m *queueMetrics) recordQueueLatency(d time.Duration) {
+	m.queueLatency.WithLabelValues().Observe(d.Seconds())
 }

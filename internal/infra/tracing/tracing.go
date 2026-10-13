@@ -1,3 +1,35 @@
+// Package tracing provides OpenTelemetry initialization for the RTC Agent server.
+//
+// Configuration Example (Jaeger with OTLP):
+//
+// To connect to a Jaeger instance using the OTLP protocol:
+//
+//	cfg := tracing.Config{
+//	    ServiceName:    "rtc-agent",
+//	    ServiceVersion: "1.0.0",
+//	    Environment:    "production",
+//	    Endpoint:       "jaeger:4317",  // Jaeger OTLP gRPC endpoint
+//	    Insecure:       false,          // Use TLS in production
+//	    SampleRate:     0.1,            // Sample 10% of traces in production
+//	}
+//
+// For local development with Jaeger running on localhost:
+//
+//	cfg := tracing.Config{
+//	    ServiceName:    "rtc-agent",
+//	    ServiceVersion: "1.0.0",
+//	    Environment:    "development",
+//	    Endpoint:       "localhost:4317",
+//	    Insecure:       true,           // Disable TLS for local development
+//	    SampleRate:     1.0,            // Sample all traces in development
+//	}
+//
+// Jaeger OTLP Endpoint Format:
+//   - gRPC: "hostname:4317" (default OTLP gRPC port)
+//   - HTTP: "hostname:4318" (default OTLP HTTP port, not used by this package)
+//
+// For Docker Compose setups, use the service name (e.g., "jaeger:4317").
+// For Kubernetes, use the service DNS name (e.g., "jaeger.tracing.svc.cluster.local:4317").
 package tracing
 
 import (

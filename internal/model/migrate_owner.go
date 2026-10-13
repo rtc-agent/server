@@ -3,6 +3,8 @@ package model
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +13,28 @@ import (
 
 	"github.com/rtc-agent/server/pkg/logger"
 )
+
+// getOwnerMigrationBatchConfig returns configurable batch size and sleep duration from environment variables.
+// Fix 7: Allows tuning migration speed vs database load trade-off.
+// MIGRATION_BATCH_SIZE: number of rows per batch (default: 1000)
+// MIGRATION_BATCH_SLEEP_MS: sleep duration between batches in milliseconds (default: 100)
+func getOwnerMigrationBatchConfig() (int, time.Duration) {
+	batchSize := 1000
+	if envSize := os.Getenv("MIGRATION_BATCH_SIZE"); envSize != "" {
+		if size, err := strconv.Atoi(envSize); err == nil && size > 0 {
+			batchSize = size
+		}
+	}
+
+	sleepMs := 100
+	if envSleep := os.Getenv("MIGRATION_BATCH_SLEEP_MS"); envSleep != "" {
+		if sleep, err := strconv.Atoi(envSleep); err == nil && sleep >= 0 {
+			sleepMs = sleep
+		}
+	}
+
+	return batchSize, time.Duration(sleepMs) * time.Millisecond
+}
 
 // MigrateOwnerStages1And2 adds new columns and backfills from legacy user_id.
 // Called by cmd/migrate.go in T2.
@@ -32,20 +56,21 @@ func MigrateOwnerStage4(db *gorm.DB) error {
 }
 
 // Stage 1: add new nullable columns (with defaults).
+// Fix 10: Added error context with table and column information.
 func addOwnerAndCreatorColumns(db *gorm.DB) error {
 	if err := db.Exec(`
 		ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS owner_kind VARCHAR(32),
 		ADD COLUMN IF NOT EXISTS owner_ref_id VARCHAR(255)
 	`).Error; err != nil {
-		return err
+		return fmt.Errorf("add owner columns to sessions: %w", err)
 	}
 	if err := db.Exec(`
 		ALTER TABLE messages
 		ADD COLUMN IF NOT EXISTS creator_kind VARCHAR(32),
 		ADD COLUMN IF NOT EXISTS creator_ref_id VARCHAR(255)
 	`).Error; err != nil {
-		return err
+		return fmt.Errorf("add creator columns to messages: %w", err)
 	}
 	return nil
 }
@@ -56,6 +81,9 @@ func addOwnerAndCreatorColumns(db *gorm.DB) error {
 // If the migration crashes between batches, the next run will resume from where it
 // left off (idempotent via WHERE owner_ref_id IS NULL condition).
 func backfillOwnerAndCreator(db *gorm.DB) error {
+	// Fix 7: Use configurable batch settings
+	batchSize, sleepDuration := getOwnerMigrationBatchConfig()
+
 	// Check whether the user_id column exists (new databases may not have it).
 	var hasUserID bool
 	if err := db.Raw(`
@@ -71,7 +99,6 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 		// Backfill sessions: owner_ref_id IS NULL means not yet backfilled
 		// (owner_kind may already have a default set by AutoMigrate).
 		// Use ctid-based batched updates to avoid index scans and reduce WAL bloat on large tables.
-		const batchSize = 1000
 		var totalSessionsBackfilled int64
 		var sessionBatchNum int
 		for {
@@ -95,9 +122,8 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 				zap.Int64("total_backfilled", totalSessionsBackfilled),
 			)
 			// Sleep between batches to reduce lock contention and allow other operations
-			// to proceed. Duration is a conservative default; see migrate.go for the
-			// configurability TODO.
-			time.Sleep(100 * time.Millisecond)
+			// to proceed. Duration is configurable via MIGRATION_BATCH_SLEEP_MS env var.
+			time.Sleep(sleepDuration)
 		}
 		if totalSessionsBackfilled > 0 {
 			logger.Info(context.Background(), "sessions backfill completed",
@@ -136,9 +162,8 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 				zap.Int64("total_backfilled", totalMessagesBackfilled),
 			)
 			// Sleep between batches to reduce lock contention and allow other operations
-			// to proceed. Duration is a conservative default; see migrate.go for the
-			// configurability TODO.
-			time.Sleep(100 * time.Millisecond)
+			// to proceed. Duration is configurable via MIGRATION_BATCH_SLEEP_MS env var.
+			time.Sleep(sleepDuration)
 		}
 		if totalMessagesBackfilled > 0 {
 			logger.Info(context.Background(), "messages backfill completed",
@@ -155,6 +180,20 @@ func backfillOwnerAndCreator(db *gorm.DB) error {
 //  1. Adding CHECK constraints with NOT VALID (doesn't scan existing rows)
 //  2. Validating constraints separately (can run concurrently with other operations)
 //  3. Converting to NOT NULL after validation (fast, as PostgreSQL trusts the validated constraint)
+//
+// Fix 3: Design Decision Documentation
+// This implementation validates constraints immediately within the same migration.
+// While a phased approach (validate separately, then set NOT NULL) could reduce lock time,
+// it adds deployment complexity. For most deployments (< 1M rows), immediate validation
+// is acceptable and simplifies the migration process.
+//
+// For very large tables, consider setting environment variable SKIP_OWNER_VALIDATION=true
+// to skip the validation step and run it manually during a maintenance window:
+//
+//	ALTER TABLE sessions VALIDATE CONSTRAINT chk_sessions_owner_kind_not_null;
+//	ALTER TABLE sessions VALIDATE CONSTRAINT chk_sessions_owner_ref_id_not_null;
+//	ALTER TABLE messages VALIDATE CONSTRAINT chk_messages_creator_kind_not_null;
+//	ALTER TABLE messages VALIDATE CONSTRAINT chk_messages_creator_ref_id_not_null;
 func finalizeOwnerAndCreatorNotNull(db *gorm.DB) error {
 	ctx := context.Background()
 

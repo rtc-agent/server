@@ -17,8 +17,9 @@ import (
 // database operations. It captures query count and duration with labels
 // for operation type (select/insert/update/delete) and status (success/error).
 type MetricsPlugin struct {
-	queriesTotal  *prometheus.CounterVec
-	queryDuration *prometheus.HistogramVec
+	queriesTotal     *prometheus.CounterVec
+	queryDuration    *prometheus.HistogramVec
+	slowQueriesTotal *prometheus.CounterVec
 }
 
 // NewMetricsPlugin creates a new DB metrics plugin with Prometheus metrics.
@@ -36,6 +37,12 @@ func NewMetricsPlugin() *MetricsPlugin {
 			Name:      "query_duration_seconds",
 			Help:      "Database query duration in seconds.",
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 13), // 1ms ~ 4.096s
+		}, []string{"operation"}),
+		slowQueriesTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "rtc",
+			Subsystem: "db",
+			Name:      "slow_queries_total",
+			Help:      "Total number of slow database queries (exceeding configured threshold).",
 		}, []string{"operation"}),
 	}
 }
