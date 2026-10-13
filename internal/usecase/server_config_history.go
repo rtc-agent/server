@@ -104,13 +104,7 @@ func (uc *ServerConfigUsecase) RollbackConfig(ctx context.Context, key string, u
 	}
 
 	// Publish config rollback event for multi-instance cache synchronization.
-	if uc.configPublisher != nil {
-		if pubErr := uc.configPublisher.PublishConfigUpdate(ctx, key, userID, newVersion, "rollback"); pubErr != nil {
-			logger.Warn(ctx, "config.publish_rollback_failed",
-				zap.String("key", key),
-				zap.Error(pubErr))
-		}
-	}
+	uc.publishConfigUpdateWithRetry(ctx, key, userID, newVersion, "rollback")
 
 	return config.UnmarshalJSONB(rolledBackJSON), newVersion, nil
 }

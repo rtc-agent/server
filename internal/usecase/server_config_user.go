@@ -302,6 +302,7 @@ func (uc *ServerConfigUsecase) publishConfigUpdateWithRetry(ctx context.Context,
 			zap.String("user_id", userID.String()),
 			zap.Int("version", version),
 			zap.Error(pubErr))
+		globalPublisherMetrics.publishErrors.Inc()
 	}
 }
 
