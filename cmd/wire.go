@@ -773,7 +773,7 @@ func provideOAuth2Handler(
 		jwksClient, err := auth.NewJWKSClient(auth.JWKSClientConfig{
 			RedisClient:     svcCtx.Redis,
 			DefaultCacheTTL: time.Hour,
-			LockTTL:         10 * time.Second,
+			LockTTL:         30 * time.Second,
 			Environment:     cfg.Server.Env,
 			AllowedIssuers:  allowedIssuers,
 		})

@@ -57,7 +57,9 @@ type JWKSClientConfig struct {
 	RedisClient redis.UniversalClient
 	// DefaultCacheTTL is the default cache TTL for JWKS keys. Defaults to 1 hour.
 	DefaultCacheTTL time.Duration
-	// LockTTL is the distributed lock TTL for preventing concurrent refresh. Defaults to 10s.
+	// LockTTL is the distributed lock TTL for preventing concurrent refresh. Defaults to 30s.
+	// Must be at least 5 seconds for distributed safety. Higher values (30-60s) are recommended
+	// for high-latency environments or when JWKS endpoints are slow.
 	LockTTL time.Duration
 	// MaxResponseSize is the maximum JWKS response size in bytes. Defaults to 1MB.
 	MaxResponseSize int64
@@ -118,7 +120,11 @@ func NewJWKSClient(cfg JWKSClientConfig) (*JWKSClient, error) {
 	}
 	lockTTL := cfg.LockTTL
 	if lockTTL <= 0 {
-		lockTTL = 10 * time.Second
+		lockTTL = defaultLockTTL
+	} else if lockTTL < minLockTTL {
+		// Enforce minimum lock TTL for distributed safety.
+		// Too-short locks can cause multiple instances to refresh simultaneously.
+		lockTTL = minLockTTL
 	}
 	maxSize := cfg.MaxResponseSize
 	if maxSize <= 0 {
@@ -479,6 +485,14 @@ func (c *JWKSClient) RefreshKey(ctx context.Context, issuer, jwksURI, kid string
 
 // Circuit breaker constants for JWKS refresh.
 const (
+	// defaultLockTTL is the default distributed lock TTL for preventing concurrent refresh.
+	// 30 seconds provides a safe balance between lock expiry and network latency tolerance.
+	defaultLockTTL = 30 * time.Second
+
+	// minLockTTL is the minimum allowed lock TTL to prevent accidental misconfiguration.
+	// Lock TTL below 5 seconds is unsafe in distributed environments.
+	minLockTTL = 5 * time.Second
+
 	// cbMaxBackoff is the maximum backoff duration (5 minutes).
 	cbMaxBackoff = 5 * time.Minute
 	// cbBaseBackoff is the base backoff duration (1 second).

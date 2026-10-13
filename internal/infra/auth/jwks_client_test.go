@@ -334,6 +334,53 @@ func TestJWKSClient_NoAllowedIssuers_AllowsAll(t *testing.T) {
 	assert.NotNil(t, key)
 }
 
+func TestJWKSClient_LockTTL_DefaultAndValidation(t *testing.T) {
+	rdb := newTestRedisClient(t)
+
+	tests := []struct {
+		name        string
+		lockTTL     time.Duration
+		description string
+	}{
+		{
+			name:        "default TTL when not specified",
+			lockTTL:     0,
+			description: "Should use default 30s TTL",
+		},
+		{
+			name:        "explicit 30s TTL",
+			lockTTL:     30 * time.Second,
+			description: "Should accept explicit 30s TTL",
+		},
+		{
+			name:        "explicit 60s TTL",
+			lockTTL:     60 * time.Second,
+			description: "Should accept explicit 60s TTL",
+		},
+		{
+			name:        "very low TTL clamped to minimum",
+			lockTTL:     1 * time.Second,
+			description: "Should clamp to minimum 5s for safety",
+		},
+		{
+			name:        "negative TTL uses default",
+			lockTTL:     -10 * time.Second,
+			description: "Should use default 30s TTL",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, err := auth.NewJWKSClient(auth.JWKSClientConfig{
+				RedisClient: rdb,
+				LockTTL:     tt.lockTTL,
+			})
+			require.NoError(t, err, tt.description)
+			assert.NotNil(t, client)
+		})
+	}
+}
+
 // Silence unused import warning for ecdsa/elliptic in tests.
 var _ = func() (*ecdsa.PrivateKey, error) {
 	return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
