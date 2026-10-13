@@ -726,10 +726,10 @@ func (s *Server) oss3CleanupLoop(ctx context.Context, uc *usecase.OSS3Usecase, i
 		return
 	case <-time.After(30 * time.Second):
 		opCtx, opCancel := context.WithTimeout(ctx, 5*time.Minute)
-		defer opCancel()
 		if err := uc.RunCleanup(opCtx); err != nil {
 			logger.Error(ctx, "[Server] OSS3 cleanup cycle failed", zap.Error(err))
 		}
+		opCancel()
 	}
 
 	for {

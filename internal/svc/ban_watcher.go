@@ -278,9 +278,9 @@ func (bw *BanWatcher) Close() error {
 	defer cancel()
 
 	done := make(chan error, 1)
-	go func() {
+	logger.SafeGo("ban_watcher.subscription_close", func() {
 		done <- bw.sub.Close()
-	}()
+	})
 
 	select {
 	case err := <-done:

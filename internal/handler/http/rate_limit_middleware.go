@@ -2,12 +2,10 @@
 package httphandler
 
 import (
-	"context"
 	"encoding/json"
 	"hash/fnv"
 	"net"
 	"net/http"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -150,15 +148,6 @@ func (rl *RateLimiter) Allow(ip string) bool {
 // cleanupLoop periodically removes expired buckets.
 // Each tick cleans only one shard (round-robin) to minimize lock hold time.
 func (rl *RateLimiter) cleanupLoop() {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Error(context.Background(), "panic_recovered",
-				zap.Any("panic", r),
-				zap.String("goroutine", "rate_limiter.cleanupLoop"),
-				zap.String("stack", string(debug.Stack())))
-		}
-	}()
-
 	ticker := time.NewTicker(rl.cleanup)
 	defer ticker.Stop()
 

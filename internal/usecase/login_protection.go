@@ -4,11 +4,8 @@ package usecase
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"sync"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/rtc-agent/server/pkg/logger"
 )
@@ -71,7 +68,9 @@ func NewLoginProtection(cfg LoginProtectionConfig) *LoginProtection {
 		lockDuration:    cfg.LockDuration,
 		stopCh:          make(chan struct{}),
 	}
-	go lp.cleanupLoop()
+	logger.SafeGo("login_protection.cleanup", func() {
+		lp.cleanupLoop()
+	})
 	return lp
 }
 
@@ -150,15 +149,6 @@ func (lp *LoginProtection) Stop() {
 // cleanupLoop periodically removes expired entries from the attempts and lockedUntil maps
 // to prevent memory leaks in long-running processes.
 func (lp *LoginProtection) cleanupLoop() {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Error(context.Background(), "panic_recovered",
-				zap.Any("panic", r),
-				zap.String("goroutine", "login_protection.cleanupLoop"),
-				zap.String("stack", string(debug.Stack())))
-		}
-	}()
-
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 

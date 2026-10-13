@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"runtime"
-	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -36,15 +35,7 @@ func StartGoroutineCollector(leakThreshold int) (cancel func()) {
 	ticker := time.NewTicker(10 * time.Second)
 	done := make(chan struct{})
 
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Error(context.Background(), "StartGoroutineCollector panic recovered",
-					zap.Any("panic", r),
-					zap.String("stack", string(debug.Stack())),
-				)
-			}
-		}()
+	logger.SafeGo("goroutine-collector", func() {
 		defer ticker.Stop()
 		for {
 			select {
@@ -54,7 +45,7 @@ func StartGoroutineCollector(leakThreshold int) (cancel func()) {
 				return
 			}
 		}
-	}()
+	})
 
 	return func() { close(done) }
 }
@@ -188,12 +179,18 @@ func parseStackOutput(output string) []stackEntry {
 func parseHeaderLine(line string) (id int, state, topFn string) {
 	// Format: goroutine 123 [running]:
 	//         func.name(args)
+	// Extract goroutine ID.
 	var n int
 	rest := line[len("goroutine "):]
 	for n < len(rest) && rest[n] >= '0' && rest[n] <= '9' {
 		n++
 	}
-	id, _ = strconv.Atoi(rest[:n])
+	// Parsing errors are intentionally ignored: this function is used for debugging/monitoring,
+	// and a malformed goroutine ID should not cause the entire operation to fail.
+	// We still attempt to parse, but return 0 if it fails.
+	if gid, err := strconv.Atoi(rest[:n]); err == nil {
+		id = gid
+	}
 
 	// Extract state.
 	if i := indexByte(rest[n:], '['); i >= 0 {
